@@ -216,10 +216,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		h := sha256.Sum256(input.RawBody)
 		checksum := hex.EncodeToString(h[:])
 
-		nextVersion := sk.LatestVersion + 1
-		// archiveName is the relative path stored in the DB; storage.Write stores
-		// it relative to BasePath, and storage.Read reads it the same way.
-		archiveName := fmt.Sprintf("%s/v%d.tar.gz", input.Name, nextVersion)
+		// archiveName is content-addressable: different content → different filename,
+		// so concurrent publishes with distinct payloads cannot overwrite each other.
+		// storage.Write stores it relative to BasePath, and storage.Read reads it
+		// the same way.
+		archiveName := fmt.Sprintf("%s/%s.tar.gz", input.Name, checksum[:16])
 		if _, err := storage.Write(archiveName, bytes.NewReader(input.RawBody)); err != nil {
 			return nil, fmt.Errorf("publish: store archive: %w", err)
 		}
