@@ -100,8 +100,8 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Block on critical findings unless --force
-	if report.Status == "critical" && !publishForce {
+	// Block on critical or warn findings unless --force
+	if (report.Status == "critical" || report.Status == "warn") && !publishForce {
 		if ui.JSONMode {
 			ui.PrintJSONError("critical security findings block publish", "scan_blocked", "skael publish --force")
 			return nil

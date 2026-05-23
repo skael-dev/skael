@@ -88,7 +88,7 @@ fi
   curl -s -o /dev/null \
     -X POST \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" \
+    -H "X-API-Key: $API_KEY" \
     -d "$EVENT_JSON" \
     "${ENDPOINT}/api/events" \
   &>/dev/null

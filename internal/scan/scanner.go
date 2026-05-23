@@ -75,25 +75,36 @@ func ScanContent(filename, content string) *Report {
 	return report
 }
 
+// scanLine checks a single line of text against all rules and appends findings.
+func scanLine(filename, line string, lineNum int, report *Report) {
+	for _, rule := range allRules {
+		match := rule.Pattern.FindString(line)
+		if match == "" {
+			continue
+		}
+		report.Findings = append(report.Findings, Finding{
+			Rule:       rule.Name,
+			Severity:   rule.Severity,
+			Confidence: rule.Confidence,
+			File:       filename,
+			Line:       lineNum,
+			Match:      maskMatch(match),
+			Message:    rule.Message,
+		})
+	}
+}
+
 // scanContent runs all rules against the content line-by-line and appends findings.
+// It also scans consecutive line pairs to catch secrets split across two lines.
 func scanContent(filename, content string, report *Report) {
 	lines := strings.Split(content, "\n")
 	for lineNum, line := range lines {
-		for _, rule := range allRules {
-			match := rule.Pattern.FindString(line)
-			if match == "" {
-				continue
-			}
-			report.Findings = append(report.Findings, Finding{
-				Rule:       rule.Name,
-				Severity:   rule.Severity,
-				Confidence: rule.Confidence,
-				File:       filename,
-				Line:       lineNum + 1,
-				Match:      maskMatch(match),
-				Message:    rule.Message,
-			})
-		}
+		scanLine(filename, line, lineNum+1, report)
+	}
+	// Also scan consecutive line pairs to catch secrets split across two lines.
+	for i := 0; i < len(lines)-1; i++ {
+		combined := lines[i] + lines[i+1]
+		scanLine(filename, combined, i+1, report)
 	}
 }
 
