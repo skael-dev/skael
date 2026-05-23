@@ -97,3 +97,35 @@ func TestStorage_WriteAtomic(t *testing.T) {
 		t.Errorf("found leftover .tmp files after Write: %v", tmpFiles)
 	}
 }
+
+func TestStorage_PathTraversal_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStorage(dir)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	_, err = s.Write("../../etc/evil.tar.gz", strings.NewReader("evil"))
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+	if !strings.Contains(err.Error(), "traversal") {
+		t.Errorf("expected error to contain 'traversal', got: %v", err)
+	}
+}
+
+func TestStorage_PathTraversal_NestedEscape(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStorage(dir)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	_, err = s.Write("skills/../../../etc/passwd", strings.NewReader("evil"))
+	if err == nil {
+		t.Fatal("expected error for nested path traversal, got nil")
+	}
+	if !strings.Contains(err.Error(), "traversal") {
+		t.Errorf("expected error to contain 'traversal', got: %v", err)
+	}
+}

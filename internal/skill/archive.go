@@ -113,9 +113,13 @@ func (bw *byteWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// maxUnpackSize is the maximum total uncompressed bytes allowed per archive.
+const maxUnpackSize = 50 << 20 // 50 MB
+
 // Unpack extracts a tar.gz archive from r into destDir.
 // It rejects any archive entry whose resolved path would escape destDir
-// (path traversal prevention).
+// (path traversal prevention), rejects symlinks and hardlinks, and enforces a
+// 50 MB total extraction size limit.
 func Unpack(r io.Reader, destDir string) error {
 	// Resolve destDir to an absolute clean path to compare against.
 	destDir, err := filepath.Abs(destDir)
@@ -128,6 +132,8 @@ func Unpack(r io.Reader, destDir string) error {
 		return fmt.Errorf("skill.Unpack gzip: %w", err)
 	}
 	defer gzr.Close()
+
+	var totalSize int64
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -160,11 +166,18 @@ func Unpack(r io.Reader, destDir string) error {
 			if err != nil {
 				return fmt.Errorf("skill.Unpack create %s: %w", hdr.Name, err)
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+			lr := io.LimitReader(tr, maxUnpackSize-totalSize+1)
+			n, err := io.Copy(f, lr)
+			f.Close()
+			if err != nil {
 				return fmt.Errorf("skill.Unpack write %s: %w", hdr.Name, err)
 			}
-			f.Close()
+			totalSize += n
+			if totalSize > maxUnpackSize {
+				return fmt.Errorf("skill.Unpack: extraction size limit exceeded (%d bytes)", maxUnpackSize)
+			}
+		case tar.TypeSymlink, tar.TypeLink:
+			return fmt.Errorf("skill.Unpack: unsupported entry type (symlink/hardlink): %s", hdr.Name)
 		}
 	}
 	return nil

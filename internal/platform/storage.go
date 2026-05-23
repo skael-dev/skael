@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Storage provides local filesystem storage for skill archive files.
@@ -27,6 +28,19 @@ func NewStorage(basePath string) (*Storage, error) {
 // Returns the full path of the written file.
 func (s *Storage) Write(name string, r io.Reader) (string, error) {
 	dest := filepath.Join(s.BasePath, name)
+
+	// Prevent path traversal: verify the resolved path stays within BasePath.
+	absPath, err := filepath.Abs(dest)
+	if err != nil {
+		return "", fmt.Errorf("storage: resolve path %q: %w", name, err)
+	}
+	absBase, err := filepath.Abs(s.BasePath)
+	if err != nil {
+		return "", fmt.Errorf("storage: resolve base path: %w", err)
+	}
+	if !strings.HasPrefix(absPath, absBase+string(os.PathSeparator)) {
+		return "", fmt.Errorf("storage: path traversal detected: %s", name)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", fmt.Errorf("storage: create parent dirs for %q: %w", name, err)
