@@ -71,9 +71,10 @@ func TestInstallClaudeHook_NewFile(t *testing.T) {
 
 	cmd, ok := hookEntry["command"].(string)
 	require.True(t, ok, "command must be a string")
-	assert.Contains(t, cmd, "SKAEL_ENDPOINT=https://skael.example.com")
-	assert.Contains(t, cmd, "SKAEL_API_KEY=test-api-key")
+	assert.Contains(t, cmd, "SKAEL_AGENT=claude-code")
 	assert.Contains(t, cmd, "skael-hook.sh")
+	assert.NotContains(t, cmd, "SKAEL_ENDPOINT=")
+	assert.NotContains(t, cmd, "SKAEL_API_KEY=")
 }
 
 // TestInstallClaudeHook_Idempotent verifies that installing twice results in exactly one skael entry.
@@ -110,4 +111,49 @@ func TestUninstallClaudeHook(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "skael", "no skael entries must remain after uninstall")
+}
+
+// TestInstallClaudeHook_NoPlaintextAPIKey verifies that the API key is NOT embedded in settings.json.
+func TestInstallClaudeHook_NoPlaintextAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "settings.json")
+
+	const sensitiveKey = "super-secret-api-key-12345"
+
+	err := hooks.InstallClaudeHook(configPath, "https://skael.example.com", sensitiveKey, "/home/user/.skael/hooks/skael-hook.sh")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(data), sensitiveKey, "API key must NOT appear in plaintext in settings.json")
+}
+
+// TestHookScript_ContainsCrossPlatformHash verifies the hook script supports both Linux and macOS hash commands.
+func TestHookScript_ContainsCrossPlatformHash(t *testing.T) {
+	skaalDir := t.TempDir()
+
+	scriptPath, err := hooks.WriteHookScript(skaalDir)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Contains(t, content, "sha256sum", "hook script must reference sha256sum (Linux)")
+	assert.Contains(t, content, "shasum", "hook script must reference shasum (macOS)")
+}
+
+// TestHookScript_ReadsConfigFile verifies the hook script reads credentials from config.json.
+func TestHookScript_ReadsConfigFile(t *testing.T) {
+	skaalDir := t.TempDir()
+
+	scriptPath, err := hooks.WriteHookScript(skaalDir)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(scriptPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Contains(t, content, "config.json", "hook script must read credentials from config.json")
 }

@@ -42,8 +42,7 @@ func InstallClaudeHook(configPath, endpoint, apiKey, scriptPath string) error {
 		return err
 	}
 
-	cmd := fmt.Sprintf("SKAEL_AGENT=claude-code SKAEL_ENDPOINT=%s SKAEL_API_KEY=%s %s",
-		endpoint, apiKey, scriptPath)
+	cmd := fmt.Sprintf("SKAEL_AGENT=claude-code %s", scriptPath)
 
 	newHookEntry := map[string]any{
 		"type":          "command",
@@ -175,8 +174,7 @@ const (
 
 // installCodexHook appends (or replaces) a skael-managed [[hooks.pre_tool_use]] TOML block.
 func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
-	cmd := fmt.Sprintf("SKAEL_AGENT=codex SKAEL_ENDPOINT=%s SKAEL_API_KEY=%s %s",
-		endpoint, apiKey, scriptPath)
+	cmd := fmt.Sprintf("SKAEL_AGENT=codex %s", scriptPath)
 
 	block := fmt.Sprintf("\n%s\n[[hooks.pre_tool_use]]\ncommand = %q\n%s\n",
 		codexBlockStart, cmd, codexBlockEnd)
