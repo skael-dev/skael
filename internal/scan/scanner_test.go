@@ -1,6 +1,8 @@
 package scan
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -104,6 +106,59 @@ func TestScan_StatusReflectsSeverity(t *testing.T) {
 	}
 	if report.Summary.Critical == 0 {
 		t.Error("expected Summary.Critical > 0")
+	}
+}
+
+// TestScanDir_SkipsBinaryFiles verifies that ScanDir does not crash when a
+// directory contains a binary file alongside SKILL.md, and that the binary
+// file is silently skipped.
+func TestScanDir_SkipsBinaryFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a clean SKILL.md.
+	skillMD := "# Safe Skill\nThis skill does nothing harmful.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	// Write a binary file containing a NUL byte.
+	binaryData := []byte("ELF\x00binary\x00data")
+	if err := os.WriteFile(filepath.Join(dir, "lib.so"), binaryData, 0644); err != nil {
+		t.Fatalf("write lib.so: %v", err)
+	}
+
+	report, err := ScanDir(dir)
+	if err != nil {
+		t.Fatalf("ScanDir returned error: %v", err)
+	}
+	if report == nil {
+		t.Fatal("ScanDir returned nil report")
+	}
+	// The binary file should not cause a crash or add spurious findings.
+	if report.Status != "clean" {
+		t.Errorf("expected status %q, got %q (findings: %+v)", "clean", report.Status, report.Findings)
+	}
+}
+
+// TestScanDir_CleanSkill verifies that scanning a directory with only a clean
+// SKILL.md produces a report with status "clean" and no findings.
+func TestScanDir_CleanSkill(t *testing.T) {
+	dir := t.TempDir()
+
+	skillMD := "# My Safe Skill\n\nThis skill helps you write better code.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	report, err := ScanDir(dir)
+	if err != nil {
+		t.Fatalf("ScanDir returned error: %v", err)
+	}
+	if report.Status != "clean" {
+		t.Errorf("expected status %q, got %q (findings: %+v)", "clean", report.Status, report.Findings)
+	}
+	if len(report.Findings) != 0 {
+		t.Errorf("expected 0 findings, got %d: %+v", len(report.Findings), report.Findings)
 	}
 }
 
