@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -113,7 +114,14 @@ func main() {
 
 	// 12. Start server.
 	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, router); err != nil {
+	server := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

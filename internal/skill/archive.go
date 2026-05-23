@@ -191,20 +191,29 @@ func Unpack(r io.Reader, destDir string) error {
 // nil, content, nil.
 func ParseFrontmatter(content string) (map[string]interface{}, string, error) {
 	const delim = "---\n"
+	const delimNoNL = "---"
 	if !strings.HasPrefix(content, delim) {
 		return nil, content, nil
 	}
 
 	// Find the closing delimiter after the opening one.
+	// The closing delimiter may be "---\n" (with trailing newline) or "---" at
+	// the very end of the string (editors that strip trailing whitespace).
 	rest := content[len(delim):]
-	closeIdx := strings.Index(rest, delim)
-	if closeIdx < 0 {
+
+	var yamlPart, body string
+	if closeIdx := strings.Index(rest, delim); closeIdx >= 0 {
+		// Standard case: closing "---\n" found.
+		yamlPart = rest[:closeIdx]
+		body = rest[closeIdx+len(delim):]
+	} else if strings.HasSuffix(rest, "\n"+delimNoNL) {
+		// Closing "---" at end of string, preceded by a newline.
+		yamlPart = rest[:len(rest)-len("\n"+delimNoNL)]
+		body = ""
+	} else {
 		// No closing delimiter; treat as no frontmatter.
 		return nil, content, nil
 	}
-
-	yamlPart := rest[:closeIdx]
-	body := rest[closeIdx+len(delim):]
 
 	fm := make(map[string]interface{})
 	if err := yaml.Unmarshal([]byte(yamlPart), &fm); err != nil {
