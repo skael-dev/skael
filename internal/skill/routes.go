@@ -347,6 +347,39 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 	})
 
 	// -----------------------------------------------------------------
+	// GET /api/search?q=...&limit=20 — full-text + fuzzy search
+	// -----------------------------------------------------------------
+	type searchInput struct {
+		Q     string `query:"q"     required:"true" minLength:"1"`
+		Limit int    `query:"limit" default:"20"    minimum:"1" maximum:"100"`
+	}
+	type searchBody struct {
+		Skills []Skill `json:"skills"`
+	}
+	type searchOutput struct {
+		Body searchBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "search-skills",
+		Method:      http.MethodGet,
+		Path:        "/api/search",
+		Summary:     "Search skills by full-text and fuzzy name matching",
+	}, func(ctx context.Context, input *searchInput) (*searchOutput, error) {
+		limit := input.Limit
+		if limit == 0 {
+			limit = 20
+		}
+		skills, err := store.Search(ctx, input.Q, limit)
+		if err != nil {
+			return nil, fmt.Errorf("search skills: %w", err)
+		}
+		if skills == nil {
+			skills = []Skill{}
+		}
+		return &searchOutput{Body: searchBody{Skills: skills}}, nil
+	})
+
+	// -----------------------------------------------------------------
 	// Raw routes registered directly on the Chi router (streaming responses).
 	// -----------------------------------------------------------------
 	if router != nil {
