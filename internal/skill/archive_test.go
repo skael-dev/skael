@@ -1,9 +1,12 @@
 package skill
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -120,6 +123,83 @@ func TestParseFrontmatter(t *testing.T) {
 	wantBody := "# Code Review\nDo the review."
 	if body != wantBody {
 		t.Errorf("body:\ngot:  %q\nwant: %q", body, wantBody)
+	}
+}
+
+// TestUnpack_RejectsSymlinks verifies that Unpack returns an error when the
+// archive contains a symlink entry.
+func TestUnpack_RejectsSymlinks(t *testing.T) {
+	// Build a tar.gz with a TypeSymlink entry.
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	hdr := &tar.Header{
+		Name:     "evil-link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "/etc/passwd",
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write symlink header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	destDir := t.TempDir()
+	err := Unpack(bytes.NewReader(buf.Bytes()), destDir)
+	if err == nil {
+		t.Fatal("expected error for symlink in archive, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") && !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("expected error to mention 'symlink' or 'unsupported', got: %v", err)
+	}
+}
+
+// TestUnpack_SizeLimit verifies that a 1MB file unpacks successfully (well
+// within the 50MB limit).
+func TestUnpack_SizeLimit(t *testing.T) {
+	// Build a tar.gz with a 1MB regular file.
+	fileData := bytes.Repeat([]byte("x"), 1<<20) // 1 MB
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	hdr := &tar.Header{
+		Name:     "bigfile.bin",
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(fileData)),
+		Mode:     0644,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(fileData); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	destDir := t.TempDir()
+	if err := Unpack(bytes.NewReader(buf.Bytes()), destDir); err != nil {
+		t.Fatalf("Unpack of 1MB file failed: %v", err)
+	}
+
+	// Verify the file was written with the correct size.
+	info, err := os.Stat(filepath.Join(destDir, "bigfile.bin"))
+	if err != nil {
+		t.Fatalf("stat unpacked file: %v", err)
+	}
+	if info.Size() != int64(len(fileData)) {
+		t.Errorf("size mismatch: got %d, want %d", info.Size(), len(fileData))
 	}
 }
 
