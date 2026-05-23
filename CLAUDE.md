@@ -8,24 +8,22 @@ Skael is a self-hostable platform + CLI for managing AI agent skills (SKILL.md f
 
 ## Commands
 
+Uses [just](https://github.com/casey/just) as the task runner. Run `just` to see all commands. Key ones:
+
 ```bash
-# Build
-make build                    # produces bin/skael-server and bin/skael
-go build ./cmd/server         # server only
-go build ./cmd/skael          # CLI only
-
-# Test
-go test ./... -v -count=1     # all unit + component tests (needs Docker for testcontainers)
-go test ./internal/scan/ -v   # single package
-go test ./internal/skill/ -v -run TestStore_Create -count=1  # single test
-
-# Integration / E2E
-go test -tags integration ./tests/e2e/ -v -count=1 -timeout 120s
-
-# Run locally
-docker compose up -d          # start platform + Postgres
-DATABASE_URL=postgres://skael:skael@localhost:5432/skael API_KEY=sk-dev go run ./cmd/server
+just build                    # build both binaries to bin/
+just dev                      # run server (reads .env)
+just db                       # start Postgres in Docker
+just test                     # all tests (needs Docker for testcontainers)
+just test-fast                # fast tests without DB (instant)
+just test-pkg internal/scan   # single package
+just test-run TestStore_Create # single test by name
+just test-e2e                 # end-to-end scenario tests
+just check                    # vet + fmt-check + test (CI)
+just scan ./path              # security scan a skill directory
 ```
+
+Server reads config from `.env` (see `.env.example`). Copy it before first run: `cp .env.example .env`
 
 ## Architecture
 
