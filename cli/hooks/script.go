@@ -9,16 +9,27 @@ import (
 // It reads stdin from the agent's hook system, extracts the skill name,
 // hashes project path and developer identity for privacy, and POSTs an
 // activation event to SKAEL_ENDPOINT/api/events (fire-and-forget).
+// Credentials are read from ~/.skael/config.json — never passed via env vars.
 const hookScript = `#!/usr/bin/env bash
 # skael-hook.sh — managed by skael CLI
 set -euo pipefail
 
-ENDPOINT="${SKAEL_ENDPOINT:-}"
-API_KEY="${SKAEL_API_KEY:-}"
 AGENT="${SKAEL_AGENT:-unknown}"
 
-# Nothing to do without an endpoint.
-[ -z "$ENDPOINT" ] && exit 0
+# Read config from file (no credentials in agent config).
+CONFIG_FILE="${HOME}/.skael/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then exit 0; fi
+
+# Parse config: prefer jq, fall back to grep.
+if command -v jq &>/dev/null; then
+  ENDPOINT=$(jq -r '.endpoint // empty' "$CONFIG_FILE")
+  API_KEY=$(jq -r '.api_key // empty' "$CONFIG_FILE")
+else
+  ENDPOINT=$(grep -o '"endpoint"[^"]*"[^"]*"' "$CONFIG_FILE" | head -1 | sed 's/.*: *"//' | sed 's/"//')
+  API_KEY=$(grep -o '"api_key"[^"]*"[^"]*"' "$CONFIG_FILE" | head -1 | sed 's/.*: *"//' | sed 's/"//')
+fi
+
+if [ -z "$ENDPOINT" ] || [ -z "$API_KEY" ]; then exit 0; fi
 
 # Read stdin (agent hook payload).
 PAYLOAD="$(cat)"
@@ -36,13 +47,22 @@ else
   fi
 fi
 
-# Hash project path and developer identity for privacy.
-PROJECT_DIR="$(pwd)"
-GIT_AUTHOR="$(git config user.email 2>/dev/null || echo "")"
-IDENTITY="${GIT_AUTHOR:-$(id -u)}"
+# Cross-platform hash: try sha256sum (Linux) then shasum (macOS), fall back to nohash.
+if command -v sha256sum &>/dev/null; then
+  HASH_CMD="sha256sum"
+elif command -v shasum &>/dev/null; then
+  HASH_CMD="shasum -a 256"
+else
+  HASH_CMD=""
+fi
 
-PROJECT_HASH="$(printf '%s' "$PROJECT_DIR" | shasum -a 256 | awk '{print $1}')"
-DEV_HASH="$(printf '%s' "$IDENTITY"     | shasum -a 256 | awk '{print $1}')"
+if [ -n "$HASH_CMD" ]; then
+  PROJECT_HASH=$(echo -n "${PWD}" | $HASH_CMD | cut -d' ' -f1 | head -c 16)
+  DEV_HASH=$(echo -n "${USER:-unknown}@${HOSTNAME:-unknown}" | $HASH_CMD | cut -d' ' -f1 | head -c 16)
+else
+  PROJECT_HASH="nohash"
+  DEV_HASH="nohash"
+fi
 
 # Build JSON payload.
 EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s"}' \
