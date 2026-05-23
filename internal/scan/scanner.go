@@ -96,6 +96,8 @@ func scanLine(filename, line string, lineNum int, report *Report) {
 
 // scanContent runs all rules against the content line-by-line and appends findings.
 // It also scans consecutive line pairs to catch secrets split across two lines.
+// After both passes it deduplicates findings by rule+file+line so that a secret
+// that exists entirely on one line is not reported twice.
 func scanContent(filename, content string, report *Report) {
 	lines := strings.Split(content, "\n")
 	for lineNum, line := range lines {
@@ -106,6 +108,18 @@ func scanContent(filename, content string, report *Report) {
 		combined := lines[i] + lines[i+1]
 		scanLine(filename, combined, i+1, report)
 	}
+
+	// Deduplicate: keep only the first finding for each rule+file+line combination.
+	seen := map[string]bool{}
+	var deduped []Finding
+	for _, f := range report.Findings {
+		key := fmt.Sprintf("%s:%s:%d", f.Rule, f.File, f.Line)
+		if !seen[key] {
+			seen[key] = true
+			deduped = append(deduped, f)
+		}
+	}
+	report.Findings = deduped
 }
 
 // maskMatch truncates long matches to avoid leaking sensitive values in reports.

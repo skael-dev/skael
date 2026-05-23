@@ -424,3 +424,81 @@ func TestGetScanResult_SkillNotFound(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
+
+// -----------------------------------------------------------------
+// DELETE /api/skills/{name} — archive cleanup
+// -----------------------------------------------------------------
+
+// TestDeleteSkill_CleansUpArchive verifies that deleting a skill also removes
+// its published archive file from storage.
+func TestDeleteSkill_CleansUpArchive(t *testing.T) {
+	handler, store, storage := setupTestAPI(t)
+
+	// Create a skill, publish one version so an archive file is written.
+	createSkill(t, handler, "cleanup-skill", "will be deleted")
+	archiveBytes := buildTestArchive(t, "cleanup-skill", "will be deleted")
+	publishVersion(t, handler, "cleanup-skill", archiveBytes)
+
+	// Use the store to retrieve the version (includes ArchivePath which is json:"-").
+	versions, err := store.ListVersions(context.Background(), "cleanup-skill")
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	archivePath := versions[0].ArchivePath
+	require.NotEmpty(t, archivePath, "published version should have an archive path")
+
+	// Confirm the archive file exists in storage before deletion.
+	rc, err := storage.Read(archivePath)
+	require.NoError(t, err, "archive should exist in storage before delete")
+	rc.Close()
+
+	// Delete the skill.
+	req := httptest.NewRequest(http.MethodDelete, "/api/skills/cleanup-skill", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	// Confirm the skill record is gone from DB.
+	sk, err := store.GetByName(context.Background(), "cleanup-skill")
+	require.NoError(t, err)
+	require.Nil(t, sk)
+
+	// Confirm the archive file has been removed from storage.
+	_, err = storage.Read(archivePath)
+	require.Error(t, err, "archive file should have been deleted from storage")
+}
+
+// -----------------------------------------------------------------
+// POST /api/skills — skill name validation
+// -----------------------------------------------------------------
+
+// TestCreateSkill_NameValidation exercises the name regex: verifies that invalid
+// names are rejected with 422 and valid names are accepted with 201.
+func TestCreateSkill_NameValidation(t *testing.T) {
+	cases := []struct {
+		name       string
+		wantStatus int
+	}{
+		// Rejected names
+		{"My-Skill", http.StatusUnprocessableEntity},  // uppercase
+		{"skill name", http.StatusUnprocessableEntity}, // space
+		{"skill-", http.StatusUnprocessableEntity},     // trailing hyphen
+		{"-skill", http.StatusUnprocessableEntity},     // leading hyphen
+		{"", http.StatusUnprocessableEntity},           // empty
+		// Accepted names
+		{"valid", http.StatusCreated},
+		{"my-skill", http.StatusCreated},
+		{"a", http.StatusCreated},
+		{"a1b2", http.StatusCreated},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			handler, _, _ := setupTestAPI(t)
+			rr := doJSON(t, handler, http.MethodPost, "/api/skills",
+				map[string]string{"name": tc.name, "description": "test"}, nil)
+			require.Equal(t, tc.wantStatus, rr.Code,
+				"name=%q body=%s", tc.name, rr.Body.String())
+		})
+	}
+}
