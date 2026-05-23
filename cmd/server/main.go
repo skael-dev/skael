@@ -54,11 +54,19 @@ func main() {
 	router.Use(middleware.RealIP)
 	router.Use(auth.Middleware(cfg.APIKey))
 
-	// 6. Create Huma API.
+	// 6. Enforce body size limit before Huma buffers the request body.
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	// 7. Create Huma API.
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
-	// 7. Register health endpoint (auth middleware skips /api/health).
+	// 8. Register health endpoint (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -77,11 +85,11 @@ func main() {
 		return out, nil
 	})
 
-	// 8. Register skill routes.
+	// 9. Register skill routes.
 	skillStore := skill.NewStore(pool)
 	skill.RegisterRoutes(api, router, skillStore, storage)
 
-	// 9. Register sync manifest route.
+	// 10. Register sync manifest route.
 	syncStore := gosync.NewStore(pool)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-manifest",
@@ -99,11 +107,11 @@ func main() {
 		}{Body: entries}, nil
 	})
 
-	// 10. Register analytics routes.
+	// 11. Register analytics routes.
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 11. Start server.
+	// 12. Start server.
 	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, router); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
