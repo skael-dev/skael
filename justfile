@@ -106,6 +106,26 @@ docker-build:
 logs:
     docker compose logs -f server
 
+# --- Migrations ---
+
+# Run pending migrations
+migrate:
+    go run ./cmd/migrate up
+
+# Rollback the last migration
+migrate-down:
+    go run ./cmd/migrate down
+
+# Show migration status
+migrate-status:
+    go run ./cmd/migrate status
+
+# Create a new migration file
+migrate-create name:
+    @mkdir -p internal/platform/migrate
+    goose -dir internal/platform/migrate create {{name}} sql
+    @echo "Created migration in internal/platform/migrate/"
+
 # --- Scan ---
 
 # Run security scan on a skill directory
