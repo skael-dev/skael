@@ -21,7 +21,13 @@ just test-run TestStore_Create # single test by name
 just test-e2e                 # end-to-end scenario tests
 just check                    # vet + fmt-check + test (CI)
 just scan ./path              # security scan a skill directory
+just migrate                  # run pending migrations
+just migrate-down             # rollback last migration
+just migrate-status           # show migration status
+just migrate-create add_foo   # create a new migration file
 ```
+
+Migrations use [goose](https://github.com/pressly/goose). SQL files live in `internal/platform/migrate/` with `-- +goose Up` and `-- +goose Down` annotations. Migrations run automatically on server startup and in tests via `testutil.SetupTestDB`.
 
 Server reads config from `.env` (see `.env.example`). Copy it before first run: `cp .env.example .env`
 

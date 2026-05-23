@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE skills (
@@ -48,3 +49,9 @@ CREATE TABLE skill_events (
 
 CREATE INDEX idx_events_skill_time ON skill_events (skill_name, created_at DESC);
 CREATE INDEX idx_events_created ON skill_events (created_at DESC);
+
+-- +goose Down
+DROP TABLE IF EXISTS skill_events;
+DROP TABLE IF EXISTS skill_versions;
+DROP TABLE IF EXISTS skills;
+DROP EXTENSION IF EXISTS pg_trgm;
