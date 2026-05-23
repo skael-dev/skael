@@ -400,3 +400,27 @@ func TestGetScanResult_NoVersions(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
+
+// TestDownloadVersion_SkillNotFound verifies that downloading a version for a
+// nonexistent skill returns 404.
+func TestDownloadVersion_SkillNotFound(t *testing.T) {
+	handler, _, _ := setupTestAPI(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skills/ghost-skill/versions/1/download", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+// TestGetScanResult_SkillNotFound verifies that requesting scan results for a
+// nonexistent skill returns 404.
+func TestGetScanResult_SkillNotFound(t *testing.T) {
+	handler, _, _ := setupTestAPI(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skills/no-such-skill/scan", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
