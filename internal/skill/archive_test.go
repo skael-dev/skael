@@ -203,6 +203,46 @@ func TestUnpack_SizeLimit(t *testing.T) {
 	}
 }
 
+// TestParseFrontmatter_NoTrailingNewline verifies that frontmatter is parsed
+// when the closing "---" has no trailing newline (editor strips trailing whitespace).
+func TestParseFrontmatter_NoTrailingNewline(t *testing.T) {
+	content := "---\nname: test\ndescription: A test\n---"
+
+	fm, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("ParseFrontmatter: %v", err)
+	}
+	if fm == nil {
+		t.Fatal("expected non-nil frontmatter map")
+	}
+	if got := fm["name"]; got != "test" {
+		t.Errorf("fm[\"name\"]: got %q, want %q", got, "test")
+	}
+	if body != "" {
+		t.Errorf("body: got %q, want empty string", body)
+	}
+}
+
+// TestParseFrontmatter_TrailingContentNoNewline verifies that frontmatter is
+// parsed and body is returned when the body does not end with a newline.
+func TestParseFrontmatter_TrailingContentNoNewline(t *testing.T) {
+	content := "---\nname: test\n---\nSome body"
+
+	fm, body, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("ParseFrontmatter: %v", err)
+	}
+	if fm == nil {
+		t.Fatal("expected non-nil frontmatter map")
+	}
+	if got := fm["name"]; got != "test" {
+		t.Errorf("fm[\"name\"]: got %q, want %q", got, "test")
+	}
+	if body != "Some body" {
+		t.Errorf("body: got %q, want %q", body, "Some body")
+	}
+}
+
 // TestParseFrontmatter_NoFrontmatter verifies that content without frontmatter
 // returns nil map and the content unchanged.
 func TestParseFrontmatter_NoFrontmatter(t *testing.T) {

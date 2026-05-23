@@ -14,8 +14,15 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// -----------------------------------------------------------------
 	// POST /api/events — ingest a skill activation event
 	// -----------------------------------------------------------------
+	type ingestBody struct {
+		SkillName     string `json:"skill_name" minLength:"1"`
+		Agent         string `json:"agent" minLength:"1"`
+		TriggerType   string `json:"trigger_type"`
+		ProjectHash   string `json:"project_hash"`
+		DeveloperHash string `json:"developer_hash"`
+	}
 	type ingestInput struct {
-		Body Event
+		Body ingestBody
 	}
 	huma.Register(api, huma.Operation{
 		OperationID:   "ingest-event",
@@ -24,7 +31,13 @@ func RegisterRoutes(api huma.API, store *Store) {
 		Summary:       "Ingest a skill activation event",
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, input *ingestInput) (*struct{}, error) {
-		if err := store.Insert(ctx, input.Body); err != nil {
+		if err := store.Insert(ctx, Event{
+			SkillName:     input.Body.SkillName,
+			Agent:         input.Body.Agent,
+			TriggerType:   input.Body.TriggerType,
+			ProjectHash:   input.Body.ProjectHash,
+			DeveloperHash: input.Body.DeveloperHash,
+		}); err != nil {
 			return nil, fmt.Errorf("ingest event: %w", err)
 		}
 		return nil, nil
