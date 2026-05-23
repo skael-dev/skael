@@ -243,6 +243,77 @@ func TestParseFrontmatter_TrailingContentNoNewline(t *testing.T) {
 	}
 }
 
+// TestUnpack_RejectsOversizedFile verifies that Unpack returns an error when a
+// single file in the archive exceeds 1 MiB, even if the total archive size is
+// within the 50 MB limit.
+func TestUnpack_RejectsOversizedFile(t *testing.T) {
+	// Build a tar.gz with a 2 MiB regular file.
+	fileData := bytes.Repeat([]byte("A"), 2<<20) // 2 MiB
+
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	hdr := &tar.Header{
+		Name:     "large.bin",
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(fileData)),
+		Mode:     0644,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(fileData); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	destDir := t.TempDir()
+	err := Unpack(bytes.NewReader(buf.Bytes()), destDir)
+	if err == nil {
+		t.Fatal("expected error for 2 MiB file in archive, got nil")
+	}
+	if !strings.Contains(err.Error(), "file size limit") && !strings.Contains(err.Error(), "too large") {
+		t.Errorf("expected error to mention file size limit, got: %v", err)
+	}
+}
+
+// TestUnpack_RejectsUnknownEntryType verifies that Unpack returns an error when
+// the archive contains an unsupported entry type (e.g. TypeFifo).
+func TestUnpack_RejectsUnknownEntryType(t *testing.T) {
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	hdr := &tar.Header{
+		Name:     "myfifo",
+		Typeflag: tar.TypeFifo,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write fifo header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	destDir := t.TempDir()
+	err := Unpack(bytes.NewReader(buf.Bytes()), destDir)
+	if err == nil {
+		t.Fatal("expected error for TypeFifo entry in archive, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("expected error to mention 'unsupported', got: %v", err)
+	}
+}
+
 // TestParseFrontmatter_NoFrontmatter verifies that content without frontmatter
 // returns nil map and the content unchanged.
 func TestParseFrontmatter_NoFrontmatter(t *testing.T) {

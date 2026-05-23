@@ -177,21 +177,30 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 
 		// Extract to each detected agent's skills directory.
-		var extractErr error
+		// Track per-agent success so a partial failure doesn't corrupt state.
+		extractOK := 0
+		extractFail := 0
 		for _, agent := range detectedAgents {
 			destDir := filepath.Join(agent.SkillsDir(home), ts.entry.Name)
 			// Clean previous version before extracting.
 			_ = os.RemoveAll(destDir)
 			if err := skill.Unpack(bytes.NewReader(archive), destDir); err != nil {
 				ui.Errorf("extract %s to %s: %s", ts.entry.Name, agent.Name(), err)
-				extractErr = err
+				extractFail++
+			} else {
+				extractOK++
 			}
 		}
 
 		ver := fmt.Sprintf("v%d", ts.entry.Version)
-		if extractErr != nil {
+		if extractOK == 0 && (extractFail > 0 || len(detectedAgents) == 0) {
+			// All agents failed (or no agents); mark as failed and don't record.
 			results = append(results, syncResult{name: ts.entry.Name, version: ts.entry.Version, failed: true})
 		} else {
+			// At least one agent succeeded; record the skill and warn about failures.
+			if extractFail > 0 {
+				ui.Errorf("extract %s: succeeded for %d agent(s), failed for %d agent(s)", ts.entry.Name, extractOK, extractFail)
+			}
 			if ts.isNew {
 				ui.New(ts.entry.Name, ver)
 			} else {
@@ -212,7 +221,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 		Skills:   newSkills,
 	}
 	if err := config.WriteState(dir, newState); err != nil {
+		if ui.JSONMode {
+			ui.PrintJSONError(fmt.Sprintf("write state: %s", err), "state_error", "")
+			return nil
+		}
 		ui.Errorf("write state: %s", err)
+		return fmt.Errorf("write state: %w", err)
 	}
 
 	// 11. Print summary.

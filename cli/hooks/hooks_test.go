@@ -144,6 +144,63 @@ func TestHookScript_ContainsCrossPlatformHash(t *testing.T) {
 	assert.Contains(t, content, "shasum", "hook script must reference shasum (macOS)")
 }
 
+// TestInstallCodexHook_NewFile verifies that installing into a nonexistent
+// config.toml creates the file and writes a managed block with the correct
+// marker comment.
+func TestInstallCodexHook_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	err := hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-api-key", "/home/user/.skael/hooks/skael-hook.sh")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	content := string(data)
+	assert.Contains(t, content, "# managed_by = skael", "managed block start marker must be present")
+	assert.Contains(t, content, "# end managed_by = skael", "managed block end marker must be present")
+	assert.Contains(t, content, "[[hooks.pre_tool_use]]", "TOML hook section must be present")
+	assert.Contains(t, content, "SKAEL_AGENT=codex", "agent env var must be set to codex")
+}
+
+// TestInstallCodexHook_Idempotent verifies that installing twice results in
+// exactly one managed block in the config.toml file.
+func TestInstallCodexHook_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "key1", "/path/to/skael-hook.sh"))
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "key2", "/path/to/skael-hook.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	content := string(data)
+	count := strings.Count(content, "# managed_by = skael")
+	assert.Equal(t, 1, count, "must have exactly one managed block after two installs")
+}
+
+// TestUninstallCodexHook verifies that after uninstalling, the managed block
+// is removed from the config.toml file.
+func TestUninstallCodexHook(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
+
+	// Confirm the managed block is present after install.
+	data, _ := os.ReadFile(configPath)
+	require.Contains(t, string(data), "# managed_by = skael", "managed block must be present after install")
+
+	require.NoError(t, hooks.UninstallForAgent("codex", configPath))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "# managed_by = skael", "managed block must be removed after uninstall")
+	assert.NotContains(t, string(data), "[[hooks.pre_tool_use]]", "hook section must be removed after uninstall")
+}
+
 // TestHookScript_ReadsConfigFile verifies the hook script reads credentials from config.json.
 func TestHookScript_ReadsConfigFile(t *testing.T) {
 	skaalDir := t.TempDir()

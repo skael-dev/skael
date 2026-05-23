@@ -193,6 +193,124 @@ func TestClient_SearchSkills(t *testing.T) {
 	}
 }
 
+// TestClient_GetSkill_ServerError verifies that a 500 response returns a
+// non-nil error and nil skill.
+func TestClient_GetSkill_ServerError(t *testing.T) {
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "internal server error"})
+	})
+	defer srv.Close()
+
+	sk, err := c.GetSkill("some-skill")
+	if err == nil {
+		t.Fatal("expected non-nil error for 500")
+	}
+	if sk != nil {
+		t.Errorf("expected nil skill on server error, got: %+v", sk)
+	}
+}
+
+// TestClient_CreateSkill_Success verifies that a 201 response is parsed into a
+// Skill struct correctly.
+func TestClient_CreateSkill_Success(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/skills" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"name":           "new-skill",
+			"description":    "a brand new skill",
+			"latest_version": 0,
+			"created_at":     now.Format(time.RFC3339),
+			"updated_at":     now.Format(time.RFC3339),
+		})
+	})
+	defer srv.Close()
+
+	sk, err := c.CreateSkill("new-skill", "a brand new skill")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sk == nil {
+		t.Fatal("expected non-nil skill")
+	}
+	if sk.Name != "new-skill" {
+		t.Errorf("expected name 'new-skill', got %q", sk.Name)
+	}
+	if sk.Description != "a brand new skill" {
+		t.Errorf("expected description 'a brand new skill', got %q", sk.Description)
+	}
+}
+
+// TestClient_CreateSkill_Conflict verifies that a 409 response returns a
+// non-nil error.
+func TestClient_CreateSkill_Conflict(t *testing.T) {
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "skill already exists"})
+	})
+	defer srv.Close()
+
+	sk, err := c.CreateSkill("existing-skill", "duplicate")
+	if err == nil {
+		t.Fatal("expected error for 409 conflict")
+	}
+	if sk != nil {
+		t.Errorf("expected nil skill on conflict, got: %+v", sk)
+	}
+}
+
+// TestClient_DownloadVersion_Success verifies that a 200 response returns the
+// raw archive bytes.
+func TestClient_DownloadVersion_Success(t *testing.T) {
+	fakeArchive := []byte("fake-gzip-archive-content")
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(fakeArchive)
+	})
+	defer srv.Close()
+
+	data, err := c.DownloadVersion("my-skill", 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != string(fakeArchive) {
+		t.Errorf("expected %q, got %q", fakeArchive, data)
+	}
+}
+
+// TestClient_DownloadVersion_NotFound verifies that a 404 response returns a
+// non-nil error.
+func TestClient_DownloadVersion_NotFound(t *testing.T) {
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "version not found"})
+	})
+	defer srv.Close()
+
+	data, err := c.DownloadVersion("ghost-skill", 99)
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	if data != nil {
+		t.Errorf("expected nil data on 404, got %d bytes", len(data))
+	}
+}
+
 // TestClient_GetManifest verifies that the manifest array is parsed and returns
 // the expected number of entries.
 func TestClient_GetManifest(t *testing.T) {
