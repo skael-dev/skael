@@ -64,12 +64,24 @@ else
   DEV_HASH="nohash"
 fi
 
-# Build JSON payload.
-EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s"}' \
-  "${SKILL_NAME:-unknown}" \
-  "$AGENT" \
-  "$PROJECT_HASH" \
-  "$DEV_HASH")"
+# Build JSON payload — use jq if available to handle arbitrary skill names safely.
+if command -v jq &>/dev/null; then
+  EVENT_JSON="$(jq -n \
+    --arg sn "${SKILL_NAME:-unknown}" \
+    --arg ag "$AGENT" \
+    --arg tt "auto" \
+    --arg ph "$PROJECT_HASH" \
+    --arg dh "$DEV_HASH" \
+    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh}')"
+else
+  # Escape double quotes so the JSON is not malformed.
+  SKILL_NAME_ESCAPED="$(printf '%s' "${SKILL_NAME:-unknown}" | sed 's/"/\\"/g')"
+  EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s"}' \
+    "$SKILL_NAME_ESCAPED" \
+    "$AGENT" \
+    "$PROJECT_HASH" \
+    "$DEV_HASH")"
+fi
 
 # POST event fire-and-forget (background, suppress output).
 (
