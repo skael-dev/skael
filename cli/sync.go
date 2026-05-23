@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -172,6 +173,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 		archive, dlErr := c.DownloadVersion(ts.entry.Name, ts.entry.Version)
 		if dlErr != nil {
 			ui.Errorf("download %s v%d: %s", ts.entry.Name, ts.entry.Version, dlErr)
+			results = append(results, syncResult{name: ts.entry.Name, version: ts.entry.Version, failed: true})
+			continue
+		}
+
+		// Verify checksum against manifest entry.
+		actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
+		if ts.entry.Checksum != "" && actualChecksum != ts.entry.Checksum {
+			ui.Warn("checksum mismatch for %s (expected %s, got %s)", ts.entry.Name, ts.entry.Checksum[:16], actualChecksum[:16])
 			results = append(results, syncResult{name: ts.entry.Name, version: ts.entry.Version, failed: true})
 			continue
 		}
