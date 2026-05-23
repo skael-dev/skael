@@ -203,7 +203,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		if err != nil {
 			return nil, fmt.Errorf("publish: scan: %w", err)
 		}
-		if report.Status == "critical" {
+		if report.Status == "critical" || report.Status == "warn" {
 			scanJSON, _ := json.Marshal(report)
 			return nil, huma.NewError(
 				http.StatusUnprocessableEntity,
@@ -299,7 +299,8 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			scanJSON,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("publish: create version: %w", err)
+			_ = storage.Delete(archiveName)
+			return nil, huma.Error500InternalServerError("creating version", err)
 		}
 
 		// 8. Update skill content and description.

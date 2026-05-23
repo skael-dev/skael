@@ -15,11 +15,11 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// POST /api/events — ingest a skill activation event
 	// -----------------------------------------------------------------
 	type ingestBody struct {
-		SkillName     string `json:"skill_name" minLength:"1"`
-		Agent         string `json:"agent" minLength:"1"`
-		TriggerType   string `json:"trigger_type"`
-		ProjectHash   string `json:"project_hash"`
-		DeveloperHash string `json:"developer_hash"`
+		SkillName     string `json:"skill_name" minLength:"1" maxLength:"255"`
+		Agent         string `json:"agent" minLength:"1" maxLength:"128"`
+		TriggerType   string `json:"trigger_type" maxLength:"64"`
+		ProjectHash   string `json:"project_hash" maxLength:"64"`
+		DeveloperHash string `json:"developer_hash" maxLength:"64"`
 	}
 	type ingestInput struct {
 		Body ingestBody
