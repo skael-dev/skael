@@ -22,14 +22,10 @@ func NewStorage(basePath string) (*Storage, error) {
 	return &Storage{BasePath: basePath}, nil
 }
 
-// Write stores the content from r under name (relative to BasePath).
-// It uses an atomic write: content is first written to a .tmp file which is
-// then renamed to the final destination, ensuring no partial files are visible.
-// Returns the full path of the written file.
-func (s *Storage) Write(name string, r io.Reader) (string, error) {
+// validatePath resolves name relative to BasePath and verifies the result
+// stays within BasePath (path traversal guard). It returns the resolved path.
+func (s *Storage) validatePath(name string) (string, error) {
 	dest := filepath.Join(s.BasePath, name)
-
-	// Prevent path traversal: verify the resolved path stays within BasePath.
 	absPath, err := filepath.Abs(dest)
 	if err != nil {
 		return "", fmt.Errorf("storage: resolve path %q: %w", name, err)
@@ -40,6 +36,18 @@ func (s *Storage) Write(name string, r io.Reader) (string, error) {
 	}
 	if !strings.HasPrefix(absPath, absBase+string(os.PathSeparator)) {
 		return "", fmt.Errorf("storage: path traversal detected: %s", name)
+	}
+	return dest, nil
+}
+
+// Write stores the content from r under name (relative to BasePath).
+// It uses an atomic write: content is first written to a .tmp file which is
+// then renamed to the final destination, ensuring no partial files are visible.
+// Returns the full path of the written file.
+func (s *Storage) Write(name string, r io.Reader) (string, error) {
+	dest, err := s.validatePath(name)
+	if err != nil {
+		return "", err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -74,7 +82,10 @@ func (s *Storage) Write(name string, r io.Reader) (string, error) {
 // Read opens the file stored under name (relative to BasePath) for reading.
 // The caller is responsible for closing the returned ReadCloser.
 func (s *Storage) Read(name string) (io.ReadCloser, error) {
-	path := filepath.Join(s.BasePath, name)
+	path, err := s.validatePath(name)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -84,6 +95,9 @@ func (s *Storage) Read(name string) (io.ReadCloser, error) {
 
 // Delete removes the file stored under name (relative to BasePath).
 func (s *Storage) Delete(name string) error {
-	path := filepath.Join(s.BasePath, name)
+	path, err := s.validatePath(name)
+	if err != nil {
+		return err
+	}
 	return os.Remove(path)
 }

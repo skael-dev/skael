@@ -193,7 +193,7 @@ func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
 		content += block
 	}
 
-	return os.WriteFile(configPath, []byte(content), 0o644)
+	return atomicWriteFile(configPath, []byte(content), 0o644)
 }
 
 // uninstallCodexHook removes the skael-managed TOML block from configPath.
@@ -207,7 +207,7 @@ func uninstallCodexHook(configPath string) error {
 	}
 
 	content := replaceCodexBlock(string(data), "")
-	return os.WriteFile(configPath, []byte(content), 0o644)
+	return atomicWriteFile(configPath, []byte(content), 0o644)
 }
 
 // replaceCodexBlock replaces the skael-managed TOML block with replacement.
@@ -289,7 +289,25 @@ func writeJSONFile(path string, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// Preserve existing file permissions; default to 0644 for new files.
+	perm := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		perm = info.Mode().Perm()
+	}
+	return atomicWriteFile(path, data, perm)
+}
+
+// atomicWriteFile writes data to path atomically via a .tmp sibling file.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func getOrCreateMap(parent map[string]any, key string) map[string]any {
