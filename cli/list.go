@@ -36,15 +36,27 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
-	skills, total, err := c.ListSkills(100, 0)
-	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
+	var allSkills []client.Skill
+	var total int
+	offset := 0
+	for {
+		page, pageTotal, err := c.ListSkills(100, offset)
+		if err != nil {
+			if ui.JSONMode {
+				ui.PrintJSONError(err.Error(), "api_error", "")
+				return nil
+			}
+			ui.Errorf("%s", err)
 			return nil
 		}
-		ui.Errorf("%s", err)
-		return nil
+		total = pageTotal
+		allSkills = append(allSkills, page...)
+		if len(allSkills) >= total || len(page) == 0 {
+			break
+		}
+		offset += len(page)
 	}
+	skills := allSkills
 
 	if ui.JSONMode {
 		out := struct {

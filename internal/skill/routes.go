@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -30,6 +32,10 @@ func NewChiAPI() (chi.Router, huma.API) {
 	api := humachi.New(r, huma.DefaultConfig("Skael API", "1.0.0"))
 	return r, api
 }
+
+// validSkillName matches lowercase alphanumeric names that may contain hyphens,
+// but must start with a lowercase letter or digit.
+var validSkillName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
@@ -55,6 +61,9 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Summary:       "Create a skill",
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *createInput) (*createOutput, error) {
+		if !validSkillName.MatchString(input.Body.Name) {
+			return nil, huma.Error400BadRequest("skill name must be lowercase alphanumeric with hyphens")
+		}
 		sk, err := store.Create(ctx,
 			input.Body.Name,
 			"", // display_name is empty at creation time
@@ -152,6 +161,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		if sk == nil {
 			return nil, huma.Error404NotFound(
 				fmt.Sprintf("skill %q not found", input.Name))
+		}
+		// Clean up archive files before deleting the DB record.
+		versions, _ := store.ListVersions(ctx, input.Name)
+		for _, v := range versions {
+			if v.ArchivePath != "" {
+				_ = storage.Delete(v.ArchivePath)
+			}
 		}
 		if err := store.Delete(ctx, input.Name); err != nil {
 			return nil, fmt.Errorf("delete skill: %w", err)
@@ -304,8 +320,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		}
 
 		// 8. Update skill content and description.
+		// Non-fatal: the version is already committed. A stale metadata entry
+		// will be corrected on the next successful publish.
 		if err := store.UpdateContent(ctx, input.Name, description, body, fmJSON); err != nil {
-			return nil, fmt.Errorf("publish: update content: %w", err)
+			log.Printf("publish: update skill metadata for %q: %v (non-fatal)", input.Name, err)
 		}
 
 		return &publishOutput{Body: ver}, nil
