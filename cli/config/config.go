@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -95,11 +96,20 @@ func ReadState(dir string) (*SyncState, error) {
 
 // LoadConfig resolves configuration with environment variables taking precedence.
 // It checks SKAEL_URL and SKAEL_KEY first, then falls back to ReadConfig(DefaultDir()).
+// If only one of the two env vars is set, it returns an error naming the missing one.
 func LoadConfig() (*Config, error) {
-	url := os.Getenv("SKAEL_URL")
-	key := os.Getenv("SKAEL_KEY")
-	if url != "" || key != "" {
-		return &Config{Endpoint: url, APIKey: key}, nil
+	envURL := os.Getenv("SKAEL_URL")
+	envKey := os.Getenv("SKAEL_KEY")
+
+	if envURL != "" && envKey != "" {
+		return &Config{Endpoint: envURL, APIKey: envKey}, nil
 	}
+	if envURL != "" && envKey == "" {
+		return nil, fmt.Errorf("SKAEL_URL is set but SKAEL_KEY is missing")
+	}
+	if envURL == "" && envKey != "" {
+		return nil, fmt.Errorf("SKAEL_KEY is set but SKAEL_URL is missing")
+	}
+
 	return ReadConfig(DefaultDir())
 }

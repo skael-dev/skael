@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,6 +61,28 @@ func TestReadState_Missing_ReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "", got.LastSync)
 	assert.Empty(t, got.Skills)
+}
+
+func TestLoadConfig_PartialEnvVars_URLOnly(t *testing.T) {
+	t.Setenv("SKAEL_URL", "https://example.com")
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "SKAEL_KEY") {
+		t.Error("should mention SKAEL_KEY")
+	}
+}
+
+func TestLoadConfig_PartialEnvVars_KeyOnly(t *testing.T) {
+	t.Setenv("SKAEL_KEY", "sk-test")
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "SKAEL_URL") {
+		t.Error("should mention SKAEL_URL")
+	}
 }
 
 func TestReadState_Corrupt_BacksUp(t *testing.T) {
