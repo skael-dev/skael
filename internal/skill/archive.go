@@ -116,6 +116,11 @@ func (bw *byteWriter) Write(p []byte) (int, error) {
 // maxUnpackSize is the maximum total uncompressed bytes allowed per archive.
 const maxUnpackSize = 50 << 20 // 50 MB
 
+// maxFileSize is the maximum size allowed for a single file within an archive.
+// Files larger than this are rejected at extraction time so they cannot bypass
+// security scanners that operate on a per-file size budget.
+const maxFileSize = 1 << 20 // 1 MiB
+
 // Unpack extracts a tar.gz archive from r into destDir.
 // It rejects any archive entry whose resolved path would escape destDir
 // (path traversal prevention), rejects symlinks and hardlinks, and enforces a
@@ -158,6 +163,12 @@ func Unpack(r io.Reader, destDir string) error {
 				return fmt.Errorf("skill.Unpack mkdir %s: %w", hdr.Name, err)
 			}
 		case tar.TypeReg:
+			// Reject individual files that exceed the per-file size limit.
+			// This prevents oversized files from bypassing content scanners
+			// that operate within a 1 MiB per-file budget.
+			if hdr.Size > maxFileSize {
+				return fmt.Errorf("skill.Unpack: file size limit exceeded for %s (%d bytes > %d)", hdr.Name, hdr.Size, maxFileSize)
+			}
 			// Ensure parent directory exists.
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return fmt.Errorf("skill.Unpack mkdir parent %s: %w", hdr.Name, err)
@@ -178,6 +189,8 @@ func Unpack(r io.Reader, destDir string) error {
 			}
 		case tar.TypeSymlink, tar.TypeLink:
 			return fmt.Errorf("skill.Unpack: unsupported entry type (symlink/hardlink): %s", hdr.Name)
+		default:
+			return fmt.Errorf("skill.Unpack: unsupported tar entry type %d: %s", hdr.Typeflag, hdr.Name)
 		}
 	}
 	return nil
