@@ -101,7 +101,7 @@ func main() {
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RealIP)
-	router.Use(auth.Middleware(cfg.APIKey))
+	router.Use(auth.Middleware(nil, nil, nil, cfg.APIKey))
 
 	// 6. Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {
