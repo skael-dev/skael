@@ -3,6 +3,7 @@ import { Shell } from "@/app/shell";
 import { SkillList } from "@/features/skills/skill-list";
 import { SkillDetail } from "@/features/skills/skill-detail";
 import { Analytics } from "@/features/analytics/analytics";
+import { Settings } from "@/features/settings/settings";
 
 export function App() {
   return (
@@ -11,7 +12,7 @@ export function App() {
         <Route path="/" element={<SkillList />} />
         <Route path="/skills/:name" element={<SkillDetail />} />
         <Route path="/analytics" element={<Analytics />} />
-        <Route path="/settings" element={<div className="p-12 text-text-primary">Settings page</div>} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
   );
