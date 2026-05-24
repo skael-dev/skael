@@ -445,13 +445,6 @@ function SyncTargetsSection() {
 
 // ── Danger zone section ───────────────────────────────────────
 function DangerSection() {
-  const [dialogOpen, setDialogOpen] = useState(false);
-
-  const handleConfirm = () => {
-    setDialogOpen(false);
-    alert("Not implemented yet");
-  };
-
   return (
     <div>
       <SectionHeader
@@ -471,44 +464,14 @@ function DangerSection() {
           <Button
             variant="destructive"
             size="sm"
-            className="shrink-0"
-            onClick={() => setDialogOpen(true)}
+            className="shrink-0 opacity-50 cursor-not-allowed"
+            disabled
+            title="Coming in a future release"
           >
             Regenerate
           </Button>
         </div>
       </Card>
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-sm bg-bg-secondary border-border text-text-primary">
-          <DialogHeader>
-            <div className="flex items-center gap-2 mb-1">
-              <AlertTriangle className="size-4 text-destructive shrink-0" />
-              <DialogTitle className="text-text-primary">
-                Regenerate API Key?
-              </DialogTitle>
-            </div>
-            <DialogDescription className="text-text-secondary">
-              This will immediately invalidate your current API key. All CLI
-              clients and integrations using the old key will stop working until
-              reconfigured.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-border text-text-secondary"
-              onClick={() => setDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button variant="destructive" size="sm" onClick={handleConfirm}>
-              Yes, regenerate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

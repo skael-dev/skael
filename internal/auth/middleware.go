@@ -62,7 +62,7 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 			// 2. Try API key (X-API-Key header with "sk-" prefix).
 			apiKey := r.Header.Get("X-API-Key")
 			if apiKey != "" && strings.HasPrefix(apiKey, "sk-") && keyStore != nil && userStore != nil {
-				prefix := apiKey[:8]
+				prefix := apiKey[:12]
 				keyRow, err := keyStore.GetByPrefix(r.Context(), prefix)
 				if err == nil && keyRow != nil && CheckAPIKey(keyRow.KeyHash, apiKey) {
 					row, err := userStore.GetByID(r.Context(), keyRow.UserID)
