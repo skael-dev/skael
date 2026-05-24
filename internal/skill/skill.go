@@ -16,6 +16,8 @@ type Skill struct {
 	Frontmatter   json.RawMessage `json:"frontmatter"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	ReviewedAt    *time.Time      `json:"reviewed_at"`
+	ReviewedBy    string          `json:"reviewed_by"`
 }
 
 // Version represents a specific published version of a skill.

@@ -25,7 +25,7 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 	const q = `
 		INSERT INTO skills (name, display_name, description, content, frontmatter)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at
+		RETURNING id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
 	`
 	row := s.pool.QueryRow(ctx, q, name, displayName, description, content, frontmatter)
 	sk, err := scanSkill(row)
@@ -38,7 +38,7 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 // GetByName retrieves a skill by its unique name. Returns nil, nil when not found.
 func (s *Store) GetByName(ctx context.Context, name string) (*Skill, error) {
 	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at
+		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
 		WHERE name = $1
 	`
@@ -62,7 +62,7 @@ func (s *Store) List(ctx context.Context, limit, offset int) ([]Skill, int, erro
 	}
 
 	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at
+		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -129,10 +129,11 @@ func (s *Store) CreateVersion(
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Increment latest_version and return the new value.
+	// Increment latest_version, reset review columns, and return the new value.
 	const updateSkill = `
 		UPDATE skills
-		SET latest_version = latest_version + 1, updated_at = now()
+		SET latest_version = latest_version + 1, updated_at = now(),
+		    reviewed_at = NULL, reviewed_by = ''
 		WHERE id = $1
 		RETURNING latest_version
 	`
@@ -232,12 +233,51 @@ func scanSkill(row scanner) (*Skill, error) {
 		&rawFrontmatter,
 		&sk.CreatedAt,
 		&sk.UpdatedAt,
+		&sk.ReviewedAt,
+		&sk.ReviewedBy,
 	)
 	if err != nil {
 		return nil, err
 	}
 	sk.Frontmatter = json.RawMessage(rawFrontmatter)
 	return &sk, nil
+}
+
+// SetReview marks a skill as reviewed by the given reviewer.
+func (s *Store) SetReview(ctx context.Context, name, reviewedBy string) error {
+	const q = `UPDATE skills SET reviewed_at = now(), reviewed_by = $2 WHERE name = $1`
+	tag, err := s.pool.Exec(ctx, q, name, reviewedBy)
+	if err != nil {
+		return fmt.Errorf("skill.Store.SetReview: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill.Store.SetReview: skill %q not found", name)
+	}
+	return nil
+}
+
+// ClearReview removes the review mark from a skill.
+func (s *Store) ClearReview(ctx context.Context, name string) error {
+	const q = `UPDATE skills SET reviewed_at = NULL, reviewed_by = '' WHERE name = $1`
+	tag, err := s.pool.Exec(ctx, q, name)
+	if err != nil {
+		return fmt.Errorf("skill.Store.ClearReview: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill.Store.ClearReview: skill %q not found", name)
+	}
+	return nil
+}
+
+// BulkSetReview marks multiple skills as reviewed in a single UPDATE.
+// Returns the number of rows actually updated.
+func (s *Store) BulkSetReview(ctx context.Context, names []string, reviewedBy string) (int, error) {
+	const q = `UPDATE skills SET reviewed_at = now(), reviewed_by = $2 WHERE name = ANY($1)`
+	tag, err := s.pool.Exec(ctx, q, names, reviewedBy)
+	if err != nil {
+		return 0, fmt.Errorf("skill.Store.BulkSetReview: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func scanVersion(row scanner) (*Version, error) {

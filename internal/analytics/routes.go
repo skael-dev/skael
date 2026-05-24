@@ -44,6 +44,58 @@ func RegisterRoutes(api huma.API, store *Store) {
 	})
 
 	// -----------------------------------------------------------------
+	// GET /api/analytics/overview?days=30 — KPI strip data
+	// -----------------------------------------------------------------
+	type overviewInput struct {
+		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+	}
+	type overviewOutput struct {
+		Body *OverviewData
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "analytics-overview",
+		Method:      http.MethodGet,
+		Path:        "/api/analytics/overview",
+		Summary:     "Analytics overview for KPI strip",
+	}, func(ctx context.Context, input *overviewInput) (*overviewOutput, error) {
+		days := input.Days
+		if days == 0 {
+			days = 30
+		}
+		data, err := store.GetOverview(ctx, days)
+		if err != nil {
+			return nil, fmt.Errorf("analytics overview: %w", err)
+		}
+		return &overviewOutput{Body: data}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// GET /api/analytics/skills?days=30 — per-skill analytics table
+	// -----------------------------------------------------------------
+	type skillsAnalyticsInput struct {
+		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+	}
+	type skillsAnalyticsOutput struct {
+		Body []SkillAnalytics
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "analytics-skills",
+		Method:      http.MethodGet,
+		Path:        "/api/analytics/skills",
+		Summary:     "Per-skill analytics for table view",
+	}, func(ctx context.Context, input *skillsAnalyticsInput) (*skillsAnalyticsOutput, error) {
+		days := input.Days
+		if days == 0 {
+			days = 30
+		}
+		skills, err := store.GetSkillsAnalytics(ctx, days)
+		if err != nil {
+			return nil, fmt.Errorf("analytics skills: %w", err)
+		}
+		return &skillsAnalyticsOutput{Body: skills}, nil
+	})
+
+	// -----------------------------------------------------------------
 	// GET /api/skills/{name}/activations?days=30 — activation summary
 	// -----------------------------------------------------------------
 	type activationsInput struct {

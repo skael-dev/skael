@@ -2,3 +2,9 @@ bin/
 .env
 data/
 *.tar.gz
+web/dist/
+!web/dist/.gitkeep
+web/src/api/
+web/openapi.json
+web/node_modules/
+web/*.tsbuildinfo

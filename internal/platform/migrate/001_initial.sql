@@ -16,7 +16,9 @@ CREATE TABLE skills (
     latest_version  INT NOT NULL DEFAULT 0,
     frontmatter     JSONB NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at     TIMESTAMPTZ,
+    reviewed_by     TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_skills_search ON skills USING gin(search_vector);

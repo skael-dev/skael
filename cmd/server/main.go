@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -17,9 +20,54 @@ import (
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
+	skweb "github.com/skael-dev/skael/web"
 )
 
 func main() {
+	// --openapi: print the OpenAPI spec and exit (used at build time by the SPA).
+	for _, arg := range os.Args[1:] {
+		if arg == "--openapi" {
+			router := chi.NewMux()
+			config := huma.DefaultConfig("Skael API", "1.0.0")
+			api := humachi.New(router, config)
+
+			// Register all operations so the spec is complete. Handlers are
+			// never called here, so nil stores/storage are safe.
+			skill.RegisterRoutes(api, router, nil, nil)
+			analytics.RegisterRoutes(api, nil)
+
+			huma.Register(api, huma.Operation{
+				OperationID: "get-manifest",
+				Method:      http.MethodGet,
+				Path:        "/api/sync/manifest",
+			}, func(ctx context.Context, input *struct{}) (*struct {
+				Body []gosync.ManifestEntry
+			}, error) {
+				return nil, nil
+			})
+
+			huma.Register(api, huma.Operation{
+				OperationID: "health",
+				Method:      http.MethodGet,
+				Path:        "/api/health",
+			}, func(ctx context.Context, input *struct{}) (*struct {
+				Body struct {
+					Status string `json:"status"`
+				}
+			}, error) {
+				return nil, nil
+			})
+
+			spec, err := json.MarshalIndent(api.OpenAPI(), "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "openapi marshal error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(spec))
+			os.Exit(0)
+		}
+	}
+
 	// 1. Load config.
 	cfg, err := platform.LoadConfig()
 	if err != nil {
@@ -112,7 +160,32 @@ func main() {
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 12. Start server.
+	// 12. Mount embedded SPA — catch-all after all /api/* routes.
+	spaFS, err := fs.Sub(skweb.Assets, "dist")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "embedded SPA error: %v\n", err)
+		os.Exit(1)
+	}
+	fileServer := http.FileServer(http.FS(spaFS))
+
+	router.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Try to open the requested file directly.
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		f, err := spaFS.Open(path)
+		if err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// Fall back to index.html for client-side routing.
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
+
+	// 13. Start server.
 	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
