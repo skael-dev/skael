@@ -46,7 +46,7 @@ func GenerateAPIKey() (fullKey, prefix string, err error) {
 	}
 	h := hex.EncodeToString(b)
 	fullKey = "sk-" + h
-	prefix = fullKey[:8]
+	prefix = fullKey[:12]
 	return fullKey, prefix, nil
 }
 

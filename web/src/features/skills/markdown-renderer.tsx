@@ -44,23 +44,23 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         rehypePlugins={[rehypeSlug]}
         components={{
           // Headings
-          h1: ({ children }) => (
-            <h1 className="text-2xl font-semibold tracking-tight text-text-primary mt-0 mb-4">
+          h1: ({ children, ...props }) => (
+            <h1 className="text-2xl font-semibold tracking-tight text-text-primary mt-0 mb-4" {...props}>
               {children}
             </h1>
           ),
-          h2: ({ children }) => (
-            <h2 className="text-base font-medium tracking-tight text-text-primary mt-8 mb-3 pb-2 border-b border-border">
+          h2: ({ children, ...props }) => (
+            <h2 className="text-base font-medium tracking-tight text-text-primary mt-8 mb-3 pb-2 border-b border-border" {...props}>
               {children}
             </h2>
           ),
-          h3: ({ children }) => (
-            <h3 className="text-[13px] font-medium text-text-primary mt-6 mb-2">
+          h3: ({ children, ...props }) => (
+            <h3 className="text-[13px] font-medium text-text-primary mt-6 mb-2" {...props}>
               {children}
             </h3>
           ),
-          h4: ({ children }) => (
-            <h4 className="text-[13px] font-medium text-text-secondary mt-4 mb-2">
+          h4: ({ children, ...props }) => (
+            <h4 className="text-[13px] font-medium text-text-secondary mt-4 mb-2" {...props}>
               {children}
             </h4>
           ),
