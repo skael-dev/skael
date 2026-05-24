@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SkillCard } from "@/features/skills/skill-card";
 import { analyticsOverview, analyticsSkills, bulkReviewSkills } from "@/api/sdk.gen";
 import type { SkillAnalytics, OverviewData } from "@/api/types.gen";
@@ -19,7 +20,7 @@ function Onboarding() {
   const [installer, setInstaller] = useState<"curl" | "brew" | "go">("curl");
   const [copied, setCopied] = useState(false);
 
-  const cmd = INSTALL_COMMANDS[installer];
+  const cmd = INSTALL_COMMANDS[installer]!;
 
   function handleCopy() {
     navigator.clipboard?.writeText(cmd);
@@ -402,6 +403,45 @@ export function SkillList() {
     } else {
       setSelected(new Set(filtered.map((s) => s.name)));
     }
+  }
+
+  // ── Loading skeleton ──────────────────────────────────────
+  if (isLoading) {
+    return (
+      <div className="flex flex-col h-full overflow-auto px-12 pt-12">
+        <Skeleton className="h-3 w-20 mb-3.5 bg-bg-secondary" />
+        <Skeleton className="h-10 w-40 mb-3.5 bg-bg-secondary" />
+        <Skeleton className="h-4 w-80 mb-9 bg-bg-secondary" />
+        <div className="grid grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-3.5 p-4 bg-bg-secondary border border-border rounded-lg">
+              <Skeleton className="size-9 rounded-[7px] bg-bg-tertiary" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-2 w-20 bg-bg-tertiary" />
+                <Skeleton className="h-6 w-12 bg-bg-tertiary" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-px">
+          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 80px 110px" }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} className="h-2 bg-bg-tertiary" />
+            ))}
+          </div>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 80px 110px" }}>
+              <Skeleton className="h-4 bg-bg-secondary" />
+              <Skeleton className="h-4 w-2 bg-bg-secondary" />
+              <Skeleton className="h-4 w-48 bg-bg-secondary" />
+              <Skeleton className="h-4 bg-bg-secondary" />
+              <Skeleton className="h-4 bg-bg-secondary" />
+              <Skeleton className="h-4 bg-bg-secondary" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   // ── Empty state — onboarding ──────────────────────────────
