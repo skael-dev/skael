@@ -12,7 +12,7 @@ import (
 // trigram rank. Limit caps the number of returned results.
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Skill, error) {
 	const q = `
-		SELECT id, name, display_name, description, '', latest_version, frontmatter, created_at, updated_at,
+		SELECT id, name, display_name, description, '', latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by,
 		    ts_rank(search_vector, websearch_to_tsquery('english', $1)) AS fts_rank,
 		    similarity(name, $1) AS trgm_rank
 		FROM skills
@@ -42,6 +42,8 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Skill, e
 			&rawFrontmatter,
 			&sk.CreatedAt,
 			&sk.UpdatedAt,
+			&sk.ReviewedAt,
+			&sk.ReviewedBy,
 			&ftsRank,
 			&trgmRank,
 		)
