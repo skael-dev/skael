@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -57,7 +58,10 @@ type OverviewData struct {
 	Security         SecuritySummary `json:"security"`
 }
 
-// SecuritySummary breaks down skills by their latest scan status.
+// SecuritySummary aggregates skill security statuses.
+// The scanner produces "warn" and "high" status strings; both are counted
+// under the Warning field. "critical" maps to Critical. Everything else
+// (including "clean", "info", and skills with no scan results) maps to Clean.
 type SecuritySummary struct {
 	Clean    int `json:"clean"`
 	Warning  int `json:"warning"`
@@ -68,6 +72,7 @@ type SecuritySummary struct {
 type SkillAnalytics struct {
 	Name           string     `json:"name"`
 	Description    string     `json:"description"`
+	Tags           []string   `json:"tags"`
 	Activations    int        `json:"activations"`
 	UniqueDevs     int        `json:"unique_devs"`
 	LastTriggered  *time.Time `json:"last_triggered"`
@@ -163,7 +168,8 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 			COALESCE(sv.scan_result->>'status', 'clean')          AS security_status,
 			s.reviewed_at,
 			s.latest_version,
-			s.updated_at
+			s.updated_at,
+			s.frontmatter->'tags'                                 AS raw_tags
 		FROM skills s
 		LEFT JOIN (
 			SELECT
@@ -188,6 +194,7 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 	var results []SkillAnalytics
 	for rows.Next() {
 		var sa SkillAnalytics
+		var rawTags []byte
 		if err := rows.Scan(
 			&sa.Name,
 			&sa.Description,
@@ -198,8 +205,15 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 			&sa.ReviewedAt,
 			&sa.LatestVersion,
 			&sa.UpdatedAt,
+			&rawTags,
 		); err != nil {
 			return nil, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)
+		}
+		if rawTags != nil {
+			_ = json.Unmarshal(rawTags, &sa.Tags)
+		}
+		if sa.Tags == nil {
+			sa.Tags = []string{}
 		}
 		results = append(results, sa)
 	}

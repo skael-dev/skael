@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSlug from "rehype-slug";
 import { cn } from "@/lib/utils";
 
 type MarkdownRendererProps = {
@@ -40,6 +41,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     <div className={cn("text-text-primary text-sm leading-7", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeSlug]}
         components={{
           // Headings
           h1: ({ children }) => (

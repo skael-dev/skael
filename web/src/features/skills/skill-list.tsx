@@ -120,14 +120,12 @@ function Onboarding() {
             2 · Connect to your registry
           </div>
           <div className="grid grid-cols-2 gap-2.5 mb-9">
-            <SetupStep
-              step="skael setup &lt;url&gt; &lt;api-key&gt;"
-              desc="Point the CLI at this server and authenticate."
-            />
-            <SetupStep
-              step="skael publish ./my-skill"
-              desc="Publish your first skill — runs security scan automatically."
-            />
+            <SetupStep desc="Point the CLI at this server and authenticate.">
+              skael setup <code className="px-1.5 py-0.5 bg-bg-tertiary border border-border rounded text-sm font-mono">&lt;url&gt;</code>{" "}<code className="px-1.5 py-0.5 bg-bg-tertiary border border-border rounded text-sm font-mono">&lt;api-key&gt;</code>
+            </SetupStep>
+            <SetupStep desc="Publish your first skill — runs security scan automatically.">
+              skael publish ./my-skill
+            </SetupStep>
           </div>
         </div>
 
@@ -152,13 +150,12 @@ function Onboarding() {
   );
 }
 
-function SetupStep({ step, desc }: { step: string; desc: string }) {
+function SetupStep({ children, desc }: { children: React.ReactNode; desc: string }) {
   return (
     <div className="p-4 bg-bg-secondary border border-border rounded-lg hover:border-border-active transition-colors duration-150">
-      <code
-        className="block font-mono text-[12px] text-accent mb-2"
-        dangerouslySetInnerHTML={{ __html: step }}
-      />
+      <div className="block font-mono text-[12px] text-accent mb-2">
+        {children}
+      </div>
       <p className="text-[12px] text-text-tertiary m-0 leading-relaxed">{desc}</p>
     </div>
   );
@@ -181,19 +178,11 @@ const TAG_COLORS: Record<string, string> = {
 function extractTags(skills: SkillAnalytics[]): string[] {
   const tags = new Set<string>();
   for (const s of skills) {
-    if (
-      s &&
-      typeof s === "object" &&
-      "tags" in s &&
-      Array.isArray((s as unknown as { tags: string[] }).tags)
-    ) {
-      for (const t of (s as unknown as { tags: string[] }).tags) {
+    if (Array.isArray(s.tags)) {
+      for (const t of s.tags) {
         tags.add(t);
       }
     }
-    // Also extract from the skill name patterns as a fallback
-    // The frontmatter tags aren't in SkillAnalytics, so we rely on
-    // whatever the API provides.
   }
   return Array.from(tags).sort();
 }
@@ -365,12 +354,7 @@ export function SkillList() {
     let result = skills.filter((s) => matchesQuery(s, query));
     if (tagFilter) {
       result = result.filter((s) => {
-        // Tag matching on name or description as a lightweight heuristic
-        // since SkillAnalytics doesn't expose tags directly
-        return (
-          s.name.includes(tagFilter) ||
-          (s.description ?? "").toLowerCase().includes(tagFilter)
-        );
+        return Array.isArray(s.tags) && s.tags.includes(tagFilter);
       });
     }
     return sortSkills(result, sortBy);
