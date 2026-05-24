@@ -99,6 +99,9 @@ func main() {
 	sessionManager.Cookie.Name = "skael_session"
 	sessionManager.Cookie.HttpOnly = true
 	sessionManager.Cookie.SameSite = http.SameSiteLaxMode
+	// Secure defaults to false for self-hosted ease (HTTP). Set COOKIE_SECURE=true
+	// in production behind a TLS-terminating reverse proxy.
+	sessionManager.Cookie.Secure = os.Getenv("COOKIE_SECURE") == "true"
 	sessionManager.Lifetime = 7 * 24 * time.Hour
 
 	// 5. Create storage.
