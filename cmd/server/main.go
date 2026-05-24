@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -18,6 +20,7 @@ import (
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
+	skweb "github.com/skael-dev/skael/web"
 )
 
 func main() {
@@ -157,7 +160,32 @@ func main() {
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 12. Start server.
+	// 12. Mount embedded SPA — catch-all after all /api/* routes.
+	spaFS, err := fs.Sub(skweb.Assets, "dist")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "embedded SPA error: %v\n", err)
+		os.Exit(1)
+	}
+	fileServer := http.FileServer(http.FS(spaFS))
+
+	router.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Try to open the requested file directly.
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		f, err := spaFS.Open(path)
+		if err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// Fall back to index.html for client-side routing.
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
+
+	// 13. Start server.
 	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
