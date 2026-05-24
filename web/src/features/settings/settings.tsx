@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Copy, Check, Eye, EyeOff, AlertTriangle } from "lucide-react";
-import { listSkills } from "@/api/sdk.gen";
-import type { ListBody } from "@/api/types.gen";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Copy, Check, Plus, Trash2, AlertTriangle, Key } from "lucide-react";
+import { listSkills, listApiKeys, createApiKey, deleteApiKey } from "@/api/sdk.gen";
+import type { ListBody, ListKeysBody, ApiKeyInfo, CreateKeyResponse } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,6 +22,24 @@ const SECTIONS = [
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
+
+// ── Relative time helper ─────────────────────────────────────
+function relativeTime(dateStr: string | null): string {
+  if (!dateStr) return "never";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  const diffMon = Math.floor(diffDay / 30);
+  return `${diffMon}mo ago`;
+}
 
 // ── Section header ───────────────────────────────────────────
 function SectionHeader({
@@ -118,61 +136,256 @@ function WorkspaceSection({ skillsTotal }: { skillsTotal: number }) {
 
 // ── API & Keys section ────────────────────────────────────────
 function ApiSection() {
-  const [revealed, setRevealed] = useState(false);
+  const queryClient = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ApiKeyInfo | null>(null);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const maskedKey = "sk-live-" + "•".repeat(12);
-  const realKey = "sk-live-••••••••••••"; // placeholder — server doesn't expose key via API
+  const { data: keysData, isLoading } = useQuery({
+    queryKey: ["api-keys"],
+    queryFn: async () => {
+      const res = await listApiKeys();
+      return res.data as ListKeysBody | undefined;
+    },
+  });
 
-  const handleCopy = async () => {
+  const keys = keysData?.keys ?? [];
+
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await createApiKey({ body: { name } });
+      return res.data as CreateKeyResponse;
+    },
+    onSuccess: (data) => {
+      setCreatedKey(data);
+      setNewKeyName("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await deleteApiKey({ path: { id } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      setDeleteTarget(null);
+    },
+  });
+
+  const handleCopyKey = async (key: string) => {
     try {
-      await navigator.clipboard.writeText(realKey);
+      await navigator.clipboard.writeText(key);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // clipboard denied — silently ignore
+      // clipboard denied
     }
+  };
+
+  const handleCloseCreate = () => {
+    setCreateOpen(false);
+    setCreatedKey(null);
+    setNewKeyName("");
+    createMutation.reset();
+    queryClient.invalidateQueries({ queryKey: ["api-keys"] });
   };
 
   return (
     <div>
       <SectionHeader title="API & Keys" desc="Programmatic access to your skills" />
       <Card>
-        <div className="p-3.5">
-          <div className="text-xs text-text-secondary mb-2">API Key</div>
-          <div className="flex items-center gap-2">
-            <div className="flex-1 px-3 py-[7px] bg-bg-tertiary border border-border rounded-[5px] font-mono text-xs text-text-primary overflow-hidden text-ellipsis whitespace-nowrap">
-              {revealed ? realKey : maskedKey}
+        {/* Key list */}
+        {isLoading ? (
+          <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">
+            Loading keys...
+          </div>
+        ) : keys.length === 0 ? (
+          <div className="px-3.5 py-6 text-center">
+            <Key className="size-5 text-text-tertiary mx-auto mb-2" />
+            <div className="text-[13px] text-text-secondary mb-1">No API keys yet</div>
+            <div className="text-[11px] text-text-tertiary">
+              Create a key to authenticate CLI and API access.
             </div>
-            <button
-              onClick={() => setRevealed((r) => !r)}
-              className="flex items-center gap-1.5 h-7 px-3 text-xs text-text-secondary border border-border bg-bg-secondary hover:bg-bg-tertiary rounded-[5px] cursor-pointer transition-colors duration-100 whitespace-nowrap"
-            >
-              {revealed ? (
-                <EyeOff className="size-3" />
-              ) : (
-                <Eye className="size-3" />
-              )}
-              {revealed ? "Hide" : "Reveal"}
-            </button>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 h-7 px-3 text-xs text-text-secondary border border-border bg-bg-secondary hover:bg-bg-tertiary rounded-[5px] cursor-pointer transition-colors duration-100 whitespace-nowrap"
-            >
-              {copied ? (
-                <Check className="size-3 text-accent" />
-              ) : (
-                <Copy className="size-3" />
-              )}
-              {copied ? "Copied" : "Copy"}
-            </button>
           </div>
-          <div className="text-[11px] text-text-tertiary mt-2 font-mono">
-            Configure in your agent with{" "}
-            <code className="text-text-secondary">SKAEL_API_KEY</code>
-          </div>
+        ) : (
+          keys.map((key, i) => (
+            <div
+              key={key.id}
+              className="flex items-center gap-3 px-3.5 py-3"
+              style={{
+                borderBottom:
+                  i < keys.length - 1 ? "1px solid var(--color-border)" : "none",
+              }}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-[13px] text-text-primary font-medium truncate">
+                    {key.name}
+                  </span>
+                  <code className="text-[11px] font-mono text-text-tertiary bg-bg-tertiary px-1.5 py-0.5 rounded border border-border">
+                    {key.prefix}...
+                  </code>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-text-tertiary">
+                  <span>Last used: {relativeTime(key.last_used_at)}</span>
+                  <span>Created: {relativeTime(key.created_at)}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setDeleteTarget(key)}
+                className="flex items-center justify-center size-7 text-text-tertiary hover:text-destructive border border-transparent hover:border-destructive/30 rounded-[5px] cursor-pointer transition-colors duration-100"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ))
+        )}
+
+        {/* Create button */}
+        <div
+          className="px-3.5 py-3"
+          style={{ borderTop: keys.length > 0 ? "1px solid var(--color-border)" : "none" }}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full border-border text-text-secondary"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="size-3 mr-1.5" />
+            Create API Key
+          </Button>
         </div>
       </Card>
+
+      {/* Create key dialog */}
+      <Dialog open={createOpen} onOpenChange={(open) => { if (!open) handleCloseCreate(); }}>
+        <DialogContent className="max-w-sm bg-bg-secondary border-border text-text-primary">
+          <DialogHeader>
+            <DialogTitle className="text-text-primary">
+              {createdKey ? "API Key Created" : "Create API Key"}
+            </DialogTitle>
+            <DialogDescription className="text-text-secondary">
+              {createdKey
+                ? "Copy your key now. It won't be shown again."
+                : "Give your key a name to identify it later."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {createdKey ? (
+            <div>
+              <div className="p-3 bg-bg-tertiary border border-border rounded-lg mb-3">
+                <code className="text-[12px] font-mono text-text-primary break-all leading-relaxed">
+                  {createdKey.key}
+                </code>
+              </div>
+              <button
+                onClick={() => handleCopyKey(createdKey.key)}
+                className="flex items-center gap-1.5 w-full justify-center h-8 px-3 text-xs border border-border bg-bg-secondary hover:bg-bg-tertiary rounded-[5px] cursor-pointer transition-colors duration-100 font-sans text-text-secondary mb-3"
+              >
+                {copied ? (
+                  <Check className="size-3 text-accent" />
+                ) : (
+                  <Copy className="size-3" />
+                )}
+                {copied ? "Copied" : "Copy to clipboard"}
+              </button>
+              <div className="flex items-start gap-2 p-2.5 bg-warning/10 border border-warning/20 rounded-md">
+                <AlertTriangle className="size-3.5 text-warning shrink-0 mt-0.5" />
+                <span className="text-[11px] text-warning leading-relaxed">
+                  This key won't be shown again. Copy it now.
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <input
+                type="text"
+                placeholder="e.g. CI/CD Pipeline"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newKeyName.trim()) {
+                    createMutation.mutate(newKeyName.trim());
+                  }
+                }}
+                className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded-[5px] text-sm text-text-primary outline-none focus:border-border-active transition-colors font-sans placeholder:text-text-tertiary"
+                autoFocus
+              />
+            </div>
+          )}
+
+          <DialogFooter>
+            {createdKey ? (
+              <Button
+                size="sm"
+                className="bg-accent text-bg-primary hover:bg-accent/90"
+                onClick={handleCloseCreate}
+              >
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-border text-text-secondary"
+                  onClick={handleCloseCreate}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-accent text-bg-primary hover:bg-accent/90"
+                  disabled={!newKeyName.trim() || createMutation.isPending}
+                  onClick={() => createMutation.mutate(newKeyName.trim())}
+                >
+                  {createMutation.isPending ? "Creating..." : "Create"}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-sm bg-bg-secondary border-border text-text-primary">
+          <DialogHeader>
+            <div className="flex items-center gap-2 mb-1">
+              <AlertTriangle className="size-4 text-destructive shrink-0" />
+              <DialogTitle className="text-text-primary">
+                Delete API Key?
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-text-secondary">
+              This will permanently delete the key{" "}
+              <strong className="text-text-primary">{deleteTarget?.name}</strong>.
+              Any integrations using this key will stop working.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border text-text-secondary"
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
