@@ -86,3 +86,20 @@ func TestMiddleware_SkipsHealth(t *testing.T) {
 		t.Errorf("expected 200 for /api/health without key, got %d", rec.Code)
 	}
 }
+
+func TestMiddleware_SkipsSPAPaths(t *testing.T) {
+	handler := auth.Middleware(testAPIKey)(okHandler)
+
+	paths := []string{"/", "/skills", "/settings", "/assets/index.js", "/favicon.ico"}
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		// No X-API-Key header intentionally
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for SPA path %q without key, got %d", path, rec.Code)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,6 +21,50 @@ import (
 )
 
 func main() {
+	// --openapi: print the OpenAPI spec and exit (used at build time by the SPA).
+	for _, arg := range os.Args[1:] {
+		if arg == "--openapi" {
+			router := chi.NewMux()
+			config := huma.DefaultConfig("Skael API", "1.0.0")
+			api := humachi.New(router, config)
+
+			// Register all operations so the spec is complete. Handlers are
+			// never called here, so nil stores/storage are safe.
+			skill.RegisterRoutes(api, router, nil, nil)
+			analytics.RegisterRoutes(api, nil)
+
+			huma.Register(api, huma.Operation{
+				OperationID: "get-manifest",
+				Method:      http.MethodGet,
+				Path:        "/api/sync/manifest",
+			}, func(ctx context.Context, input *struct{}) (*struct {
+				Body []gosync.ManifestEntry
+			}, error) {
+				return nil, nil
+			})
+
+			huma.Register(api, huma.Operation{
+				OperationID: "health",
+				Method:      http.MethodGet,
+				Path:        "/api/health",
+			}, func(ctx context.Context, input *struct{}) (*struct {
+				Body struct {
+					Status string `json:"status"`
+				}
+			}, error) {
+				return nil, nil
+			})
+
+			spec, err := json.MarshalIndent(api.OpenAPI(), "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "openapi marshal error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(spec))
+			os.Exit(0)
+		}
+	}
+
 	// 1. Load config.
 	cfg, err := platform.LoadConfig()
 	if err != nil {

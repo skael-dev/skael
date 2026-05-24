@@ -4,15 +4,17 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // Middleware returns a chi-compatible middleware that enforces X-API-Key
-// authentication on all routes except /api/health and /api/openapi.json.
+// authentication on all /api/ routes except /api/health and /api/openapi.json.
+// Non-/api/ paths (SPA static files and index.html catch-all) are always exempt.
 func Middleware(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip auth for exempt paths.
-			if r.URL.Path == "/api/health" || r.URL.Path == "/api/openapi.json" {
+			// Skip auth for non-API paths (SPA) and explicitly exempt API paths.
+			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/health" || r.URL.Path == "/api/openapi.json" {
 				next.ServeHTTP(w, r)
 				return
 			}
