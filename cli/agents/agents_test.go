@@ -39,3 +39,36 @@ func TestDetect_NoneInstalled(t *testing.T) {
 
 	assert.Len(t, detected, 0)
 }
+
+func TestDetect_OpenCode(t *testing.T) {
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	require.NoError(t, os.MkdirAll(opencodeDir, 0o755))
+
+	detected := DetectIn(home)
+
+	require.Len(t, detected, 1)
+	assert.Equal(t, "opencode", detected[0].Name())
+	assert.Equal(t, filepath.Join(home, ".config", "opencode", "skills"), detected[0].SkillsDir(home))
+	assert.Equal(t, filepath.Join(home, ".config", "opencode", "plugins", "skael-tracking.ts"), detected[0].ConfigPath(home))
+}
+
+func TestDetect_MultipleAgents(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755))
+
+	detected := DetectIn(home)
+
+	require.Len(t, detected, 2)
+	names := []string{detected[0].Name(), detected[1].Name()}
+	assert.Contains(t, names, "claude-code")
+	assert.Contains(t, names, "opencode")
+}
+
+func TestOpenCode_NotDetected(t *testing.T) {
+	home := t.TempDir()
+
+	oc := &OpenCode{}
+	assert.False(t, oc.Detected(home))
+}
