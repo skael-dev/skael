@@ -66,9 +66,10 @@ down-clean:
 
 # --- Test ---
 
-# Run all tests (needs Docker for testcontainers)
+# Run all tests except e2e (needs Docker for Go testcontainers)
 test:
     go test ./... -count=1
+    cd web && npx vitest run
 
 # Run tests with verbose output
 test-v:
@@ -82,13 +83,17 @@ test-pkg pkg:
 test-run name:
     go test ./... -v -count=1 -run {{name}}
 
-# Run end-to-end tests (requires integration build tag)
+# Full Playwright E2E (starts server, needs Docker)
 test-e2e:
-    go test -tags integration ./tests/e2e/ -v -count=1 -timeout 120s
+    cd web && npx playwright test
 
-# Run fast tests only (no testcontainers — platform, auth, scan, CLI packages)
+# Frontend unit/integration tests (fast, no server needed)
+test-web:
+    cd web && npx vitest run
+
+# Fast feedback loop (<10s) — skip testcontainers + e2e
 test-fast:
-    go test ./internal/platform/ ./internal/auth/ ./internal/scan/ ./cli/... -v -count=1
+    go test -short ./... -count=1 && cd web && npx vitest run
 
 # --- Lint / Check ---
 
