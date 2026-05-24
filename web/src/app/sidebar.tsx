@@ -14,10 +14,9 @@ const navItems: NavItem[] = [
   { id: "skills", label: "Skills", path: "/", icon: <Layers size={16} /> },
   {
     id: "analytics",
-    label: "Analytics · Phase 2",
+    label: "Analytics",
     path: "/analytics",
     icon: <BarChart3 size={16} />,
-    disabled: true,
   },
 ];
 
