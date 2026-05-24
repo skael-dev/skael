@@ -1,10 +1,17 @@
-import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
-import { getSkill, getSkillActivations } from "@/api/sdk.gen";
-import type { Skill, ActivationSummary } from "@/api/types.gen";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ShieldCheck, ShieldAlert, Clock } from "lucide-react";
+import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreviewSkill } from "@/api/sdk.gen";
+import type { Skill, ActivationSummary, Version, ListVersionsBody } from "@/api/types.gen";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
+import { FileTree } from "@/features/skills/file-tree";
+import { FileViewer, FileViewerFallback } from "@/features/skills/file-viewer";
+import { VersionList } from "@/features/skills/version-list";
+import { SecurityBadge } from "@/features/security/security-badge";
+import { ReviewStatus } from "@/features/security/review-status";
+import { ScanFindings } from "@/features/security/scan-findings";
+import type { ScanReport } from "@/features/security/scan-findings";
 import { cn } from "@/lib/utils";
 
 // ── Tag colors (mirrors skill-card) ──────────────────────────────
@@ -246,7 +253,323 @@ function TabContent({ skill }: { skill: Skill }) {
   );
 }
 
-// ── Placeholder tabs ──────────────────────────────────────────────
+// ── Files Tab ────────────────────────────────────────────────────
+function TabFiles({ skill, versions }: { skill: Skill; versions: Version[] }) {
+  const [activeFile, setActiveFile] = useState("SKILL.md");
+
+  // Get file manifest from the latest version
+  const latestVersion = versions.length > 0
+    ? [...versions].sort((a, b) => b.version - a.version)[0]
+    : null;
+
+  const fileManifest = latestVersion?.file_manifest ?? [];
+
+  // For SKILL.md we can show the content directly from the skill object
+  const fileContent = useMemo(() => {
+    if (activeFile === "SKILL.md" && skill.content) {
+      return skill.content;
+    }
+    return null;
+  }, [activeFile, skill.content]);
+
+  if (fileManifest.length === 0) {
+    return (
+      <div className="text-text-tertiary text-sm py-12 text-center">
+        No files available. Publish a version to see the file manifest.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-6 max-w-[1200px] min-h-[480px]">
+      <FileTree
+        files={fileManifest}
+        activeFile={activeFile}
+        onSelect={setActiveFile}
+      />
+      {fileContent ? (
+        <FileViewer
+          content={fileContent}
+          filename={activeFile}
+          skillName={skill.name}
+        />
+      ) : (
+        <FileViewerFallback filename={activeFile} />
+      )}
+    </div>
+  );
+}
+
+// ── Usage Tab ────────────────────────────────────────────────────
+function TabUsage({ skill, activations }: { skill: Skill; activations: ActivationSummary | undefined }) {
+  const [period, setPeriod] = useState<number>(30);
+
+  const { data: periodActivations } = useQuery({
+    queryKey: ["skill-activations", skill.name, period],
+    queryFn: () =>
+      getSkillActivations({ path: { name: skill.name }, query: { days: period } }).then(
+        (r) => r.data as ActivationSummary
+      ),
+    enabled: period !== 30, // For 30d we already have the data
+  });
+
+  const data = period === 30 ? activations : periodActivations ?? activations;
+
+  const totalCount = data?.total_count ?? 0;
+  const uniqueDevs = data?.unique_devs ?? 0;
+  const avgPerDay = period > 0 ? Math.round(totalCount / period) : 0;
+  const lastTriggered = data?.last_triggered;
+  const byAgent = data?.by_agent ?? {};
+
+  // Format last triggered time
+  const lastTriggeredText = lastTriggered
+    ? formatRelativeTime(lastTriggered)
+    : "—";
+
+  // Calculate total for agent percentages
+  const agentTotal = Object.values(byAgent).reduce((sum, v) => sum + v, 0);
+
+  return (
+    <div className="max-w-[760px]">
+      {/* KPI row */}
+      <div className="grid grid-cols-4 gap-2.5 mb-8">
+        {[
+          { label: `Invocations - ${period}d`, value: totalCount.toLocaleString() },
+          { label: "Unique devs", value: uniqueDevs },
+          { label: "Avg per day", value: avgPerDay },
+          { label: "Last triggered", value: lastTriggeredText },
+        ].map((kpi) => (
+          <div
+            key={kpi.label}
+            className="p-3.5 bg-bg-secondary border border-border rounded-lg"
+          >
+            <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-2">
+              {kpi.label}
+            </div>
+            <span
+              className="text-[22px] font-medium text-text-primary leading-none tracking-tight"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {kpi.value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Period toggle */}
+      <div className="flex items-center gap-3 mb-6">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
+          Time period
+        </span>
+        <div className="flex gap-1">
+          {[
+            { label: "7d", days: 7 },
+            { label: "30d", days: 30 },
+            { label: "90d", days: 90 },
+          ].map((opt) => (
+            <button
+              key={opt.days}
+              onClick={() => setPeriod(opt.days)}
+              className={cn(
+                "px-2 py-1 text-[11px] rounded border border-border cursor-pointer font-sans transition-colors duration-100",
+                period === opt.days
+                  ? "bg-bg-tertiary text-text-primary"
+                  : "bg-transparent text-text-tertiary hover:text-text-secondary"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Agent breakdown */}
+      {Object.keys(byAgent).length > 0 && (
+        <>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-3">
+            Agent breakdown
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            {Object.entries(byAgent)
+              .sort(([, a], [, b]) => b - a)
+              .map(([agent, count], i, arr) => {
+                const pct = agentTotal > 0 ? (count / agentTotal) * 100 : 0;
+                return (
+                  <div
+                    key={agent}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-3 relative",
+                      i < arr.length - 1 && "border-b border-border"
+                    )}
+                  >
+                    {/* Background bar */}
+                    <div
+                      className="absolute left-0 top-0 bottom-0 bg-accent/5 pointer-events-none"
+                      style={{ width: `${pct}%` }}
+                    />
+                    {/* Avatar circle */}
+                    <div className="size-6 rounded-full bg-bg-tertiary border border-border flex items-center justify-center text-[11px] font-mono text-text-secondary z-[1]">
+                      {agent[0]?.toUpperCase()}
+                    </div>
+                    <span className="text-[13px] text-text-primary z-[1]">
+                      {agent}
+                    </span>
+                    <span className="flex-1" />
+                    <span
+                      className="text-xs text-text-primary z-[1]"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {count.toLocaleString()}
+                    </span>
+                    <span
+                      className="text-[11px] text-text-tertiary z-[1] w-11 text-right"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {pct.toFixed(0)}%
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+        </>
+      )}
+
+      {Object.keys(byAgent).length === 0 && totalCount === 0 && (
+        <div className="text-text-tertiary text-sm py-12 text-center">
+          No usage data yet. Activate this skill to start tracking.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Security Tab ─────────────────────────────────────────────────
+function TabSecurity({
+  skill,
+  scanReport,
+  scanLoading,
+}: {
+  skill: Skill;
+  scanReport: ScanReport | null;
+  scanLoading: boolean;
+}) {
+  const queryClient = useQueryClient();
+
+  const reviewMutation = useMutation({
+    mutationFn: () => reviewSkill({ path: { name: skill.name } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+    },
+  });
+
+  const unreviewMutation = useMutation({
+    mutationFn: () => unreviewSkill({ path: { name: skill.name } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+    },
+  });
+
+  const isReviewed = !!skill.reviewed_at;
+  const isPending = reviewMutation.isPending || unreviewMutation.isPending;
+
+  return (
+    <div className="max-w-[800px]">
+      {/* Security overview card */}
+      <div className="flex items-center justify-between p-4 bg-bg-secondary border border-border rounded-lg mb-6">
+        <div className="flex items-center gap-4">
+          {/* Security status */}
+          <div className="flex items-center gap-2.5">
+            {scanReport ? (
+              <>
+                {scanReport.status === "clean" ? (
+                  <ShieldCheck size={20} className="text-accent" />
+                ) : (
+                  <ShieldAlert
+                    size={20}
+                    className={cn(
+                      scanReport.status === "critical"
+                        ? "text-danger"
+                        : scanReport.status === "warn"
+                        ? "text-warning"
+                        : "text-text-tertiary"
+                    )}
+                  />
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <SecurityBadge status={scanReport.status} showLabel />
+                  </div>
+                  <div className="text-[10px] text-text-tertiary mt-0.5">
+                    {scanReport.findings.length} finding{scanReport.findings.length !== 1 ? "s" : ""} detected
+                  </div>
+                </div>
+              </>
+            ) : scanLoading ? (
+              <div className="text-xs text-text-tertiary">Loading scan results...</div>
+            ) : (
+              <div className="text-xs text-text-tertiary">No scan data available</div>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="w-px h-8 bg-border" />
+
+          {/* Review status */}
+          <div className="flex items-center gap-2">
+            <ReviewStatus reviewedAt={skill.reviewed_at} />
+            <div>
+              <div className="text-xs text-text-secondary">
+                {isReviewed ? "Reviewed" : "Unreviewed"}
+              </div>
+              {isReviewed && skill.reviewed_at && (
+                <div className="flex items-center gap-1 text-[10px] text-text-tertiary mt-0.5">
+                  <Clock size={9} />
+                  {formatRelativeTime(skill.reviewed_at)}
+                  {skill.reviewed_by && ` by ${skill.reviewed_by}`}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Review action button */}
+        <button
+          onClick={() => {
+            if (isReviewed) {
+              unreviewMutation.mutate();
+            } else {
+              reviewMutation.mutate();
+            }
+          }}
+          disabled={isPending}
+          className={cn(
+            "flex items-center gap-1.5 h-[30px] px-3 text-[12px] font-sans cursor-pointer rounded-md transition-colors duration-150",
+            isReviewed
+              ? "bg-transparent border border-border text-text-secondary hover:bg-bg-tertiary"
+              : "bg-accent text-bg-primary border border-accent hover:opacity-90",
+            isPending && "opacity-50 cursor-not-allowed"
+          )}
+        >
+          {isPending
+            ? "Updating..."
+            : isReviewed
+            ? "Unmark Reviewed"
+            : "Mark Reviewed"}
+        </button>
+      </div>
+
+      {/* Scan findings */}
+      {scanReport && (
+        <ScanFindings
+          findings={scanReport.findings}
+          scanStatus={scanReport.status}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Placeholder tab (for changelog) ──────────────────────────────
 function TabPlaceholder({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center py-24 text-text-tertiary text-sm">
@@ -277,6 +600,21 @@ const TABS: TabDef[] = [
   { id: "changelog", label: "Changelog", disabled: true },
 ];
 
+// ── Fetch scan report (raw Chi route, not in generated client) ───
+async function fetchScanReport(name: string): Promise<ScanReport | null> {
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(name)}/scan`, {
+      headers: {
+        "X-API-Key": localStorage.getItem("skael-api-key") ?? "",
+      },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ScanReport;
+  } catch {
+    return null;
+  }
+}
+
 export function SkillDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
@@ -297,8 +635,25 @@ export function SkillDetail() {
     enabled: !!name,
   });
 
+  const versionsQuery = useQuery({
+    queryKey: ["skill-versions", name],
+    queryFn: () =>
+      listSkillVersions({ path: { name: name! } }).then(
+        (r) => (r.data as ListVersionsBody)?.versions ?? []
+      ),
+    enabled: !!name,
+  });
+
+  const scanQuery = useQuery({
+    queryKey: ["skill-scan", name],
+    queryFn: () => fetchScanReport(name!),
+    enabled: !!name,
+  });
+
   const skill = skillQuery.data;
   const activations = activationsQuery.data;
+  const versions = versionsQuery.data ?? [];
+  const scanReport = scanQuery.data ?? null;
 
   const tags = skill ? extractTags(skill) : [];
 
@@ -459,10 +814,22 @@ export function SkillDetail() {
         {activeTab === "content" && !skill && !skillQuery.isLoading && (
           <TabPlaceholder label="Content" />
         )}
-        {activeTab === "files" && <TabPlaceholder label="Files tab" />}
-        {activeTab === "versions" && <TabPlaceholder label="Versions tab" />}
-        {activeTab === "usage" && <TabPlaceholder label="Usage tab" />}
-        {activeTab === "security" && <TabPlaceholder label="Security tab" />}
+        {activeTab === "files" && skill && (
+          <TabFiles skill={skill} versions={versions} />
+        )}
+        {activeTab === "versions" && (
+          <VersionList versions={versions} />
+        )}
+        {activeTab === "usage" && skill && (
+          <TabUsage skill={skill} activations={activations} />
+        )}
+        {activeTab === "security" && skill && (
+          <TabSecurity
+            skill={skill}
+            scanReport={scanReport}
+            scanLoading={scanQuery.isLoading}
+          />
+        )}
       </div>
     </div>
   );
