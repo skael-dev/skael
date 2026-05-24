@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 @theme {
+  /* Design system tokens */
   --color-bg-primary: #0a0a0a;
   --color-bg-secondary: #141414;
   --color-bg-tertiary: #1e1e1e;
@@ -17,6 +18,26 @@
   --color-info: #3b82f6;
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", "SF Mono", monospace;
+
+  /* shadcn/ui CSS variables — dark theme (neutral) */
+  --color-background: #0a0a0a;
+  --color-foreground: #ededed;
+  --color-card: #141414;
+  --color-card-foreground: #ededed;
+  --color-popover: #141414;
+  --color-popover-foreground: #ededed;
+  --color-primary: #ededed;
+  --color-primary-foreground: #0a0a0a;
+  --color-secondary: #1e1e1e;
+  --color-secondary-foreground: #ededed;
+  --color-muted: #1e1e1e;
+  --color-muted-foreground: #a0a0a0;
+  --color-accent-foreground: #ededed;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ededed;
+  --color-input: #262626;
+  --color-ring: #404040;
+  --radius: 0.5rem;
 }
 
 body {
