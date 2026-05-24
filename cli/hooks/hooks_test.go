@@ -214,3 +214,109 @@ func TestHookScript_ReadsConfigFile(t *testing.T) {
 
 	assert.Contains(t, content, "config.json", "hook script must read credentials from config.json")
 }
+
+func TestInstallOpenCodeHook_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	err := hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "test-api-key", "/unused")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	content := string(data)
+	assert.Contains(t, content, "managed by skael", "plugin must contain managed-by marker")
+	assert.Contains(t, content, "tool.execute.before", "plugin must hook tool.execute.before")
+	assert.Contains(t, content, "/api/events", "plugin must POST to /api/events")
+	assert.Contains(t, content, `agent: "opencode"`, "plugin must identify as opencode agent")
+}
+
+func TestInstallOpenCodeHook_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key1", "/unused"))
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key2", "/unused"))
+
+	data1, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key3", "/unused"))
+
+	data2, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(data1), string(data2), "plugin content must be identical after repeated installs")
+}
+
+func TestUninstallOpenCodeHook(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "test-key", "/unused"))
+
+	_, err := os.Stat(configPath)
+	require.NoError(t, err, "plugin file must exist after install")
+
+	require.NoError(t, hooks.UninstallForAgent("opencode", configPath))
+
+	_, err = os.Stat(configPath)
+	assert.True(t, os.IsNotExist(err), "plugin file must be removed after uninstall")
+}
+
+func TestUninstallOpenCodeHook_NotExists(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "nonexistent", "skael-tracking.ts")
+
+	err := hooks.UninstallForAgent("opencode", configPath)
+	assert.NoError(t, err, "uninstalling a nonexistent plugin must not error")
+}
+
+func TestOpenCodePlugin_NoPlaintextCredentials(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	const sensitiveKey = "super-secret-api-key-12345"
+	const sensitiveEndpoint = "https://secret.skael.example.com"
+
+	err := hooks.InstallForAgent("opencode", configPath, sensitiveEndpoint, sensitiveKey, "/unused")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(data), sensitiveKey, "API key must NOT appear in plugin source")
+	assert.NotContains(t, string(data), sensitiveEndpoint, "endpoint must NOT appear in plugin source")
+}
+
+func TestOpenCodePlugin_FireAndForget(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key", "/unused"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), ".catch(() => {})", "plugin must use fire-and-forget fetch pattern")
+}
+
+func TestOpenCodePlugin_ReadsConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	pluginsDir := filepath.Join(dir, "plugins")
+	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key", "/unused"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), "config.json", "plugin must read credentials from config.json")
+	assert.Contains(t, string(data), "homedir()", "plugin must use os.homedir() for path resolution")
+}
