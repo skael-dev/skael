@@ -52,7 +52,39 @@ CREATE TABLE skill_events (
 CREATE INDEX idx_events_skill_time ON skill_events (skill_name, created_at DESC);
 CREATE INDEX idx_events_created ON skill_events (created_at DESC);
 
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email           TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'admin',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE user_api_keys (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL DEFAULT 'default',
+    key_prefix      TEXT NOT NULL,
+    key_hash        TEXT NOT NULL,
+    last_used_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_api_keys_prefix ON user_api_keys (key_prefix);
+
+CREATE TABLE sessions (
+    token   TEXT PRIMARY KEY,
+    data    BYTEA NOT NULL,
+    expiry  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX idx_sessions_expiry ON sessions (expiry);
+
 -- +goose Down
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS user_api_keys;
+DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS skill_events;
 DROP TABLE IF EXISTS skill_versions;
 DROP TABLE IF EXISTS skills;
