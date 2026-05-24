@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexedwards/scs/pgxstore"
+	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -33,6 +35,7 @@ func main() {
 
 			// Register all operations so the spec is complete. Handlers are
 			// never called here, so nil stores/storage are safe.
+			auth.RegisterRoutes(api, nil, nil, nil, false)
 			skill.RegisterRoutes(api, router, nil, nil)
 			analytics.RegisterRoutes(api, nil)
 
@@ -90,20 +93,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 4. Create storage.
+	// 4. Initialize session manager.
+	sessionManager := scs.New()
+	sessionManager.Store = pgxstore.NewWithCleanupInterval(pool, 30*time.Minute)
+	sessionManager.Cookie.Name = "skael_session"
+	sessionManager.Cookie.HttpOnly = true
+	sessionManager.Cookie.SameSite = http.SameSiteLaxMode
+	sessionManager.Lifetime = 7 * 24 * time.Hour
+
+	// 5. Create storage.
 	storage, err := platform.NewStorage(cfg.StoragePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "storage error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 5. Create chi router with middleware.
+	// 6. Create auth stores.
+	userStore := auth.NewUserStore(pool)
+	keyStore := auth.NewKeyStore(pool)
+
+	// 7. Create chi router with middleware.
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RealIP)
-	router.Use(auth.Middleware(cfg.APIKey))
+	router.Use(sessionManager.LoadAndSave)
+	router.Use(auth.Middleware(sessionManager, userStore, keyStore, cfg.APIKey))
 
-	// 6. Enforce body size limit before Huma buffers the request body.
+	// 8. Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB
@@ -111,11 +127,11 @@ func main() {
 		})
 	})
 
-	// 7. Create Huma API.
+	// 9. Create Huma API.
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
-	// 8. Register health endpoint (auth middleware skips /api/health).
+	// 10. Register health endpoint (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -134,11 +150,14 @@ func main() {
 		return out, nil
 	})
 
-	// 9. Register skill routes.
+	// 11. Register auth routes.
+	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
+
+	// 12. Register skill routes.
 	skillStore := skill.NewStore(pool)
 	skill.RegisterRoutes(api, router, skillStore, storage)
 
-	// 10. Register sync manifest route.
+	// 13. Register sync manifest route.
 	syncStore := gosync.NewStore(pool)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-manifest",
@@ -156,11 +175,11 @@ func main() {
 		}{Body: entries}, nil
 	})
 
-	// 11. Register analytics routes.
+	// 14. Register analytics routes.
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 12. Mount embedded SPA — catch-all after all /api/* routes.
+	// 15. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "embedded SPA error: %v\n", err)
@@ -185,7 +204,7 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// 13. Start server.
+	// 16. Start server.
 	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
