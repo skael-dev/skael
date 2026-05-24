@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
 )
@@ -63,7 +64,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *createInput) (*createOutput, error) {
 		if !validSkillName.MatchString(input.Body.Name) {
-			return nil, huma.Error400BadRequest("skill name must be lowercase alphanumeric with hyphens")
+			return nil, huma.Error422UnprocessableEntity("skill name must be lowercase alphanumeric with hyphens")
 		}
 		sk, err := store.Create(ctx,
 			input.Body.Name,
@@ -422,7 +423,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Path:        "/api/skills/review",
 		Summary:     "Bulk mark skills as reviewed",
 	}, func(ctx context.Context, input *bulkReviewInput) (*bulkReviewOutput, error) {
-		n, err := store.BulkSetReview(ctx, input.Body.Names, "admin")
+		reviewedBy := "admin"
+		if u := auth.UserFromContext(ctx); u != nil {
+			reviewedBy = u.Name
+		}
+		n, err := store.BulkSetReview(ctx, input.Body.Names, reviewedBy)
 		if err != nil {
 			return nil, fmt.Errorf("bulk review: %w", err)
 		}
@@ -452,7 +457,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			return nil, huma.Error404NotFound(
 				fmt.Sprintf("skill %q not found", input.Name))
 		}
-		if err := store.SetReview(ctx, input.Name, "admin"); err != nil {
+		reviewedBy := "admin"
+		if u := auth.UserFromContext(ctx); u != nil {
+			reviewedBy = u.Name
+		}
+		if err := store.SetReview(ctx, input.Name, reviewedBy); err != nil {
 			return nil, fmt.Errorf("review skill: %w", err)
 		}
 		sk, err = store.GetByName(ctx, input.Name)
