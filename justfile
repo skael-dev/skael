@@ -6,8 +6,8 @@ default:
 
 # --- Build ---
 
-# Build both binaries
-build:
+# Build both binaries (includes SPA)
+build: web-build
     CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
 
@@ -18,6 +18,21 @@ build-server:
 # Build CLI only
 build-cli:
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
+
+# --- Web / Frontend ---
+
+# Generate OpenAPI spec + TypeScript client
+generate:
+    go run ./cmd/server --openapi > web/openapi.json
+    cd web && npm run generate
+
+# Run Vite dev server
+web-dev:
+    cd web && npm run dev
+
+# Build the SPA
+web-build:
+    cd web && npm run build
 
 # --- Dev ---
 

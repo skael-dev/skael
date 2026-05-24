@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  /* Design system tokens */
+  --color-bg-primary: #0a0a0a;
+  --color-bg-secondary: #141414;
+  --color-bg-tertiary: #1e1e1e;
+  --color-border: #262626;
+  --color-border-active: #404040;
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a0a0a0;
+  --color-text-tertiary: #666666;
+  --color-accent: #22c55e;
+  --color-accent-muted: #166534;
+  --color-accent-surface: #052e16;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-info: #3b82f6;
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", monospace;
+
+  /* shadcn/ui CSS variables — dark theme (neutral) */
+  --color-background: #0a0a0a;
+  --color-foreground: #ededed;
+  --color-card: #141414;
+  --color-card-foreground: #ededed;
+  --color-popover: #141414;
+  --color-popover-foreground: #ededed;
+  --color-primary: #ededed;
+  --color-primary-foreground: #0a0a0a;
+  --color-secondary: #1e1e1e;
+  --color-secondary-foreground: #ededed;
+  --color-muted: #1e1e1e;
+  --color-muted-foreground: #a0a0a0;
+  --color-accent-foreground: #ededed;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ededed;
+  --color-input: #262626;
+  --color-ring: #404040;
+  --radius: 0.5rem;
+}
+
+body {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Animation keyframes ────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Animation utility classes ──────────────────────────────── */
+.animate-fade-up {
+  animation: fade-up 0.4s ease-out both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out both;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}

@@ -401,6 +401,95 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 	})
 
 	// -----------------------------------------------------------------
+	// PUT /api/skills/review — bulk review (must be registered before
+	// /api/skills/{name}/review so the static path takes precedence)
+	// -----------------------------------------------------------------
+	type bulkReviewBody struct {
+		Names []string `json:"names" minItems:"1" maxItems:"100"`
+	}
+	type bulkReviewInput struct {
+		Body bulkReviewBody
+	}
+	type bulkReviewResponseBody struct {
+		Reviewed int `json:"reviewed"`
+	}
+	type bulkReviewOutput struct {
+		Body bulkReviewResponseBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "bulk-review-skills",
+		Method:      http.MethodPut,
+		Path:        "/api/skills/review",
+		Summary:     "Bulk mark skills as reviewed",
+	}, func(ctx context.Context, input *bulkReviewInput) (*bulkReviewOutput, error) {
+		n, err := store.BulkSetReview(ctx, input.Body.Names, "admin")
+		if err != nil {
+			return nil, fmt.Errorf("bulk review: %w", err)
+		}
+		return &bulkReviewOutput{Body: bulkReviewResponseBody{Reviewed: n}}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// PUT /api/skills/{name}/review — mark a skill as reviewed
+	// -----------------------------------------------------------------
+	type reviewInput struct {
+		Name string `path:"name"`
+	}
+	type reviewOutput struct {
+		Body *Skill
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "review-skill",
+		Method:      http.MethodPut,
+		Path:        "/api/skills/{name}/review",
+		Summary:     "Mark skill as reviewed",
+	}, func(ctx context.Context, input *reviewInput) (*reviewOutput, error) {
+		sk, err := store.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("review skill: %w", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(
+				fmt.Sprintf("skill %q not found", input.Name))
+		}
+		if err := store.SetReview(ctx, input.Name, "admin"); err != nil {
+			return nil, fmt.Errorf("review skill: %w", err)
+		}
+		sk, err = store.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("review skill: fetch updated: %w", err)
+		}
+		return &reviewOutput{Body: sk}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// DELETE /api/skills/{name}/review — unmark a skill as reviewed
+	// -----------------------------------------------------------------
+	type unreviewInput struct {
+		Name string `path:"name"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "unreview-skill",
+		Method:        http.MethodDelete,
+		Path:          "/api/skills/{name}/review",
+		Summary:       "Unmark skill as reviewed",
+		DefaultStatus: http.StatusNoContent,
+	}, func(ctx context.Context, input *unreviewInput) (*struct{}, error) {
+		sk, err := store.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("unreview skill: %w", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(
+				fmt.Sprintf("skill %q not found", input.Name))
+		}
+		if err := store.ClearReview(ctx, input.Name); err != nil {
+			return nil, fmt.Errorf("unreview skill: %w", err)
+		}
+		return nil, nil
+	})
+
+	// -----------------------------------------------------------------
 	// Raw routes registered directly on the Chi router (streaming responses).
 	// -----------------------------------------------------------------
 	if router != nil {
