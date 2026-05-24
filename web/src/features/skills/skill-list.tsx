@@ -1,12 +1,167 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown } from "lucide-react";
+import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { SkillCard } from "@/features/skills/skill-card";
 import { analyticsOverview, analyticsSkills, bulkReviewSkills } from "@/api/sdk.gen";
 import type { SkillAnalytics, OverviewData } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
+
+// ── Onboarding empty state ────────────────────────────────────
+const INSTALL_COMMANDS: Record<string, string> = {
+  curl: "curl -fsSL skael.dev/install | sh",
+  brew: "brew install skael",
+  go: "go install github.com/skael-dev/skael/cmd/skael@latest",
+};
+
+function Onboarding() {
+  const [installer, setInstaller] = useState<"curl" | "brew" | "go">("curl");
+  const [copied, setCopied] = useState(false);
+
+  const cmd = INSTALL_COMMANDS[installer];
+
+  function handleCopy() {
+    navigator.clipboard?.writeText(cmd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div className="flex-1 overflow-auto relative flex flex-col">
+      {/* Ambient gradient blob */}
+      <div
+        className="pointer-events-none absolute -top-[120px] -right-[100px] w-[520px] h-[520px] rounded-full"
+        style={{
+          background: "radial-gradient(circle, var(--color-accent) 0%, transparent 65%)",
+          opacity: 0.10,
+          filter: "blur(40px)",
+        }}
+      />
+      <div
+        className="pointer-events-none absolute top-[420px] -left-[80px] w-[420px] h-[420px] rounded-full"
+        style={{
+          background: "radial-gradient(circle, var(--color-info) 0%, transparent 65%)",
+          opacity: 0.04,
+          filter: "blur(40px)",
+        }}
+      />
+
+      <div className="relative px-12 pt-16 pb-12 max-w-[880px] w-full mx-auto">
+        {/* Heading */}
+        <div className="animate-fade-up" style={{ animationDelay: "0ms" }}>
+          <h1 className="text-4xl font-medium tracking-tight text-text-primary m-0 mb-3.5 leading-none">
+            Welcome to Skael
+          </h1>
+        </div>
+
+        <div className="animate-fade-up" style={{ animationDelay: "50ms" }}>
+          <p className="text-[15px] text-text-secondary m-0 mb-9 max-w-[540px] leading-relaxed">
+            Manage and track AI agent skills across your team. Install the CLI to get started.
+          </p>
+        </div>
+
+        {/* Step 1: Install */}
+        <div className="animate-fade-up" style={{ animationDelay: "120ms" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
+              1 · Install the CLI
+            </div>
+            <div className="flex-1" />
+            {/* Tab switcher */}
+            <div className="flex border border-border rounded-[5px] overflow-hidden">
+              {(["curl", "brew", "go"] as const).map((k, i) => (
+                <button
+                  key={k}
+                  onClick={() => setInstaller(k)}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-mono cursor-pointer transition-colors duration-100",
+                    i > 0 && "border-l border-border",
+                    installer === k
+                      ? "bg-bg-tertiary text-text-primary"
+                      : "bg-transparent text-text-tertiary hover:text-text-secondary"
+                  )}
+                  style={{ border: "none" }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Terminal card */}
+          <div className="flex items-center gap-3 px-4 py-3.5 bg-bg-secondary border border-border-active rounded-lg relative overflow-hidden mb-11">
+            <span className="font-mono text-[13px] text-accent select-none shrink-0">$</span>
+            <code
+              key={installer}
+              className="font-mono text-[13px] text-text-primary flex-1 whitespace-nowrap overflow-auto animate-fade-in"
+            >
+              {cmd}
+            </code>
+            <button
+              onClick={handleCopy}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 h-[26px] text-[11px] border rounded-[5px] cursor-pointer font-sans shrink-0 transition-all duration-150",
+                copied
+                  ? "bg-accent-surface text-accent border-accent"
+                  : "bg-bg-tertiary text-text-secondary border-border hover:border-border-active"
+              )}
+            >
+              {copied ? <Check className="size-[11px]" /> : <Copy className="size-[11px]" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        {/* Step 2: Setup */}
+        <div className="animate-fade-up" style={{ animationDelay: "200ms" }}>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-3">
+            2 · Connect to your registry
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 mb-9">
+            <SetupStep
+              step="skael setup &lt;url&gt; &lt;api-key&gt;"
+              desc="Point the CLI at this server and authenticate."
+            />
+            <SetupStep
+              step="skael publish ./my-skill"
+              desc="Publish your first skill — runs security scan automatically."
+            />
+          </div>
+        </div>
+
+        {/* Footer: what is a skill */}
+        <div className="animate-fade-up" style={{ animationDelay: "280ms" }}>
+          <div className="flex items-center gap-4 p-4 bg-bg-secondary border border-border rounded-lg">
+            <div className="size-8 rounded-[7px] bg-bg-tertiary border border-border flex items-center justify-center shrink-0">
+              <Zap className="size-[14px] text-text-secondary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] text-text-primary mb-0.5">
+                Not sure what a skill is?
+              </div>
+              <div className="text-[12px] text-text-tertiary leading-relaxed">
+                A skill is a versioned SKILL.md file that gives Claude structured context for a specific task — code review, deploy checks, API patterns, and more.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SetupStep({ step, desc }: { step: string; desc: string }) {
+  return (
+    <div className="p-4 bg-bg-secondary border border-border rounded-lg hover:border-border-active transition-colors duration-150">
+      <code
+        className="block font-mono text-[12px] text-accent mb-2"
+        dangerouslySetInnerHTML={{ __html: step }}
+      />
+      <p className="text-[12px] text-text-tertiary m-0 leading-relaxed">{desc}</p>
+    </div>
+  );
+}
 
 // ── Tag colors ────────────────────────────────────────────────
 const TAG_COLORS: Record<string, string> = {
@@ -249,23 +404,9 @@ export function SkillList() {
     }
   }
 
-  // ── Empty state ───────────────────────────────────────────
+  // ── Empty state — onboarding ──────────────────────────────
   if (!isLoading && skills.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center px-12 py-24">
-        <Layers className="size-10 text-text-tertiary mb-4" />
-        <p className="text-sm text-text-secondary mb-1">
-          No skills published yet.
-        </p>
-        <p className="text-xs text-text-tertiary">
-          Run{" "}
-          <code className="font-mono text-text-secondary bg-bg-secondary px-1.5 py-0.5 rounded">
-            skael publish ./my-skill
-          </code>{" "}
-          to get started.
-        </p>
-      </div>
-    );
+    return <Onboarding />;
   }
 
   return (
