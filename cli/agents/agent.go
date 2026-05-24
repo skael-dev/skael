@@ -26,6 +26,7 @@ func DetectIn(homeDir string) []Agent {
 	known := []Agent{
 		&ClaudeCode{},
 		&Codex{},
+		&OpenCode{},
 	}
 
 	var found []Agent

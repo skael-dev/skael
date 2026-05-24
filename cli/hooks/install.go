@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -235,6 +236,28 @@ func replaceCodexBlock(content, replacement string) string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// OpenCode  (TypeScript plugin file)
+// ────────────────────────────────────────────────────────────────────────────
+
+// installOpenCodeHook writes the skael TypeScript plugin to configPath.
+// Unlike Claude/Codex, this is a standalone file — not an entry in a shared config.
+func installOpenCodeHook(configPath string) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return err
+	}
+	return atomicWriteFile(configPath, []byte(opencodePlugin), 0o644)
+}
+
+// uninstallOpenCodeHook removes the skael TypeScript plugin file.
+func uninstallOpenCodeHook(configPath string) error {
+	err := os.Remove(configPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Generic dispatch
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -245,6 +268,8 @@ func InstallForAgent(agentName, configPath, endpoint, apiKey, scriptPath string)
 		return InstallClaudeHook(configPath, endpoint, apiKey, scriptPath)
 	case "codex":
 		return installCodexHook(configPath, endpoint, apiKey, scriptPath)
+	case "opencode":
+		return installOpenCodeHook(configPath)
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}
@@ -257,6 +282,8 @@ func UninstallForAgent(agentName, configPath string) error {
 		return UninstallClaudeHook(configPath)
 	case "codex":
 		return uninstallCodexHook(configPath)
+	case "opencode":
+		return uninstallOpenCodeHook(configPath)
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}

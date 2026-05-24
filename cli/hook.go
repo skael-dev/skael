@@ -98,6 +98,7 @@ func runHookStatus(cmd *cobra.Command, args []string) error {
 	knownAgents := []agents.Agent{
 		&agents.ClaudeCode{},
 		&agents.Codex{},
+		&agents.OpenCode{},
 	}
 
 	for _, agent := range knownAgents {
