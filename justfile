@@ -6,8 +6,8 @@ default:
 
 # --- Build ---
 
-# Build both binaries (includes SPA)
-build: web-build
+# Build everything (generate client + build SPA + build Go binaries)
+build: generate web-build
     CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
 

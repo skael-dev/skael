@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alexedwards/scs/pgxstore"
@@ -16,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
@@ -26,6 +29,8 @@ import (
 )
 
 func main() {
+	platform.InitLogger()
+
 	// --openapi: print the OpenAPI spec and exit (used at build time by the SPA).
 	for _, arg := range os.Args[1:] {
 		if arg == "--openapi" {
@@ -74,23 +79,20 @@ func main() {
 	// 1. Load config.
 	cfg, err := platform.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("configuration error")
 	}
 
 	// 2. Connect to database.
 	ctx := context.Background()
 	pool, err := platform.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "database connection error: %v\n", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("database connection error")
 	}
 	defer pool.Close()
 
 	// 3. Run migrations.
 	if err := platform.RunMigrations(ctx, pool); err != nil {
-		fmt.Fprintf(os.Stderr, "migration error: %v\n", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("migration error")
 	}
 
 	// 4. Initialize session manager.
@@ -107,8 +109,7 @@ func main() {
 	// 5. Create storage.
 	storage, err := platform.NewStorage(cfg.StoragePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "storage error: %v\n", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("storage error")
 	}
 
 	// 6. Create auth stores.
@@ -119,6 +120,7 @@ func main() {
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RealIP)
+	router.Use(platform.RequestLogger)
 	router.Use(sessionManager.LoadAndSave)
 	router.Use(auth.Middleware(sessionManager, userStore, keyStore, cfg.APIKey))
 
@@ -185,8 +187,7 @@ func main() {
 	// 15. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "embedded SPA error: %v\n", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("embedded SPA error")
 	}
 	fileServer := http.FileServer(http.FS(spaFS))
 
@@ -207,8 +208,7 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// 16. Start server.
-	fmt.Printf("skael-server listening on %s\n", cfg.ListenAddr)
+	// 16. Start server with graceful shutdown.
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           router,
@@ -217,8 +217,24 @@ func main() {
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("server error")
+			os.Exit(1)
+		}
+	}()
+
+	log.Info().Str("addr", cfg.ListenAddr).Msg("skael-server listening")
+	<-sigCtx.Done()
+	log.Info().Msg("shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("shutdown error")
 	}
 }
