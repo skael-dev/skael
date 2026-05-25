@@ -222,6 +222,13 @@ func importSingleSkill(
 		}
 	}
 
+	if sk.LatestVersion > 0 {
+		latest, err := skillStore.GetVersion(ctx, ds.Name, sk.LatestVersion)
+		if err == nil && latest != nil && latest.Checksum == checksum {
+			return latest, nil
+		}
+	}
+
 	archiveName := fmt.Sprintf("%s/%s.tar.gz", ds.Name, checksum[:16])
 	if _, err := storage.Write(archiveName, bytes.NewReader(archive)); err != nil {
 		return nil, fmt.Errorf("store archive: %w", err)
