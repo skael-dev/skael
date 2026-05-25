@@ -90,10 +90,11 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 	}
 
 	const activeQ = `
-		SELECT COUNT(DISTINCT se.skill_name)
+		SELECT COUNT(DISTINCT COALESCE(a.canonical, se.skill_name))
 		FROM skill_events se
-		JOIN skills s ON s.name = se.skill_name
+		LEFT JOIN skill_aliases a ON a.alias = se.skill_name
 		WHERE se.created_at > now() - make_interval(days => $1)
+		  AND EXISTS (SELECT 1 FROM skills s WHERE s.name = COALESCE(a.canonical, se.skill_name))
 	`
 	var active int
 	if err := s.pool.QueryRow(ctx, activeQ, days).Scan(&active); err != nil {
@@ -103,8 +104,9 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 	const totalEventsQ = `
 		SELECT COUNT(*)
 		FROM skill_events se
-		JOIN skills s ON s.name = se.skill_name
+		LEFT JOIN skill_aliases a ON a.alias = se.skill_name
 		WHERE se.created_at > now() - make_interval(days => $1)
+		  AND EXISTS (SELECT 1 FROM skills s WHERE s.name = COALESCE(a.canonical, se.skill_name))
 	`
 	var totalActivations int
 	if err := s.pool.QueryRow(ctx, totalEventsQ, days).Scan(&totalActivations); err != nil {
@@ -175,14 +177,15 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 		FROM skills s
 		LEFT JOIN (
 			SELECT
-				skill_name,
+				COALESCE(a.canonical, se.skill_name) AS resolved_name,
 				COUNT(*)                    AS activation_count,
 				COUNT(DISTINCT developer_hash) AS unique_devs,
-				MAX(created_at)             AS last_triggered
-			FROM skill_events
-			WHERE created_at > now() - make_interval(days => $1)
-			GROUP BY skill_name
-		) e ON e.skill_name = s.name
+				MAX(se.created_at)          AS last_triggered
+			FROM skill_events se
+			LEFT JOIN skill_aliases a ON a.alias = se.skill_name
+			WHERE se.created_at > now() - make_interval(days => $1)
+			GROUP BY resolved_name
+		) e ON e.resolved_name = s.name
 		LEFT JOIN skill_versions sv
 			ON sv.skill_id = s.id AND sv.version = s.latest_version
 		ORDER BY activations DESC, s.name ASC
@@ -233,10 +236,11 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 func (s *Store) GetActivations(ctx context.Context, skillName string, days int) (*ActivationSummary, error) {
 	// Query 1: aggregate counts.
 	const aggQ = `
-		SELECT COUNT(*), COUNT(DISTINCT developer_hash), MAX(created_at)
-		FROM skill_events
-		WHERE skill_name = $1
-		  AND created_at > now() - make_interval(days => $2)
+		SELECT COUNT(*), COUNT(DISTINCT se.developer_hash), MAX(se.created_at)
+		FROM skill_events se
+		LEFT JOIN skill_aliases a ON a.alias = se.skill_name
+		WHERE COALESCE(a.canonical, se.skill_name) = $1
+		  AND se.created_at > now() - make_interval(days => $2)
 	`
 	var totalCount int
 	var uniqueDevs int
@@ -250,9 +254,10 @@ func (s *Store) GetActivations(ctx context.Context, skillName string, days int) 
 	// Query 2: per-agent breakdown.
 	const agentQ = `
 		SELECT agent, COUNT(*)
-		FROM skill_events
-		WHERE skill_name = $1
-		  AND created_at > now() - make_interval(days => $2)
+		FROM skill_events se
+		LEFT JOIN skill_aliases a ON a.alias = se.skill_name
+		WHERE COALESCE(a.canonical, se.skill_name) = $1
+		  AND se.created_at > now() - make_interval(days => $2)
 		GROUP BY agent
 	`
 	rows, err := s.pool.Query(ctx, agentQ, skillName, days)
@@ -304,6 +309,7 @@ func (s *Store) GetUnregisteredSkills(ctx context.Context, days int) ([]Unregist
 		WHERE se.created_at > now() - make_interval(days => $1)
 		  AND NOT EXISTS (SELECT 1 FROM skills s WHERE s.name = se.skill_name)
 		  AND NOT EXISTS (SELECT 1 FROM dismissed_skills d WHERE d.name = se.skill_name)
+		  AND NOT EXISTS (SELECT 1 FROM skill_aliases a WHERE a.alias = se.skill_name)
 		GROUP BY se.skill_name
 		ORDER BY activations DESC
 	`
@@ -360,7 +366,13 @@ func (s *Store) GetTimeSeries(ctx context.Context, days int) ([]DailyCount, erro
 		FROM days d
 		LEFT JOIN skill_events se
 			ON se.created_at::date = d.day
-			AND EXISTS (SELECT 1 FROM skills s WHERE s.name = se.skill_name)
+			AND EXISTS (
+				SELECT 1 FROM skills s
+				WHERE s.name = COALESCE(
+					(SELECT canonical FROM skill_aliases WHERE alias = se.skill_name),
+					se.skill_name
+				)
+			)
 		GROUP BY d.day
 		ORDER BY d.day
 	`
