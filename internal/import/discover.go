@@ -1,6 +1,7 @@
 package skillimport
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,10 +58,37 @@ func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {
 		results = append(results, *ds)
 	}
 
+	// Dedup: if multiple directories produce the same skill name, keep the first.
+	seen := map[string]bool{}
+	var deduped []DiscoveredSkill
+	for _, ds := range results {
+		if !seen[ds.Name] {
+			seen[ds.Name] = true
+			deduped = append(deduped, ds)
+		}
+	}
+	results = deduped
+
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Name < results[j].Name
 	})
 	return results, nil
+}
+
+// DetectPluginName looks for .claude-plugin/plugin.json in the root directory
+// and returns the plugin name if found.
+func DetectPluginName(rootDir string) string {
+	data, err := os.ReadFile(filepath.Join(rootDir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return ""
+	}
+	return manifest.Name
 }
 
 func inspectSkillDir(rootDir, skillDir string) (*DiscoveredSkill, error) {

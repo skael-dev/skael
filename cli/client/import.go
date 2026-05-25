@@ -33,8 +33,9 @@ type FileEntry struct {
 }
 
 type ResolveResponse struct {
-	Source ImportSource      `json:"source"`
-	Skills []DiscoveredSkill `json:"skills"`
+	Source     ImportSource      `json:"source"`
+	Skills     []DiscoveredSkill `json:"skills"`
+	PluginName string            `json:"plugin_name,omitempty"`
 }
 
 type ImportedSkill struct {
@@ -83,10 +84,11 @@ func (c *Client) ImportResolve(url string) (*ResolveResponse, error) {
 	return &result, nil
 }
 
-func (c *Client) ImportSkills(source ImportSource, skillNames []string) (*ImportResponse, error) {
+func (c *Client) ImportSkills(source ImportSource, skillNames []string, namespace string) (*ImportResponse, error) {
 	payload, err := json.Marshal(map[string]interface{}{
-		"source": source,
-		"skills": skillNames,
+		"source":    source,
+		"skills":    skillNames,
+		"namespace": namespace,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal import request: %w", err)
