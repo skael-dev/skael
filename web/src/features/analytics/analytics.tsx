@@ -4,6 +4,7 @@ import { BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KpiStrip } from "./kpi-strip";
+import { ActivationsChart } from "./activations-chart";
 import { AnalyticsTable } from "./analytics-table";
 import { analyticsOverview, analyticsSkills } from "@/api/sdk.gen";
 import type { OverviewData, SkillAnalytics } from "@/api/types.gen";
@@ -128,6 +129,11 @@ export function Analytics() {
           ) : (
             <KpiStrip data={overview} days={days} />
           )}
+        </div>
+
+        {/* Activations chart */}
+        <div className="mb-9">
+          <ActivationsChart days={days} />
         </div>
       </div>
 
