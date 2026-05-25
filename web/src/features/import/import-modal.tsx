@@ -219,9 +219,9 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
                     disabled={isImporting}
                     className="shrink-0"
                   />
-                  <div className="min-w-0 flex-1">
+                  <div className="flex-1 max-w-0 grow">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[13px] text-text-primary font-medium truncate">
+                      <span className="font-mono text-[13px] text-text-primary font-medium">
                         {sk.name}
                       </span>
                       <SecurityBadge status={sk.scan_status} />
@@ -231,8 +231,11 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-text-tertiary truncate m-0">{sk.description}</p>
+                    <p className="text-xs text-text-tertiary m-0 overflow-hidden text-ellipsis whitespace-nowrap">{sk.description}</p>
                   </div>
+                  <span className="text-[11px] text-text-tertiary whitespace-nowrap shrink-0">
+                    {(sk.files ?? []).length} files
+                  </span>
                 </label>
               ))}
             </div>
