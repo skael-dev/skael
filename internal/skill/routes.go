@@ -83,6 +83,36 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 	})
 
 	// -----------------------------------------------------------------
+	// POST /api/skills/register — register a skill stub (no name validation)
+	// -----------------------------------------------------------------
+	type registerBody struct {
+		Name string `json:"name" minLength:"1" maxLength:"255"`
+	}
+	type registerInput struct {
+		Body registerBody
+	}
+	type registerOutput struct {
+		Body *Skill
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "register-skill",
+		Method:        http.MethodPost,
+		Path:          "/api/skills/register",
+		Summary:       "Register a skill stub (no name format validation)",
+		DefaultStatus: http.StatusCreated,
+	}, func(ctx context.Context, input *registerInput) (*registerOutput, error) {
+		sk, err := store.Create(ctx, input.Body.Name, "", "", "", json.RawMessage(`{}`))
+		if err != nil {
+			if platform.IsDuplicateKey(err) {
+				return nil, huma.Error409Conflict(
+					fmt.Sprintf("skill %q already exists", input.Body.Name))
+			}
+			return nil, fmt.Errorf("register skill: %w", err)
+		}
+		return &registerOutput{Body: sk}, nil
+	})
+
+	// -----------------------------------------------------------------
 	// GET /api/skills/{name} — get a skill by name
 	// -----------------------------------------------------------------
 	type getInput struct {
