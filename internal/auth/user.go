@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 
@@ -51,13 +52,11 @@ func GenerateAPIKey() (fullKey, prefix string, err error) {
 }
 
 func HashAPIKey(key string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(key), bcrypt.DefaultCost)
-	if err != nil {
-		return "", fmt.Errorf("auth.HashAPIKey: %w", err)
-	}
-	return string(hash), nil
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:]), nil
 }
 
 func CheckAPIKey(hash, key string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(key)) == nil
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:]) == hash
 }

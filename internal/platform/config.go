@@ -2,8 +2,9 @@ package platform
 
 import (
 	"errors"
-	"fmt"
 	"os"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Config holds all runtime configuration for the skael server.
@@ -28,7 +29,7 @@ func LoadConfig() (*Config, error) {
 
 	apiKey := os.Getenv("API_KEY")
 	if apiKey != "" {
-		fmt.Fprintln(os.Stderr, "WARNING: API_KEY is deprecated. Use user accounts and personal API keys instead.")
+		log.Warn().Msg("API_KEY env var is deprecated — use user accounts and personal API keys")
 	}
 
 	return &Config{
