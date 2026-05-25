@@ -128,9 +128,14 @@ export function UnregisteredTab({ days }: { days: number }) {
     },
   });
 
-  const handleMerge = (sourceName: string) => {
+  const handleMerge = async (sourceName: string) => {
     const target = window.prompt(`Merge "${sourceName}" into which skill? Enter the target skill name:`);
     if (!target) return;
+    try {
+      await registerSkill(sourceName);
+    } catch {
+      // already registered is fine
+    }
     mergeMutation.mutate({ source: sourceName, target });
   };
 
@@ -283,7 +288,8 @@ export function UnregisteredTab({ days }: { days: number }) {
             <div className="relative group/merge">
               <button
                 onClick={() => handleMerge(sk.name)}
-                className="p-1.5 rounded-md text-text-tertiary hover:text-info hover:bg-info/10 transition-colors cursor-pointer"
+                disabled={mergeMutation.isPending}
+                className="p-1.5 rounded-md text-text-tertiary hover:text-info hover:bg-info/10 transition-colors cursor-pointer disabled:opacity-50"
               >
                 <GitMerge size={14} />
               </button>
