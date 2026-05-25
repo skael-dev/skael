@@ -46,7 +46,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 
 		result, err := fetcher.Fetch(src)
 		if err != nil {
-			return nil, huma.Error400BadRequest(fmt.Sprintf("fetch failed: %v", err))
+			return nil, huma.Error502BadGateway(fmt.Sprintf("fetch failed: %v", err))
 		}
 		defer os.RemoveAll(result.Dir)
 
@@ -100,7 +100,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 
 		result, err := fetcher.Fetch(src)
 		if err != nil {
-			return nil, huma.Error400BadRequest(fmt.Sprintf("fetch failed: %v", err))
+			return nil, huma.Error502BadGateway(fmt.Sprintf("fetch failed: %v", err))
 		}
 		defer os.RemoveAll(result.Dir)
 
@@ -235,17 +235,21 @@ func importSingleSkill(
 
 	// Update skill metadata (non-fatal, same as publish).
 	// Note: UpdateContent takes skill name, not ID.
-	skillStore.UpdateContent(ctx, ds.Name, description, body, fmJSON)
+	if err := skillStore.UpdateContent(ctx, ds.Name, description, body, fmJSON); err != nil {
+		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: update content failed (non-fatal)")
+	}
 
 	// Record provenance.
-	importStore.Upsert(ctx, ImportSource{
+	if err := importStore.Upsert(ctx, ImportSource{
 		SkillID:    sk.ID,
 		SourceType: src.Type,
 		SourceURL:  fmt.Sprintf("https://github.com/%s/%s", src.Owner, src.Repo),
 		SourcePath: ds.Path,
 		SourceRef:  src.Ref,
 		CommitSHA:  src.CommitSHA,
-	})
+	}); err != nil {
+		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: record provenance failed (non-fatal)")
+	}
 
 	return ver, nil
 }
@@ -270,22 +274,44 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage *pla
 			return
 		}
 
-		skills, err := Discover(tmpDir, "")
+		discovered, err := Discover(tmpDir, "")
 		if err != nil {
 			http.Error(w, "discover: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		type response struct {
-			Source Source            `json:"source"`
-			Skills []DiscoveredSkill `json:"skills"`
+		src := Source{Type: "upload"}
+
+		type importedSkill struct {
+			Name       string `json:"name"`
+			Version    int    `json:"version"`
+			ScanStatus string `json:"scan_status"`
 		}
+		type failedSkill struct {
+			Name  string `json:"name"`
+			Error string `json:"error"`
+		}
+		type response struct {
+			Imported []importedSkill `json:"imported"`
+			Failed   []failedSkill   `json:"failed"`
+		}
+
 		resp := response{
-			Source: Source{Type: "upload"},
-			Skills: skills,
+			Imported: []importedSkill{},
+			Failed:   []failedSkill{},
+		}
+
+		for _, ds := range discovered {
+			ver, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage)
+			if err != nil {
+				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
+				continue
+			}
+			resp.Imported = append(resp.Imported, importedSkill{Name: ds.Name, Version: ver.Version, ScanStatus: ds.ScanStatus})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(resp)
 	}
 }

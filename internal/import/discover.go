@@ -1,6 +1,7 @@
 package skillimport
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,8 +30,11 @@ func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {
 	if _, err := os.Stat(filepath.Join(searchDir, "SKILL.md")); err == nil {
 		skillDirs = append(skillDirs, searchDir)
 	} else {
-		filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+		err := filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // skip inaccessible entries
+			}
+			if info.IsDir() {
 				return nil
 			}
 			if info.Name() == "SKILL.md" {
@@ -38,6 +42,9 @@ func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {
 			}
 			return nil
 		})
+		if err != nil {
+			return nil, fmt.Errorf("walk %s: %w", searchDir, err)
+		}
 	}
 
 	var results []DiscoveredSkill
