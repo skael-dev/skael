@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
@@ -20,6 +22,9 @@ import (
 )
 
 func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage *platform.Storage, fetcher *Fetcher) {
+	// Rate limit: 10 requests per minute for the resolve endpoint.
+	resolveLimiter := rate.NewLimiter(rate.Every(time.Minute/10), 1)
+
 	// POST /api/import/resolve — preview skills from a URL
 	type resolveBody struct {
 		URL string `json:"url" minLength:"1"`
@@ -39,6 +44,10 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 		Path:        "/api/import/resolve",
 		Summary:     "Preview skills available for import from a URL",
 	}, func(ctx context.Context, input *resolveInput) (*resolveOutput, error) {
+		if !resolveLimiter.Allow() {
+			return nil, huma.Error429TooManyRequests("import resolve rate limited (max 10/min)")
+		}
+
 		src, err := ResolveURL(input.Body.URL)
 		if err != nil {
 			return nil, huma.Error400BadRequest(fmt.Sprintf("invalid URL: %v", err))
@@ -55,6 +64,13 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 		skills, err := Discover(result.Dir, src.Path)
 		if err != nil {
 			return nil, fmt.Errorf("discover: %w", err)
+		}
+
+		for i := range skills {
+			existing, err := skillStore.GetByName(ctx, skills[i].Name)
+			if err == nil && existing != nil {
+				skills[i].ExistingVersion = existing.LatestVersion
+			}
 		}
 
 		out := &resolveOutput{}
@@ -159,6 +175,29 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 			return nil, fmt.Errorf("list sources: %w", err)
 		}
 		return &sourcesOutput{Body: sources}, nil
+	})
+
+	// GET /api/skills/{name}/source — get import provenance for a single skill
+	type skillSourceInput struct {
+		Name string `path:"name"`
+	}
+	type skillSourceOutput struct {
+		Body *ImportSource
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get-skill-import-source",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/source",
+		Summary:     "Get import source for a skill",
+	}, func(ctx context.Context, input *skillSourceInput) (*skillSourceOutput, error) {
+		src, err := importStore.GetBySkillName(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("get skill source: %w", err)
+		}
+		if src == nil {
+			return &skillSourceOutput{Body: nil}, nil
+		}
+		return &skillSourceOutput{Body: src}, nil
 	})
 
 	// POST /api/import/upload — local upload for CLI
