@@ -2,10 +2,17 @@ package skill
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skill, error) {
+	if sourceName == targetName {
+		return nil, fmt.Errorf("cannot merge a skill into itself")
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("skill.Store.Merge begin: %w", err)
@@ -16,11 +23,17 @@ func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skil
 	var targetLatest int
 	err = tx.QueryRow(ctx, `SELECT id FROM skills WHERE name = $1`, sourceName).Scan(&sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("skill.Store.Merge source not found: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("source skill %q not found", sourceName)
+		}
+		return nil, fmt.Errorf("skill.Store.Merge source lookup: %w", err)
 	}
 	err = tx.QueryRow(ctx, `SELECT id, latest_version FROM skills WHERE name = $1`, targetName).Scan(&targetID, &targetLatest)
 	if err != nil {
-		return nil, fmt.Errorf("skill.Store.Merge target not found: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("target skill %q not found", targetName)
+		}
+		return nil, fmt.Errorf("skill.Store.Merge target lookup: %w", err)
 	}
 
 	rows, err := tx.Query(ctx,
@@ -72,9 +85,13 @@ func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skil
 	}
 
 	var targetHasSource bool
-	tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM import_sources WHERE skill_id = $1)`, targetID).Scan(&targetHasSource)
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM import_sources WHERE skill_id = $1)`, targetID).Scan(&targetHasSource); err != nil {
+		return nil, fmt.Errorf("skill.Store.Merge check import_sources: %w", err)
+	}
 	if !targetHasSource {
-		tx.Exec(ctx, `UPDATE import_sources SET skill_id = $1 WHERE skill_id = $2`, targetID, sourceID)
+		if _, err := tx.Exec(ctx, `UPDATE import_sources SET skill_id = $1 WHERE skill_id = $2`, targetID, sourceID); err != nil {
+			return nil, fmt.Errorf("skill.Store.Merge transfer import_sources: %w", err)
+		}
 	}
 
 	_, err = tx.Exec(ctx, `DELETE FROM skills WHERE id = $1`, sourceID)
