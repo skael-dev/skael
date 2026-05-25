@@ -229,9 +229,16 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			)
 		}
 
-		// 4. Compute checksum and store the archive.
+		// 4. Compute checksum and compare against latest version.
 		h := sha256.Sum256(input.RawBody)
 		checksum := hex.EncodeToString(h[:])
+
+		if sk.LatestVersion > 0 {
+			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
+			if err == nil && latest != nil && latest.Checksum == checksum {
+				return &publishOutput{Body: latest}, nil
+			}
+		}
 
 		// archiveName is content-addressable: different content → different filename,
 		// so concurrent publishes with distinct payloads cannot overwrite each other.
