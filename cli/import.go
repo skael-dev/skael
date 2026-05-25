@@ -224,9 +224,13 @@ func runLocalImport(c *client.Client, path string) error {
 		}
 
 		for _, imp := range result.Imported {
-			allImported = append(allImported, client.ImportedSkill{Name: imp.Name, Version: imp.Version, ScanStatus: imp.ScanStatus})
+			allImported = append(allImported, client.ImportedSkill{Name: imp.Name, Version: imp.Version, ScanStatus: imp.ScanStatus, Created: imp.Created})
 			if !ui.JSONMode {
-				ui.Success("%s v%d imported", imp.Name, imp.Version)
+				if imp.Created {
+					ui.Success("%s v%d imported", imp.Name, imp.Version)
+				} else {
+					ui.Info("%s v%d — no changes detected", imp.Name, imp.Version)
+				}
 			}
 		}
 		for _, fail := range result.Failed {
@@ -350,14 +354,23 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 	}
 
 	fmt.Fprintln(os.Stdout)
+	newCount := 0
 	for _, imp := range result.Imported {
-		ui.Success("%s v%d", imp.Name, imp.Version)
+		if imp.Created {
+			ui.Success("%s v%d", imp.Name, imp.Version)
+			newCount++
+		} else {
+			ui.Info("%s v%d — no changes detected", imp.Name, imp.Version)
+		}
 	}
 	for _, fail := range result.Failed {
 		ui.Errorf("%s: %s", fail.Name, fail.Error)
 	}
 
-	parts := []string{fmt.Sprintf("%d imported", len(result.Imported))}
+	parts := []string{fmt.Sprintf("%d imported", newCount)}
+	if len(result.Imported)-newCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d unchanged", len(result.Imported)-newCount))
+	}
 	if len(result.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", len(result.Failed)))
 	}
