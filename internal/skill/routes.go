@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,7 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
@@ -74,7 +73,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			json.RawMessage(`{}`),
 		)
 		if err != nil {
-			if isDuplicateKey(err) {
+			if platform.IsDuplicateKey(err) {
 				return nil, huma.Error409Conflict(
 					fmt.Sprintf("skill %q already exists", input.Body.Name))
 			}
@@ -325,7 +324,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		// Non-fatal: the version is already committed. A stale metadata entry
 		// will be corrected on the next successful publish.
 		if err := store.UpdateContent(ctx, input.Name, description, body, fmJSON); err != nil {
-			log.Printf("publish: update skill metadata for %q: %v (non-fatal)", input.Name, err)
+			log.Warn().Str("skill", input.Name).Err(err).Msg("publish: update skill metadata (non-fatal)")
 		}
 
 		return &publishOutput{Body: ver}, nil
@@ -587,19 +586,3 @@ func makeLatestScanHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-// isDuplicateKey returns true if err is a Postgres unique-violation error
-// (SQLSTATE 23505).
-func isDuplicateKey(err error) bool {
-	for err != nil {
-		if pe, ok := err.(*pgconn.PgError); ok {
-			return pe.Code == "23505"
-		}
-		type unwrapper interface{ Unwrap() error }
-		if u, ok := err.(unwrapper); ok {
-			err = u.Unwrap()
-		} else {
-			break
-		}
-	}
-	return false
-}
