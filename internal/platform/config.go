@@ -14,6 +14,7 @@ type Config struct {
 	ListenAddr    string
 	APIKey        string
 	DisableSignup bool
+	GitHubToken   string
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -38,6 +39,7 @@ func LoadConfig() (*Config, error) {
 		StoragePath:   envDefault("STORAGE_PATH", "./data/skills"),
 		ListenAddr:    envDefault("LISTEN_ADDR", ":8080"),
 		DisableSignup: os.Getenv("DISABLE_SIGNUP") == "true",
+		GitHubToken:   os.Getenv("GITHUB_TOKEN"),
 	}, nil
 }
 
