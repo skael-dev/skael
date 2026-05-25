@@ -207,34 +207,32 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
               </button>
             </div>
 
-            <div className="max-h-[320px] overflow-y-auto border border-border rounded-b-md border-t-0 divide-y divide-border">
+            <div className="max-h-[320px] overflow-y-auto overflow-x-hidden border border-border rounded-b-md border-t-0 divide-y divide-border">
               {resolved.skills.map((sk) => (
                 <label
                   key={sk.name}
-                  className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-secondary cursor-pointer transition-colors"
+                  className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-secondary cursor-pointer transition-colors overflow-hidden"
                 >
                   <Checkbox
                     checked={selected.has(sk.name)}
                     onCheckedChange={(v) => toggleSkill(sk.name, v === true)}
                     disabled={isImporting}
+                    className="shrink-0"
                   />
-                  <div className="flex-1 min-w-0 overflow-hidden">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[13px] text-text-primary font-medium">
+                      <span className="font-mono text-[13px] text-text-primary font-medium truncate">
                         {sk.name}
                       </span>
                       <SecurityBadge status={sk.scan_status} />
                       {sk.existing_version > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary shrink-0">
                           v{sk.existing_version}
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-text-tertiary truncate">{sk.description}</p>
+                    <p className="text-xs text-text-tertiary truncate m-0">{sk.description}</p>
                   </div>
-                  <span className="text-[11px] text-text-tertiary whitespace-nowrap">
-                    {(sk.files ?? []).length} files
-                  </span>
                 </label>
               ))}
             </div>
