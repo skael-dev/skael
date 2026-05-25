@@ -63,6 +63,10 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		ui.Errorf("write hook script: %s", err)
 		return fmt.Errorf("write hook script: %w", err)
 	}
+	cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
+	if cursorErr != nil {
+		ui.Warn("write cursor hook script: %s", cursorErr)
+	}
 
 	detectedAgents := agents.DetectIn(home)
 	if len(detectedAgents) == 0 {
@@ -77,7 +81,11 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 			ui.Warn("create config dir for %s: %s", agent.Name(), mkErr)
 			continue
 		}
-		if instErr := hooks.InstallForAgent(agent.Name(), configPath, cfg.Endpoint, cfg.APIKey, scriptPath); instErr != nil {
+		hookScript := scriptPath
+		if agent.Name() == "cursor" {
+			hookScript = cursorScriptPath
+		}
+		if instErr := hooks.InstallForAgent(agent.Name(), configPath, cfg.Endpoint, cfg.APIKey, hookScript); instErr != nil {
 			ui.Errorf("install hook for %s: %s", agent.Name(), instErr)
 		} else {
 			ui.Success("Hook installed for %s", agent.Name())
@@ -99,6 +107,7 @@ func runHookStatus(cmd *cobra.Command, args []string) error {
 		&agents.ClaudeCode{},
 		&agents.Codex{},
 		&agents.OpenCode{},
+		&agents.Cursor{},
 	}
 
 	for _, agent := range knownAgents {

@@ -112,6 +112,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				}
 				hookScript := scriptPath
 				if agent.Name() == "cursor" {
+					if cursorScriptPath == "" {
+						ui.Warn("skip cursor hook: script not available")
+						continue
+					}
 					hookScript = cursorScriptPath
 				}
 				if instErr := hooks.InstallForAgent(agent.Name(), configPath, endpoint, apiKey, hookScript); instErr != nil {
