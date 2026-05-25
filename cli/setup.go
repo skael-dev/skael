@@ -99,6 +99,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			ui.Warn("write hook script: %s", err)
 		} else {
+			cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
+			if cursorErr != nil {
+				ui.Warn("write cursor hook script: %s", cursorErr)
+			}
 			for _, agent := range detectedAgents {
 				configPath := agent.ConfigPath(home)
 				// Ensure parent directory exists for agents whose config may not yet exist.
@@ -106,7 +110,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 					ui.Warn("create config dir for %s: %s", agent.Name(), mkErr)
 					continue
 				}
-				if instErr := hooks.InstallForAgent(agent.Name(), configPath, endpoint, apiKey, scriptPath); instErr != nil {
+				hookScript := scriptPath
+				if agent.Name() == "cursor" {
+					hookScript = cursorScriptPath
+				}
+				if instErr := hooks.InstallForAgent(agent.Name(), configPath, endpoint, apiKey, hookScript); instErr != nil {
 					ui.Warn("install hook for %s: %s", agent.Name(), instErr)
 				} else {
 					ui.Success("Hook installed for %s", agent.Name())
