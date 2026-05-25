@@ -41,6 +41,7 @@ type ImportedSkill struct {
 	Name       string `json:"name"`
 	Version    int    `json:"version"`
 	ScanStatus string `json:"scan_status"`
+	Created    bool   `json:"created"`
 }
 
 type FailedSkill struct {
