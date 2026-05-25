@@ -48,6 +48,7 @@ async function resolveImport(url: string): Promise<ResolveResponse> {
   const res = await fetch("/api/import/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ url }),
   });
   if (!res.ok) {
@@ -61,6 +62,7 @@ async function executeImport(source: ImportSource, skills: string[]): Promise<Im
   const res = await fetch("/api/import", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ source, skills }),
   });
   if (!res.ok) {
@@ -196,7 +198,7 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
                     <p className="text-xs text-text-tertiary truncate">{sk.description}</p>
                   </div>
                   <span className="text-[11px] text-text-tertiary whitespace-nowrap">
-                    {sk.files.length} files
+                    {(sk.files ?? []).length} files
                   </span>
                 </label>
               ))}
@@ -219,14 +221,14 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
 
         {result && (
           <div className="space-y-3">
-            {result.imported.map((imp) => (
+            {(result.imported ?? []).map((imp) => (
               <div key={imp.name} className="flex items-center gap-2 text-sm">
                 <Check size={14} className="text-accent" />
                 <span className="font-mono text-text-primary">{imp.name}</span>
                 <span className="text-text-tertiary">v{imp.version}</span>
               </div>
             ))}
-            {result.failed.map((fail) => (
+            {(result.failed ?? []).map((fail) => (
               <div key={fail.name} className="flex items-center gap-2 text-sm">
                 <AlertTriangle size={14} className="text-danger" />
                 <span className="font-mono text-text-primary">{fail.name}</span>

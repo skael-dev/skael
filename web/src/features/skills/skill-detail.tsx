@@ -653,7 +653,7 @@ export function SkillDetail() {
   const importSourceQuery = useQuery({
     queryKey: ["import-source", name],
     queryFn: async () => {
-      const res = await fetch("/api/import/sources");
+      const res = await fetch("/api/import/sources", { credentials: "include" });
       if (!res.ok) return null;
       const sources: { skill_name: string; source_url: string; source_ref: string; commit_sha: string; imported_at: string }[] = await res.json();
       return sources.find((s) => s.skill_name === name) ?? null;
@@ -806,6 +806,7 @@ export function SkillDetail() {
                   </a>
                   {importSource.source_ref && ` · ${importSource.source_ref}`}
                   {importSource.commit_sha && ` @ ${importSource.commit_sha.slice(0, 7)}`}
+                  {importSource.imported_at && ` · ${formatRelativeTime(importSource.imported_at)}`}
                 </span>
               </div>
             )}
