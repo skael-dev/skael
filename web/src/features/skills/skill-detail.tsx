@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ShieldCheck, ShieldAlert, Clock } from "lucide-react";
+import { ArrowLeft, ShieldCheck, ShieldAlert, Clock, Download } from "lucide-react";
 import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreviewSkill } from "@/api/sdk.gen";
 import type { Skill, ActivationSummary, Version, ListVersionsBody } from "@/api/types.gen";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
@@ -500,7 +500,7 @@ function TabSecurity({
                     <SecurityBadge status={scanReport.status} showLabel />
                   </div>
                   <div className="text-[10px] text-text-tertiary mt-0.5">
-                    {scanReport.findings.length} finding{scanReport.findings.length !== 1 ? "s" : ""} detected
+                    {(scanReport.findings ?? []).length} finding{(scanReport.findings ?? []).length !== 1 ? "s" : ""} detected
                   </div>
                 </div>
               </>
@@ -561,7 +561,7 @@ function TabSecurity({
       {/* Scan findings */}
       {scanReport && (
         <ScanFindings
-          findings={scanReport.findings}
+          findings={scanReport.findings ?? []}
           scanStatus={scanReport.status}
         />
       )}
@@ -650,10 +650,22 @@ export function SkillDetail() {
     enabled: !!name,
   });
 
+  const importSourceQuery = useQuery({
+    queryKey: ["import-source", name],
+    queryFn: async () => {
+      const res = await fetch("/api/import/sources");
+      if (!res.ok) return null;
+      const sources: { skill_name: string; source_url: string; source_ref: string; commit_sha: string; imported_at: string }[] = await res.json();
+      return sources.find((s) => s.skill_name === name) ?? null;
+    },
+    enabled: !!name,
+  });
+
   const skill = skillQuery.data;
   const activations = activationsQuery.data;
   const versions = versionsQuery.data ?? [];
   const scanReport = scanQuery.data ?? null;
+  const importSource = importSourceQuery.data;
 
   const tags = skill ? extractTags(skill) : [];
 
@@ -779,6 +791,24 @@ export function SkillDetail() {
               label="Last updated"
               value={skill ? formatRelativeTime(skill.updated_at) : "—"}
             />
+            {importSource && (
+              <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary">
+                <Download size={11} />
+                <span>
+                  Imported from{" "}
+                  <a
+                    href={importSource.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent hover:underline"
+                  >
+                    {importSource.source_url.replace("https://github.com/", "")}
+                  </a>
+                  {importSource.source_ref && ` · ${importSource.source_ref}`}
+                  {importSource.commit_sha && ` @ ${importSource.commit_sha.slice(0, 7)}`}
+                </span>
+              </div>
+            )}
             <div className="flex-1" />
             {/* Tags */}
             {tags.length > 0 && (
