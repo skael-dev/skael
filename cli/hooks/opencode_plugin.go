@@ -43,7 +43,7 @@ export default (async () => {
           "X-API-Key": config.api_key,
         },
         body: JSON.stringify({
-          skill_name: input.tool,
+          skill_name: input.tool.replace(/^skills_/, ''),
           agent: "opencode",
           trigger_type: "auto",
           project_hash: projectHash,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserPlus, EyeOff } from "lucide-react";
+import { UserPlus, EyeOff, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
@@ -104,6 +104,35 @@ export function UnregisteredTab({ days }: { days: number }) {
       toast.error(err instanceof Error ? err.message : "Failed to register");
     },
   });
+
+  const mergeMutation = useMutation({
+    mutationFn: async ({ source, target }: { source: string; target: string }) => {
+      const res = await fetch("/api/skills/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ source, target }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.title || "Failed to merge");
+      }
+    },
+    onSuccess: () => {
+      toast.success("Skills merged");
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to merge");
+    },
+  });
+
+  const handleMerge = (sourceName: string) => {
+    const target = window.prompt(`Merge "${sourceName}" into which skill? Enter the target skill name:`);
+    if (!target) return;
+    mergeMutation.mutate({ source: sourceName, target });
+  };
 
   const dismissMutation = useMutation({
     mutationFn: async (names: string[]) => {
@@ -210,6 +239,11 @@ export function UnregisteredTab({ days }: { days: number }) {
           {/* Name */}
           <span className="font-mono text-[13px] text-text-primary font-medium truncate">
             {sk.name}
+            {sk.name.includes(":") && (
+              <span className="text-[10px] text-text-tertiary ml-1">
+                → {sk.name.split(":").pop()}
+              </span>
+            )}
           </span>
 
           {/* Activations */}
@@ -244,6 +278,17 @@ export function UnregisteredTab({ days }: { days: number }) {
               </button>
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/register:opacity-100 transition-opacity z-10">
                 Register
+              </div>
+            </div>
+            <div className="relative group/merge">
+              <button
+                onClick={() => handleMerge(sk.name)}
+                className="p-1.5 rounded-md text-text-tertiary hover:text-info hover:bg-info/10 transition-colors cursor-pointer"
+              >
+                <GitMerge size={14} />
+              </button>
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/merge:opacity-100 transition-opacity z-10">
+                Merge into...
               </div>
             </div>
             <div className="relative group/dismiss">
