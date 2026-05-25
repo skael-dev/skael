@@ -71,6 +71,27 @@ func (s *Store) GetBySkillID(ctx context.Context, skillID string) (*ImportSource
 	return &src, nil
 }
 
+func (s *Store) GetBySkillName(ctx context.Context, skillName string) (*ImportSource, error) {
+	const q = `
+		SELECT i.id, i.skill_id, s.name, i.source_type, i.source_url, i.source_path, i.source_ref, i.commit_sha, i.imported_at, i.last_checked
+		FROM import_sources i
+		JOIN skills s ON s.id = i.skill_id
+		WHERE s.name = $1
+	`
+	var src ImportSource
+	err := s.pool.QueryRow(ctx, q, skillName).Scan(
+		&src.ID, &src.SkillID, &src.SkillName, &src.SourceType, &src.SourceURL,
+		&src.SourcePath, &src.SourceRef, &src.CommitSHA, &src.ImportedAt, &src.LastChecked,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("import.Store.GetBySkillName: %w", err)
+	}
+	return &src, nil
+}
+
 func (s *Store) ListAll(ctx context.Context) ([]ImportSource, error) {
 	const q = `
 		SELECT i.id, i.skill_id, s.name, i.source_type, i.source_url, i.source_path, i.source_ref, i.commit_sha, i.imported_at, i.last_checked

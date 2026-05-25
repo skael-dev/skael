@@ -70,6 +70,40 @@ func TestStore_UpsertUpdatesExisting(t *testing.T) {
 	}
 }
 
+func TestStore_GetBySkillName(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+
+	skillStore := skill.NewStore(pool)
+	sk, err := skillStore.Create(ctx, "by-name-test", "", "test", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+
+	store := NewStore(pool)
+	store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", SourceURL: "https://github.com/test/test", CommitSHA: "abc"})
+
+	got, err := store.GetBySkillName(ctx, "by-name-test")
+	if err != nil {
+		t.Fatalf("GetBySkillName: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil")
+	}
+	if got.SourceURL != "https://github.com/test/test" {
+		t.Errorf("SourceURL = %q", got.SourceURL)
+	}
+
+	// Not found case
+	notFound, err := store.GetBySkillName(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetBySkillName not found: %v", err)
+	}
+	if notFound != nil {
+		t.Error("expected nil for nonexistent skill")
+	}
+}
+
 func TestStore_ListAll(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()

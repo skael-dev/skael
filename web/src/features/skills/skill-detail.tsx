@@ -653,10 +653,10 @@ export function SkillDetail() {
   const importSourceQuery = useQuery({
     queryKey: ["import-source", name],
     queryFn: async () => {
-      const res = await fetch("/api/import/sources", { credentials: "include" });
+      const res = await fetch(`/api/skills/${encodeURIComponent(name!)}/source`, { credentials: "include" });
       if (!res.ok) return null;
-      const sources: { skill_name: string; source_url: string; source_ref: string; commit_sha: string; imported_at: string }[] = await res.json();
-      return sources.find((s) => s.skill_name === name) ?? null;
+      const data = await res.json();
+      return data as { skill_name: string; source_url: string; source_ref: string; commit_sha: string; imported_at: string } | null;
     },
     enabled: !!name,
   });
