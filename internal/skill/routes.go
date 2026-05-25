@@ -183,8 +183,12 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Name    string `path:"name"`
 		RawBody []byte `contentType:"application/gzip,application/octet-stream"`
 	}
+	type publishBody struct {
+		Version
+		Created bool `json:"created"`
+	}
 	type publishOutput struct {
-		Body *Version
+		Body *publishBody
 	}
 	huma.Register(api, huma.Operation{
 		OperationID:   "publish-skill-version",
@@ -229,9 +233,16 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			)
 		}
 
-		// 4. Compute checksum and store the archive.
+		// 4. Compute checksum and compare against latest version.
 		h := sha256.Sum256(input.RawBody)
 		checksum := hex.EncodeToString(h[:])
+
+		if sk.LatestVersion > 0 {
+			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
+			if err == nil && latest != nil && latest.Checksum == checksum {
+				return &publishOutput{Body: &publishBody{Version: *latest, Created: false}}, nil
+			}
+		}
 
 		// archiveName is content-addressable: different content → different filename,
 		// so concurrent publishes with distinct payloads cannot overwrite each other.
@@ -327,7 +338,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 			log.Warn().Str("skill", input.Name).Err(err).Msg("publish: update skill metadata (non-fatal)")
 		}
 
-		return &publishOutput{Body: ver}, nil
+		return &publishOutput{Body: &publishBody{Version: *ver, Created: true}}, nil
 	})
 
 	// -----------------------------------------------------------------

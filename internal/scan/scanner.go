@@ -111,7 +111,7 @@ func scanContent(filename, content string, report *Report) {
 
 	// Deduplicate: keep only the first finding for each rule+file+line combination.
 	seen := map[string]bool{}
-	var deduped []Finding
+	deduped := []Finding{}
 	for _, f := range report.Findings {
 		key := fmt.Sprintf("%s:%s:%d", f.Rule, f.File, f.Line)
 		if !seen[key] {
