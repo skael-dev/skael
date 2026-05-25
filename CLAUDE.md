@@ -56,7 +56,7 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - **`skill.RegisterRoutes` takes `(api huma.API, router chi.Router, store *Store, storage *platform.Storage)`** — it needs both the Huma API and the underlying Chi router.
 - **Testcontainers:** DB-backed tests use `testutil.SetupTestDB(t)` which spins up Postgres 17 per test. Each test gets a fresh migrated database.
 - **Content-addressable archives:** Published archives are stored at `{skillName}/{checksum[:16]}.tar.gz`, not by version number. This prevents race conditions on concurrent publishes.
-- **Skill names:** Must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`, max 128 chars.
+- **Skill names:** Must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`, max 128 chars. Colons support namespaced names (e.g., `superpowers:brainstorming`).
 
 ## Server env vars
 
