@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap } from "lucide-react";
+import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
+import { ImportModal } from "@/features/import/import-modal";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -299,6 +300,7 @@ export function SkillList() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>("updated");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [importOpen, setImportOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Keyboard shortcut: "/" focuses search
@@ -533,6 +535,16 @@ export function SkillList() {
               <option value="usage">Usage</option>
             </select>
           </div>
+
+          {/* Import button */}
+          <Button
+            onClick={() => setImportOpen(true)}
+            variant="outline"
+            className="h-8 text-xs"
+          >
+            <Download size={13} className="mr-1.5" />
+            Import
+          </Button>
         </div>
 
         {/* Bulk actions */}
@@ -594,6 +606,8 @@ export function SkillList() {
           )}
         </div>
       </div>
+
+      <ImportModal open={importOpen} onOpenChange={setImportOpen} />
     </div>
   );
 }

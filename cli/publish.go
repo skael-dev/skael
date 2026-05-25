@@ -193,13 +193,20 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		out := struct {
 			Name    string `json:"name"`
 			Version int    `json:"version"`
+			Created bool   `json:"created"`
 		}{
 			Name:    name,
 			Version: ver.Version,
+			Created: ver.Created,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
+	}
+
+	if !ver.Created {
+		ui.Info("No changes detected — v%d is already up to date", ver.Version)
+		return nil
 	}
 
 	fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)

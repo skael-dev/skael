@@ -36,6 +36,7 @@ type Version struct {
 	Changelog  string          `json:"changelog"`
 	ScanResult json.RawMessage `json:"scan_result,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
+	Created    bool            `json:"created"`
 }
 
 // ManifestEntry holds the sync metadata for a single skill.
