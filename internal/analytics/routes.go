@@ -147,4 +147,52 @@ func RegisterRoutes(api huma.API, store *Store) {
 		}
 		return &timeseriesOutput{Body: series}, nil
 	})
+
+	// -----------------------------------------------------------------
+	// GET /api/analytics/unregistered?days=30 — unregistered skills
+	// -----------------------------------------------------------------
+	type unregisteredInput struct {
+		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+	}
+	type unregisteredOutput struct {
+		Body []UnregisteredSkill
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "analytics-unregistered",
+		Method:      http.MethodGet,
+		Path:        "/api/analytics/unregistered",
+		Summary:     "List unregistered skills with activation data",
+	}, func(ctx context.Context, input *unregisteredInput) (*unregisteredOutput, error) {
+		days := input.Days
+		if days == 0 {
+			days = 30
+		}
+		skills, err := store.GetUnregisteredSkills(ctx, days)
+		if err != nil {
+			return nil, fmt.Errorf("analytics unregistered: %w", err)
+		}
+		return &unregisteredOutput{Body: skills}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// POST /api/analytics/dismiss — dismiss an unregistered skill
+	// -----------------------------------------------------------------
+	type dismissBody struct {
+		Name string `json:"name" minLength:"1"`
+	}
+	type dismissInput struct {
+		Body dismissBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "dismiss-skill",
+		Method:        http.MethodPost,
+		Path:          "/api/analytics/dismiss",
+		Summary:       "Dismiss an unregistered skill",
+		DefaultStatus: http.StatusNoContent,
+	}, func(ctx context.Context, input *dismissInput) (*struct{}, error) {
+		if err := store.DismissSkill(ctx, input.Body.Name); err != nil {
+			return nil, fmt.Errorf("dismiss skill: %w", err)
+		}
+		return nil, nil
+	})
 }
