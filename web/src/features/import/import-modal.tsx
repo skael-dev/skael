@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Download, Loader2, AlertTriangle, Check, Package } from "lucide-react";
 import {
   Dialog,
@@ -99,6 +100,14 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
     onSuccess: (data) => {
       setResult(data);
       queryClient.invalidateQueries({ queryKey: ["analytics"] });
+      const importCount = data.imported?.length ?? 0;
+      const failCount = data.failed?.length ?? 0;
+      if (importCount > 0) {
+        toast.success(`${importCount} skill${importCount !== 1 ? "s" : ""} imported`);
+      }
+      if (failCount > 0) {
+        toast.error(`${failCount} skill${failCount !== 1 ? "s" : ""} failed to import`);
+      }
     },
   });
 

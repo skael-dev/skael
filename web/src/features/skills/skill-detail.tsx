@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { ArrowLeft, ShieldCheck, ShieldAlert, Clock, Download } from "lucide-react";
 import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreviewSkill } from "@/api/sdk.gen";
 import type { Skill, ActivationSummary, Version, ListVersionsBody } from "@/api/types.gen";
@@ -459,6 +460,10 @@ function TabSecurity({
     mutationFn: () => reviewSkill({ path: { name: skill.name } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+      toast.success("Skill marked as reviewed");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update review status");
     },
   });
 
@@ -466,6 +471,10 @@ function TabSecurity({
     mutationFn: () => unreviewSkill({ path: { name: skill.name } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+      toast.success("Review status removed");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update review status");
     },
   });
 
