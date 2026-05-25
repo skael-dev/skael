@@ -258,6 +258,101 @@ func uninstallOpenCodeHook(configPath string) error {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Cursor  (JSON hooks.json)
+// ────────────────────────────────────────────────────────────────────────────
+
+func installCursorHook(configPath, scriptPath string) error {
+	hooks, err := readJSONFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read cursor hooks: %w", err)
+	}
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+
+	if _, ok := hooks["version"]; !ok {
+		hooks["version"] = float64(1)
+	}
+
+	hooksObj, ok := hooks["hooks"].(map[string]any)
+	if !ok {
+		hooksObj = map[string]any{}
+		hooks["hooks"] = hooksObj
+	}
+
+	stopArr, ok := hooksObj["stop"].([]any)
+	if !ok {
+		stopArr = []any{}
+	}
+
+	cmd := fmt.Sprintf("SKAEL_AGENT=cursor %s", scriptPath)
+	newEntry := map[string]any{
+		"_managed_by": managedBy,
+		"command":     cmd,
+	}
+
+	found := false
+	for i, entry := range stopArr {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["_managed_by"] == managedBy {
+			stopArr[i] = newEntry
+			found = true
+			break
+		}
+	}
+	if !found {
+		stopArr = append(stopArr, newEntry)
+	}
+
+	hooksObj["stop"] = stopArr
+	return writeJSONFile(configPath, hooks)
+}
+
+func uninstallCursorHook(configPath string) error {
+	hooks, err := readJSONFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read cursor hooks: %w", err)
+	}
+
+	hooksObj, ok := hooks["hooks"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	stopArr, ok := hooksObj["stop"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var filtered []any
+	for _, entry := range stopArr {
+		m, ok := entry.(map[string]any)
+		if ok && m["_managed_by"] == managedBy {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	if len(filtered) == 0 {
+		delete(hooksObj, "stop")
+	} else {
+		hooksObj["stop"] = filtered
+	}
+
+	if len(hooksObj) == 0 {
+		delete(hooks, "hooks")
+	}
+
+	return writeJSONFile(configPath, hooks)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Generic dispatch
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -270,6 +365,8 @@ func InstallForAgent(agentName, configPath, endpoint, apiKey, scriptPath string)
 		return installCodexHook(configPath, endpoint, apiKey, scriptPath)
 	case "opencode":
 		return installOpenCodeHook(configPath)
+	case "cursor":
+		return installCursorHook(configPath, scriptPath)
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}
@@ -284,6 +381,8 @@ func UninstallForAgent(agentName, configPath string) error {
 		return uninstallCodexHook(configPath)
 	case "opencode":
 		return uninstallOpenCodeHook(configPath)
+	case "cursor":
+		return uninstallCursorHook(configPath)
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}
