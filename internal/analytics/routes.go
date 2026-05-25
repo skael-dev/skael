@@ -121,4 +121,30 @@ func RegisterRoutes(api huma.API, store *Store) {
 		}
 		return &activationsOutput{Body: summary}, nil
 	})
+
+	// -----------------------------------------------------------------
+	// GET /api/analytics/timeseries?days=30 — daily activation counts
+	// -----------------------------------------------------------------
+	type timeseriesInput struct {
+		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+	}
+	type timeseriesOutput struct {
+		Body []DailyCount
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "analytics-timeseries",
+		Method:      http.MethodGet,
+		Path:        "/api/analytics/timeseries",
+		Summary:     "Daily activation counts for chart",
+	}, func(ctx context.Context, input *timeseriesInput) (*timeseriesOutput, error) {
+		days := input.Days
+		if days == 0 {
+			days = 30
+		}
+		series, err := store.GetTimeSeries(ctx, days)
+		if err != nil {
+			return nil, fmt.Errorf("analytics timeseries: %w", err)
+		}
+		return &timeseriesOutput{Body: series}, nil
+	})
 }

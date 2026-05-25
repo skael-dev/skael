@@ -90,9 +90,10 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 	}
 
 	const activeQ = `
-		SELECT COUNT(DISTINCT skill_name)
-		FROM skill_events
-		WHERE created_at > now() - make_interval(days => $1)
+		SELECT COUNT(DISTINCT se.skill_name)
+		FROM skill_events se
+		JOIN skills s ON s.name = se.skill_name
+		WHERE se.created_at > now() - make_interval(days => $1)
 	`
 	var active int
 	if err := s.pool.QueryRow(ctx, activeQ, days).Scan(&active); err != nil {
@@ -101,8 +102,9 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 
 	const totalEventsQ = `
 		SELECT COUNT(*)
-		FROM skill_events
-		WHERE created_at > now() - make_interval(days => $1)
+		FROM skill_events se
+		JOIN skills s ON s.name = se.skill_name
+		WHERE se.created_at > now() - make_interval(days => $1)
 	`
 	var totalActivations int
 	if err := s.pool.QueryRow(ctx, totalEventsQ, days).Scan(&totalActivations); err != nil {
@@ -278,4 +280,52 @@ func (s *Store) GetActivations(ctx context.Context, skillName string, days int) 
 		LastTriggered: lastTriggered,
 		ByAgent:       byAgent,
 	}, nil
+}
+
+// DailyCount holds the activation count for a single day.
+type DailyCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
+// GetTimeSeries returns daily activation counts for the last `days` days.
+// Days with zero activations are included (filled with 0).
+func (s *Store) GetTimeSeries(ctx context.Context, days int) ([]DailyCount, error) {
+	const q = `
+		WITH days AS (
+			SELECT generate_series(
+				(now() - make_interval(days => $1))::date,
+				now()::date,
+				'1 day'::interval
+			)::date AS day
+		)
+		SELECT d.day::text, COALESCE(COUNT(se.id), 0)::int
+		FROM days d
+		LEFT JOIN skill_events se
+			ON se.created_at::date = d.day
+			AND EXISTS (SELECT 1 FROM skills s WHERE s.name = se.skill_name)
+		GROUP BY d.day
+		ORDER BY d.day
+	`
+	rows, err := s.pool.Query(ctx, q, days)
+	if err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetTimeSeries query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []DailyCount
+	for rows.Next() {
+		var dc DailyCount
+		if err := rows.Scan(&dc.Date, &dc.Count); err != nil {
+			return nil, fmt.Errorf("analytics.Store.GetTimeSeries scan: %w", err)
+		}
+		results = append(results, dc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetTimeSeries rows: %w", err)
+	}
+	if results == nil {
+		results = []DailyCount{}
+	}
+	return results, nil
 }
