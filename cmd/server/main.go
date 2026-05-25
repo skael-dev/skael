@@ -29,6 +29,12 @@ import (
 	skweb "github.com/skael-dev/skael/web"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	platform.InitLogger()
 
