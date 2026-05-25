@@ -1,4 +1,7 @@
 bin/
+/migrate
+/server
+/skael
 .env
 data/
 *.tar.gz
