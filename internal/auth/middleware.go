@@ -14,7 +14,7 @@ import (
 // on all /api/ routes except explicitly exempt paths. It checks three auth
 // methods in order:
 //  1. Session cookie (via scs session manager)
-//  2. API key (X-API-Key header with "sk-" prefix, bcrypt-hashed)
+//  2. API key (X-API-Key header with "sk-" prefix, SHA-256 hashed)
 //  3. Legacy API key (constant-time comparison against a static key)
 //
 // On success, the authenticated User is attached to the request context via

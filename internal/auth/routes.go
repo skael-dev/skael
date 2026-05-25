@@ -9,25 +9,9 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/jackc/pgx/v5/pgconn"
-)
 
-// isDuplicateKey returns true if err is a Postgres unique-violation error
-// (SQLSTATE 23505).
-func isDuplicateKey(err error) bool {
-	for err != nil {
-		if pe, ok := err.(*pgconn.PgError); ok {
-			return pe.Code == "23505"
-		}
-		type unwrapper interface{ Unwrap() error }
-		if u, ok := err.(unwrapper); ok {
-			err = u.Unwrap()
-		} else {
-			break
-		}
-	}
-	return false
-}
+	"github.com/skael-dev/skael/internal/platform"
+)
 
 // RegisterRoutes wires up all authentication-related HTTP endpoints onto the
 // provided Huma API: signup, login, logout, me, and API key management.
@@ -80,7 +64,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 			row, err = userStore.Create(ctx, input.Body.Email, input.Body.Name, hash)
 		}
 		if err != nil {
-			if isDuplicateKey(err) {
+			if platform.IsDuplicateKey(err) {
 				return nil, huma.Error409Conflict("email already registered")
 			}
 			return nil, fmt.Errorf("signup: create user: %w", err)
