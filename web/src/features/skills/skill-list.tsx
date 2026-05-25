@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
 import { ImportModal } from "@/features/import/import-modal";
+import { UnregisteredTab } from "@/features/skills/unregistered-tab";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -301,6 +302,7 @@ export function SkillList() {
   const [sortBy, setSortBy] = useState<SortKey>("updated");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"registry" | "unregistered">("registry");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Keyboard shortcut: "/" focuses search
@@ -335,6 +337,16 @@ export function SkillList() {
       return (res.data as SkillAnalytics[] | null) ?? [];
     },
   });
+
+  const { data: unregisteredData } = useQuery({
+    queryKey: ["analytics", "unregistered", 30],
+    queryFn: async () => {
+      const res = await fetch("/api/analytics/unregistered?days=30", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json() as Promise<{ name: string }[]>;
+    },
+  });
+  const unregisteredCount = unregisteredData?.length ?? 0;
 
   const skills = skillsData ?? [];
 
@@ -480,131 +492,168 @@ export function SkillList() {
         </div>
       </div>
 
+      {/* Tab bar */}
+        <div className="px-12 flex border-b border-border max-w-screen-xl">
+          <button
+            onClick={() => setActiveTab("registry")}
+            className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent ${
+              activeTab === "registry"
+                ? "text-text-primary border-accent font-medium"
+                : "text-text-secondary border-transparent hover:text-text-primary"
+            }`}
+          >
+            Registry
+          </button>
+          <button
+            onClick={() => setActiveTab("unregistered")}
+            className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent flex items-center gap-2 ${
+              activeTab === "unregistered"
+                ? "text-text-primary border-accent font-medium"
+                : "text-text-secondary border-transparent hover:text-text-primary"
+            }`}
+          >
+            Unregistered
+            {unregisteredCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/20 text-warning font-medium">
+                {unregisteredCount}
+              </span>
+            )}
+          </button>
+        </div>
+
       {/* Filter + list */}
       <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl">
-        {/* Filter bar */}
-        <div className="flex items-center gap-2.5 mb-4">
-          {/* Search input */}
-          <div className="flex items-center gap-2 px-3 h-8 flex-[0_1_300px] bg-bg-secondary border border-border rounded-md transition-colors duration-150 focus-within:border-border-active">
-            <Search className="size-[13px] text-text-tertiary shrink-0" />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Filter skills..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="flex-1 bg-transparent border-none outline-none text-[13px] text-text-primary font-sans min-w-0 placeholder:text-text-tertiary"
-            />
-            {!query && (
-              <kbd className="font-mono text-[10px] text-text-tertiary px-[5px] py-px border border-border rounded-[3px]">
-                /
-              </kbd>
-            )}
+        {activeTab === "unregistered" ? (
+          <div className="mt-4">
+            <UnregisteredTab days={30} />
           </div>
-
-          {/* Tag filter pills */}
-          <div className="flex gap-1 items-center overflow-x-auto flex-1 min-w-0">
-            <FilterPill
-              active={!tagFilter}
-              onClick={() => setTagFilter(null)}
-              label="all"
-            />
-            {allTags.map((t) => (
-              <FilterPill
-                key={t}
-                active={tagFilter === t}
-                onClick={() =>
-                  setTagFilter(t === tagFilter ? null : t)
-                }
-                label={t}
-                color={TAG_COLORS[t]}
-              />
-            ))}
-          </div>
-
-          {/* Sort dropdown */}
-          <div className="flex items-center gap-1.5 px-2.5 h-8 border border-border rounded-md text-text-secondary text-xs shrink-0">
-            <ArrowUpDown className="size-3" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortKey)}
-              className="bg-transparent border-none outline-none text-text-secondary text-xs font-sans cursor-pointer pr-3.5"
-            >
-              <option value="updated">Updated</option>
-              <option value="name">Name</option>
-              <option value="usage">Usage</option>
-            </select>
-          </div>
-
-          {/* Import button */}
-          <Button
-            onClick={() => setImportOpen(true)}
-            variant="outline"
-            className="h-8 text-xs"
-          >
-            <Download size={13} className="mr-1.5" />
-            Import
-          </Button>
-        </div>
-
-        {/* Bulk actions */}
-        {anyChecked && (
-          <div className="flex items-center gap-3 mb-3 px-3.5 py-2 bg-bg-secondary border border-border rounded-lg">
-            <Checkbox
-              checked={allChecked}
-              onCheckedChange={toggleAll}
-            />
-            <span className="text-xs text-text-secondary">
-              {selected.size} selected
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto h-7 text-xs"
-              disabled={bulkReview.isPending}
-              onClick={() => bulkReview.mutate(Array.from(selected))}
-            >
-              {bulkReview.isPending ? "Reviewing..." : "Mark Reviewed"}
-            </Button>
-          </div>
-        )}
-
-        {/* Column headers */}
-        <div
-          className="grid gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
-          style={{
-            gridTemplateColumns: "28px 12px 1fr 80px 80px 110px",
-          }}
-        >
-          <span />
-          <span />
-          <span>Skill</span>
-          <span className="text-right">Invocations</span>
-          <span className="text-right">Security</span>
-          <span className="text-right">Updated</span>
-        </div>
-
-        {/* Skill rows */}
-        <div>
-          {filtered.map((skill) => (
-            <SkillCard
-              key={skill.name}
-              skill={skill}
-              checked={selected.has(skill.name)}
-              onCheck={(checked) => toggleOne(skill.name, checked)}
-              anyChecked={anyChecked}
-            />
-          ))}
-
-          {filtered.length === 0 && skills.length > 0 && (
-            <div className="text-center py-16 text-text-secondary">
-              <div className="text-sm mb-2">Nothing matches that filter</div>
-              <div className="text-xs text-text-tertiary">
-                Try clearing the search or selecting a different tag
+        ) : (
+          <>
+            {/* Filter bar */}
+            <div className="flex items-center gap-2.5 mb-4">
+              {/* Search input */}
+              <div className="flex items-center gap-2 px-3 h-8 flex-[0_1_300px] bg-bg-secondary border border-border rounded-md transition-colors duration-150 focus-within:border-border-active">
+                <Search className="size-[13px] text-text-tertiary shrink-0" />
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Filter skills..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="flex-1 bg-transparent border-none outline-none text-[13px] text-text-primary font-sans min-w-0 placeholder:text-text-tertiary"
+                />
+                {!query && (
+                  <kbd className="font-mono text-[10px] text-text-tertiary px-[5px] py-px border border-border rounded-[3px]">
+                    /
+                  </kbd>
+                )}
               </div>
+
+              {/* Tag filter pills */}
+              <div className="flex gap-1 items-center overflow-x-auto flex-1 min-w-0">
+                <FilterPill
+                  active={!tagFilter}
+                  onClick={() => setTagFilter(null)}
+                  label="all"
+                />
+                {allTags.map((t) => (
+                  <FilterPill
+                    key={t}
+                    active={tagFilter === t}
+                    onClick={() =>
+                      setTagFilter(t === tagFilter ? null : t)
+                    }
+                    label={t}
+                    color={TAG_COLORS[t]}
+                  />
+                ))}
+              </div>
+
+              {/* Sort dropdown */}
+              <div className="flex items-center gap-1.5 px-2.5 h-8 border border-border rounded-md text-text-secondary text-xs shrink-0">
+                <ArrowUpDown className="size-3" />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortKey)}
+                  className="bg-transparent border-none outline-none text-text-secondary text-xs font-sans cursor-pointer pr-3.5"
+                >
+                  <option value="updated">Updated</option>
+                  <option value="name">Name</option>
+                  <option value="usage">Usage</option>
+                </select>
+              </div>
+
+              {/* Import button */}
+              <Button
+                onClick={() => setImportOpen(true)}
+                variant="outline"
+                className="h-8 text-xs"
+              >
+                <Download size={13} className="mr-1.5" />
+                Import
+              </Button>
             </div>
-          )}
-        </div>
+
+            {/* Bulk actions */}
+            {anyChecked && (
+              <div className="flex items-center gap-3 mb-3 px-3.5 py-2 bg-bg-secondary border border-border rounded-lg">
+                <Checkbox
+                  checked={allChecked}
+                  onCheckedChange={toggleAll}
+                />
+                <span className="text-xs text-text-secondary">
+                  {selected.size} selected
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-7 text-xs"
+                  disabled={bulkReview.isPending}
+                  onClick={() => bulkReview.mutate(Array.from(selected))}
+                >
+                  {bulkReview.isPending ? "Reviewing..." : "Mark Reviewed"}
+                </Button>
+              </div>
+            )}
+
+            {/* Column headers */}
+            <div
+              className="grid gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
+              style={{
+                gridTemplateColumns: "28px 12px 1fr 80px 80px 110px",
+              }}
+            >
+              <span />
+              <span />
+              <span>Skill</span>
+              <span className="text-right">Invocations</span>
+              <span className="text-right">Security</span>
+              <span className="text-right">Updated</span>
+            </div>
+
+            {/* Skill rows */}
+            <div>
+              {filtered.map((skill) => (
+                <SkillCard
+                  key={skill.name}
+                  skill={skill}
+                  checked={selected.has(skill.name)}
+                  onCheck={(checked) => toggleOne(skill.name, checked)}
+                  anyChecked={anyChecked}
+                />
+              ))}
+
+              {filtered.length === 0 && skills.length > 0 && (
+                <div className="text-center py-16 text-text-secondary">
+                  <div className="text-sm mb-2">Nothing matches that filter</div>
+                  <div className="text-xs text-text-tertiary">
+                    Try clearing the search or selecting a different tag
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <ImportModal open={importOpen} onOpenChange={setImportOpen} />
