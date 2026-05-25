@@ -539,6 +539,97 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 	})
 
 	// -----------------------------------------------------------------
+	// GET /api/skills/{name}/aliases
+	// -----------------------------------------------------------------
+	type aliasListInput struct {
+		Name string `path:"name"`
+	}
+	type aliasListOutput struct {
+		Body []Alias
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "list-skill-aliases",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/aliases",
+		Summary:     "List aliases for a skill",
+	}, func(ctx context.Context, input *aliasListInput) (*aliasListOutput, error) {
+		aliases, err := store.ListAliases(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("list aliases: %w", err)
+		}
+		return &aliasListOutput{Body: aliases}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// POST /api/skills/{name}/aliases
+	// -----------------------------------------------------------------
+	type aliasCreateBody struct {
+		Alias string `json:"alias" minLength:"1"`
+	}
+	type aliasCreateInput struct {
+		Name string `path:"name"`
+		Body aliasCreateBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "create-skill-alias",
+		Method:        http.MethodPost,
+		Path:          "/api/skills/{name}/aliases",
+		Summary:       "Add an alias for a skill",
+		DefaultStatus: http.StatusCreated,
+	}, func(ctx context.Context, input *aliasCreateInput) (*struct{}, error) {
+		if err := store.CreateAlias(ctx, input.Body.Alias, input.Name); err != nil {
+			return nil, fmt.Errorf("create alias: %w", err)
+		}
+		return nil, nil
+	})
+
+	// -----------------------------------------------------------------
+	// DELETE /api/skills/{name}/aliases/{alias}
+	// -----------------------------------------------------------------
+	type aliasDeleteInput struct {
+		Name  string `path:"name"`
+		Alias string `path:"alias"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "delete-skill-alias",
+		Method:        http.MethodDelete,
+		Path:          "/api/skills/{name}/aliases/{alias}",
+		Summary:       "Remove an alias",
+		DefaultStatus: http.StatusNoContent,
+	}, func(ctx context.Context, input *aliasDeleteInput) (*struct{}, error) {
+		if err := store.DeleteAlias(ctx, input.Alias); err != nil {
+			return nil, fmt.Errorf("delete alias: %w", err)
+		}
+		return nil, nil
+	})
+
+	// -----------------------------------------------------------------
+	// POST /api/skills/merge
+	// -----------------------------------------------------------------
+	type mergeBody struct {
+		Source string `json:"source" minLength:"1"`
+		Target string `json:"target" minLength:"1"`
+	}
+	type mergeInput struct {
+		Body mergeBody
+	}
+	type mergeOutput struct {
+		Body *Skill
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "merge-skills",
+		Method:      http.MethodPost,
+		Path:        "/api/skills/merge",
+		Summary:     "Merge source skill into target skill",
+	}, func(ctx context.Context, input *mergeInput) (*mergeOutput, error) {
+		merged, err := store.Merge(ctx, input.Body.Source, input.Body.Target)
+		if err != nil {
+			return nil, fmt.Errorf("merge skills: %w", err)
+		}
+		return &mergeOutput{Body: merged}, nil
+	})
+
+	// -----------------------------------------------------------------
 	// Raw routes registered directly on the Chi router (streaming responses).
 	// -----------------------------------------------------------------
 	if router != nil {
