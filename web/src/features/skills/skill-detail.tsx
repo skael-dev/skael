@@ -678,11 +678,13 @@ export function SkillDetail() {
 
   const tags = skill ? extractTags(skill) : [];
 
-  // Active status: last_triggered within 14 days
-  const isActive =
-    activations?.last_triggered
-      ? (Date.now() - new Date(activations.last_triggered).getTime()) / 86_400_000 < 14
-      : false;
+  // Three-state status: active (used within 14d), stale (was used but not recently), idle (never triggered)
+  const skillStatus: "active" | "idle" | "stale" = (() => {
+    const lastTriggered = activations?.last_triggered ?? null;
+    if (!lastTriggered) return "idle";
+    const daysSince = (Date.now() - new Date(lastTriggered).getTime()) / 86_400_000;
+    return daysSince < 14 ? "active" : "stale";
+  })();
 
   const author = (() => {
     if (!skill) return "—";
@@ -737,15 +739,21 @@ export function SkillDetail() {
               </h1>
             )}
             {/* Status dot */}
-            <span
-              className={cn(
-                "size-2.5 rounded-full shrink-0",
-                isActive
-                  ? "bg-accent shadow-[0_0_8px_var(--color-accent)]"
-                  : "bg-warning"
-              )}
-              title={isActive ? "active" : "stale"}
-            />
+            <div className="relative flex items-center justify-center group/status">
+              <span
+                className={cn(
+                  "size-2.5 rounded-full shrink-0",
+                  skillStatus === "active"
+                    ? "bg-accent shadow-[0_0_8px_var(--color-accent)]"
+                    : skillStatus === "stale"
+                    ? "bg-warning"
+                    : "bg-text-tertiary"
+                )}
+              />
+              <div className="absolute left-full ml-2 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/status:opacity-100 transition-opacity z-10">
+                {skillStatus === "active" ? "Active — used within 14 days" : skillStatus === "stale" ? "Stale — not used in 14+ days" : "Idle — not yet activated"}
+              </div>
+            </div>
           </div>
 
           {/* Action buttons */}

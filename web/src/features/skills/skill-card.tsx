@@ -53,11 +53,13 @@ function getFirstTag(skill: SkillAnalytics): string | null {
   return null;
 }
 
-function isActive(lastTriggered: string | null): boolean {
-  if (!lastTriggered) return false;
-  const daysSince =
-    (Date.now() - new Date(lastTriggered).getTime()) / 86_400_000;
-  return daysSince < 14;
+type SkillStatus = "active" | "idle" | "stale";
+
+function getStatus(lastTriggered: string | null): SkillStatus {
+  if (!lastTriggered) return "idle";
+  const daysSince = (Date.now() - new Date(lastTriggered).getTime()) / 86_400_000;
+  if (daysSince < 14) return "active";
+  return "stale";
 }
 
 export function SkillCard({
@@ -68,8 +70,7 @@ export function SkillCard({
 }: SkillCardProps) {
   const navigate = useNavigate();
   const tag = getFirstTag(skill as SkillAnalytics);
-  const active = isActive(skill.last_triggered);
-  const status = active ? "active" : "stale";
+  const status = getStatus(skill.last_triggered);
 
   return (
     <div
@@ -107,14 +108,16 @@ export function SkillCard({
       </div>
 
       {/* Status dot */}
-      <div className="flex items-center justify-center">
+      <div className="relative flex items-center justify-center group/status">
         <span
           className={cn(
             "size-1.5 rounded-full shrink-0",
-            status === "active" ? "bg-accent" : "bg-warning"
+            status === "active" ? "bg-accent" : status === "stale" ? "bg-warning" : "bg-text-tertiary"
           )}
-          title={status}
         />
+        <div className="absolute left-full ml-2 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/status:opacity-100 transition-opacity z-10">
+          {status === "active" ? "Active — used within 14 days" : status === "stale" ? "Stale — not used in 14+ days" : "Idle — not yet activated"}
+        </div>
       </div>
 
       {/* Name + tag + description */}
