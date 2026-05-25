@@ -24,6 +24,7 @@ type DiscoveredSkill struct {
 	Files             []FileEntry `json:"files"`
 	ScanStatus        string      `json:"scan_status"`
 	ScanFindingsCount int         `json:"scan_findings_count"`
+	ExistingVersion   int         `json:"existing_version"`
 }
 
 type FileEntry struct {

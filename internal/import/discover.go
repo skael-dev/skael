@@ -17,6 +17,7 @@ type DiscoveredSkill struct {
 	Files             []skill.FileEntry `json:"files"`
 	ScanStatus        string            `json:"scan_status"`
 	ScanFindingsCount int               `json:"scan_findings_count"`
+	ExistingVersion   int               `json:"existing_version"`
 }
 
 func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {

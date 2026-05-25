@@ -23,6 +23,7 @@ type DiscoveredSkill = {
   files: FileEntry[];
   scan_status: string;
   scan_findings_count: number;
+  existing_version: number;
 };
 
 type ImportSource = {
@@ -88,7 +89,7 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
     mutationFn: (url: string) => resolveImport(url),
     onSuccess: (data) => {
       setResolved(data);
-      setSelected(new Set(data.skills.map((s) => s.name)));
+      setSelected(new Set(data.skills.filter((s) => s.existing_version === 0).map((s) => s.name)));
     },
   });
 
@@ -194,6 +195,11 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
                         {sk.name}
                       </span>
                       <SecurityBadge status={sk.scan_status} />
+                      {sk.existing_version > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">
+                          v{sk.existing_version}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-text-tertiary truncate">{sk.description}</p>
                   </div>

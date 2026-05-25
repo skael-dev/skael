@@ -309,6 +309,8 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		check := "[ ]"
 		if importAll {
 			check = "[x]"
+		} else if sk.ExistingVersion == 0 {
+			check = "[x]" // pre-select new skills
 		}
 
 		scanBadge := scanCleanStyle.Render("clean")
@@ -318,11 +320,16 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 			scanBadge = scanCriticalStyle.Render("critical")
 		}
 
+		versionBadge := ""
+		if sk.ExistingVersion > 0 {
+			versionBadge = importFilesStyle.Render(fmt.Sprintf(" v%d", sk.ExistingVersion))
+		}
+
 		name := importNameStyle.Render(fmt.Sprintf("%-20s", sk.Name))
 		desc := importDescStyle.Render(truncateDesc(sk.Description, 35))
 		files := importFilesStyle.Render(fmt.Sprintf("%d files", len(sk.Files)))
 
-		row := fmt.Sprintf("  %s  %s %s  %s  %s", check, name, desc, files, scanBadge)
+		row := fmt.Sprintf("  %s  %s %s  %s  %s%s", check, name, desc, files, scanBadge, versionBadge)
 		rows = append(rows, row)
 	}
 
