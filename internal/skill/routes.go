@@ -36,7 +36,7 @@ func NewChiAPI() (chi.Router, huma.API) {
 // validSkillName matches lowercase alphanumeric names that may contain internal
 // hyphens, but must start and end with a lowercase letter or digit (no trailing
 // or leading hyphens).
-var validSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+var validSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
