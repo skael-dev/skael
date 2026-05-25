@@ -166,16 +166,48 @@ func runLocalImport(c *client.Client, path string) error {
 		return nil
 	}
 
+	if importDryRun {
+		if !ui.JSONMode {
+			for _, dir := range dirs {
+				name := filepath.Base(dir)
+				fmt.Fprintf(os.Stdout, "  %s %s\n", ui.Accent("·"), name)
+			}
+			fmt.Fprintf(os.Stdout, "\n  %s\n", importSourceStyle.Render(fmt.Sprintf("(dry run — %d skills found, no changes made)", len(dirs))))
+		} else {
+			type dryRunEntry struct {
+				Name string `json:"name"`
+				Path string `json:"path"`
+			}
+			var entries []dryRunEntry
+			for _, dir := range dirs {
+				entries = append(entries, dryRunEntry{Name: filepath.Base(dir), Path: dir})
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			enc.Encode(entries)
+		}
+		return nil
+	}
+
+	var allImported []client.ImportedSkill
+	var allFailed []client.FailedSkill
+
 	for _, dir := range dirs {
 		archive, _, _, err := skill.Pack(dir)
 		if err != nil {
-			ui.Errorf("pack %s: %s", dir, err)
+			allFailed = append(allFailed, client.FailedSkill{Name: filepath.Base(dir), Error: err.Error()})
+			if !ui.JSONMode {
+				ui.Errorf("pack %s: %s", dir, err)
+			}
 			continue
 		}
 
 		resolved, err := c.ImportUpload(archive)
 		if err != nil {
-			ui.Errorf("upload %s: %s", dir, err)
+			allFailed = append(allFailed, client.FailedSkill{Name: filepath.Base(dir), Error: err.Error()})
+			if !ui.JSONMode {
+				ui.Errorf("upload %s: %s", dir, err)
+			}
 			continue
 		}
 
@@ -190,16 +222,42 @@ func runLocalImport(c *client.Client, path string) error {
 
 		result, err := c.ImportSkills(resolved.Source, names)
 		if err != nil {
-			ui.Errorf("import: %s", err)
+			allFailed = append(allFailed, client.FailedSkill{Name: filepath.Base(dir), Error: err.Error()})
+			if !ui.JSONMode {
+				ui.Errorf("import: %s", err)
+			}
 			continue
 		}
 
 		for _, imp := range result.Imported {
-			ui.Success("%s v%d imported", imp.Name, imp.Version)
+			allImported = append(allImported, client.ImportedSkill{Name: imp.Name, Version: imp.Version, ScanStatus: imp.ScanStatus})
+			if !ui.JSONMode {
+				ui.Success("%s v%d imported", imp.Name, imp.Version)
+			}
 		}
 		for _, fail := range result.Failed {
-			ui.Errorf("%s: %s", fail.Name, fail.Error)
+			allFailed = append(allFailed, client.FailedSkill{Name: fail.Name, Error: fail.Error})
+			if !ui.JSONMode {
+				ui.Errorf("%s: %s", fail.Name, fail.Error)
+			}
 		}
+	}
+
+	if ui.JSONMode {
+		type localResult struct {
+			Imported []client.ImportedSkill `json:"imported"`
+			Failed   []client.FailedSkill   `json:"failed"`
+		}
+		out := localResult{Imported: allImported, Failed: allFailed}
+		if out.Imported == nil {
+			out.Imported = []client.ImportedSkill{}
+		}
+		if out.Failed == nil {
+			out.Failed = []client.FailedSkill{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(out)
 	}
 
 	return nil
@@ -328,13 +386,7 @@ func runSearchImport(c *client.Client, query string) error {
 }
 
 func isLocalPath(s string) bool {
-	if strings.HasPrefix(s, "./") || strings.HasPrefix(s, "/") || strings.HasPrefix(s, "../") {
-		return true
-	}
-	if _, err := os.Stat(s); err == nil {
-		return true
-	}
-	return false
+	return strings.HasPrefix(s, "./") || strings.HasPrefix(s, "/") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "~")
 }
 
 func truncateDesc(s string, max int) string {
