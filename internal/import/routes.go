@@ -94,6 +94,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 		Name       string `json:"name"`
 		Version    int    `json:"version"`
 		ScanStatus string `json:"scan_status"`
+		Created    bool   `json:"created"`
 	}
 	type failedSkill struct {
 		Name  string `json:"name"`
@@ -143,7 +144,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				continue
 			}
 
-			ver, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage)
+			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -154,6 +155,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				Name:       ds.Name,
 				Version:    ver.Version,
 				ScanStatus: ds.ScanStatus,
+				Created:    created,
 			})
 		}
 
@@ -212,21 +214,21 @@ func importSingleSkill(
 	skillStore *skill.Store,
 	importStore *Store,
 	storage *platform.Storage,
-) (*skill.Version, error) {
+) (*skill.Version, bool, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
 	archive, checksum, manifest, err := skill.Pack(skillDir)
 	if err != nil {
-		return nil, fmt.Errorf("pack: %w", err)
+		return nil, false, fmt.Errorf("pack: %w", err)
 	}
 
 	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	if err != nil {
-		return nil, fmt.Errorf("read SKILL.md: %w", err)
+		return nil, false, fmt.Errorf("read SKILL.md: %w", err)
 	}
 	fm, body, err := skill.ParseFrontmatter(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("parse frontmatter: %w", err)
+		return nil, false, fmt.Errorf("parse frontmatter: %w", err)
 	}
 
 	var fmJSON json.RawMessage
@@ -246,37 +248,37 @@ func importSingleSkill(
 
 	report, err := scan.ScanDir(skillDir)
 	if err != nil {
-		return nil, fmt.Errorf("scan: %w", err)
+		return nil, false, fmt.Errorf("scan: %w", err)
 	}
 	scanJSON, _ := json.Marshal(report)
 
 	sk, err := skillStore.GetByName(ctx, ds.Name)
 	if err != nil {
-		return nil, fmt.Errorf("get skill: %w", err)
+		return nil, false, fmt.Errorf("get skill: %w", err)
 	}
 	if sk == nil {
 		sk, err = skillStore.Create(ctx, ds.Name, "", description, body, fmJSON)
 		if err != nil {
-			return nil, fmt.Errorf("create skill: %w", err)
+			return nil, false, fmt.Errorf("create skill: %w", err)
 		}
 	}
 
 	if sk.LatestVersion > 0 {
 		latest, err := skillStore.GetVersion(ctx, ds.Name, sk.LatestVersion)
 		if err == nil && latest != nil && latest.Checksum == checksum {
-			return latest, nil
+			return latest, false, nil
 		}
 	}
 
 	archiveName := fmt.Sprintf("%s/%s.tar.gz", ds.Name, checksum[:16])
 	if _, err := storage.Write(archiveName, bytes.NewReader(archive)); err != nil {
-		return nil, fmt.Errorf("store archive: %w", err)
+		return nil, false, fmt.Errorf("store archive: %w", err)
 	}
 
 	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog, fmJSON, manifest, scanJSON)
 	if err != nil {
 		_ = storage.Delete(archiveName)
-		return nil, fmt.Errorf("create version: %w", err)
+		return nil, false, fmt.Errorf("create version: %w", err)
 	}
 
 	// Update skill metadata (non-fatal, same as publish).
@@ -297,7 +299,7 @@ func importSingleSkill(
 		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: record provenance failed (non-fatal)")
 	}
 
-	return ver, nil
+	return ver, true, nil
 }
 
 func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage *platform.Storage) http.HandlerFunc {
@@ -332,6 +334,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage *pla
 			Name       string `json:"name"`
 			Version    int    `json:"version"`
 			ScanStatus string `json:"scan_status"`
+			Created    bool   `json:"created"`
 		}
 		type failedSkill struct {
 			Name  string `json:"name"`
@@ -348,12 +351,12 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage *pla
 		}
 
 		for _, ds := range discovered {
-			ver, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage)
+			ver, created, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue
 			}
-			resp.Imported = append(resp.Imported, importedSkill{Name: ds.Name, Version: ver.Version, ScanStatus: ds.ScanStatus})
+			resp.Imported = append(resp.Imported, importedSkill{Name: ds.Name, Version: ver.Version, ScanStatus: ds.ScanStatus, Created: created})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
