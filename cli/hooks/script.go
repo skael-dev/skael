@@ -49,6 +49,9 @@ else
   fi
 fi
 
+# Normalize OpenCode prefix.
+SKILL_NAME="${SKILL_NAME#skills_}"
+
 # Cross-platform hash: try sha256sum (Linux) then shasum (macOS), fall back to nohash.
 if command -v sha256sum &>/dev/null; then
   HASH_CMD="sha256sum"
