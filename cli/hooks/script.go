@@ -34,16 +34,18 @@ if [ -z "$ENDPOINT" ] || [ -z "$API_KEY" ]; then exit 0; fi
 # Read stdin (agent hook payload).
 PAYLOAD="$(cat)"
 
-# Extract skill name: prefer jq, fall back to grep.
+# Extract skill name from tool_input (where agents put skill parameters).
+# Claude Code Skill tool: .tool_input.skill
+# Fallback chain covers other agents and payload formats.
 if command -v jq >/dev/null 2>&1; then
-  SKILL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.skillName // .skill_name // .tool_name // "" ' 2>/dev/null || true)"
+  SKILL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.skill // .tool_input.skill_name // .tool_input.name // .skill_name // .skillName // "" ' 2>/dev/null || true)"
 else
-  SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"skillName"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
+  SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"skill"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
   if [ -z "$SKILL_NAME" ]; then
     SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"skill_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
   fi
   if [ -z "$SKILL_NAME" ]; then
-    SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
+    SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"skillName"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
   fi
 fi
 
