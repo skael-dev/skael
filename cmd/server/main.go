@@ -22,6 +22,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
+	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
@@ -43,6 +44,7 @@ func main() {
 			auth.RegisterRoutes(api, nil, nil, nil, false)
 			skill.RegisterRoutes(api, router, nil, nil)
 			analytics.RegisterRoutes(api, nil)
+			skillimport.RegisterRoutes(api, router, nil, nil, nil, nil)
 
 			huma.Register(api, huma.Operation{
 				OperationID: "get-manifest",
@@ -184,7 +186,12 @@ func main() {
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 15. Mount embedded SPA — catch-all after all /api/* routes.
+	// 15. Register import routes.
+	importStore := skillimport.NewStore(pool)
+	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
+	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher)
+
+	// 17. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
 		log.Fatal().Err(err).Msg("embedded SPA error")
@@ -208,7 +215,7 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// 16. Start server with graceful shutdown.
+	// 18. Start server with graceful shutdown.
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           router,
