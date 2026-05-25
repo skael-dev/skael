@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -60,11 +59,6 @@ var (
 
 	importFilesStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666666"))
-
-	importBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#333333")).
-			Padding(0, 1)
 
 	scanCleanStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#22c55e"))
@@ -303,62 +297,48 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		importSourceStyle.Render(shaShort),
 	)
 
-	// Build skill rows
-	var rows []string
-	for _, sk := range resolved.Skills {
-		check := "[ ]"
-		if importAll {
-			check = "[x]"
-		} else if sk.ExistingVersion == 0 {
-			check = "[x]" // pre-select new skills
-		}
-
-		scanBadge := scanCleanStyle.Render("clean")
-		if sk.ScanStatus == "warn" {
-			scanBadge = scanWarnStyle.Render("warn")
-		} else if sk.ScanStatus == "critical" {
-			scanBadge = scanCriticalStyle.Render("critical")
-		}
-
-		versionBadge := ""
-		if sk.ExistingVersion > 0 {
-			versionBadge = importFilesStyle.Render(fmt.Sprintf(" v%d", sk.ExistingVersion))
-		}
-
-		name := importNameStyle.Render(fmt.Sprintf("%-20s", sk.Name))
-		desc := importDescStyle.Render(truncateDesc(sk.Description, 35))
-		files := importFilesStyle.Render(fmt.Sprintf("%d files", len(sk.Files)))
-
-		row := fmt.Sprintf("  %s  %s %s  %s  %s%s", check, name, desc, files, scanBadge, versionBadge)
-		rows = append(rows, row)
-	}
-
-	fmt.Fprintln(os.Stdout, importBoxStyle.Render(strings.Join(rows, "\n")))
-
 	if importDryRun {
-		fmt.Fprintf(os.Stdout, "\n  %s\n\n", importSourceStyle.Render("(dry run — no changes made)"))
+		// Show static list for dry-run (no interaction needed).
+		for _, sk := range resolved.Skills {
+			scanBadge := scanCleanStyle.Render("clean")
+			if sk.ScanStatus == "warn" {
+				scanBadge = scanWarnStyle.Render("warn")
+			} else if sk.ScanStatus == "critical" {
+				scanBadge = scanCriticalStyle.Render("critical")
+			}
+			versionBadge := ""
+			if sk.ExistingVersion > 0 {
+				versionBadge = importFilesStyle.Render(fmt.Sprintf(" v%d", sk.ExistingVersion))
+			}
+			name := importNameStyle.Render(fmt.Sprintf("%-20s", sk.Name))
+			files := importFilesStyle.Render(fmt.Sprintf("%d files", len(sk.Files)))
+			fmt.Fprintf(os.Stdout, "  %s %s  %s  %s%s\n", name, importDescStyle.Render(truncateDesc(sk.Description, 35)), files, scanBadge, versionBadge)
+		}
+		fmt.Fprintf(os.Stdout, "\n  %s\n\n", importSourceStyle.Render(fmt.Sprintf("(dry run — %d skills found, no changes made)", len(resolved.Skills))))
 		return nil
 	}
 
-	// Selection prompt
-	selected := resolved.Skills
-	if !importAll {
-		fmt.Fprintf(os.Stdout, "\n  %d skills available\n", len(resolved.Skills))
-		fmt.Fprintf(os.Stdout, "  Import all? [y/N] ")
-
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "y" && answer != "yes" {
+	// Interactive selection or --all.
+	var names []string
+	if importAll {
+		names = make([]string, len(resolved.Skills))
+		for i, s := range resolved.Skills {
+			names[i] = s.Name
+		}
+	} else {
+		result := runSelector(resolved.Skills)
+		if result.canceled {
 			fmt.Fprintln(os.Stdout, "  Cancelled.")
 			return nil
 		}
-	}
-
-	// Execute import
-	names := make([]string, len(selected))
-	for i, s := range selected {
-		names[i] = s.Name
+		if len(result.selected) == 0 {
+			fmt.Fprintln(os.Stdout, "  No skills selected.")
+			return nil
+		}
+		names = make([]string, len(result.selected))
+		for i, s := range result.selected {
+			names[i] = s.Name
+		}
 	}
 
 	fmt.Fprintf(os.Stdout, "\n  %s Importing %d skills...\n", ui.Accent("↓"), len(names))
