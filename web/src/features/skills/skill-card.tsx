@@ -55,6 +55,12 @@ function getFirstTag(skill: SkillAnalytics): string | null {
 
 type SkillStatus = "active" | "idle" | "stale";
 
+function parseSkillName(name: string): { namespace: string | null; bare: string } {
+  const idx = name.indexOf(":");
+  if (idx === -1) return { namespace: null, bare: name };
+  return { namespace: name.slice(0, idx), bare: name.slice(idx + 1) };
+}
+
 function getStatus(lastTriggered: string | null): SkillStatus {
   if (!lastTriggered) return "idle";
   const daysSince = (Date.now() - new Date(lastTriggered).getTime()) / 86_400_000;
@@ -123,9 +129,21 @@ export function SkillCard({
       {/* Name + tag + description */}
       <div className="flex flex-col gap-1 min-w-0">
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-mono font-medium text-[13px] text-text-primary whitespace-nowrap">
-            {skill.name}
-          </span>
+          {(() => {
+            const { namespace, bare } = parseSkillName(skill.name);
+            return (
+              <>
+                <span className="font-mono font-medium text-[13px] text-text-primary whitespace-nowrap">
+                  {bare}
+                </span>
+                {namespace && (
+                  <span className="text-[10px] text-text-tertiary whitespace-nowrap">
+                    {namespace}
+                  </span>
+                )}
+              </>
+            );
+          })()}
           {tag && (
             <span className="inline-flex items-center gap-1.5 text-[11px] text-text-secondary whitespace-nowrap">
               <span

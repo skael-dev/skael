@@ -55,6 +55,12 @@ function extractTags(skill: Skill): string[] {
   return [];
 }
 
+function parseSkillName(name: string): { namespace: string | null; bare: string } {
+  const idx = name.indexOf(":");
+  if (idx === -1) return { namespace: null, bare: name };
+  return { namespace: name.slice(0, idx), bare: name.slice(idx + 1) };
+}
+
 // ── MetaCell ──────────────────────────────────────────────────────
 function MetaCell({ label, value }: { label: string; value: string | number }) {
   return (
@@ -670,6 +676,16 @@ export function SkillDetail() {
     enabled: !!name,
   });
 
+  const aliasesQuery = useQuery({
+    queryKey: ["skill-aliases", name],
+    queryFn: async () => {
+      const res = await fetch(`/api/skills/${encodeURIComponent(name!)}/aliases`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json() as Promise<{ alias: string; canonical: string; created_at: string }[]>;
+    },
+    enabled: !!name,
+  });
+
   const skill = skillQuery.data;
   const activations = activationsQuery.data;
   const versions = versionsQuery.data ?? [];
@@ -825,6 +841,16 @@ export function SkillDetail() {
                   {importSource.commit_sha && ` @ ${importSource.commit_sha.slice(0, 7)}`}
                   {importSource.imported_at && ` · ${formatRelativeTime(importSource.imported_at)}`}
                 </span>
+              </div>
+            )}
+            {(aliasesQuery.data ?? []).length > 0 && (
+              <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary flex-wrap">
+                <span>Aliases:</span>
+                {(aliasesQuery.data ?? []).map((a) => (
+                  <span key={a.alias} className="px-1.5 py-0.5 rounded bg-bg-tertiary font-mono text-[10px]">
+                    {a.alias}
+                  </span>
+                ))}
               </div>
             )}
             <div className="flex-1" />

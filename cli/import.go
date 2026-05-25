@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -214,7 +215,7 @@ func runLocalImport(c *client.Client, path string) error {
 			names[i] = s.Name
 		}
 
-		result, err := c.ImportSkills(resolved.Source, names)
+		result, err := c.ImportSkills(resolved.Source, names, "")
 		if err != nil {
 			allFailed = append(allFailed, client.FailedSkill{Name: filepath.Base(dir), Error: err.Error()})
 			if !ui.JSONMode {
@@ -283,7 +284,7 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		for i, s := range resolved.Skills {
 			names[i] = s.Name
 		}
-		result, err := c.ImportSkills(src, names)
+		result, err := c.ImportSkills(src, names, "")
 		if err != nil {
 			ui.PrintJSONError(err.Error(), "import_error", "")
 			return nil
@@ -345,9 +346,21 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		}
 	}
 
+	namespace := ""
+	if resolved.PluginName != "" && !ui.JSONMode {
+		fmt.Fprintf(os.Stdout, "\n  These skills come from plugin %s.\n", importNameStyle.Render(resolved.PluginName))
+		fmt.Fprintf(os.Stdout, "  Use prefix \"%s:\"? [Y/n] ", resolved.PluginName)
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer != "n" && answer != "no" {
+			namespace = resolved.PluginName
+		}
+	}
+
 	fmt.Fprintf(os.Stdout, "\n  %s Importing %d skills...\n", ui.Accent("↓"), len(names))
 
-	result, err := c.ImportSkills(resolved.Source, names)
+	result, err := c.ImportSkills(resolved.Source, names, namespace)
 	if err != nil {
 		ui.Errorf("%s", err)
 		return nil
