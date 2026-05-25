@@ -282,6 +282,63 @@ func (s *Store) GetActivations(ctx context.Context, skillName string, days int) 
 	}, nil
 }
 
+// UnregisteredSkill represents a skill name found in events but not in the registry.
+type UnregisteredSkill struct {
+	Name          string     `json:"name"`
+	Activations   int        `json:"activations"`
+	UniqueDevs    int        `json:"unique_devs"`
+	LastTriggered *time.Time `json:"last_triggered"`
+	FirstSeen     *time.Time `json:"first_seen"`
+}
+
+// GetUnregisteredSkills returns skill names from events that don't exist in the
+// skills table or dismissed_skills table, with activation stats.
+func (s *Store) GetUnregisteredSkills(ctx context.Context, days int) ([]UnregisteredSkill, error) {
+	const q = `
+		SELECT se.skill_name,
+		       COUNT(*)::int                          AS activations,
+		       COUNT(DISTINCT se.developer_hash)::int AS unique_devs,
+		       MAX(se.created_at)                     AS last_triggered,
+		       MIN(se.created_at)                     AS first_seen
+		FROM skill_events se
+		WHERE se.created_at > now() - make_interval(days => $1)
+		  AND NOT EXISTS (SELECT 1 FROM skills s WHERE s.name = se.skill_name)
+		  AND NOT EXISTS (SELECT 1 FROM dismissed_skills d WHERE d.name = se.skill_name)
+		GROUP BY se.skill_name
+		ORDER BY activations DESC
+	`
+	rows, err := s.pool.Query(ctx, q, days)
+	if err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetUnregisteredSkills query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []UnregisteredSkill
+	for rows.Next() {
+		var u UnregisteredSkill
+		if err := rows.Scan(&u.Name, &u.Activations, &u.UniqueDevs, &u.LastTriggered, &u.FirstSeen); err != nil {
+			return nil, fmt.Errorf("analytics.Store.GetUnregisteredSkills scan: %w", err)
+		}
+		results = append(results, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetUnregisteredSkills rows: %w", err)
+	}
+	if results == nil {
+		results = []UnregisteredSkill{}
+	}
+	return results, nil
+}
+
+// DismissSkill inserts a name into dismissed_skills. Idempotent.
+func (s *Store) DismissSkill(ctx context.Context, name string) error {
+	const q = `INSERT INTO dismissed_skills (name) VALUES ($1) ON CONFLICT DO NOTHING`
+	if _, err := s.pool.Exec(ctx, q, name); err != nil {
+		return fmt.Errorf("analytics.Store.DismissSkill: %w", err)
+	}
+	return nil
+}
+
 // DailyCount holds the activation count for a single day.
 type DailyCount struct {
 	Date  string `json:"date"`
