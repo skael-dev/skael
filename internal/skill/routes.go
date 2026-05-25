@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -577,6 +578,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Summary:       "Add an alias for a skill",
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *aliasCreateInput) (*struct{}, error) {
+		sk, err := store.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("create alias: %w", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
 		if err := store.CreateAlias(ctx, input.Body.Alias, input.Name); err != nil {
 			return nil, fmt.Errorf("create alias: %w", err)
 		}
@@ -597,6 +605,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Summary:       "Remove an alias",
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, input *aliasDeleteInput) (*struct{}, error) {
+		canonical, err := store.ResolveAlias(ctx, input.Alias)
+		if err != nil {
+			return nil, fmt.Errorf("delete alias: %w", err)
+		}
+		if canonical != input.Name {
+			return nil, huma.Error404NotFound(fmt.Sprintf("alias %q not found for skill %q", input.Alias, input.Name))
+		}
 		if err := store.DeleteAlias(ctx, input.Alias); err != nil {
 			return nil, fmt.Errorf("delete alias: %w", err)
 		}
@@ -622,8 +637,15 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 		Path:        "/api/skills/merge",
 		Summary:     "Merge source skill into target skill",
 	}, func(ctx context.Context, input *mergeInput) (*mergeOutput, error) {
+		if input.Body.Source == input.Body.Target {
+			return nil, huma.Error400BadRequest("cannot merge a skill into itself")
+		}
 		merged, err := store.Merge(ctx, input.Body.Source, input.Body.Target)
 		if err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "not found") {
+				return nil, huma.Error404NotFound(errMsg)
+			}
 			return nil, fmt.Errorf("merge skills: %w", err)
 		}
 		return &mergeOutput{Body: merged}, nil
