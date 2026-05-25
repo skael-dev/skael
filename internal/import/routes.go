@@ -34,8 +34,9 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	}
 	type resolveOutput struct {
 		Body struct {
-			Source Source            `json:"source"`
-			Skills []DiscoveredSkill `json:"skills"`
+			Source     Source            `json:"source"`
+			Skills     []DiscoveredSkill `json:"skills"`
+			PluginName string            `json:"plugin_name,omitempty"`
 		}
 	}
 	huma.Register(api, huma.Operation{
@@ -73,9 +74,12 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 			}
 		}
 
+		pluginName := DetectPluginName(result.Dir)
+
 		out := &resolveOutput{}
 		out.Body.Source = src
 		out.Body.Skills = skills
+		out.Body.PluginName = pluginName
 		if out.Body.Skills == nil {
 			out.Body.Skills = []DiscoveredSkill{}
 		}
@@ -84,8 +88,9 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 
 	// POST /api/import — execute import for selected skills
 	type importBody struct {
-		Source Source   `json:"source"`
-		Skills []string `json:"skills" minItems:"1"`
+		Source    Source   `json:"source"`
+		Skills    []string `json:"skills" minItems:"1"`
+		Namespace string   `json:"namespace,omitempty"`
 	}
 	type importInput struct {
 		Body importBody
@@ -144,11 +149,21 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				continue
 			}
 
+			originalName := ds.Name
+			if input.Body.Namespace != "" {
+				ds.Name = input.Body.Namespace + ":" + ds.Name
+			}
+
 			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue
+			}
+
+			// Auto-create reverse alias if namespace was applied.
+			if input.Body.Namespace != "" {
+				skillStore.CreateAlias(ctx, originalName, ds.Name)
 			}
 
 			out.Body.Imported = append(out.Body.Imported, importedSkill{
