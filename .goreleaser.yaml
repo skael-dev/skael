@@ -73,7 +73,22 @@ changelog:
 release:
   github:
     owner: alternayte
-    name: skael
+    name: skael-releases
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
+
+brews:
+  - ids:
+      - skael
+    repository:
+      owner: alternayte
+      name: homebrew-skael
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://skael.dev"
+    description: "Control plane for AI agent skills"
+    license: "Apache-2.0"
+    install: |
+      bin.install "skael"
+    test: |
+      system "#{bin}/skael", "version"
