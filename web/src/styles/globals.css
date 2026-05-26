@@ -10,11 +10,12 @@
   --color-text-primary: #ededed;
   --color-text-secondary: #a0a0a0;
   --color-text-tertiary: #666666;
-  --color-accent: #22c55e;
-  --color-accent-muted: #166534;
-  --color-accent-surface: #052e16;
+  --color-accent: #f59e0b;
+  --color-accent-muted: #92400e;
+  --color-accent-surface: rgba(245, 158, 11, 0.08);
+  --color-success: #22c55e;
   --color-danger: #ef4444;
-  --color-warning: #f59e0b;
+  --color-warning: #d97706;
   --color-info: #3b82f6;
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", "SF Mono", monospace;
@@ -40,7 +41,7 @@
   --radius: 0.5rem;
 
   /* Chart colors */
-  --color-chart-1: #22c55e;
+  --color-chart-1: #f59e0b;
   --color-chart-2: #3b82f6;
   --color-chart-3: #f59e0b;
   --color-chart-4: #8b5cf6;

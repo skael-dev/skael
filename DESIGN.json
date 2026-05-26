@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-26T00:00:00Z",
+  "title": "Design System: Skael",
+  "extensions": {
+    "colorMeta": {
+      "forge-amber":         { "role": "primary",  "displayName": "Forge Amber",         "canonical": "oklch(78% 0.17 85)",   "tonalRamp": ["#1c1004", "#3b2308", "#5a360c", "#784a0f", "#975e13", "#b57216", "#d4871a", "#f59e0b"] },
+      "forge-amber-muted":   { "role": "primary",  "displayName": "Forge Amber Muted",   "canonical": "oklch(42% 0.12 55)",   "tonalRamp": [] },
+      "forge-amber-surface": { "role": "primary",  "displayName": "Forge Amber Surface",  "canonical": "rgba(245, 158, 11, 0.08)", "tonalRamp": [] },
+      "void-black":          { "role": "neutral",  "displayName": "Void Black",           "canonical": "oklch(7% 0.003 85)",   "tonalRamp": ["#050505", "#0a0a0a", "#141414", "#1e1e1e", "#282828", "#323232", "#3c3c3c", "#464646"] },
+      "surface-primary":     { "role": "neutral",  "displayName": "Surface Primary",      "canonical": "oklch(12% 0.003 85)",  "tonalRamp": [] },
+      "surface-raised":      { "role": "neutral",  "displayName": "Surface Raised",       "canonical": "oklch(17% 0.003 85)",  "tonalRamp": [] },
+      "wire-dim":            { "role": "neutral",  "displayName": "Wire Dim",             "canonical": "oklch(22% 0.003 85)",  "tonalRamp": [] },
+      "wire-active":         { "role": "neutral",  "displayName": "Wire Active",          "canonical": "oklch(32% 0.003 85)",  "tonalRamp": [] },
+      "ash-light":           { "role": "neutral",  "displayName": "Ash Light",            "canonical": "oklch(95% 0.003 85)",  "tonalRamp": [] },
+      "ash-mid":             { "role": "neutral",  "displayName": "Ash Mid",              "canonical": "oklch(72% 0.003 85)",  "tonalRamp": [] },
+      "ash-deep":            { "role": "neutral",  "displayName": "Ash Deep",             "canonical": "oklch(48% 0.003 85)",  "tonalRamp": [] },
+      "signal-danger":       { "role": "tertiary", "displayName": "Signal Danger",        "canonical": "oklch(63% 0.24 27)",   "tonalRamp": [] },
+      "signal-info":         { "role": "tertiary", "displayName": "Signal Info",          "canonical": "oklch(59% 0.18 260)",  "tonalRamp": [] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles on landing page only." },
+      "title":   { "displayName": "Title",   "purpose": "Section headers, skill names in detail view." },
+      "body":    { "displayName": "Body",    "purpose": "Descriptions, markdown, form labels. Max 65-75ch." },
+      "label":   { "displayName": "Label",   "purpose": "Uppercase section markers, metadata captions." },
+      "mono":    { "displayName": "Mono",    "purpose": "Skill names, versions, checksums, counts, timestamps." }
+    },
+    "shadows": [
+      { "name": "accent-glow-sm", "value": "0 0 8px var(--color-accent)", "purpose": "Active indicators, connected-status dots." },
+      { "name": "accent-glow-md", "value": "0 0 12px var(--color-accent-surface)", "purpose": "Hover glow on accent-adjacent interactive elements." },
+      { "name": "accent-glow-lg", "value": "0 0 24px var(--color-accent-surface)", "purpose": "Auth page accent buttons, hero elements on landing." }
+    ],
+    "motion": [
+      { "name": "fade-up", "value": "0.4s ease-out", "purpose": "Content entrance on page load. translateY(8px) to 0." },
+      { "name": "fade-in", "value": "0.3s ease-out", "purpose": "Opacity-only entrance for secondary content." },
+      { "name": "pulse-soft", "value": "2s ease-in-out infinite", "purpose": "Loading skeleton pulse." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "High-contrast action button. The strongest visual element on any screen.",
+      "html": "<button class=\"ds-btn-primary\">Get started</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 6px; font-size: 14px; font-weight: 500; font-family: 'Geist', system-ui, sans-serif; background: #ededed; color: #0a0a0a; border: none; cursor: pointer; transition: background 0.15s, opacity 0.15s; } .ds-btn-primary:hover { background: rgba(237, 237, 237, 0.9); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(64, 64, 64, 0.5); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Low-emphasis action. Appears on hover only.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 6px; font-size: 14px; font-weight: 500; font-family: 'Geist', system-ui, sans-serif; background: transparent; color: #a0a0a0; border: none; cursor: pointer; transition: background 0.15s, color 0.15s; } .ds-btn-ghost:hover { background: #1e1e1e; color: #ededed; } .ds-btn-ghost:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(64, 64, 64, 0.5); }"
+    },
+    {
+      "name": "Accent Badge",
+      "kind": "chip",
+      "refersTo": "badge-accent",
+      "description": "Amber-tinted pill for active status indicators.",
+      "html": "<span class=\"ds-badge-accent\">active</span>",
+      "css": ".ds-badge-accent { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; font-family: 'Geist Mono', monospace; background: rgba(245, 158, 11, 0.08); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Compact search field with monospace placeholder.",
+      "html": "<div class=\"ds-input-search\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m21 21-4.3-4.3\"/></svg><input placeholder=\"Search skills...\" /></div>",
+      "css": ".ds-input-search { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; background: #141414; border: 1px solid #262626; border-radius: 6px; color: #666666; font-size: 13px; font-family: 'Geist Mono', monospace; } .ds-input-search input { background: none; border: none; outline: none; color: #ededed; font-size: 13px; font-family: 'Geist', system-ui, sans-serif; width: 100%; } .ds-input-search:focus-within { border-color: #404040; box-shadow: 0 0 0 3px rgba(64, 64, 64, 0.5); }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": null,
+      "description": "Sidebar navigation item with active state.",
+      "html": "<div class=\"ds-nav-item ds-nav-active\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M12 3v14\"/><path d=\"M5 10h14\"/><path d=\"M5 21h14\"/></svg>Skills</div>",
+      "css": ".ds-nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 6px; font-size: 13px; font-family: 'Geist', system-ui, sans-serif; color: #a0a0a0; cursor: pointer; transition: background 0.12s, color 0.12s; } .ds-nav-item:hover { background: #1e1e1e; color: #ededed; } .ds-nav-active { background: #1e1e1e; color: #ededed; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Forge",
+    "overview": "Skael's interface is a forge: where skills are shaped, tested, and tempered before they reach production agents. Dark surfaces absorb attention into the content. Amber heat marks what's active, what's changing, what demands a decision. Everything else recedes into carbon-black stillness.\n\nThe system rejects decoration. No illustrations, no gradient flourishes, no friendly rounded cards with pastel backgrounds. It rejects the enterprise-gray trap equally: Skael is alive, not administrative. The difference is signal. Amber glows when something fires. Red appears when something breaks. The rest is monochrome discipline.",
+    "keyCharacteristics": [
+      "Dark-only, amber accent, monochrome neutrals",
+      "Flat surfaces separated by 1px borders, not shadows",
+      "Monospace for data, sans-serif for prose",
+      "Motion only on state changes",
+      "CLI-native aesthetics adapted to spatial layout"
+    ],
+    "rules": [
+      { "name": "The Forge Heat Rule", "body": "Amber appears on no more than 10% of any product screen. Its rarity is its power.", "section": "colors" },
+      { "name": "The No Status Green Rule", "body": "Green was removed as the accent. It appears only in trend-up indicators and terminal success markers.", "section": "colors" },
+      { "name": "The Mono-for-Data Rule", "body": "Any value that is a skill name, version, checksum, count, percentage, or timestamp uses Geist Mono.", "section": "typography" },
+      { "name": "The No Shadow Rule", "body": "Surfaces are flat. Shadows exist only as colored glows on active/focused accent elements.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use monospace for every piece of data: skill names, versions, checksums, counts, timestamps.",
+      "Do separate surfaces with 1px solid Wire Dim borders.",
+      "Do use amber glows for active indicators and focused accent elements only.",
+      "Do test all text against WCAG AA on Void Black.",
+      "Do match :focus-visible treatments to hover treatments.",
+      "Do use font-variant-numeric: tabular-nums on numeric columns."
+    ],
+    "donts": [
+      "Don't use border-left or border-right >1px as a colored accent stripe.",
+      "Don't apply background-clip: text with a gradient.",
+      "Don't use blur/glass effects decoratively.",
+      "Don't build hero-metric templates (big number, small label, gradient accent).",
+      "Don't create identical card grids with icon + heading + text.",
+      "Don't default to modals.",
+      "Don't use box-shadow on cards or containers.",
+      "Don't use pastel backgrounds, illustrations, or friendly rounded-everything (anti-ref: Intercom, HubSpot).",
+      "Don't overdesign with gradients and glass for spectacle (anti-ref: Vercel circa 2024).",
+      "Don't let the interface feel gray, dense, and dated (anti-ref: Jira, ServiceNow).",
+      "Don't use green (#22c55e) as the primary accent."
+    ]
+  }
+}
