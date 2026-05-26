@@ -398,3 +398,82 @@ func (s *Store) GetTimeSeries(ctx context.Context, days int) ([]DailyCount, erro
 	}
 	return results, nil
 }
+
+// AgentDailyCount holds per-agent activation counts for a single day.
+type AgentDailyCount struct {
+	Date   string         `json:"date"`
+	Agents map[string]int `json:"-"`
+}
+
+// MarshalJSON produces a flat object: {"date":"2026-05-20","claude-code":5,"cursor":2}
+func (a AgentDailyCount) MarshalJSON() ([]byte, error) {
+	m := make(map[string]interface{}, len(a.Agents)+1)
+	m["date"] = a.Date
+	for agent, count := range a.Agents {
+		m[agent] = count
+	}
+	return json.Marshal(m)
+}
+
+// GetSkillTimeSeries returns daily per-agent activation counts for a specific
+// skill over the last `days` days. Days with zero activations are included.
+func (s *Store) GetSkillTimeSeries(ctx context.Context, skillName string, days int) ([]AgentDailyCount, error) {
+	const q = `
+		WITH days AS (
+			SELECT generate_series(
+				(now() - make_interval(days => $2))::date,
+				now()::date,
+				'1 day'::interval
+			)::date AS day
+		),
+		counts AS (
+			SELECT se.created_at::date AS day, se.agent, COUNT(*)::int AS cnt
+			FROM skill_events se
+			LEFT JOIN skill_aliases a ON a.alias = se.skill_name
+			WHERE COALESCE(a.canonical, se.skill_name) = $1
+			  AND se.created_at > now() - make_interval(days => $2)
+			GROUP BY se.created_at::date, se.agent
+		)
+		SELECT d.day::text, COALESCE(c.agent, ''), COALESCE(c.cnt, 0)
+		FROM days d
+		LEFT JOIN counts c ON c.day = d.day
+		ORDER BY d.day, c.agent
+	`
+	rows, err := s.pool.Query(ctx, q, skillName, days)
+	if err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetSkillTimeSeries query: %w", err)
+	}
+	defer rows.Close()
+
+	dayMap := make(map[string]*AgentDailyCount)
+	var orderedDates []string
+
+	for rows.Next() {
+		var date, agent string
+		var count int
+		if err := rows.Scan(&date, &agent, &count); err != nil {
+			return nil, fmt.Errorf("analytics.Store.GetSkillTimeSeries scan: %w", err)
+		}
+		entry, exists := dayMap[date]
+		if !exists {
+			entry = &AgentDailyCount{Date: date, Agents: make(map[string]int)}
+			dayMap[date] = entry
+			orderedDates = append(orderedDates, date)
+		}
+		if agent != "" && count > 0 {
+			entry.Agents[agent] = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetSkillTimeSeries rows: %w", err)
+	}
+
+	results := make([]AgentDailyCount, 0, len(orderedDates))
+	for _, d := range orderedDates {
+		results = append(results, *dayMap[d])
+	}
+	if results == nil {
+		results = []AgentDailyCount{}
+	}
+	return results, nil
+}
