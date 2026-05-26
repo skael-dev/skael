@@ -92,8 +92,8 @@ export function ActivationsChart({ days }: { days: number }) {
             content={
               <ChartTooltipContent
                 indicator="line"
-                labelFormatter={(value: string) =>
-                  new Date(value + "T00:00:00").toLocaleDateString("en-US", {
+                labelFormatter={(value) =>
+                  new Date(String(value) + "T00:00:00").toLocaleDateString("en-US", {
                     weekday: "short",
                     month: "short",
                     day: "numeric",

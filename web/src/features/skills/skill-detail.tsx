@@ -56,12 +56,6 @@ function extractTags(skill: Skill): string[] {
   return [];
 }
 
-function parseSkillName(name: string): { namespace: string | null; bare: string } {
-  const idx = name.indexOf(":");
-  if (idx === -1) return { namespace: null, bare: name };
-  return { namespace: name.slice(0, idx), bare: name.slice(idx + 1) };
-}
-
 // ── MetaCell ──────────────────────────────────────────────────────
 function MetaCell({ label, value }: { label: string; value: string | number }) {
   return (
