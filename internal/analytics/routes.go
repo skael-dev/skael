@@ -123,6 +123,33 @@ func RegisterRoutes(api huma.API, store *Store) {
 	})
 
 	// -----------------------------------------------------------------
+	// GET /api/skills/{name}/timeseries?days=30 — per-agent daily counts
+	// -----------------------------------------------------------------
+	type skillTimeseriesInput struct {
+		Name string `path:"name"`
+		Days int    `query:"days" default:"30" minimum:"1" maximum:"365"`
+	}
+	type skillTimeseriesOutput struct {
+		Body []AgentDailyCount
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get-skill-timeseries",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/timeseries",
+		Summary:     "Get per-agent daily activation counts for a skill",
+	}, func(ctx context.Context, input *skillTimeseriesInput) (*skillTimeseriesOutput, error) {
+		days := input.Days
+		if days == 0 {
+			days = 30
+		}
+		series, err := store.GetSkillTimeSeries(ctx, input.Name, days)
+		if err != nil {
+			return nil, fmt.Errorf("get skill timeseries: %w", err)
+		}
+		return &skillTimeseriesOutput{Body: series}, nil
+	})
+
+	// -----------------------------------------------------------------
 	// GET /api/analytics/timeseries?days=30 — daily activation counts
 	// -----------------------------------------------------------------
 	type timeseriesInput struct {

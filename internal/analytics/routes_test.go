@@ -2,6 +2,7 @@ package analytics_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -111,4 +112,40 @@ func TestGetActivations_ViaHTTP(t *testing.T) {
 		"response body: %s", rr.Body.String())
 	// No events inserted, so counts should be zero.
 	require.Equal(t, 0, summary.TotalCount)
+}
+
+// TestGetSkillTimeSeries_ViaHTTP verifies that the GET /api/skills/{name}/timeseries
+// endpoint returns 200 with per-agent daily data in flat JSON shape.
+func TestGetSkillTimeSeries_ViaHTTP(t *testing.T) {
+	handler, store := setupAnalyticsAPI(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "ts-skill", Agent: "claude-code", TriggerType: "auto",
+		ProjectHash: "p1", DeveloperHash: "d1",
+	}))
+
+	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/ts-skill/timeseries?days=7", nil)
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+
+	var series []map[string]interface{}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &series))
+	require.NotEmpty(t, series)
+
+	for _, entry := range series {
+		_, hasDate := entry["date"]
+		require.True(t, hasDate, "each entry must have a date key")
+	}
+}
+
+// TestGetSkillTimeSeries_ViaHTTP_Empty verifies empty timeseries returns gap-filled days.
+func TestGetSkillTimeSeries_ViaHTTP_Empty(t *testing.T) {
+	handler, _ := setupAnalyticsAPI(t)
+
+	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/nonexistent/timeseries?days=7", nil)
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+
+	var series []map[string]interface{}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &series))
+	require.Equal(t, 8, len(series))
 }
