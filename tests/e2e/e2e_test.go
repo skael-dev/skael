@@ -5,7 +5,9 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -380,4 +382,108 @@ func TestE2E_ConfigRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, emptyState)
 	require.Empty(t, emptyState.Skills)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 6: Full CLI lifecycle — onboarding flow end-to-end.
+// ---------------------------------------------------------------------------
+
+func TestE2E_FullLifecycle(t *testing.T) {
+	// 1. Start test server.
+	serverURL, cleanup := startTestServer(t)
+	defer cleanup()
+
+	c := client.New(serverURL, testAPIKey)
+
+	// 2. Create and publish a skill.
+	skillName := "lifecycle-skill"
+	_, err := c.CreateSkill(skillName, "full lifecycle test skill")
+	require.NoError(t, err)
+
+	archiveBytes := packTestdataDir(t, "clean-skill")
+	ver, _, err := c.PublishVersion(skillName, archiveBytes)
+	require.NoError(t, err)
+	require.NotNil(t, ver)
+	require.Equal(t, 1, ver.Version)
+
+	// 3. Configure — simulate setup by writing config to a temp dir.
+	configDir := t.TempDir()
+	cfg := &config.Config{
+		Endpoint: serverURL,
+		APIKey:   testAPIKey,
+	}
+	require.NoError(t, config.WriteConfig(configDir, cfg))
+
+	readCfg, err := config.ReadConfig(configDir)
+	require.NoError(t, err)
+	require.Equal(t, serverURL, readCfg.Endpoint)
+	require.Equal(t, testAPIKey, readCfg.APIKey)
+
+	// 4. Get manifest via client, verify the skill appears.
+	manifest, err := c.GetManifest()
+	require.NoError(t, err)
+	require.Len(t, manifest, 1)
+	require.Equal(t, skillName, manifest[0].Name)
+	require.Equal(t, 1, manifest[0].Version)
+	require.NotEmpty(t, manifest[0].Checksum)
+	manifestChecksum := manifest[0].Checksum
+
+	// 5. Download the archive, verify checksum matches manifest entry.
+	downloaded, err := c.DownloadVersion(skillName, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, downloaded)
+
+	sum := sha256.Sum256(downloaded)
+	downloadedChecksum := fmt.Sprintf("%x", sum)
+	require.Equal(t, manifestChecksum, downloadedChecksum,
+		"downloaded archive checksum must match manifest entry")
+
+	// 6. Extract to a simulated agent directory.
+	agentDir := t.TempDir()
+	err = skill.Unpack(bytes.NewReader(downloaded), agentDir)
+	require.NoError(t, err)
+
+	// 7. Verify SKILL.md exists in the extracted location.
+	skillMDPath := filepath.Join(agentDir, "SKILL.md")
+	data, err := os.ReadFile(skillMDPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "E2E Test Skill")
+
+	// 8. Write sync state file, read it back, verify.
+	state := &config.SyncState{
+		LastSync: "2026-01-01T00:00:00Z",
+		Skills: []config.SyncedSkill{
+			{Name: skillName, Version: 1, Checksum: manifestChecksum},
+		},
+	}
+	require.NoError(t, config.WriteState(configDir, state))
+
+	readState, err := config.ReadState(configDir)
+	require.NoError(t, err)
+	require.Equal(t, state.LastSync, readState.LastSync)
+	require.Len(t, readState.Skills, 1)
+	require.Equal(t, skillName, readState.Skills[0].Name)
+	require.Equal(t, 1, readState.Skills[0].Version)
+	require.Equal(t, manifestChecksum, readState.Skills[0].Checksum)
+
+	// 9. Post an activation event, query activations, verify count.
+	postEvent(t, serverURL, testAPIKey, skillName, "claude")
+
+	req, err := http.NewRequest(http.MethodGet,
+		serverURL+"/api/skills/"+skillName+"/activations?days=30", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-API-Key", testAPIKey)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var summary analytics.ActivationSummary
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(bodyBytes, &summary))
+
+	require.Equal(t, 1, summary.TotalCount)
+	require.Contains(t, summary.ByAgent, "claude")
+	require.Equal(t, 1, summary.ByAgent["claude"])
 }
