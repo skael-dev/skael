@@ -9,21 +9,32 @@ Skael gives engineering teams a central registry for the skills that power their
 ### Self-hosted (Docker Compose)
 
 ```bash
-git clone https://github.com/skael-dev/skael.git
-cd skael
+cp .env.example .env          # set API_KEY and DATABASE_URL
 docker compose up -d
 ```
 
-Platform is at `http://localhost:8080`. Default API key is `sk-change-me-in-production` (set `API_KEY` env var in production).
+Platform is at `http://localhost:8080`. Set `API_KEY` in `.env` before running in production.
 
-### CLI
+### Install the CLI
 
 ```bash
+# macOS / Linux (Homebrew)
+brew install alternayte/skael/skael
+
+# macOS / Linux (curl)
+curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+
+# From source
 go install github.com/skael-dev/skael/cmd/skael@latest
-skael setup http://localhost:8080 sk-change-me-in-production
 ```
 
-That's it. Skills are synced to your agents.
+### Connect to your registry
+
+```bash
+skael setup http://localhost:8080 <your-api-key>
+```
+
+This validates the connection, saves config, syncs all skills, and installs activation tracking hooks for every detected agent.
 
 ## What it does
 
