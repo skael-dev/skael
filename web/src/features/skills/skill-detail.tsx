@@ -13,6 +13,7 @@ import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
 import { ScanFindings } from "@/features/security/scan-findings";
 import type { ScanReport } from "@/features/security/scan-findings";
+import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { cn } from "@/lib/utils";
 
 // ── Tag colors (mirrors skill-card) ──────────────────────────────
@@ -389,6 +390,9 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
           ))}
         </div>
       </div>
+
+      {/* Activations chart */}
+      <SkillActivationsChart skillName={skill.name} days={period} />
 
       {/* Agent breakdown */}
       {Object.keys(byAgent).length > 0 && (
