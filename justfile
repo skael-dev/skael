@@ -34,6 +34,14 @@ web-dev:
 web-build:
     cd web && npm run build
 
+# Run Astro dev server for the landing page
+site-dev:
+    cd site && npm run dev
+
+# Build the landing page
+site-build:
+    cd site && npm run build
+
 # --- Dev ---
 
 # Run the server locally (requires DATABASE_URL and API_KEY in .env or environment)
