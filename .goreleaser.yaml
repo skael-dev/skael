@@ -85,8 +85,8 @@ changelog:
 
 release:
   github:
-    owner: alternayte
-    name: skael-releases
+    owner: skael-dev
+    name: skael
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
@@ -97,10 +97,10 @@ release:
 
     ```bash
     # macOS / Linux (Homebrew)
-    brew install alternayte/skael/skael
+    brew install skael-dev/skael/skael
 
-    # macOS / Linux (curl)
-    curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+    # Docker
+    docker pull ghcr.io/skael-dev/skael:{{.Version}}
 
     # Windows: download the .zip for your architecture below
     ```
@@ -108,21 +108,21 @@ release:
     ## Self-host the platform
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+    docker pull ghcr.io/skael-dev/skael:latest
     docker compose up -d
     skael setup http://localhost:8080 <your-api-key>
     ```
 
     ## What's in this release
   footer: |
-    **Full changelog**: https://github.com/alternayte/skael-releases/compare/...v{{.Version}}
+    **Full changelog**: https://github.com/skael-dev/skael/compare/...v{{.Version}}
 
 brews:
   - name: skael
     ids:
       - skael
     repository:
-      owner: alternayte
+      owner: skael-dev
       name: homebrew-skael
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://skael.dev"

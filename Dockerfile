@@ -1,5 +1,5 @@
 # Stage 1: Generate OpenAPI spec
-FROM golang:1.24 AS spec
+FROM golang:1.25 AS spec
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,7 +17,7 @@ COPY --from=spec /openapi.json ./openapi.json
 RUN npm run generate && npm run build
 
 # Stage 3: Build Go binary with embedded SPA
-FROM golang:1.24 AS go
+FROM golang:1.25 AS go
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

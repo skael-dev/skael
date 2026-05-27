@@ -19,10 +19,7 @@ Platform is at `http://localhost:8080`. Set `API_KEY` in `.env` before running i
 
 ```bash
 # macOS / Linux (Homebrew)
-brew install alternayte/skael/skael
-
-# macOS / Linux (curl)
-curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+brew install skael-dev/skael/skael
 
 # From source
 go install github.com/skael-dev/skael/cmd/skael@latest
@@ -76,7 +73,6 @@ cmd/skael/      → CLI binary (Cobra + Lipgloss)
 internal/       → Server packages (skill, scan, analytics, auth, platform, sync)
 cli/            → CLI packages (commands, client, config, agents, hooks)
 tests/e2e/      → End-to-end integration tests
-docs/           → PRD, SDD, UI/UX specs, implementation plans
 ```
 
 ### Key commands
@@ -100,8 +96,6 @@ Single Go binary embeds the API server and (soon) a React dashboard. Backed by P
 
 The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, and manifest-based sync with checksum verification.
 
-See `docs/sdd.md` for the full system design and `docs/prd.md` for product requirements.
-
 ## License
 
-TBD
+Apache-2.0
