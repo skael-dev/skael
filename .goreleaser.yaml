@@ -79,7 +79,8 @@ release:
   name_template: "v{{.Version}}"
 
 brews:
-  - ids:
+  - name: skael
+    ids:
       - skael
     repository:
       owner: alternayte
