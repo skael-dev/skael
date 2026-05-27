@@ -29,7 +29,7 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 			}
 
 			// Skip explicitly exempt API paths.
-			if r.URL.Path == "/api/health" || r.URL.Path == "/api/openapi.json" {
+			if r.URL.Path == "/api/health" || r.URL.Path == "/api/openapi.json" || r.URL.Path == "/api/capabilities" {
 				next.ServeHTTP(w, r)
 				return
 			}
