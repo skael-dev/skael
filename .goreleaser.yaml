@@ -63,12 +63,25 @@ checksum:
 
 changelog:
   sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^feat'
+    - title: Fixes
+      regexp: '^fix'
+    - title: Security
+      regexp: '^security'
+    - title: Other
+      order: 999
   filters:
     exclude:
       - "^docs:"
       - "^test:"
       - "^chore:"
       - "^ci:"
+      - "^refactor:"
+      - "^merge:"
+      - "^task"
 
 release:
   github:
@@ -77,6 +90,32 @@ release:
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
+  header: |
+    The control plane for AI agent skills. Publish, sync, scan, and track SKILL.md files across your team's agents.
+
+    ## Install
+
+    ```bash
+    # macOS / Linux (Homebrew)
+    brew install alternayte/skael/skael
+
+    # macOS / Linux (curl)
+    curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+
+    # Windows: download the .zip for your architecture below
+    ```
+
+    ## Self-host the platform
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/alternayte/skael-releases/main/install.sh | sh
+    docker compose up -d
+    skael setup http://localhost:8080 <your-api-key>
+    ```
+
+    ## What's in this release
+  footer: |
+    **Full changelog**: https://github.com/alternayte/skael-releases/compare/...v{{.Version}}
 
 brews:
   - name: skael
