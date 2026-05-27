@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="alternayte/skael-releases"
+REPO="skael-dev/skael"
 BINARY="skael"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
