@@ -5,6 +5,7 @@ bin/
 .env
 data/
 *.tar.gz
+docs/
 web/dist/*
 !web/dist/.gitkeep
 web/src/api/
