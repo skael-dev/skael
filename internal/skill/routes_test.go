@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -323,9 +324,9 @@ func TestListVersions_200(t *testing.T) {
 
 	createSkill(t, handler, "versioned-skill", "versioning test")
 
-	// Publish two versions.
+	// Publish two versions with different content so checksums differ.
 	for i := 0; i < 2; i++ {
-		archiveBytes := buildTestArchive(t, "versioned-skill", "desc")
+		archiveBytes := buildTestArchive(t, "versioned-skill", fmt.Sprintf("desc v%d", i+1))
 		publishVersion(t, handler, "versioned-skill", archiveBytes)
 	}
 
