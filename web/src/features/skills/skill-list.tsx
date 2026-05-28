@@ -493,33 +493,31 @@ export function SkillList() {
       </div>
 
       {/* Tab bar */}
-        <div className="px-12 flex border-b border-border max-w-screen-xl mx-auto">
-          <button
-            onClick={() => setActiveTab("registry")}
-            className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent ${
-              activeTab === "registry"
-                ? "text-text-primary border-accent font-medium"
-                : "text-text-secondary border-transparent hover:text-text-primary"
+      <div className="px-12 flex border-b border-border max-w-screen-xl mx-auto">
+        <button
+          onClick={() => setActiveTab("registry")}
+          className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent ${activeTab === "registry"
+              ? "text-text-primary border-accent font-medium"
+              : "text-text-secondary border-transparent hover:text-text-primary"
             }`}
-          >
-            Registry
-          </button>
-          <button
-            onClick={() => setActiveTab("unregistered")}
-            className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent flex items-center gap-2 ${
-              activeTab === "unregistered"
-                ? "text-text-primary border-accent font-medium"
-                : "text-text-secondary border-transparent hover:text-text-primary"
+        >
+          Registry
+        </button>
+        <button
+          onClick={() => setActiveTab("unregistered")}
+          className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent flex items-center gap-2 ${activeTab === "unregistered"
+              ? "text-text-primary border-accent font-medium"
+              : "text-text-secondary border-transparent hover:text-text-primary"
             }`}
-          >
-            Unregistered
-            {unregisteredCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/20 text-warning font-medium">
-                {unregisteredCount}
-              </span>
-            )}
-          </button>
-        </div>
+        >
+          Unregistered
+          {unregisteredCount > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/20 text-warning font-medium">
+              {unregisteredCount}
+            </span>
+          )}
+        </button>
+      </div>
 
       {/* Filter + list */}
       <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl mx-auto">
