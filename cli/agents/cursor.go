@@ -18,3 +18,5 @@ func (c *Cursor) ConfigPath(home string) string {
 func (c *Cursor) Detected(home string) bool {
 	return dirExists(filepath.Join(home, ".cursor"))
 }
+
+func (c *Cursor) ProjectScoped() bool { return true }

@@ -18,3 +18,5 @@ func (c *ClaudeCode) ConfigPath(home string) string {
 func (c *ClaudeCode) Detected(home string) bool {
 	return dirExists(filepath.Join(home, ".claude"))
 }
+
+func (c *ClaudeCode) ProjectScoped() bool { return false }

@@ -18,3 +18,5 @@ func (c *Codex) ConfigPath(home string) string {
 func (c *Codex) Detected(home string) bool {
 	return dirExists(filepath.Join(home, ".codex"))
 }
+
+func (c *Codex) ProjectScoped() bool { return false }

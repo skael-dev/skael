@@ -7,9 +7,10 @@ import (
 // Agent represents an AI coding agent installed on the host machine.
 type Agent interface {
 	Name() string
-	SkillsDir(homeDir string) string
+	SkillsDir(baseDir string) string
 	ConfigPath(homeDir string) string
 	Detected(homeDir string) bool
+	ProjectScoped() bool
 }
 
 // Detect returns all agents found using the real home directory.

@@ -72,3 +72,10 @@ func TestOpenCode_NotDetected(t *testing.T) {
 	oc := &OpenCode{}
 	assert.False(t, oc.Detected(home))
 }
+
+func TestGlobalAgents_NotProjectScoped(t *testing.T) {
+	agents := []Agent{&ClaudeCode{}, &Codex{}, &OpenCode{}}
+	for _, a := range agents {
+		assert.False(t, a.ProjectScoped(), "%s must not be project-scoped", a.Name())
+	}
+}

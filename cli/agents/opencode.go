@@ -18,3 +18,5 @@ func (o *OpenCode) ConfigPath(home string) string {
 func (o *OpenCode) Detected(home string) bool {
 	return dirExists(filepath.Join(home, ".config", "opencode"))
 }
+
+func (o *OpenCode) ProjectScoped() bool { return false }

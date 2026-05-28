@@ -24,3 +24,14 @@ func TestCursor_NotDetected(t *testing.T) {
 	c := &Cursor{}
 	assert.False(t, c.Detected(home))
 }
+
+func TestCursor_ProjectScoped(t *testing.T) {
+	c := &Cursor{}
+	assert.True(t, c.ProjectScoped(), "cursor must be project-scoped")
+}
+
+func TestCursor_SkillsDir_ProjectRoot(t *testing.T) {
+	projectRoot := "/tmp/my-project"
+	c := &Cursor{}
+	assert.Equal(t, filepath.Join(projectRoot, ".cursor", "skills"), c.SkillsDir(projectRoot))
+}
