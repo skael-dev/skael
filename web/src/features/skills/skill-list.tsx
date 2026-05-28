@@ -31,7 +31,7 @@ function Onboarding() {
   }
 
   return (
-    <div className="flex-1 overflow-auto relative flex flex-col">
+    <div className="flex-1 relative flex flex-col">
       {/* Ambient gradient blob */}
       <div
         className="pointer-events-none absolute -top-[120px] -right-[100px] w-[520px] h-[520px] rounded-full"
@@ -406,7 +406,7 @@ export function SkillList() {
   // ── Loading skeleton ──────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="flex flex-col h-full overflow-auto px-12 pt-12">
+      <div className="flex flex-col min-h-full px-12 pt-12">
         <Skeleton className="h-3 w-20 mb-3.5 bg-bg-secondary" />
         <Skeleton className="h-10 w-40 mb-3.5 bg-bg-secondary" />
         <Skeleton className="h-4 w-80 mb-9 bg-bg-secondary" />
@@ -443,15 +443,15 @@ export function SkillList() {
   }
 
   // ── Empty state — onboarding ──────────────────────────────
-  if (!isLoading && skills.length === 0) {
+  if (!isLoading && skills.length === 0 && unregisteredCount === 0) {
     return <Onboarding />;
   }
 
   return (
-    <div className="flex flex-col h-full overflow-auto relative">
+    <div className="flex flex-col min-h-full relative">
       {/* Hero */}
       <div className="relative overflow-hidden">
-        <div className="px-12 pt-12 relative max-w-screen-xl">
+        <div className="px-12 pt-12 relative max-w-screen-xl mx-auto">
           <div className="text-[11px] text-text-tertiary uppercase tracking-[0.1em] mb-3.5">
             Workspace
           </div>
@@ -493,7 +493,7 @@ export function SkillList() {
       </div>
 
       {/* Tab bar */}
-        <div className="px-12 flex border-b border-border max-w-screen-xl">
+        <div className="px-12 flex border-b border-border max-w-screen-xl mx-auto">
           <button
             onClick={() => setActiveTab("registry")}
             className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent ${
@@ -522,7 +522,7 @@ export function SkillList() {
         </div>
 
       {/* Filter + list */}
-      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl">
+      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl mx-auto">
         {activeTab === "unregistered" ? (
           <div className="mt-4">
             <UnregisteredTab days={30} />

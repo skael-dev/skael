@@ -18,7 +18,6 @@ const SECTIONS = [
   { id: "workspace", label: "Workspace" },
   { id: "api", label: "API & Keys" },
   { id: "sync", label: "Sync Targets" },
-  { id: "danger", label: "Danger Zone" },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -443,39 +442,6 @@ function SyncTargetsSection() {
   );
 }
 
-// ── Danger zone section ───────────────────────────────────────
-function DangerSection() {
-  return (
-    <div>
-      <SectionHeader
-        title="Danger Zone"
-        desc="Irreversible and destructive actions"
-      />
-      <Card danger>
-        <div className="px-3.5 py-3 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[13px] text-text-primary mb-0.5">
-              Regenerate API Key
-            </div>
-            <div className="text-[11px] text-text-tertiary">
-              All existing integrations will break and need updating
-            </div>
-          </div>
-          <Button
-            variant="destructive"
-            size="sm"
-            className="shrink-0 opacity-50 cursor-not-allowed"
-            disabled
-            title="Coming in a future release"
-          >
-            Regenerate
-          </Button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────
 export function Settings() {
   const [activeSection, setActiveSection] = useState<SectionId>("workspace");
@@ -578,14 +544,6 @@ export function Settings() {
             }}
           >
             <SyncTargetsSection />
-          </div>
-
-          <div
-            ref={(el) => {
-              sectionRefs.current.danger = el;
-            }}
-          >
-            <DangerSection />
           </div>
 
           {/* Bottom spacer */}

@@ -82,9 +82,9 @@ export function Analytics() {
   const isLoading = overviewLoading || skillsLoading;
 
   return (
-    <div className="flex flex-col h-full overflow-auto">
+    <div className="flex flex-col min-h-full">
       {/* Page header */}
-      <div className="px-12 pt-12 max-w-screen-xl">
+      <div className="px-12 pt-12 max-w-screen-xl mx-auto">
         <div className="text-[11px] text-text-tertiary uppercase tracking-[0.1em] mb-3.5">
           Workspace
         </div>
@@ -138,7 +138,7 @@ export function Analytics() {
       </div>
 
       {/* Table section */}
-      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl">
+      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl mx-auto">
         <div className="text-[11px] text-text-tertiary uppercase tracking-widest mb-4">
           Skills breakdown
         </div>

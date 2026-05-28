@@ -27,7 +27,7 @@ export function Shell() {
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar onOpenCommand={openCommand} />
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>

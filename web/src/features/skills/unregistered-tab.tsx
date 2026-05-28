@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserPlus, EyeOff, GitMerge } from "lucide-react";
+import { UserPlus, EyeOff, GitMerge, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 type UnregisteredSkill = {
@@ -210,7 +217,7 @@ export function UnregisteredTab({ days }: { days: number }) {
       {/* Column headers */}
       <div
         className="grid items-center gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
-        style={{ gridTemplateColumns: "28px 1fr 80px 60px 100px 100px 60px" }}
+        style={{ gridTemplateColumns: "28px 1fr 80px 60px 100px 100px 36px" }}
       >
         <span />
         <span>Skill</span>
@@ -226,7 +233,7 @@ export function UnregisteredTab({ days }: { days: number }) {
         <div
           key={sk.name}
           className="group grid items-center gap-4 px-3.5 py-3 border-b border-border hover:bg-bg-secondary transition-colors"
-          style={{ gridTemplateColumns: "28px 1fr 80px 60px 100px 100px 60px" }}
+          style={{ gridTemplateColumns: "28px 1fr 80px 60px 100px 100px 36px" }}
         >
           {/* Checkbox */}
           <div
@@ -271,44 +278,40 @@ export function UnregisteredTab({ days }: { days: number }) {
             {formatRelativeTime(sk.first_seen)}
           </span>
 
-          {/* Icon actions */}
-          <div className="flex items-center justify-end gap-1">
-            <div className="relative group/register">
-              <button
-                onClick={() => registerMutation.mutate([sk.name])}
-                disabled={registerMutation.isPending}
-                className="p-1.5 rounded-md text-text-tertiary hover:text-accent hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <UserPlus size={14} />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/register:opacity-100 transition-opacity z-10">
-                Register
-              </div>
-            </div>
-            <div className="relative group/merge">
-              <button
-                onClick={() => handleMerge(sk.name)}
-                disabled={mergeMutation.isPending}
-                className="p-1.5 rounded-md text-text-tertiary hover:text-info hover:bg-info/10 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <GitMerge size={14} />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/merge:opacity-100 transition-opacity z-10">
-                Merge into...
-              </div>
-            </div>
-            <div className="relative group/dismiss">
-              <button
-                onClick={() => dismissMutation.mutate([sk.name])}
-                disabled={dismissMutation.isPending}
-                className="p-1.5 rounded-md text-text-tertiary hover:text-warning hover:bg-warning/10 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <EyeOff size={14} />
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[10px] text-text-primary bg-bg-tertiary border border-border rounded whitespace-nowrap opacity-0 pointer-events-none group-hover/dismiss:opacity-100 transition-opacity z-10">
-                Dismiss
-              </div>
-            </div>
+          {/* Actions dropdown */}
+          <div className="flex items-center justify-end">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition-colors cursor-pointer">
+                  <MoreHorizontal size={14} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-[160px]">
+                <DropdownMenuItem
+                  onClick={() => registerMutation.mutate([sk.name])}
+                  disabled={registerMutation.isPending}
+                >
+                  <UserPlus size={14} className="mr-2" />
+                  Register
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleMerge(sk.name)}
+                  disabled={mergeMutation.isPending}
+                >
+                  <GitMerge size={14} className="mr-2" />
+                  Merge into...
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => dismissMutation.mutate([sk.name])}
+                  disabled={dismissMutation.isPending}
+                  className="text-text-tertiary"
+                >
+                  <EyeOff size={14} className="mr-2" />
+                  Dismiss
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       ))}
