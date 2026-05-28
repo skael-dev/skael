@@ -23,10 +23,16 @@ var syncCmd = &cobra.Command{
 	RunE:  runSync,
 }
 
-var syncDryRun bool
+var (
+	syncDryRun bool
+	syncAgent  string
+	syncQuiet  bool
+)
 
 func init() {
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "Show what would happen")
+	syncCmd.Flags().StringVar(&syncAgent, "agent", "", "Sync only for this agent")
+	syncCmd.Flags().BoolVar(&syncQuiet, "quiet", false, "Suppress non-error output")
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -108,29 +114,33 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			return ui.PrintJSON(out)
 		}
-		ui.Success("Already up to date")
-		ui.Summary(
-			fmt.Sprintf("0 updated"),
-			fmt.Sprintf("0 failed"),
-			fmt.Sprintf("%d total", len(manifest)),
-		)
+		if !syncQuiet {
+			ui.Success("Already up to date")
+			ui.Summary(
+				fmt.Sprintf("0 updated"),
+				fmt.Sprintf("0 failed"),
+				fmt.Sprintf("%d total", len(manifest)),
+			)
+		}
 		return nil
 	}
 
 	// 7. If --dry-run, show what would happen and return.
 	if syncDryRun {
-		for _, ts := range pending {
-			ver := fmt.Sprintf("v%d", ts.entry.Version)
-			if ts.isNew {
-				ui.New(ts.entry.Name, ver)
-			} else {
-				ui.Download(ts.entry.Name, ver)
+		if !syncQuiet {
+			for _, ts := range pending {
+				ver := fmt.Sprintf("v%d", ts.entry.Version)
+				if ts.isNew {
+					ui.New(ts.entry.Name, ver)
+				} else {
+					ui.Download(ts.entry.Name, ver)
+				}
 			}
+			ui.Summary(
+				fmt.Sprintf("%d to sync", len(pending)),
+				fmt.Sprintf("%d total", len(manifest)),
+			)
 		}
-		ui.Summary(
-			fmt.Sprintf("%d to sync", len(pending)),
-			fmt.Sprintf("%d total", len(manifest)),
-		)
 		return nil
 	}
 
@@ -145,6 +155,21 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	detectedAgents := agents.DetectIn(home)
+
+	// Filter to a single agent if --agent is set.
+	if syncAgent != "" {
+		var filtered []agents.Agent
+		for _, a := range detectedAgents {
+			if a.Name() == syncAgent {
+				filtered = append(filtered, a)
+			}
+		}
+		if len(filtered) == 0 {
+			ui.Errorf("agent %q not detected", syncAgent)
+			return nil
+		}
+		detectedAgents = filtered
+	}
 
 	// 9. For each skill to sync: download and extract.
 	type syncResult struct {
@@ -190,7 +215,17 @@ func runSync(cmd *cobra.Command, args []string) error {
 		extractOK := 0
 		extractFail := 0
 		for _, agent := range detectedAgents {
-			destDir := filepath.Join(agent.SkillsDir(home), ts.entry.Name)
+			base := home
+			if agent.ProjectScoped() {
+				wd, wdErr := os.Getwd()
+				if wdErr != nil {
+					ui.Errorf("cannot determine working directory: %s", wdErr)
+					extractFail++
+					continue
+				}
+				base = wd
+			}
+			destDir := filepath.Join(agent.SkillsDir(base), ts.entry.Name)
 			// Clean previous version before extracting.
 			_ = os.RemoveAll(destDir)
 			if err := skill.Unpack(bytes.NewReader(archive), destDir); err != nil {
@@ -210,10 +245,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if extractFail > 0 {
 				ui.Errorf("extract %s: succeeded for %d agent(s), failed for %d agent(s)", ts.entry.Name, extractOK, extractFail)
 			}
-			if ts.isNew {
-				ui.New(ts.entry.Name, ver)
-			} else {
-				ui.Download(ts.entry.Name, ver)
+			if !syncQuiet {
+				if ts.isNew {
+					ui.New(ts.entry.Name, ver)
+				} else {
+					ui.Download(ts.entry.Name, ver)
+				}
 			}
 			results = append(results, syncResult{name: ts.entry.Name, version: ts.entry.Version, failed: false})
 			newSkills = append(newSkills, config.SyncedSkill{
@@ -270,15 +307,17 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return ui.PrintJSON(out)
 	}
 
-	parts := []string{
-		fmt.Sprintf("%d updated", synced),
-		fmt.Sprintf("%d failed", failed),
-		fmt.Sprintf("%d total", len(manifest)),
+	if !syncQuiet {
+		parts := []string{
+			fmt.Sprintf("%d updated", synced),
+			fmt.Sprintf("%d failed", failed),
+			fmt.Sprintf("%d total", len(manifest)),
+		}
+		if len(agentNames) > 0 {
+			parts = append(parts, strings.Join(agentNames, ", "))
+		}
+		ui.Summary(parts...)
 	}
-	if len(agentNames) > 0 {
-		parts = append(parts, strings.Join(agentNames, ", "))
-	}
-	ui.Summary(parts...)
 
 	return nil
 }
