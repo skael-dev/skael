@@ -41,7 +41,7 @@ fi
 
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty')
 if [ -n "$HASH_CMD" ]; then
-  PROJECT_HASH=$(printf '%s' "${CWD:-unknown}" | $HASH_CMD | cut -d' ' -f1 | head -c 16)
+  PROJECT_HASH=$(printf '%s' "${CWD:-$PWD}" | $HASH_CMD | cut -d' ' -f1 | head -c 16)
   DEV_HASH=$(printf '%s' "${USER:-unknown}@${HOSTNAME:-unknown}" | $HASH_CMD | cut -d' ' -f1 | head -c 16)
 else
   PROJECT_HASH="nohash"

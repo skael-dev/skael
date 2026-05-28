@@ -280,35 +280,49 @@ func installCursorHook(configPath, scriptPath string) error {
 		hooks["hooks"] = hooksObj
 	}
 
-	stopArr, ok := hooksObj["stop"].([]any)
-	if !ok {
-		stopArr = []any{}
-	}
-
-	cmd := fmt.Sprintf("SKAEL_AGENT=cursor %s", scriptPath)
-	newEntry := map[string]any{
+	// sessionStart hook: auto-sync skills on project open.
+	syncEntry := map[string]any{
 		"_managed_by": managedBy,
-		"command":     cmd,
+		"command":     "skael sync --agent cursor --quiet",
+	}
+	upsertCursorHookEntry(hooksObj, "sessionStart", syncEntry)
+
+	// stop hook: activation tracking via transcript parsing.
+	stopCmd := fmt.Sprintf("SKAEL_AGENT=cursor %s", scriptPath)
+	stopEntry := map[string]any{
+		"_managed_by": managedBy,
+		"command":     stopCmd,
+	}
+	upsertCursorHookEntry(hooksObj, "stop", stopEntry)
+
+	return writeJSONFile(configPath, hooks)
+}
+
+// upsertCursorHookEntry finds the skael-managed entry in the named hook array
+// and updates it, or appends a new entry if none exists.
+func upsertCursorHookEntry(hooksObj map[string]any, hookName string, entry map[string]any) {
+	arr, ok := hooksObj[hookName].([]any)
+	if !ok {
+		arr = []any{}
 	}
 
 	found := false
-	for i, entry := range stopArr {
-		m, ok := entry.(map[string]any)
+	for i, raw := range arr {
+		m, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		if m["_managed_by"] == managedBy {
-			stopArr[i] = newEntry
+			arr[i] = entry
 			found = true
 			break
 		}
 	}
 	if !found {
-		stopArr = append(stopArr, newEntry)
+		arr = append(arr, entry)
 	}
 
-	hooksObj["stop"] = stopArr
-	return writeJSONFile(configPath, hooks)
+	hooksObj[hookName] = arr
 }
 
 func uninstallCursorHook(configPath string) error {
@@ -325,24 +339,26 @@ func uninstallCursorHook(configPath string) error {
 		return nil
 	}
 
-	stopArr, ok := hooksObj["stop"].([]any)
-	if !ok {
-		return nil
-	}
-
-	var filtered []any
-	for _, entry := range stopArr {
-		m, ok := entry.(map[string]any)
-		if ok && m["_managed_by"] == managedBy {
+	for _, hookName := range []string{"sessionStart", "stop"} {
+		arr, ok := hooksObj[hookName].([]any)
+		if !ok {
 			continue
 		}
-		filtered = append(filtered, entry)
-	}
 
-	if len(filtered) == 0 {
-		delete(hooksObj, "stop")
-	} else {
-		hooksObj["stop"] = filtered
+		var filtered []any
+		for _, entry := range arr {
+			m, ok := entry.(map[string]any)
+			if ok && m["_managed_by"] == managedBy {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+
+		if len(filtered) == 0 {
+			delete(hooksObj, hookName)
+		} else {
+			hooksObj[hookName] = filtered
+		}
 	}
 
 	if len(hooksObj) == 0 {

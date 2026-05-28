@@ -307,6 +307,98 @@ func TestOpenCodePlugin_FireAndForget(t *testing.T) {
 	assert.Contains(t, string(data), ".catch(() => {})", "plugin must use fire-and-forget fetch pattern")
 }
 
+func TestInstallCursorHook_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "hooks.json")
+
+	err := hooks.InstallForAgent("cursor", configPath, "", "", "/home/user/.skael/hooks/skael-cursor-stop.sh")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	var hooksFile map[string]any
+	require.NoError(t, json.Unmarshal(data, &hooksFile))
+
+	// Must have version 1.
+	assert.Equal(t, float64(1), hooksFile["version"])
+
+	hooksObj, ok := hooksFile["hooks"].(map[string]any)
+	require.True(t, ok)
+
+	// Must have sessionStart hook.
+	sessionStart, ok := hooksObj["sessionStart"].([]any)
+	require.True(t, ok, "sessionStart array must exist")
+	require.Len(t, sessionStart, 1)
+
+	ssEntry, ok := sessionStart[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "skael", ssEntry["_managed_by"])
+	assert.Contains(t, ssEntry["command"], "skael sync --agent cursor --quiet")
+
+	// Must have stop hook.
+	stopArr, ok := hooksObj["stop"].([]any)
+	require.True(t, ok, "stop array must exist")
+	require.Len(t, stopArr, 1)
+
+	stopEntry, ok := stopArr[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "skael", stopEntry["_managed_by"])
+	assert.Contains(t, stopEntry["command"].(string), "skael-cursor-stop.sh")
+}
+
+func TestInstallCursorHook_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "hooks.json")
+
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v1/skael-cursor-stop.sh"))
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v2/skael-cursor-stop.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	// Exactly 2 _managed_by entries: one in sessionStart, one in stop.
+	count := strings.Count(string(data), `"_managed_by"`)
+	assert.Equal(t, 2, count, "must have exactly 2 skael-managed entries (sessionStart + stop)")
+
+	// Second install's path must be used.
+	assert.Contains(t, string(data), "/path/v2/skael-cursor-stop.sh")
+	assert.NotContains(t, string(data), "/path/v1/skael-cursor-stop.sh")
+}
+
+func TestUninstallCursorHook(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "hooks.json")
+
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-stop.sh"))
+
+	data, _ := os.ReadFile(configPath)
+	require.Contains(t, string(data), "skael")
+
+	require.NoError(t, hooks.UninstallForAgent("cursor", configPath))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "skael")
+}
+
+func TestInstallCursorHook_PreservesExistingHooks(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "hooks.json")
+
+	// Pre-populate with a user-defined stop hook.
+	existing := `{"version":1,"hooks":{"stop":[{"command":"my-custom-hook.sh"}]}}`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
+
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-stop.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), "my-custom-hook.sh", "user's existing hook must be preserved")
+	assert.Contains(t, string(data), "skael-cursor-stop.sh", "skael hook must be added")
+}
+
 func TestOpenCodePlugin_ReadsConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	pluginsDir := filepath.Join(dir, "plugins")
