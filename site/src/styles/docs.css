@@ -1,0 +1,61 @@
+/* The Forge theme for Starlight — amber accent, Geist fonts, dark-only.
+   Overrides Starlight's --sl-* custom properties to match the landing page
+   (token source: src/layouts/Base.astro :root). */
+:root {
+  --sl-font: 'Geist', system-ui, sans-serif;
+  --sl-font-mono: 'Geist Mono', 'SF Mono', monospace;
+
+  /* Accent (amber) */
+  --sl-color-accent-low: #92400e;
+  --sl-color-accent: #f59e0b;
+  --sl-color-accent-high: #fbbf24;
+  --sl-color-text-accent: #f59e0b;
+
+  /* Greys mapped to the Forge palette */
+  --sl-color-white: #ededed;
+  --sl-color-gray-1: #e5e5e5;
+  --sl-color-gray-2: #a0a0a0;
+  --sl-color-gray-3: #666666;
+  --sl-color-gray-4: #404040;
+  --sl-color-gray-5: #262626;
+  --sl-color-gray-6: #131313;
+  --sl-color-black: #0a0a0a;
+
+  /* Surfaces */
+  --sl-color-bg: #0a0a0a;
+  --sl-color-bg-nav: rgba(10, 10, 10, 0.7);
+  --sl-color-bg-sidebar: #0a0a0a;
+  --sl-color-bg-inline-code: #1c1c1c;
+  --sl-color-hairline-shade: #262626;
+  --sl-color-hairline: #262626;
+}
+
+/* Force the brand's dark look regardless of the toggle state, and hide the
+   light/dark switcher — skael's docs are dark-only to match the site. */
+:root[data-theme='light'] {
+  --sl-color-white: #ededed;
+  --sl-color-gray-1: #e5e5e5;
+  --sl-color-gray-2: #a0a0a0;
+  --sl-color-gray-3: #666666;
+  --sl-color-gray-4: #404040;
+  --sl-color-gray-5: #262626;
+  --sl-color-gray-6: #131313;
+  --sl-color-black: #0a0a0a;
+  --sl-color-bg: #0a0a0a;
+  --sl-color-bg-nav: rgba(10, 10, 10, 0.7);
+  --sl-color-bg-sidebar: #0a0a0a;
+  --sl-color-bg-inline-code: #1c1c1c;
+  --sl-color-text-accent: #f59e0b;
+  --sl-color-accent: #f59e0b;
+  --sl-color-accent-low: #92400e;
+  --sl-color-accent-high: #fbbf24;
+}
+
+starlight-theme-select {
+  display: none;
+}
+
+/* Match the landing page's tighter heading tracking */
+.site-title {
+  letter-spacing: -0.01em;
+}
