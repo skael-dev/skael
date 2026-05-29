@@ -292,6 +292,26 @@ import Base from '../layouts/Base.astro';
     </div>
   </section>
 
+  <!-- Why not git -->
+  <section class="faq" id="why">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-eyebrow">// the obvious question</div>
+        <h2 class="sec-title">"Can't I just use a git repo?"</h2>
+      </div>
+      <div class="faq-list">
+        <div class="faq-item">
+          <h3>Can't I just commit <span class="mono-inline">.claude/skills/</span> to a repo?</h3>
+          <p>You can — if everyone's on the same agent, in the same project, and remembers to pull. A git folder gives you a folder. It doesn't place skills into Cursor <em>and</em> Codex <em>and</em> OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. skael is the layer that turns a folder of markdown into managed infrastructure.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Doesn't Claude already do org skill sharing?</h3>
+          <p>For Claude.ai and Desktop, on Team and Enterprise plans — not Claude Code, and not Cursor, Codex, or OpenCode. skael is vendor-neutral by design: it manages the SKILL.md standard across <em>every</em> agent your team runs, not one vendor's walled garden.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Final CTA -->
   <section class="cta">
     <div class="container cta-inner">
@@ -318,7 +338,7 @@ import Base from '../layouts/Base.astro';
             <span class="logo-mark">s</span>
             <span>skael</span>
           </a>
-          <p>The control plane for the skills your agents run on. Self-host or use the cloud.</p>
+          <p>One registry for your team's AI skills, across every agent. Open source and self-hosted.</p>
         </div>
         <div class="foot-cols">
           <div class="foot-col">
@@ -913,6 +933,40 @@ import Base from '../layouts/Base.astro';
     word-break: break-all;
   }
   .step-code .p { color: var(--accent); }
+
+  /* ---------- faq / why-not-git ---------- */
+  .faq {
+    padding: 100px 0;
+    border-top: 1px solid var(--border);
+  }
+  .faq-list {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex; flex-direction: column;
+    gap: 18px;
+  }
+  .faq-item {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    background: var(--bg);
+  }
+  .faq-item h3 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin-bottom: 10px;
+  }
+  .faq-item p {
+    color: var(--text-2);
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+  .faq-item em {
+    color: var(--text);
+    font-style: normal;
+    font-weight: 500;
+  }
 
   /* ---------- final cta ---------- */
   .cta {
