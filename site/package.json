@@ -15,5 +15,8 @@
     "@astrojs/sitemap": "^3.7.3",
     "@astrojs/starlight": "^0.39.2",
     "astro": "^6.3.8"
+  },
+  "devDependencies": {
+    "starlight-llms-txt": "^0.10.0"
   }
 }

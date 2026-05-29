@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 // https://astro.build/config
 export default defineConfig({
@@ -10,6 +11,7 @@ export default defineConfig({
     sitemap(),
     starlight({
       title: 'skael docs',
+      plugins: [starlightLlmsTxt({ projectName: 'skael' })],
       // Custom landing page lives at "/"; docs are served from /docs/* because
       // content is nested under src/content/docs/docs/.
       logo: { src: './public/favicon.svg', alt: 'skael' },
