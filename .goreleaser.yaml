@@ -107,11 +107,15 @@ release:
 
     ## Self-host the platform
 
+    Bring your own Postgres — `DATABASE_URL` is the only required env var:
+
     ```bash
-    docker pull ghcr.io/skael-dev/skael:latest
-    docker compose up -d
-    skael setup http://localhost:8080 <your-api-key>
+    docker run -p 8080:8080 \
+      -e DATABASE_URL="postgres://user:pass@host:5432/skael?sslmode=disable" \
+      ghcr.io/skael-dev/skael:{{.Version}}
     ```
+
+    Migrations run automatically on startup. Or use `docker compose up -d` to bundle Postgres. Then sign up at `http://localhost:8080` to create your first account and personal API key.
 
     ## What's in this release
   footer: |

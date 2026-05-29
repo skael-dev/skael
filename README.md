@@ -6,14 +6,27 @@ Skael gives engineering teams a central registry for the skills that power their
 
 ## Quick Start
 
-### Self-hosted (Docker Compose)
+### Run the published image (bring your own Postgres)
+
+If you already have a Postgres database, the only required env var is `DATABASE_URL`:
 
 ```bash
-cp .env.example .env          # set API_KEY and DATABASE_URL
+docker run -p 8080:8080 \
+  -e DATABASE_URL="postgres://user:pass@host:5432/skael?sslmode=disable" \
+  ghcr.io/skael-dev/skael:latest
+```
+
+Migrations run automatically on startup. Platform is at `http://localhost:8080` — sign up to create the first account and a personal API key.
+
+### Self-hosted (Docker Compose)
+
+Bundles Postgres, so there's nothing external to provision:
+
+```bash
 docker compose up -d
 ```
 
-Platform is at `http://localhost:8080`. Set `API_KEY` in `.env` before running in production.
+Platform is at `http://localhost:8080`.
 
 ### Install the CLI
 
