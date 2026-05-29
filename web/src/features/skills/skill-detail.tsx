@@ -727,7 +727,7 @@ export function SkillDetail() {
   return (
     <div className="flex flex-col h-full overflow-auto">
       {/* Hero header */}
-      <div className="px-12 pt-12 pb-0 shrink-0 max-w-[1280px]">
+      <div className="px-12 pt-12 pb-0 shrink-0 max-w-[1280px] w-full mx-auto">
         {/* Back link */}
         <button
           onClick={() => navigate("/")}
@@ -876,12 +876,12 @@ export function SkillDetail() {
       </div>
 
       {/* Sticky tab bar */}
-      <div className="sticky top-0 z-10 flex px-12 border-b border-border bg-bg-primary shrink-0">
+      <div className="sticky top-0 z-10 flex px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto">
         <SlidingTabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
       </div>
 
       {/* Tab content */}
-      <div className="px-12 pt-7 pb-12 max-w-[1280px]">
+      <div className="px-12 pt-7 pb-12 max-w-[1280px] w-full mx-auto">
         {activeTab === "content" && skill && <TabContent skill={skill} />}
         {activeTab === "content" && !skill && !skillQuery.isLoading && (
           <TabPlaceholder label="Content" />
