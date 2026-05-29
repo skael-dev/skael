@@ -109,8 +109,8 @@ import Base from '../layouts/Base.astro';
     <div class="container">
       <div class="sec-head">
         <div class="sec-eyebrow">// capabilities</div>
-        <h2 class="sec-title">Everything your team needs to ship skills with confidence.</h2>
-        <p class="sec-sub">From publishing to tracking — skael handles the full lifecycle of AI agent skills across your infrastructure.</p>
+        <h2 class="sec-title">Run your skills like infrastructure — not scattered markdown.</h2>
+        <p class="sec-sub">Centralize, distribute, secure, and measure every SKILL.md across every agent your team uses.</p>
       </div>
 
       <div class="feat-grid">
@@ -120,18 +120,8 @@ import Base from '../layouts/Base.astro';
               <path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M17 17h.01"/><path d="M14 17h.01"/><path d="M20 17h.01"/><path d="M17 14h.01"/><path d="M17 20h.01"/>
             </svg>
           </div>
-          <h3>Cross-agent sync</h3>
-          <p>One <span class="mono-inline">skael sync</span> command distributes skills to Claude Code, Codex CLI, and all detected agents. No manual file copying.</p>
-        </div>
-
-        <div class="feat">
-          <div class="feat-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-          </div>
-          <h3>Security scanning</h3>
-          <p>30+ regex rules catch secrets, prompt injection, data exfiltration, and obfuscation. Critical findings block publishing automatically.</p>
+          <h3>Centralize, don't copy-paste</h3>
+          <p>One source of truth for every skill. <span class="mono-inline">skael sync</span> places them in each developer's Claude Code, Cursor, Codex, and OpenCode — across every project and machine. Update once; everyone gets it.</p>
         </div>
 
         <div class="feat">
@@ -140,18 +130,18 @@ import Base from '../layouts/Base.astro';
               <path d="M3 3v18h18"/><path d="m7 17 4-7 4 4 5-9"/>
             </svg>
           </div>
-          <h3>Activation tracking</h3>
-          <p>See which skills fire, which agents use them, and how often. Hook scripts report events without blocking the agent.</p>
+          <h3>See what actually fires</h3>
+          <p>Native telemetry counts "Skill" calls but never <em>which</em> skill. skael's hooks report every activation — which skill, which agent, how often. Turn "we have 50 skills" into "these 12 do the work."</p>
         </div>
 
         <div class="feat">
           <div class="feat-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
           </div>
-          <h3>Full-text search</h3>
-          <p>Postgres FTS with pg_trgm fuzzy matching. Search across skill names, descriptions, and content. Results are instant.</p>
+          <h3>Scanned before it ships</h3>
+          <p>Every publish runs a security scan for hardcoded secrets, prompt injection, data exfiltration, and obfuscation. Critical findings block the publish — no <span class="mono-inline">curl | bash</span> for your agent's brain.</p>
         </div>
 
         <div class="feat">
@@ -160,8 +150,18 @@ import Base from '../layouts/Base.astro';
               <path d="M12 3v14"/><circle cx="12" cy="20" r="2"/><path d="M6 8l6-5 6 5"/>
             </svg>
           </div>
-          <h3>Version history</h3>
-          <p>Every publish creates an immutable version. Content-addressable archives prevent race conditions on concurrent publishes.</p>
+          <h3>Versioned by default</h3>
+          <p>Every publish is an immutable, content-addressable version. Roll back, diff, and always know which version your team is actually on.</p>
+        </div>
+
+        <div class="feat">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>
+            </svg>
+          </div>
+          <h3>Instant search</h3>
+          <p>Full-text search across skill names, descriptions, and content, with fuzzy matching on names. Find the right skill in milliseconds.</p>
         </div>
 
         <div class="feat">
@@ -170,8 +170,8 @@ import Base from '../layouts/Base.astro';
               <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
             </svg>
           </div>
-          <h3>Self-hosted</h3>
-          <p>Docker Compose with Postgres. Your skills stay on your infrastructure. Single binary, single API key. No lock-in.</p>
+          <h3>Self-hosted, no lock-in</h3>
+          <p>One container against your own Postgres, or Docker Compose with a bundled database. Your skills stay on your infrastructure.</p>
         </div>
       </div>
     </div>
