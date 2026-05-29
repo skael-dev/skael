@@ -29,7 +29,7 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)

@@ -104,6 +104,12 @@ func unpackTarball(r io.Reader, destDir string) (string, error) {
 			return "", fmt.Errorf("tar next: %w", err)
 		}
 
+		// Skip PAX headers — GitHub tarballs start with a pax_global_header
+		// entry that must not be mistaken for the root directory prefix.
+		if hdr.Typeflag == tar.TypeXGlobalHeader || hdr.Typeflag == tar.TypeXHeader {
+			continue
+		}
+
 		// GitHub tarballs have a root dir like "owner-repo-shortsha/"
 		if prefix == "" {
 			parts := strings.SplitN(hdr.Name, "/", 2)
@@ -151,7 +157,7 @@ func unpackTarball(r io.Reader, destDir string) (string, error) {
 			}
 			f.Close()
 		case tar.TypeSymlink, tar.TypeLink:
-			return "", fmt.Errorf("rejected %s: symlinks/hardlinks not allowed", relPath)
+			continue
 		default:
 			continue
 		}
