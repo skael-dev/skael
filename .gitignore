@@ -5,7 +5,8 @@ bin/
 .env
 data/
 *.tar.gz
-docs/
+# Private product docs (specs, plans, PRD) — root only; do NOT match site/src/content/docs/
+/docs/
 web/dist/*
 !web/dist/.gitkeep
 web/src/api/
