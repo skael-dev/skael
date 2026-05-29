@@ -1,8 +1,44 @@
 ---
 import Base from '../layouts/Base.astro';
+
+const softwareLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "skael",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux, Windows",
+  "description": "One registry for your team's AI skills — across every agent and every project. Versioned, security-scanned, synced to Claude Code, Cursor, Codex, and OpenCode, with activation tracking.",
+  "url": "https://skael.dev",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+};
+const faqLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can't I just commit .claude/skills/ to a repo?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "You can — if everyone's on the same agent, in the same project, and remembers to pull. A git folder doesn't place skills into Cursor, Codex, and OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. skael turns a folder of markdown into managed infrastructure.",
+      },
+    },
+    {
+      "@type": "Question",
+      "name": "Doesn't Claude already do org skill sharing?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "For Claude.ai and Desktop, on Team and Enterprise plans — not Claude Code, and not Cursor, Codex, or OpenCode. skael is vendor-neutral: it manages the SKILL.md standard across every agent your team runs.",
+      },
+    },
+  ],
+};
 ---
 
 <Base title="skael — one registry for your team's AI skills, on every agent">
+
+  <script type="application/ld+json" set:html={JSON.stringify(softwareLd)} is:inline />
+  <script type="application/ld+json" set:html={JSON.stringify(faqLd)} is:inline />
 
   <div class="grid-bg"></div>
   <div class="glow"></div>
