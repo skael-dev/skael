@@ -4,6 +4,8 @@ One registry for your team's AI skills — across every agent and every project.
 
 Your team's SKILL.md files live in scattered home directories and half-synced repos, copied by hand into each agent, with no idea which ones are actually used. Skael is the single source of truth: publish once, and it versions every skill, scans it for secrets and prompt injection, syncs it to Claude Code, Cursor, Codex, and OpenCode on every machine, and shows you which skills actually fire — by which agent, how often. Self-hosted and open source.
 
+![The skael dashboard — skills registry with versions, security status, and activation counts](site/public/dashboard-skills.png)
+
 ## Why not just a git repo?
 
 You can commit `.claude/skills/` to a repo — if everyone's on the same agent, in the same project, and remembers to pull. A git folder gives you a folder. It doesn't place skills into Cursor *and* Codex *and* OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. Skael is the layer that turns a folder of markdown into managed infrastructure — and unlike Claude's native org sharing (Claude.ai/Desktop, paid tiers only), it's vendor-neutral across every agent your team runs.
