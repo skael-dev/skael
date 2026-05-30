@@ -21,10 +21,12 @@ var setupCmd = &cobra.Command{
 }
 
 var setupSkipSync, setupSkipHooks bool
+var setupScope string
 
 func init() {
 	setupCmd.Flags().BoolVar(&setupSkipSync, "skip-sync", false, "Skip initial sync")
 	setupCmd.Flags().BoolVar(&setupSkipHooks, "skip-hooks", false, "Skip hook installation")
+	setupCmd.Flags().StringVar(&setupScope, "scope", "project", "Default skill placement scope: project|user")
 	rootCmd.AddCommand(setupCmd)
 }
 
@@ -67,10 +69,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	ui.Success("Connected to %s", endpoint)
 
 	// 3. Write config.
+	if !validScope(setupScope) {
+		ui.Errorf("invalid --scope %q: must be \"project\" or \"user\"", setupScope)
+		return fmt.Errorf("invalid scope")
+	}
 	dir := config.DefaultDir()
 	cfg := &config.Config{
 		Endpoint: endpoint,
 		APIKey:   apiKey,
+		Scope:    setupScope,
 	}
 	if err := config.WriteConfig(dir, cfg); err != nil {
 		ui.Errorf("write config: %s", err)
