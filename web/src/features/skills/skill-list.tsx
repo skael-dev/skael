@@ -466,7 +466,7 @@ export function SkillList() {
           </div>
 
           <p className="text-sm text-text-secondary m-0 mb-9 max-w-lg leading-relaxed">
-            Author, version, and sync Claude skills across your team.
+            Author, version, and sync your team's AI skills across every agent.
           </p>
 
           {/* Stat tiles */}
