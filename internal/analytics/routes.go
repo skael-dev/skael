@@ -73,26 +73,59 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// GET /api/analytics/skills?days=30 — per-skill analytics table
 	// -----------------------------------------------------------------
 	type skillsAnalyticsInput struct {
-		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+		Days   int    `query:"days"   default:"30" minimum:"1" maximum:"365"`
+		Limit  int    `query:"limit"  default:"50" minimum:"1" maximum:"100"`
+		Offset int    `query:"offset" default:"0"  minimum:"0"`
+		Sort   string `query:"sort"   default:"activations"`
+		Q      string `query:"q"`
+		Tag    string `query:"tag"`
 	}
 	type skillsAnalyticsOutput struct {
-		Body []SkillAnalytics
+		Body struct {
+			Skills []SkillAnalytics `json:"skills"`
+			Total  int              `json:"total"`
+		}
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "analytics-skills",
 		Method:      http.MethodGet,
 		Path:        "/api/analytics/skills",
-		Summary:     "Per-skill analytics for table view",
+		Summary:     "Per-skill analytics for table view (paginated)",
 	}, func(ctx context.Context, input *skillsAnalyticsInput) (*skillsAnalyticsOutput, error) {
 		days := input.Days
 		if days == 0 {
 			days = 30
 		}
-		skills, err := store.GetSkillsAnalytics(ctx, days)
+		skills, total, err := store.GetSkillsAnalytics(ctx, days, SkillsQuery{
+			Limit: input.Limit, Offset: input.Offset, Sort: input.Sort, Query: input.Q, Tag: input.Tag,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("analytics skills: %w", err)
 		}
-		return &skillsAnalyticsOutput{Body: skills}, nil
+		out := &skillsAnalyticsOutput{}
+		out.Body.Skills = skills
+		out.Body.Total = total
+		return out, nil
+	})
+
+	type skillsTagsOutput struct {
+		Body struct {
+			Tags []string `json:"tags"`
+		}
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "skills-tags",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/tags",
+		Summary:     "Distinct tags across all skills",
+	}, func(ctx context.Context, _ *struct{}) (*skillsTagsOutput, error) {
+		tags, err := store.GetAllTags(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("skills tags: %w", err)
+		}
+		out := &skillsTagsOutput{}
+		out.Body.Tags = tags
+		return out, nil
 	})
 
 	// -----------------------------------------------------------------

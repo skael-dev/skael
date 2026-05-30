@@ -161,8 +161,40 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 
 // GetSkillsAnalytics returns per-skill analytics for all skills over the last
 // `days` days, ordered by activation count descending.
-func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalytics, error) {
-	const q = `
+// SkillsQuery holds optional list filters/pagination for GetSkillsAnalytics.
+type SkillsQuery struct {
+	Limit  int
+	Offset int
+	Sort   string // "activations" (default) | "name" | "updated"
+	Query  string // case-insensitive substring on name/description
+	Tag    string // frontmatter tag membership
+}
+
+var skillsSortClauses = map[string]string{
+	"activations": "activations DESC, s.name ASC",
+	"name":        "s.name ASC",
+	"updated":     "s.updated_at DESC, s.name ASC",
+}
+
+func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQuery) ([]SkillAnalytics, int, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 50
+	}
+	orderBy, ok := skillsSortClauses[opts.Sort]
+	if !ok {
+		orderBy = skillsSortClauses["activations"]
+	}
+	args := []any{days}
+	next := func(v any) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
+	where := ""
+	if opts.Query != "" {
+		p := next("%" + opts.Query + "%")
+		where += fmt.Sprintf(" AND (s.name ILIKE %s OR s.description ILIKE %s)", p, p)
+	}
+	if opts.Tag != "" {
+		where += fmt.Sprintf(" AND COALESCE(s.frontmatter->'tags','[]'::jsonb) @> to_jsonb(%s::text)", next(opts.Tag))
+	}
+	q := `
 		SELECT
 			s.name,
 			s.description,
@@ -173,7 +205,8 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 			s.reviewed_at,
 			s.latest_version,
 			s.updated_at,
-			s.frontmatter->'tags'                                 AS raw_tags
+			s.frontmatter->'tags'                                 AS raw_tags,
+			COUNT(*) OVER() AS total_count
 		FROM skills s
 		LEFT JOIN (
 			SELECT
@@ -188,18 +221,21 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 		) e ON e.resolved_name = s.name
 		LEFT JOIN skill_versions sv
 			ON sv.skill_id = s.id AND sv.version = s.latest_version
-		ORDER BY activations DESC, s.name ASC
-	`
-	rows, err := s.pool.Query(ctx, q, days)
+		WHERE 1=1` + where + `
+		ORDER BY ` + orderBy + `
+		LIMIT ` + next(opts.Limit) + ` OFFSET ` + next(opts.Offset)
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("analytics.Store.GetSkillsAnalytics query: %w", err)
+		return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics query: %w", err)
 	}
 	defer rows.Close()
 
 	var results []SkillAnalytics
+	total := 0
 	for rows.Next() {
 		var sa SkillAnalytics
 		var rawTags []byte
+		var rowTotal int
 		if err := rows.Scan(
 			&sa.Name,
 			&sa.Description,
@@ -211,8 +247,9 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 			&sa.LatestVersion,
 			&sa.UpdatedAt,
 			&rawTags,
+			&rowTotal,
 		); err != nil {
-			return nil, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)
+			return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)
 		}
 		if rawTags != nil {
 			_ = json.Unmarshal(rawTags, &sa.Tags)
@@ -220,15 +257,39 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int) ([]SkillAnalyt
 		if sa.Tags == nil {
 			sa.Tags = []string{}
 		}
+		total = rowTotal
 		results = append(results, sa)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("analytics.Store.GetSkillsAnalytics rows: %w", err)
+		return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics rows: %w", err)
 	}
 	if results == nil {
 		results = []SkillAnalytics{}
 	}
-	return results, nil
+	return results, total, nil
+}
+
+// GetAllTags returns the distinct, sorted set of tags across all skills.
+func (s *Store) GetAllTags(ctx context.Context) ([]string, error) {
+	const q = `
+		SELECT DISTINCT t AS tag
+		FROM skills s, jsonb_array_elements_text(s.frontmatter->'tags') AS t
+		WHERE jsonb_typeof(s.frontmatter->'tags') = 'array'
+		ORDER BY tag`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetAllTags query: %w", err)
+	}
+	defer rows.Close()
+	tags := []string{}
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("analytics.Store.GetAllTags scan: %w", err)
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
 }
 
 // GetActivations returns an ActivationSummary for the given skill over the

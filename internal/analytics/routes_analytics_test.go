@@ -136,8 +136,9 @@ func TestGetSkillsAnalytics_WithData(t *testing.T) {
 		ProjectHash: "p2", DeveloperHash: "dev2",
 	}))
 
-	skills, err := analyticsStore.GetSkillsAnalytics(ctx, 30)
+	skills, total, err := analyticsStore.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{})
 	require.NoError(t, err)
+	require.Equal(t, 2, total)
 	require.Len(t, skills, 2)
 
 	// Results are sorted by activations DESC — analytics-a should be first.
@@ -162,10 +163,11 @@ func TestGetSkillsAnalytics_EmptyDB(t *testing.T) {
 	ctx := context.Background()
 	store := analytics.NewStore(pool)
 
-	skills, err := store.GetSkillsAnalytics(ctx, 30)
+	skills, total, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{})
 	require.NoError(t, err)
 	require.NotNil(t, skills)
 	require.Empty(t, skills)
+	require.Equal(t, 0, total)
 }
 
 // TestGetSkillsAnalytics_ViaHTTP verifies that the HTTP endpoint returns 200
@@ -176,8 +178,84 @@ func TestGetSkillsAnalytics_ViaHTTP(t *testing.T) {
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/analytics/skills?days=30", nil)
 	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
 
-	var skills []analytics.SkillAnalytics
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &skills), "body: %s", rr.Body.String())
-	require.NotNil(t, skills)
-	require.Empty(t, skills)
+	var body struct {
+		Skills []analytics.SkillAnalytics `json:"skills"`
+		Total  int                        `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body), "body: %s", rr.Body.String())
+	require.NotNil(t, body.Skills)
+	require.Empty(t, body.Skills)
+}
+
+// insertTestSkillTagged creates a skill with the given frontmatter tags.
+func insertTestSkillTagged(t *testing.T, ctx context.Context, skillStore *skill.Store, name string, tags []string) *skill.Skill {
+	t.Helper()
+	tagsJSON, err := json.Marshal(tags)
+	require.NoError(t, err)
+	fm := json.RawMessage(`{"tags":` + string(tagsJSON) + `}`)
+	sk, err := skillStore.Create(ctx, name, name, name+" description", "skill content", fm)
+	require.NoError(t, err)
+	return sk
+}
+
+func TestGetSkillsAnalytics_Pagination(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	store := analytics.NewStore(pool)
+	skillStore := skill.NewStore(pool)
+
+	insertTestSkillTagged(t, ctx, skillStore, "alpha", []string{"backend"})
+	insertTestSkillTagged(t, ctx, skillStore, "bravo", []string{"review"})
+	insertTestSkillTagged(t, ctx, skillStore, "charlie", nil)
+
+	// total reflects all matches; limit slices; sort=name is deterministic.
+	page, total, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 2, Offset: 0, Sort: "name"})
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+	require.Len(t, page, 2)
+	require.Equal(t, "alpha", page[0].Name)
+	require.Equal(t, "bravo", page[1].Name)
+
+	page2, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 2, Offset: 2, Sort: "name"})
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	require.Equal(t, "charlie", page2[0].Name)
+
+	// q substring filter.
+	q, qTotal, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50, Query: "brav"})
+	require.NoError(t, err)
+	require.Equal(t, 1, qTotal)
+	require.Len(t, q, 1)
+	require.Equal(t, "bravo", q[0].Name)
+
+	// tag filter.
+	tg, tgTotal, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50, Tag: "backend"})
+	require.NoError(t, err)
+	require.Equal(t, 1, tgTotal)
+	require.Len(t, tg, 1)
+	require.Equal(t, "alpha", tg[0].Name)
+
+	// unknown sort clamps to default (no error).
+	_, _, err = store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50, Sort: "bogus"})
+	require.NoError(t, err)
+
+	// all tags, distinct + sorted.
+	tags, err := store.GetAllTags(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"backend", "review"}, tags)
+}
+
+func TestAnalyticsSkills_PaginatedShapeViaHTTP(t *testing.T) {
+	handler, _ := setupAnalyticsAPI(t)
+
+	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/analytics/skills?limit=1&sort=name", nil)
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+	var body struct {
+		Skills []analytics.SkillAnalytics `json:"skills"`
+		Total  int                        `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body), "body: %s", rr.Body.String())
+
+	tagsRR := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/tags", nil)
+	require.Equal(t, http.StatusOK, tagsRR.Code, "body: %s", tagsRR.Body.String())
 }
