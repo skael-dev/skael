@@ -130,8 +130,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// 5. Compute diff.
 	type toSync struct {
-		entry   client.ManifestEntry
-		isNew   bool
+		entry client.ManifestEntry
+		isNew bool
 	}
 	var pending []toSync
 
