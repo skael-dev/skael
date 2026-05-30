@@ -347,7 +347,7 @@ export function SkillList() {
     if (!el) return;
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && skillsQuery.hasNextPage && !skillsQuery.isFetchingNextPage) {
+        if (entries[0]?.isIntersecting && skillsQuery.hasNextPage && !skillsQuery.isFetchingNextPage) {
           skillsQuery.fetchNextPage();
         }
       },
