@@ -27,12 +27,14 @@ var (
 	syncDryRun bool
 	syncAgent  string
 	syncQuiet  bool
+	syncScope  string
 )
 
 func init() {
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "Show what would happen")
 	syncCmd.Flags().StringVar(&syncAgent, "agent", "", "Sync only for this agent")
 	syncCmd.Flags().BoolVar(&syncQuiet, "quiet", false, "Suppress non-error output")
+	syncCmd.Flags().StringVar(&syncScope, "scope", "", "Skill placement scope: project|user (default: config or project)")
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -50,6 +52,50 @@ func runSync(cmd *cobra.Command, args []string) error {
 			Suggestion: "skael setup <url> <api-key>",
 		})
 		return nil
+	}
+
+	// 1b. Resolve placement scope (flag > config > project), detect agents,
+	// and resolve the project root if needed. Done early so --dry-run can
+	// report destinations too.
+	if syncScope != "" && !validScope(syncScope) {
+		ui.Errorf("invalid --scope %q: must be \"project\" or \"user\"", syncScope)
+		return fmt.Errorf("invalid scope")
+	}
+	scope := resolveScope(syncScope, cfg.Scope)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if ui.JSONMode {
+			ui.PrintJSONError("cannot determine home directory", "home_error", "")
+			return nil
+		}
+		ui.Errorf("cannot determine home directory: %s", err)
+		return nil
+	}
+
+	var projectRoot string
+	if scope == ScopeProject {
+		wd, wdErr := os.Getwd()
+		if wdErr != nil {
+			ui.Errorf("cannot determine working directory: %s", wdErr)
+			return wdErr
+		}
+		projectRoot = gitRoot(wd)
+	}
+
+	detectedAgents := agents.DetectIn(home)
+	if syncAgent != "" {
+		var filtered []agents.Agent
+		for _, a := range detectedAgents {
+			if a.Name() == syncAgent {
+				filtered = append(filtered, a)
+			}
+		}
+		if len(filtered) == 0 {
+			ui.Errorf("agent %q not detected", syncAgent)
+			return nil
+		}
+		detectedAgents = filtered
 	}
 
 	// 2. Create client and get manifest.
@@ -128,6 +174,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// 7. If --dry-run, show what would happen and return.
 	if syncDryRun {
 		if !syncQuiet {
+			ui.Info("scope: %s", scope)
+			for _, agent := range detectedAgents {
+				ui.Info("  %s → %s", agent.Name(), agentSkillsBase(agent, scope, home, projectRoot))
+			}
 			for _, ts := range pending {
 				ver := fmt.Sprintf("v%d", ts.entry.Version)
 				if ts.isNew {
@@ -142,33 +192,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 			)
 		}
 		return nil
-	}
-
-	// 8. Detect agents.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("cannot determine home directory", "home_error", "")
-			return nil
-		}
-		ui.Errorf("cannot determine home directory: %s", err)
-		return nil
-	}
-	detectedAgents := agents.DetectIn(home)
-
-	// Filter to a single agent if --agent is set.
-	if syncAgent != "" {
-		var filtered []agents.Agent
-		for _, a := range detectedAgents {
-			if a.Name() == syncAgent {
-				filtered = append(filtered, a)
-			}
-		}
-		if len(filtered) == 0 {
-			ui.Errorf("agent %q not detected", syncAgent)
-			return nil
-		}
-		detectedAgents = filtered
 	}
 
 	// 9. For each skill to sync: download and extract.
@@ -215,17 +238,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		extractOK := 0
 		extractFail := 0
 		for _, agent := range detectedAgents {
-			base := home
-			if agent.ProjectScoped() {
-				wd, wdErr := os.Getwd()
-				if wdErr != nil {
-					ui.Errorf("cannot determine working directory: %s", wdErr)
-					extractFail++
-					continue
-				}
-				base = wd
-			}
-			destDir := filepath.Join(agent.SkillsDir(base), ts.entry.Name)
+			destDir := filepath.Join(agentSkillsBase(agent, scope, home, projectRoot), ts.entry.Name)
 			// Clean previous version before extracting.
 			_ = os.RemoveAll(destDir)
 			if err := skill.Unpack(bytes.NewReader(archive), destDir); err != nil {
@@ -287,21 +300,27 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	agentNames := make([]string, 0, len(detectedAgents))
+	dests := make(map[string]string, len(detectedAgents))
 	for _, a := range detectedAgents {
 		agentNames = append(agentNames, a.Name())
+		dests[a.Name()] = agentSkillsBase(a, scope, home, projectRoot)
 	}
 
 	// 12. If JSONMode: print JSON.
 	if ui.JSONMode {
 		out := struct {
-			Synced int      `json:"synced"`
-			Failed int      `json:"failed"`
-			Agents []string `json:"agents"`
-			Total  int      `json:"total"`
+			Synced int               `json:"synced"`
+			Failed int               `json:"failed"`
+			Agents []string          `json:"agents"`
+			Scope  string            `json:"scope"`
+			Dests  map[string]string `json:"dests"`
+			Total  int               `json:"total"`
 		}{
 			Synced: synced,
 			Failed: failed,
 			Agents: agentNames,
+			Scope:  string(scope),
+			Dests:  dests,
 			Total:  len(manifest),
 		}
 		return ui.PrintJSON(out)
@@ -317,6 +336,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 			parts = append(parts, strings.Join(agentNames, ", "))
 		}
 		ui.Summary(parts...)
+		// Report the concrete destination per agent so placement is never a surprise.
+		for _, a := range detectedAgents {
+			ui.Info("  %s → %s · %s", a.Name(), scope, dests[a.Name()])
+		}
 	}
 
 	return nil
