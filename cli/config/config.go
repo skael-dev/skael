@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Endpoint string `json:"endpoint"`
 	APIKey   string `json:"api_key"`
+	Scope    string `json:"scope,omitempty"`
 }
 
 // SyncState records the last sync timestamp and each synced skill.
