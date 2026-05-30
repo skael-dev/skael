@@ -34,6 +34,8 @@ docker compose up -d
 
 Platform is at `http://localhost:8080`.
 
+> **Storage:** archives default to local disk (`STORAGE_PATH`). For Kubernetes/ephemeral hosts or multiple replicas, set `STORAGE_PATH=s3://bucket/prefix` to use S3-compatible object storage (AWS S3, MinIO, R2, Spaces) — see [Self-hosting](https://skael.dev/docs/self-hosting).
+
 ### Install the CLI
 
 ```bash

@@ -63,9 +63,13 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | Postgres connection string |
-| `API_KEY` | yes | — | API key for authentication |
-| `STORAGE_PATH` | no | `./data/skills` | Local directory for archives |
+| `STORAGE_PATH` | no | `./data/skills` | Archive storage; local dir, or `s3://bucket/prefix` for S3 |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
+| `S3_ENDPOINT` / `S3_REGION` | no | AWS / `us-east-1` | Only when `STORAGE_PATH=s3://…` |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Fall back to `AWS_*`; omit both for IAM instance role |
+| `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
+
+Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
 
 ## Security constraints
 

@@ -6,7 +6,6 @@ services:
     environment:
       DATABASE_URL: postgres://skael:skael@db:5432/skael?sslmode=disable
       STORAGE_PATH: /data/skills
-      API_KEY: sk-change-me-in-production
     volumes:
       - skill-data:/data/skills
     depends_on:
