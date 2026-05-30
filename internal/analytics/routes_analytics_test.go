@@ -79,6 +79,7 @@ func TestGetOverview_WithData(t *testing.T) {
 	require.Equal(t, 2, result.Security.Clean, "expected 2 clean skills (a and c)")
 	require.Equal(t, 1, result.Security.Warning, "expected 1 warning skill (b)")
 	require.Equal(t, 0, result.Security.Critical)
+	require.Equal(t, 3, result.UnreviewedSkills, "all 3 seeded skills are unreviewed")
 }
 
 // TestGetOverview_EmptyDB verifies that GET /api/analytics/overview returns

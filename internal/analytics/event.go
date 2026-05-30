@@ -55,6 +55,7 @@ type OverviewData struct {
 	TotalSkills      int             `json:"total_skills"`
 	ActiveSkills     int             `json:"active_skills"`
 	TotalActivations int             `json:"total_activations"`
+	UnreviewedSkills int             `json:"unreviewed_skills"`
 	Security         SecuritySummary `json:"security"`
 }
 
@@ -151,10 +152,16 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 		return nil, fmt.Errorf("analytics.Store.GetOverview security rows: %w", err)
 	}
 
+	var unreviewed int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM skills WHERE reviewed_at IS NULL`).Scan(&unreviewed); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetOverview unreviewed_skills: %w", err)
+	}
+
 	return &OverviewData{
 		TotalSkills:      total,
 		ActiveSkills:     active,
 		TotalActivations: totalActivations,
+		UnreviewedSkills: unreviewed,
 		Security:         sec,
 	}, nil
 }
