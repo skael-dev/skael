@@ -42,7 +42,7 @@ var validSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
 // routes (download + scan) that stream bytes rather than returning JSON.
-func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *platform.Storage) {
+func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage) {
 	// -----------------------------------------------------------------
 	// POST /api/skills — create a skill
 	// -----------------------------------------------------------------
@@ -666,7 +666,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage *plat
 
 // makeDownloadHandler returns a handler that streams the archive for a specific
 // version of a skill.
-func makeDownloadHandler(store *Store, storage *platform.Storage) http.HandlerFunc {
+func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
 		versionStr := chi.URLParam(r, "version")

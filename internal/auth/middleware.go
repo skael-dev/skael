@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,15 +10,14 @@ import (
 )
 
 // Middleware returns a chi-compatible middleware that enforces authentication
-// on all /api/ routes except explicitly exempt paths. It checks three auth
+// on all /api/ routes except explicitly exempt paths. It checks two auth
 // methods in order:
 //  1. Session cookie (via scs session manager)
 //  2. API key (X-API-Key header with "sk-" prefix, SHA-256 hashed)
-//  3. Legacy API key (constant-time comparison against a static key)
 //
 // On success, the authenticated User is attached to the request context via
 // ContextWithUser.
-func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keyStore *KeyStore, legacyAPIKey string) func(http.Handler) http.Handler {
+func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keyStore *KeyStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip auth for non-API paths (SPA static files).
@@ -82,21 +80,6 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 						next.ServeHTTP(w, r)
 						return
 					}
-				}
-			}
-
-			// 3. Try legacy API key (constant-time comparison).
-			if legacyAPIKey != "" && apiKey != "" {
-				if subtle.ConstantTimeCompare([]byte(apiKey), []byte(legacyAPIKey)) == 1 {
-					user := &User{
-						ID:    "system",
-						Email: "",
-						Name:  "system",
-						Role:  "admin",
-					}
-					r = r.WithContext(ContextWithUser(r.Context(), user))
-					next.ServeHTTP(w, r)
-					return
 				}
 			}
 

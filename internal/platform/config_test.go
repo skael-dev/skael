@@ -7,30 +7,14 @@ import (
 )
 
 func TestLoadConfig_RequiresDatabaseURL(t *testing.T) {
-	t.Setenv("API_KEY", "test-key")
-
 	_, err := platform.LoadConfig()
 	if err == nil {
 		t.Fatal("expected error when DATABASE_URL is not set, got nil")
 	}
 }
 
-func TestLoadConfig_APIKeyOptional(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://localhost/skael")
-	// API_KEY intentionally not set — should succeed now
-
-	cfg, err := platform.LoadConfig()
-	if err != nil {
-		t.Fatalf("expected success when API_KEY is not set, got error: %v", err)
-	}
-	if cfg.APIKey != "" {
-		t.Errorf("expected empty APIKey, got %q", cfg.APIKey)
-	}
-}
-
 func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/skael")
-	t.Setenv("API_KEY", "test-key")
 
 	cfg, err := platform.LoadConfig()
 	if err != nil {

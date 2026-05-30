@@ -8,23 +8,34 @@ import (
 	"strings"
 )
 
-// Storage provides local filesystem storage for skill archive files.
-type Storage struct {
+// Storage abstracts archive blob storage (local filesystem or object storage).
+// Names are relative keys, e.g. "code-review/abc123.tar.gz".
+type Storage interface {
+	// Write stores r under name and returns the stored key (name).
+	Write(name string, r io.Reader) (string, error)
+	// Read opens the blob stored under name; caller closes the ReadCloser.
+	Read(name string) (io.ReadCloser, error)
+	// Delete removes the blob stored under name.
+	Delete(name string) error
+}
+
+// LocalStorage provides local filesystem storage for skill archive files.
+type LocalStorage struct {
 	BasePath string
 }
 
-// NewStorage creates a Storage rooted at basePath, creating the directory if
-// it does not already exist.
-func NewStorage(basePath string) (*Storage, error) {
+// NewLocalStorage creates a LocalStorage rooted at basePath, creating the
+// directory if it does not already exist.
+func NewLocalStorage(basePath string) (*LocalStorage, error) {
 	if err := os.MkdirAll(basePath, 0o755); err != nil {
 		return nil, fmt.Errorf("storage: create base path %q: %w", basePath, err)
 	}
-	return &Storage{BasePath: basePath}, nil
+	return &LocalStorage{BasePath: basePath}, nil
 }
 
 // validatePath resolves name relative to BasePath and verifies the result
 // stays within BasePath (path traversal guard). It returns the resolved path.
-func (s *Storage) validatePath(name string) (string, error) {
+func (s *LocalStorage) validatePath(name string) (string, error) {
 	dest := filepath.Join(s.BasePath, name)
 	absPath, err := filepath.Abs(dest)
 	if err != nil {
@@ -44,7 +55,7 @@ func (s *Storage) validatePath(name string) (string, error) {
 // It uses an atomic write: content is first written to a .tmp file which is
 // then renamed to the final destination, ensuring no partial files are visible.
 // Returns the full path of the written file.
-func (s *Storage) Write(name string, r io.Reader) (string, error) {
+func (s *LocalStorage) Write(name string, r io.Reader) (string, error) {
 	dest, err := s.validatePath(name)
 	if err != nil {
 		return "", err
@@ -76,12 +87,12 @@ func (s *Storage) Write(name string, r io.Reader) (string, error) {
 		return "", fmt.Errorf("storage: rename to final path %q: %w", name, err)
 	}
 
-	return dest, nil
+	return name, nil
 }
 
 // Read opens the file stored under name (relative to BasePath) for reading.
 // The caller is responsible for closing the returned ReadCloser.
-func (s *Storage) Read(name string) (io.ReadCloser, error) {
+func (s *LocalStorage) Read(name string) (io.ReadCloser, error) {
 	path, err := s.validatePath(name)
 	if err != nil {
 		return nil, err
@@ -94,7 +105,7 @@ func (s *Storage) Read(name string) (io.ReadCloser, error) {
 }
 
 // Delete removes the file stored under name (relative to BasePath).
-func (s *Storage) Delete(name string) error {
+func (s *LocalStorage) Delete(name string) error {
 	path, err := s.validatePath(name)
 	if err != nil {
 		return err

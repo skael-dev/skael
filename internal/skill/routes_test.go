@@ -26,14 +26,14 @@ import (
 // setupTestAPI creates a real Chi router + Huma API backed by a real ephemeral
 // Postgres database. Returns the http.Handler, the Store (for direct DB checks),
 // and the Storage (for archive access).
-func setupTestAPI(t *testing.T) (http.Handler, *skill.Store, *platform.Storage) {
+func setupTestAPI(t *testing.T) (http.Handler, *skill.Store, platform.Storage) {
 	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
 	store := skill.NewStore(pool)
 
 	storageDir := t.TempDir()
-	storage, err := platform.NewStorage(storageDir)
+	storage, err := platform.NewLocalStorage(storageDir)
 	require.NoError(t, err)
 
 	r := chi.NewMux()

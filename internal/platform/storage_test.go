@@ -10,9 +10,9 @@ import (
 
 func TestStorage_WriteAndRead(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewLocalStorage(dir)
 	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
+		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
 	content := "hello, skael"
@@ -36,17 +36,17 @@ func TestStorage_WriteAndRead(t *testing.T) {
 		t.Errorf("content mismatch: got %q, want %q", got, content)
 	}
 
-	// path should be the full absolute path to the file
-	if !filepath.IsAbs(path) {
-		t.Errorf("Write returned non-absolute path: %q", path)
+	// Write returns the stored key (the name), not a filesystem path.
+	if path != "archives/test.tar.gz" {
+		t.Errorf("Write returned key %q, want %q", path, "archives/test.tar.gz")
 	}
 }
 
 func TestStorage_Delete(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewLocalStorage(dir)
 	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
+		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
 	_, err = s.Write("to-delete.tar.gz", strings.NewReader("data"))
@@ -69,9 +69,9 @@ func TestStorage_Delete(t *testing.T) {
 
 func TestStorage_WriteAtomic(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewLocalStorage(dir)
 	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
+		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
 	_, err = s.Write("atomic.tar.gz", strings.NewReader("payload"))
@@ -100,9 +100,9 @@ func TestStorage_WriteAtomic(t *testing.T) {
 
 func TestStorage_PathTraversal_Rejected(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewLocalStorage(dir)
 	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
+		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
 	_, err = s.Write("../../etc/evil.tar.gz", strings.NewReader("evil"))
@@ -116,9 +116,9 @@ func TestStorage_PathTraversal_Rejected(t *testing.T) {
 
 func TestStorage_PathTraversal_NestedEscape(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewLocalStorage(dir)
 	if err != nil {
-		t.Fatalf("NewStorage: %v", err)
+		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
 	_, err = s.Write("skills/../../../etc/passwd", strings.NewReader("evil"))

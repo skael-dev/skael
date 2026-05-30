@@ -45,7 +45,7 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 
 	// 2. Create storage in a temp dir.
 	storageDir := t.TempDir()
-	storage, err := platform.NewStorage(storageDir)
+	storage, err := platform.NewLocalStorage(storageDir)
 	require.NoError(t, err)
 
 	// 3. Create chi router with auth middleware (mirrors main.go exactly).

@@ -21,7 +21,7 @@ import (
 	"github.com/skael-dev/skael/internal/skill"
 )
 
-func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage *platform.Storage, fetcher *Fetcher) {
+func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher) {
 	// Rate limit: 10 requests per minute for the resolve endpoint.
 	resolveLimiter := rate.NewLimiter(rate.Every(time.Minute/10), 1)
 
@@ -228,7 +228,7 @@ func importSingleSkill(
 	src Source,
 	skillStore *skill.Store,
 	importStore *Store,
-	storage *platform.Storage,
+	storage platform.Storage,
 ) (*skill.Version, bool, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
@@ -317,7 +317,7 @@ func importSingleSkill(
 	return ver, true, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage *platform.Storage) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {

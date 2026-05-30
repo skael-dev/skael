@@ -64,8 +64,8 @@ func (b *Builder) Build() (*Server, error) {
 	sessionManager.Cookie.Secure = os.Getenv("COOKIE_SECURE") == "true"
 	sessionManager.Lifetime = 7 * 24 * time.Hour
 
-	// 5. Create storage.
-	storage, err := platform.NewStorage(cfg.StoragePath)
+	// 5. Create storage (local filesystem or S3, per STORAGE_PATH).
+	storage, err := platform.NewStorageFromConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: storage: %w", err)
 	}
@@ -80,7 +80,7 @@ func (b *Builder) Build() (*Server, error) {
 	router.Use(middleware.RealIP)
 	router.Use(platform.RequestLogger)
 	router.Use(sessionManager.LoadAndSave)
-	router.Use(auth.Middleware(sessionManager, userStore, keyStore, cfg.APIKey))
+	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
 
 	// 8. Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {

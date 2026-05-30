@@ -18,8 +18,6 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
-const testLegacyAPIKey = "test-legacy-key-12345"
-
 // setupMiddlewareTest creates a router with session manager, auth middleware,
 // auth routes (for signup/login), and a protected /api/protected endpoint.
 // Returns an httptest.Server and test infrastructure.
@@ -34,7 +32,7 @@ func setupMiddlewareTest(t *testing.T) (*httptest.Server, *scs.SessionManager, *
 
 	r := chi.NewMux()
 	r.Use(sessionManager.LoadAndSave)
-	r.Use(auth.Middleware(sessionManager, userStore, keyStore, testLegacyAPIKey))
+	r.Use(auth.Middleware(sessionManager, userStore, keyStore))
 
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 
@@ -198,25 +196,6 @@ func TestMiddleware_ValidAPIKey_PassesWithUser(t *testing.T) {
 	var user auth.User
 	decodeJSON(t, resp2, &user)
 	require.Equal(t, "apikey@example.com", user.Email)
-}
-
-func TestMiddleware_LegacyAPIKey_PassesWithSystemUser(t *testing.T) {
-	srv, _, _, _ := setupMiddlewareTest(t)
-
-	client := newClientWithJar(t)
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/protected", nil)
-	require.NoError(t, err)
-	req.Header.Set("X-API-Key", testLegacyAPIKey)
-
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var user auth.User
-	decodeJSON(t, resp, &user)
-	require.Equal(t, "system", user.ID)
-	require.Equal(t, "system", user.Name)
-	require.Equal(t, "admin", user.Role)
 }
 
 func TestMiddleware_NoAuth_Returns401(t *testing.T) {
