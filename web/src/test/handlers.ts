@@ -77,8 +77,26 @@ export const handlers = [
     return HttpResponse.json(mockOverview);
   }),
 
-  http.get("/api/analytics/skills", () => {
-    return HttpResponse.json(mockSkillAnalytics);
+  http.get("/api/analytics/skills", ({ request }) => {
+    const url = new URL(request.url);
+    const q = (url.searchParams.get("q") ?? "").toLowerCase();
+    const limit = Number(url.searchParams.get("limit") ?? "50");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    let items = mockSkillAnalytics as Array<{ name: string; description?: string | null }>;
+    if (q) {
+      items = items.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.description ?? "").toLowerCase().includes(q),
+      );
+    }
+    const total = items.length;
+    const page = items.slice(offset, offset + limit);
+    return HttpResponse.json({ skills: page, total });
+  }),
+
+  http.get("/api/skills/tags", () => {
+    return HttpResponse.json({ tags: [] });
   }),
 
   // Skills

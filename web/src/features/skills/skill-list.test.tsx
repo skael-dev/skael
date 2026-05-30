@@ -26,16 +26,19 @@ describe("SkillList", () => {
     const searchInput = screen.getByPlaceholderText("Filter skills...");
     await user.type(searchInput, "review");
 
-    // code-review matches "review" in its name; others should not appear
-    expect(screen.getByText("code-review")).toBeInTheDocument();
-    expect(screen.queryByText("test-writer")).not.toBeInTheDocument();
+    // Filtering is server-side + debounced; wait for the settled filtered state
+    // (code-review present, others gone) to avoid the refetch loading gap.
+    await waitFor(() => {
+      expect(screen.getByText("code-review")).toBeInTheDocument();
+      expect(screen.queryByText("test-writer")).not.toBeInTheDocument();
+    });
     expect(screen.queryByText("doc-generator")).not.toBeInTheDocument();
   });
 
   it("shows onboarding when no skills exist", async () => {
     server.use(
       http.get("/api/analytics/skills", () => {
-        return HttpResponse.json([]);
+        return HttpResponse.json({ skills: [], total: 0 });
       }),
       http.get("/api/analytics/overview", () => {
         return HttpResponse.json({

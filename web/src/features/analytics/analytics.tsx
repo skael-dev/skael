@@ -74,8 +74,8 @@ export function Analytics() {
   const { data: skills, isLoading: skillsLoading } = useQuery({
     queryKey: ["analytics", "skills", days],
     queryFn: async () => {
-      const res = await analyticsSkills({ query: { days } });
-      return (res.data as SkillAnalytics[] | null) ?? [];
+      const res = await analyticsSkills({ query: { days, limit: 100 } });
+      return (res.data?.skills as SkillAnalytics[] | null) ?? [];
     },
   });
 

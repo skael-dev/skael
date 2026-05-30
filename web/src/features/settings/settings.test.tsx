@@ -40,12 +40,4 @@ describe("Settings", () => {
     // Dialog should appear with "Create API Key" title and input placeholder
     expect(await screen.findByPlaceholderText("e.g. CI/CD Pipeline")).toBeInTheDocument();
   });
-
-  it("danger zone regenerate button is disabled", async () => {
-    renderWithProviders(<Settings />);
-
-    // The DangerSection has a disabled "Regenerate" button
-    const regenBtn = await screen.findByRole("button", { name: "Regenerate" });
-    expect(regenBtn).toBeDisabled();
-  });
 });

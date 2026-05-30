@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useRef, useEffect } from "react";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
 import { ImportModal } from "@/features/import/import-modal";
 import { UnregisteredTab } from "@/features/skills/unregistered-tab";
@@ -7,9 +7,19 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SkillCard } from "@/features/skills/skill-card";
-import { analyticsOverview, analyticsSkills, bulkReviewSkills } from "@/api/sdk.gen";
+import { analyticsOverview, analyticsSkills, skillsTags, bulkReviewSkills } from "@/api/sdk.gen";
 import type { SkillAnalytics, OverviewData } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
+
+// ── Debounce hook ─────────────────────────────────────────────
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return debounced;
+}
 
 // ── Onboarding empty state ────────────────────────────────────
 const INSTALL_COMMANDS: Record<string, string> = {
@@ -176,45 +186,8 @@ const TAG_COLORS: Record<string, string> = {
   deprecated: "bg-slate-400",
 };
 
-// ── Helpers ───────────────────────────────────────────────────
-function extractTags(skills: SkillAnalytics[]): string[] {
-  const tags = new Set<string>();
-  for (const s of skills) {
-    if (Array.isArray(s.tags)) {
-      for (const t of s.tags) {
-        tags.add(t);
-      }
-    }
-  }
-  return Array.from(tags).sort();
-}
-
-function matchesQuery(skill: SkillAnalytics, q: string): boolean {
-  if (!q) return true;
-  const lower = q.toLowerCase();
-  return (
-    skill.name.toLowerCase().includes(lower) ||
-    (skill.description ?? "").toLowerCase().includes(lower)
-  );
-}
-
+// Sort options exposed in the UI; mapped to the server's `sort` param.
 type SortKey = "updated" | "name" | "usage";
-
-function sortSkills(skills: SkillAnalytics[], key: SortKey): SkillAnalytics[] {
-  const sorted = [...skills];
-  switch (key) {
-    case "name":
-      return sorted.sort((a, b) => a.name.localeCompare(b.name));
-    case "usage":
-      return sorted.sort((a, b) => b.activations - a.activations);
-    case "updated":
-    default:
-      return sorted.sort(
-        (a, b) =>
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      );
-  }
-}
 
 // ── Stat tile ─────────────────────────────────────────────────
 function StatTile({
@@ -330,12 +303,29 @@ export function SkillList() {
     },
   });
 
-  const { data: skillsData, isLoading } = useQuery({
-    queryKey: ["analytics", "skills"],
-    queryFn: async () => {
-      const res = await analyticsSkills({ query: { days: 30 } });
-      return (res.data as SkillAnalytics[] | null) ?? [];
+  const PAGE = 50;
+  const debouncedQuery = useDebouncedValue(query, 250);
+  const serverSort = sortBy === "usage" ? "activations" : sortBy;
+  const skillsQuery = useInfiniteQuery({
+    queryKey: ["analytics", "skills", { sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "" }],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const res = await analyticsSkills({
+        query: { days: 30, limit: PAGE, offset: pageParam as number, sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "" },
+      });
+      return (res.data as { skills: SkillAnalytics[] | null; total: number }) ?? { skills: [], total: 0 };
     },
+    getNextPageParam: (_last, pages) => {
+      const loaded = pages.reduce((n, p) => n + (p.skills?.length ?? 0), 0);
+      const total = pages[0]?.total ?? 0;
+      return loaded < total ? loaded : undefined;
+    },
+  });
+  const isLoading = skillsQuery.isLoading;
+
+  const tagsQuery = useQuery({
+    queryKey: ["skills", "tags"],
+    queryFn: async () => (await skillsTags()).data?.tags ?? [],
   });
 
   const { data: unregisteredData } = useQuery({
@@ -348,7 +338,24 @@ export function SkillList() {
   });
   const unregisteredCount = unregisteredData?.length ?? 0;
 
-  const skills = skillsData ?? [];
+  const skills = skillsQuery.data?.pages.flatMap((p) => p.skills ?? []) ?? [];
+
+  // Infinite scroll: load the next page when the sentinel scrolls into view.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && skillsQuery.hasNextPage && !skillsQuery.isFetchingNextPage) {
+          skillsQuery.fetchNextPage();
+        }
+      },
+      { rootMargin: "300px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [skillsQuery.hasNextPage, skillsQuery.isFetchingNextPage, skillsQuery]);
 
   // Bulk review mutation
   const bulkReview = useMutation({
@@ -361,18 +368,9 @@ export function SkillList() {
     },
   });
 
-  // Derived data
-  const allTags = useMemo(() => extractTags(skills), [skills]);
-
-  const filtered = useMemo(() => {
-    let result = skills.filter((s) => matchesQuery(s, query));
-    if (tagFilter) {
-      result = result.filter((s) => {
-        return Array.isArray(s.tags) && s.tags.includes(tagFilter);
-      });
-    }
-    return sortSkills(result, sortBy);
-  }, [skills, query, tagFilter, sortBy]);
+  // Derived data — filtering/sorting happen server-side; the list IS the result.
+  const allTags = tagsQuery.data ?? [];
+  const filtered = skills;
 
   const anyChecked = selected.size > 0;
   const allChecked = filtered.length > 0 && selected.size === filtered.length;
@@ -383,7 +381,7 @@ export function SkillList() {
   const needsAttention =
     (overviewData?.security.warning ?? 0) +
     (overviewData?.security.critical ?? 0) +
-    skills.filter((s) => !s.reviewed_at).length;
+    (overviewData?.unreviewed_skills ?? 0);
 
   // Selection handlers
   function toggleOne(name: string, checked: boolean) {
@@ -641,13 +639,19 @@ export function SkillList() {
                 />
               ))}
 
-              {filtered.length === 0 && skills.length > 0 && (
+              {skills.length === 0 && (debouncedQuery || tagFilter) && (
                 <div className="text-center py-16 text-text-secondary">
                   <div className="text-sm mb-2">Nothing matches that filter</div>
                   <div className="text-xs text-text-tertiary">
                     Try clearing the search or selecting a different tag
                   </div>
                 </div>
+              )}
+
+              {/* Infinite-scroll sentinel + loading indicator */}
+              <div ref={sentinelRef} />
+              {skillsQuery.isFetchingNextPage && (
+                <div className="text-center py-4 text-xs text-text-tertiary">Loading more…</div>
               )}
             </div>
           </>

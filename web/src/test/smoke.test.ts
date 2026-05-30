@@ -10,7 +10,8 @@ describe("test infrastructure", () => {
   it("MSW returns fixture data for skills", async () => {
     const res = await fetch("/api/analytics/skills");
     const data = await res.json();
-    expect(data).toHaveLength(3);
-    expect(data[0].name).toBe("code-review");
+    expect(data.skills).toHaveLength(3);
+    expect(data.total).toBe(3);
+    expect(data.skills[0].name).toBe("code-review");
   });
 });
