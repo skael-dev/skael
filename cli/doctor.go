@@ -71,6 +71,20 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── 4. Per-agent checks ───────────────────────────────────────────────────
+	// Resolve placement scope from config (no flag in doctor) to report the
+	// directory skills actually sync to.
+	var configScope string
+	if cfg != nil {
+		configScope = cfg.Scope
+	}
+	scope := resolveScope("", configScope)
+	var projectRoot string
+	if scope == ScopeProject {
+		if wd, err := os.Getwd(); err == nil {
+			projectRoot = gitRoot(wd)
+		}
+	}
+
 	knownAgents := []agents.Agent{
 		&agents.ClaudeCode{},
 		&agents.Codex{},
@@ -85,8 +99,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Count skills in the agent's skills directory.
-		skillsDir := agent.SkillsDir(home)
+		// Count skills in the agent's skills directory (scope-resolved).
+		skillsDir := agentSkillsBase(agent, scope, home, projectRoot)
 		entries, err := os.ReadDir(skillsDir)
 		skillCount := 0
 		if err == nil {
@@ -107,7 +121,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		// Determine the skills directory relative to home for display.
 		relSkillsDir := skillsDir
 		if home != "" {
-			if rel, err := filepath.Rel(home, skillsDir); err == nil {
+			if rel, err := filepath.Rel(home, skillsDir); err == nil && !strings.HasPrefix(rel, "..") {
 				relSkillsDir = "~/" + rel
 			}
 		}

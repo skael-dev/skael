@@ -18,7 +18,7 @@ func TestDetect_ClaudeCode(t *testing.T) {
 
 	require.Len(t, detected, 1)
 	assert.Equal(t, "claude-code", detected[0].Name())
-	assert.Equal(t, filepath.Join(home, ".claude", "skills"), detected[0].SkillsDir(home))
+	assert.Equal(t, filepath.Join(home, ".claude", "skills"), detected[0].UserSkillsDir(home))
 }
 
 func TestDetect_Codex(t *testing.T) {
@@ -49,7 +49,7 @@ func TestDetect_OpenCode(t *testing.T) {
 
 	require.Len(t, detected, 1)
 	assert.Equal(t, "opencode", detected[0].Name())
-	assert.Equal(t, filepath.Join(home, ".config", "opencode", "skills"), detected[0].SkillsDir(home))
+	assert.Equal(t, filepath.Join(home, ".config", "opencode", "skills"), detected[0].UserSkillsDir(home))
 	assert.Equal(t, filepath.Join(home, ".config", "opencode", "plugins", "skael-tracking.ts"), detected[0].ConfigPath(home))
 }
 
@@ -71,13 +71,6 @@ func TestOpenCode_NotDetected(t *testing.T) {
 
 	oc := &OpenCode{}
 	assert.False(t, oc.Detected(home))
-}
-
-func TestGlobalAgents_NotProjectScoped(t *testing.T) {
-	agents := []Agent{&ClaudeCode{}, &Codex{}, &OpenCode{}}
-	for _, a := range agents {
-		assert.False(t, a.ProjectScoped(), "%s must not be project-scoped", a.Name())
-	}
 }
 
 func TestSkillsDirs_UserAndProject(t *testing.T) {
