@@ -11,6 +11,14 @@ func (o *OpenCode) SkillsDir(home string) string {
 	return filepath.Join(home, ".config", "opencode", "skills")
 }
 
+func (o *OpenCode) UserSkillsDir(home string) string {
+	return filepath.Join(home, ".config", "opencode", "skills")
+}
+
+func (o *OpenCode) ProjectSkillsDir(root string) string {
+	return filepath.Join(root, ".opencode", "skills")
+}
+
 func (o *OpenCode) ConfigPath(home string) string {
 	return filepath.Join(home, ".config", "opencode", "plugins", "skael-tracking.ts")
 }

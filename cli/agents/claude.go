@@ -11,6 +11,14 @@ func (c *ClaudeCode) SkillsDir(home string) string {
 	return filepath.Join(home, ".claude", "skills")
 }
 
+func (c *ClaudeCode) UserSkillsDir(home string) string {
+	return filepath.Join(home, ".claude", "skills")
+}
+
+func (c *ClaudeCode) ProjectSkillsDir(root string) string {
+	return filepath.Join(root, ".claude", "skills")
+}
+
 func (c *ClaudeCode) ConfigPath(home string) string {
 	return filepath.Join(home, ".claude", "settings.json")
 }

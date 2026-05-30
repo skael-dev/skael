@@ -79,3 +79,22 @@ func TestGlobalAgents_NotProjectScoped(t *testing.T) {
 		assert.False(t, a.ProjectScoped(), "%s must not be project-scoped", a.Name())
 	}
 }
+
+func TestSkillsDirs_UserAndProject(t *testing.T) {
+	home := "/home/u"
+	root := "/repo"
+	cases := []struct {
+		agent       Agent
+		wantUser    string
+		wantProject string
+	}{
+		{&ClaudeCode{}, "/home/u/.claude/skills", "/repo/.claude/skills"},
+		{&Codex{}, "/home/u/.codex/skills", "/repo/.agents/skills"},
+		{&OpenCode{}, "/home/u/.config/opencode/skills", "/repo/.opencode/skills"},
+		{&Cursor{}, "/home/u/.cursor/skills", "/repo/.cursor/skills"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.wantUser, c.agent.UserSkillsDir(home), "%s user", c.agent.Name())
+		assert.Equal(t, c.wantProject, c.agent.ProjectSkillsDir(root), "%s project", c.agent.Name())
+	}
+}

@@ -8,6 +8,8 @@ import (
 type Agent interface {
 	Name() string
 	SkillsDir(baseDir string) string
+	UserSkillsDir(home string) string
+	ProjectSkillsDir(root string) string
 	ConfigPath(homeDir string) string
 	Detected(homeDir string) bool
 	ProjectScoped() bool

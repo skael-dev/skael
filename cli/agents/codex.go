@@ -11,6 +11,14 @@ func (c *Codex) SkillsDir(home string) string {
 	return filepath.Join(home, ".codex", "skills")
 }
 
+func (c *Codex) UserSkillsDir(home string) string {
+	return filepath.Join(home, ".codex", "skills")
+}
+
+func (c *Codex) ProjectSkillsDir(root string) string {
+	return filepath.Join(root, ".agents", "skills")
+}
+
 func (c *Codex) ConfigPath(home string) string {
 	return filepath.Join(home, ".codex", "config.toml")
 }

@@ -11,6 +11,14 @@ func (c *Cursor) SkillsDir(home string) string {
 	return filepath.Join(home, ".cursor", "skills")
 }
 
+func (c *Cursor) UserSkillsDir(home string) string {
+	return filepath.Join(home, ".cursor", "skills")
+}
+
+func (c *Cursor) ProjectSkillsDir(root string) string {
+	return filepath.Join(root, ".cursor", "skills")
+}
+
 func (c *Cursor) ConfigPath(home string) string {
 	return filepath.Join(home, ".cursor", "hooks.json")
 }
