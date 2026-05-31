@@ -6,6 +6,8 @@ Your team's SKILL.md files live in scattered home directories and half-synced re
 
 ![The skael dashboard — skills registry with versions, security status, and activation counts](site/public/dashboard-skills.png)
 
+![Walkthrough — skills list, per-agent activations over time, and security scans](site/public/walkthrough.gif)
+
 ## Why not just a git repo?
 
 You can commit `.claude/skills/` to a repo — if everyone's on the same agent, in the same project, and remembers to pull. A git folder gives you a folder. It doesn't place skills into Cursor *and* Codex *and* OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. Skael is the layer that turns a folder of markdown into managed infrastructure — and unlike Claude's native org sharing (Claude.ai/Desktop, paid tiers only), it's vendor-neutral across every agent your team runs.
