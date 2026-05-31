@@ -290,6 +290,27 @@ const faqLd = {
     </div>
   </section>
 
+  <!-- Cloud waitlist -->
+  <section class="waitlist" id="cloud">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-eyebrow">// cloud</div>
+        <h2 class="sec-title">Don't want to self-host? Cloud is coming.</h2>
+        <p class="sec-sub">Managed skael — same control plane, zero infra. Join the waitlist.</p>
+      </div>
+      <iframe
+        data-tally-src="https://tally.so/embed/44zAjY?alignLeft=1&hideTitle=1&transparentBackground=1&dynamicHeight=1"
+        loading="lazy" width="100%" height="200" frameborder="0"
+        title="Skael Cloud Waitlist"
+        style="max-width:520px;margin:0 auto;display:block;"
+      ></iframe>
+    </div>
+  </section>
+  <script is:inline>
+    var d = document, w = "https://tally.so/widgets/embed.js", v = function () { "undefined" != typeof Tally ? Tally.loadEmbeds() : d.querySelectorAll("iframe[data-tally-src]:not([src])").forEach(function (e) { e.src = e.dataset.tallySrc }) };
+    if ("undefined" != typeof Tally) v(); else if (d.querySelector('script[src="' + w + '"]') == null) { var s = d.createElement("script"); s.src = w, s.onload = v, s.onerror = v, d.body.appendChild(s); }
+  </script>
+
   <!-- Final CTA -->
   <section class="cta">
     <div class="container cta-inner">
@@ -912,6 +933,12 @@ const faqLd = {
     word-break: break-all;
   }
   .step-code .p { color: var(--accent); }
+
+  /* ---------- cloud waitlist ---------- */
+  .waitlist {
+    padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
 
   /* ---------- faq / why-not-git ---------- */
   .faq {
