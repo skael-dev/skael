@@ -95,6 +95,10 @@ test-run name:
 test-e2e:
     cd web && npx playwright test
 
+# Go integration e2e suite (real server + Postgres testcontainers)
+test-integration:
+    go test -tags integration ./tests/e2e/ -count=1
+
 # Frontend unit/integration tests (fast, no server needed)
 test-web:
     cd web && npx vitest run
@@ -121,8 +125,8 @@ fmt-check:
 tidy:
     go mod tidy
 
-# Run all checks (vet + fmt + test)
-check: vet fmt-check test
+# Run all checks (vet + fmt + test + integration)
+check: vet fmt-check test test-integration
 
 # --- Docker ---
 

@@ -160,7 +160,7 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 10*time.Second, 100*time.Millisecond, "server did not become ready in time")
+	}, 30*time.Second, 100*time.Millisecond, "server did not become ready in time")
 
 	return url, apiKey, cleanupFn
 }
