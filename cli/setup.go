@@ -93,10 +93,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 	detectedAgents := agents.DetectIn(home)
 
-	// 5. Run initial sync unless skipped.
+	// 5. Run initial sync unless skipped. A failure here must not abort hook
+	// installation (independent step), but it must fail the command at the end.
+	var syncErr error
 	if !setupSkipSync {
-		if err := runSync(cmd, nil); err != nil {
-			ui.Warn("initial sync failed: %s", err)
+		if syncErr = runSync(cmd, nil); syncErr != nil {
+			ui.Errorf("initial sync failed: %s", syncErr)
 		}
 	}
 
@@ -132,6 +134,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
+	}
+
+	if syncErr != nil {
+		ui.Error(ui.ErrorDetail{
+			Message:    "Setup finished with errors: initial sync failed",
+			Context:    syncErr.Error(),
+			Suggestion: "Fix the issue, then run: skael sync",
+		})
+		return fmt.Errorf("initial sync failed: %w", syncErr)
 	}
 
 	ui.Success("Setup complete. Skills are live.")
