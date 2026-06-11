@@ -22,11 +22,13 @@ func insertTestSkill(t *testing.T, ctx context.Context, skillStore *skill.Store,
 }
 
 // insertTestVersion creates a skill_version row with the given scan status.
-func insertTestVersion(t *testing.T, ctx context.Context, skillStore *skill.Store, skillID, scanStatus string) {
+// description is forwarded to CreateVersion so the parent skill's metadata is
+// not wiped (CreateVersion atomically updates the skill row).
+func insertTestVersion(t *testing.T, ctx context.Context, skillStore *skill.Store, skillID, scanStatus, description string) {
 	t.Helper()
 	scanResult := json.RawMessage(`{"status":"` + scanStatus + `","findings":[],"summary":{"critical":0,"high":0,"medium":0,"info":0}}`)
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
-	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", "", "", json.RawMessage(`{}`), manifest, scanResult)
+	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", description, "", json.RawMessage(`{}`), manifest, scanResult)
 	require.NoError(t, err)
 }
 
@@ -44,8 +46,8 @@ func TestGetOverview_WithData(t *testing.T) {
 	skB := insertTestSkill(t, ctx, skillStore, "skill-b", "second skill")
 	insertTestSkill(t, ctx, skillStore, "skill-c", "third skill — no version, no events")
 
-	insertTestVersion(t, ctx, skillStore, skA.ID, "clean")
-	insertTestVersion(t, ctx, skillStore, skB.ID, "warn")
+	insertTestVersion(t, ctx, skillStore, skA.ID, "clean", "first skill")
+	insertTestVersion(t, ctx, skillStore, skB.ID, "warn", "second skill")
 
 	// Insert events: skill-a has 2 events (different devs), skill-b has 1 event.
 	events := []analytics.Event{
@@ -124,8 +126,8 @@ func TestGetSkillsAnalytics_WithData(t *testing.T) {
 
 	skA := insertTestSkill(t, ctx, skillStore, "analytics-a", "skill a description")
 	skB := insertTestSkill(t, ctx, skillStore, "analytics-b", "skill b description")
-	insertTestVersion(t, ctx, skillStore, skA.ID, "clean")
-	insertTestVersion(t, ctx, skillStore, skB.ID, "critical")
+	insertTestVersion(t, ctx, skillStore, skA.ID, "clean", "skill a description")
+	insertTestVersion(t, ctx, skillStore, skB.ID, "critical", "skill b description")
 
 	// skill-a: 2 activations, skill-b: 0
 	require.NoError(t, analyticsStore.Insert(ctx, analytics.Event{

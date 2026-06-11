@@ -73,8 +73,8 @@ func TestStore_GetSkillTimeSeries(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, series)
 
-	// All events inserted today — find today's row
-	today := time.Now().Format("2006-01-02")
+	// All events inserted today — use UTC to match Postgres now()::date
+	today := time.Now().UTC().Format("2006-01-02")
 	var todayRow *analytics.AgentDailyCount
 	for i := range series {
 		if series[i].Date == today {
