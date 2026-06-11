@@ -90,7 +90,12 @@ func WriteState(dir string, state *SyncState) error {
 		os.Remove(tmpName)
 		return err
 	}
-	return os.Rename(tmpName, filepath.Join(dir, "state.json"))
+	target := filepath.Join(dir, "state.json")
+	if err := os.Rename(tmpName, target); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // ReadState reads state.json from dir.
