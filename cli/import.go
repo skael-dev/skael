@@ -24,8 +24,7 @@ var importCmd = &cobra.Command{
 Examples:
   skael import https://github.com/anthropics/skills
   skael import https://github.com/anthropics/skills/tree/main/skills/docx
-  skael import ./my-skills/code-review
-  skael import --search "react testing"`,
+  skael import ./my-skills/code-review`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runImport,
 }
@@ -33,13 +32,11 @@ Examples:
 var (
 	importAll    bool
 	importDryRun bool
-	importSearch string
 )
 
 func init() {
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all discovered skills without prompting")
 	importCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "Preview without importing")
-	importCmd.Flags().StringVar(&importSearch, "search", "", "Search skills.sh and import from results")
 	rootCmd.AddCommand(importCmd)
 }
 
@@ -86,12 +83,8 @@ func runImport(cmd *cobra.Command, args []string) error {
 	}
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
-	if importSearch != "" {
-		return runSearchImport(c, importSearch)
-	}
-
 	if len(args) == 0 {
-		return fmt.Errorf("provide a URL or local path, or use --search")
+		return fmt.Errorf("provide a URL or local path")
 	}
 
 	input := args[0]
@@ -389,12 +382,6 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 	}
 	ui.Summary(parts...)
 
-	return nil
-}
-
-func runSearchImport(c *client.Client, query string) error {
-	ui.Warn("skills.sh search integration is not yet implemented")
-	ui.Info("Use a GitHub URL directly: skael import https://github.com/owner/repo")
 	return nil
 }
 
