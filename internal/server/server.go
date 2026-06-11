@@ -119,13 +119,9 @@ func (b *Builder) Build() (*Server, error) {
 
 	// 10b. Readiness: verifies DB and storage connectivity. Liveness stays on
 	// /api/health (static) so orchestrators don't restart pods on DB blips.
-	type readyCheck struct {
-		Database string `json:"database"`
-		Storage  string `json:"storage"`
-	}
 	type readyBody struct {
-		Status string     `json:"status"`
-		Checks readyCheck `json:"checks"`
+		Status string      `json:"status"`
+		Checks ReadyChecks `json:"checks"`
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "health-ready",
@@ -135,17 +131,8 @@ func (b *Builder) Build() (*Server, error) {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		checks := readyCheck{Database: "ok", Storage: "ok"}
-		failed := false
-		if err := b.pool.Ping(checkCtx); err != nil {
-			checks.Database = err.Error()
-			failed = true
-		}
-		if err := storage.Ping(checkCtx); err != nil {
-			checks.Storage = err.Error()
-			failed = true
-		}
-		if failed {
+		checks, ready := readinessChecks(checkCtx, b.pool, storage)
+		if !ready {
 			detail, _ := json.Marshal(checks)
 			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
 		}
