@@ -1,8 +1,12 @@
 package skill_test
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -502,4 +506,35 @@ func TestCreateSkill_NameValidation(t *testing.T) {
 				"name=%q body=%s", tc.name, rr.Body.String())
 		})
 	}
+}
+
+func TestPublishVersion_NoOrphanedArchiveOnMissingSkillMD(t *testing.T) {
+	handler, _, storage := setupTestAPI(t)
+
+	createSkill(t, handler, "orphan-skill", "test")
+
+	// A valid tar.gz that lacks SKILL.md: passes Unpack, then fails at the
+	// SKILL.md read. That failure must not leave an archive in storage.
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	content := []byte("just a readme")
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "README.md", Mode: 0o644, Size: int64(len(content))}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gzw.Close())
+	payload := buf.Bytes()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/skills/orphan-skill/versions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/gzip")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// Archive name is content-addressable: {name}/{sha256[:16]}.tar.gz
+	sum := sha256.Sum256(payload)
+	archiveName := fmt.Sprintf("orphan-skill/%s.tar.gz", hex.EncodeToString(sum[:])[:16])
+	_, err = storage.Read(archiveName)
+	require.Error(t, err, "orphaned archive left in storage after failed publish")
 }

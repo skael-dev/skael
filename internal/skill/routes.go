@@ -280,9 +280,6 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// storage.Write stores it relative to BasePath, and storage.Read reads it
 		// the same way.
 		archiveName := fmt.Sprintf("%s/%s.tar.gz", input.Name, checksum[:16])
-		if _, err := storage.Write(archiveName, bytes.NewReader(input.RawBody)); err != nil {
-			return nil, fmt.Errorf("publish: store archive: %w", err)
-		}
 
 		// 5. Read SKILL.md and extract frontmatter.
 		skillMDPath := filepath.Join(tmpDir, "SKILL.md")
@@ -346,7 +343,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, fmt.Errorf("publish: marshal scan result: %w", err)
 		}
 
-		// 7. Create version record. Store the relative archiveName so that
+		// 7. Write archive to storage. All validation has passed; write last so
+		// that no orphaned blobs are left behind when earlier steps fail.
+		if _, err := storage.Write(archiveName, bytes.NewReader(input.RawBody)); err != nil {
+			return nil, fmt.Errorf("publish: store archive: %w", err)
+		}
+
+		// 8. Create version record. Store the relative archiveName so that
 		// storage.Read can locate the file without needing the absolute basePath.
 		ver, err := store.CreateVersion(ctx,
 			sk.ID,
@@ -362,7 +365,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, huma.Error500InternalServerError("creating version", err)
 		}
 
-		// 8. Update skill content and description.
+		// 9. Update skill content and description.
 		// Non-fatal: the version is already committed. A stale metadata entry
 		// will be corrected on the next successful publish.
 		if err := store.UpdateContent(ctx, input.Name, description, body, fmJSON); err != nil {
