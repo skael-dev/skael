@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,8 @@ type Storage interface {
 	Read(name string) (io.ReadCloser, error)
 	// Delete removes the blob stored under name.
 	Delete(name string) error
+	// Ping verifies the backing store is reachable (readiness checks).
+	Ping(ctx context.Context) error
 }
 
 // LocalStorage provides local filesystem storage for skill archive files.
@@ -111,4 +114,16 @@ func (s *LocalStorage) Delete(name string) error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+// Ping verifies the base path still exists and is a directory.
+func (s *LocalStorage) Ping(_ context.Context) error {
+	info, err := os.Stat(s.BasePath)
+	if err != nil {
+		return fmt.Errorf("storage: ping: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("storage: ping: %s is not a directory", s.BasePath)
+	}
+	return nil
 }

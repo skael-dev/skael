@@ -119,3 +119,15 @@ func (s *S3Storage) Delete(name string) error {
 	}
 	return s.client.RemoveObject(context.Background(), s.bucket, key, minio.RemoveObjectOptions{})
 }
+
+// Ping verifies the bucket is reachable.
+func (s *S3Storage) Ping(ctx context.Context) error {
+	exists, err := s.client.BucketExists(ctx, s.bucket)
+	if err != nil {
+		return fmt.Errorf("storage: s3 ping: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("storage: s3 ping: bucket %q does not exist", s.bucket)
+	}
+	return nil
+}

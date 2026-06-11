@@ -97,6 +97,18 @@ func printOpenAPISpec() {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "health-ready",
+		Method:      http.MethodGet,
+		Path:        "/api/health/ready",
+	}, func(_ context.Context, _ *struct{}) (*struct {
+		Body struct {
+			Status string `json:"status"`
+		}
+	}, error) {
+		return nil, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "get-capabilities",
 		Method:      http.MethodGet,
 		Path:        "/api/capabilities",

@@ -209,3 +209,14 @@ func TestS3Storage_BucketMissing(t *testing.T) {
 	_, err := newS3Storage("s3://no-such-bucket/x")
 	require.Error(t, err)
 }
+
+func TestLocalStorage_Ping(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewLocalStorage(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, s.Ping(context.Background()))
+
+	require.NoError(t, os.RemoveAll(dir))
+	require.Error(t, s.Ping(context.Background()), "ping must fail when base path is gone")
+}

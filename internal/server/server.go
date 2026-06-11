@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -115,6 +116,44 @@ func (b *Builder) Build() (*Server, error) {
 
 	// 10a. Register capabilities endpoint.
 	b.caps.Register(api)
+
+	// 10b. Readiness: verifies DB and storage connectivity. Liveness stays on
+	// /api/health (static) so orchestrators don't restart pods on DB blips.
+	type readyCheck struct {
+		Database string `json:"database"`
+		Storage  string `json:"storage"`
+	}
+	type readyBody struct {
+		Status string     `json:"status"`
+		Checks readyCheck `json:"checks"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "health-ready",
+		Method:      http.MethodGet,
+		Path:        "/api/health/ready",
+	}, func(ctx context.Context, _ *struct{}) (*struct{ Body readyBody }, error) {
+		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		checks := readyCheck{Database: "ok", Storage: "ok"}
+		failed := false
+		if err := b.pool.Ping(checkCtx); err != nil {
+			checks.Database = err.Error()
+			failed = true
+		}
+		if err := storage.Ping(checkCtx); err != nil {
+			checks.Storage = err.Error()
+			failed = true
+		}
+		if failed {
+			detail, _ := json.Marshal(checks)
+			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
+		}
+		out := &struct{ Body readyBody }{}
+		out.Body.Status = "ready"
+		out.Body.Checks = checks
+		return out, nil
+	})
 
 	// 11. Register auth routes.
 	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
