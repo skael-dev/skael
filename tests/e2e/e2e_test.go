@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -32,12 +33,11 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
-const testAPIKey = "e2e-test-api-key"
-
 // startTestServer spins up a fully-wired HTTP server backed by a real Postgres
-// instance (via testcontainers). It returns the server URL and a cleanup
-// function that must be called when the test finishes.
-func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
+// instance (via testcontainers). It returns the server URL, a live API key for
+// the test user, and a cleanup function that must be called when the test
+// finishes.
+func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 	t.Helper()
 
 	// 1. Provision an ephemeral Postgres and run all migrations.
@@ -48,11 +48,32 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 	storage, err := platform.NewLocalStorage(storageDir)
 	require.NoError(t, err)
 
-	// 3. Create chi router with auth middleware (mirrors main.go exactly).
+	// 3. Create auth stores and a test user with a real API key.
+	userStore := auth.NewUserStore(pool)
+	keyStore := auth.NewKeyStore(pool)
+
+	pwHash, err := auth.HashPassword("test-password")
+	require.NoError(t, err)
+	testUser, err := userStore.Create(context.Background(), "e2e@test.local", "E2E Test User", pwHash)
+	require.NoError(t, err)
+
+	fullKey, prefix, err := auth.GenerateAPIKey()
+	require.NoError(t, err)
+	keyHash, err := auth.HashAPIKey(fullKey)
+	require.NoError(t, err)
+	_, err = keyStore.Create(context.Background(), testUser.ID, "e2e-test-key", prefix, keyHash)
+	require.NoError(t, err)
+	apiKey = fullKey
+
+	// 4. Create session manager (in-memory for tests).
+	sessionManager := scs.New()
+
+	// 5. Create chi router with auth middleware (mirrors server.Build exactly).
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RealIP)
-	router.Use(auth.Middleware(nil, nil, nil, testAPIKey))
+	router.Use(sessionManager.LoadAndSave)
+	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
 
 	// Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {
@@ -62,11 +83,11 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 		})
 	})
 
-	// 4. Create Huma API.
+	// 6. Create Huma API.
 	humaConfig := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, humaConfig)
 
-	// 5. Register health endpoint (auth skips /api/health).
+	// 7. Register health endpoint (auth skips /api/health).
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -85,11 +106,11 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 		return out, nil
 	})
 
-	// 6. Register skill routes.
+	// 8. Register skill routes.
 	skillStore := skill.NewStore(pool)
 	skill.RegisterRoutes(api, router, skillStore, storage)
 
-	// 7. Register sync manifest route.
+	// 9. Register sync manifest route.
 	syncStore := gosync.NewStore(pool)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-manifest",
@@ -107,11 +128,11 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 		}{Body: entries}, nil
 	})
 
-	// 8. Register analytics routes.
+	// 10. Register analytics routes.
 	analyticsStore := analytics.NewStore(pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
-	// 9. Start server on a random OS-assigned port.
+	// 11. Start server on a random OS-assigned port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -123,7 +144,7 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 	}
 	go server.Serve(listener) //nolint:errcheck
 
-	// 10. Build the URL and return a cleanup that shuts the server down.
+	// 12. Build the URL and return a cleanup that shuts the server down.
 	url := "http://" + listener.Addr().String()
 	cleanupFn := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -141,7 +162,7 @@ func startTestServer(t *testing.T) (serverURL string, cleanup func()) {
 		return resp.StatusCode == http.StatusOK
 	}, 10*time.Second, 100*time.Millisecond, "server did not become ready in time")
 
-	return url, cleanupFn
+	return url, apiKey, cleanupFn
 }
 
 // packTestdataDir packs the testdata directory at the given relative path into
@@ -181,10 +202,10 @@ func postEvent(t *testing.T, serverURL, apiKey, skillName, agent string) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_PublishAndRetrieve(t *testing.T) {
-	serverURL, cleanup := startTestServer(t)
+	serverURL, testKey, cleanup := startTestServer(t)
 	defer cleanup()
 
-	c := client.New(serverURL, testAPIKey)
+	c := client.New(serverURL, testKey)
 
 	// Create the skill record.
 	created, err := c.CreateSkill("e2e-test-skill", "initial description")
@@ -217,10 +238,10 @@ func TestE2E_PublishAndRetrieve(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_SyncFlow(t *testing.T) {
-	serverURL, cleanup := startTestServer(t)
+	serverURL, testKey, cleanup := startTestServer(t)
 	defer cleanup()
 
-	c := client.New(serverURL, testAPIKey)
+	c := client.New(serverURL, testKey)
 
 	// Publish a skill so the manifest has at least one entry.
 	_, err := c.CreateSkill("e2e-test-skill", "sync test")
@@ -259,10 +280,10 @@ func TestE2E_SyncFlow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_SecurityScanBlocks(t *testing.T) {
-	serverURL, cleanup := startTestServer(t)
+	serverURL, testKey, cleanup := startTestServer(t)
 	defer cleanup()
 
-	c := client.New(serverURL, testAPIKey)
+	c := client.New(serverURL, testKey)
 
 	// Create the bad-skill record.
 	_, err := c.CreateSkill("bad-skill", "should be blocked")
@@ -294,10 +315,10 @@ func TestE2E_SecurityScanBlocks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_ActivationTracking(t *testing.T) {
-	serverURL, cleanup := startTestServer(t)
+	serverURL, testKey, cleanup := startTestServer(t)
 	defer cleanup()
 
-	c := client.New(serverURL, testAPIKey)
+	c := client.New(serverURL, testKey)
 
 	// Create and publish a skill (needed so the name is registered, though the
 	// analytics endpoint does not require the skill to exist in the skills table).
@@ -308,14 +329,14 @@ func TestE2E_ActivationTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Post 2 events from 2 distinct developers/agents.
-	postEvent(t, serverURL, testAPIKey, "tracked-skill", "claude")
-	postEvent(t, serverURL, testAPIKey, "tracked-skill", "codex")
+	postEvent(t, serverURL, testKey, "tracked-skill", "claude")
+	postEvent(t, serverURL, testKey, "tracked-skill", "codex")
 
 	// Retrieve activation summary.
 	req, err := http.NewRequest(http.MethodGet,
 		serverURL+"/api/skills/tracked-skill/activations?days=30", nil)
 	require.NoError(t, err)
-	req.Header.Set("X-API-Key", testAPIKey)
+	req.Header.Set("X-API-Key", testKey)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -385,15 +406,48 @@ func TestE2E_ConfigRoundTrip(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 6: Full CLI lifecycle — onboarding flow end-to-end.
+// Scenario 6: Failed publish leaves clean state.
+// ---------------------------------------------------------------------------
+
+func TestE2E_FailedPublishLeavesCleanState(t *testing.T) {
+	serverURL, testKey, cleanup := startTestServer(t)
+	defer cleanup()
+
+	c := client.New(serverURL, testKey)
+
+	// Create the skill record.
+	created, err := c.CreateSkill("clean-state", "failed publish regression test")
+	require.NoError(t, err)
+	require.Equal(t, "clean-state", created.Name)
+
+	// POST a corrupt body that is not a valid gzip archive → expect HTTP 400.
+	corrupt := []byte("this is not a valid gzip archive")
+	ver, _, err := c.PublishVersion("clean-state", corrupt)
+	require.Error(t, err, "expected corrupt archive to be rejected")
+	require.Nil(t, ver)
+	apiErr, ok := err.(*client.APIError)
+	require.True(t, ok, "expected *client.APIError, got %T: %v", err, err)
+	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+
+	// POST a valid archive — must succeed with version == 1, proving the failed
+	// attempt left no version row or partial state behind.
+	archiveBytes := packTestdataDir(t, "clean-skill")
+	ver, _, err = c.PublishVersion("clean-state", archiveBytes)
+	require.NoError(t, err)
+	require.NotNil(t, ver)
+	require.Equal(t, 1, ver.Version)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 7: Full CLI lifecycle — onboarding flow end-to-end.
 // ---------------------------------------------------------------------------
 
 func TestE2E_FullLifecycle(t *testing.T) {
 	// 1. Start test server.
-	serverURL, cleanup := startTestServer(t)
+	serverURL, testKey, cleanup := startTestServer(t)
 	defer cleanup()
 
-	c := client.New(serverURL, testAPIKey)
+	c := client.New(serverURL, testKey)
 
 	// 2. Create and publish a skill.
 	skillName := "lifecycle-skill"
@@ -410,14 +464,14 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	configDir := t.TempDir()
 	cfg := &config.Config{
 		Endpoint: serverURL,
-		APIKey:   testAPIKey,
+		APIKey:   testKey,
 	}
 	require.NoError(t, config.WriteConfig(configDir, cfg))
 
 	readCfg, err := config.ReadConfig(configDir)
 	require.NoError(t, err)
 	require.Equal(t, serverURL, readCfg.Endpoint)
-	require.Equal(t, testAPIKey, readCfg.APIKey)
+	require.Equal(t, testKey, readCfg.APIKey)
 
 	// 4. Get manifest via client, verify the skill appears.
 	manifest, err := c.GetManifest()
@@ -467,12 +521,12 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	require.Equal(t, manifestChecksum, readState.Skills[0].Checksum)
 
 	// 9. Post an activation event, query activations, verify count.
-	postEvent(t, serverURL, testAPIKey, skillName, "claude")
+	postEvent(t, serverURL, testKey, skillName, "claude")
 
 	req, err := http.NewRequest(http.MethodGet,
 		serverURL+"/api/skills/"+skillName+"/activations?days=30", nil)
 	require.NoError(t, err)
-	req.Header.Set("X-API-Key", testAPIKey)
+	req.Header.Set("X-API-Key", testKey)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
