@@ -38,6 +38,24 @@ func NewChiAPI() (chi.Router, huma.API) {
 // or leading hyphens).
 var validSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
+// validRegisterName is the relaxed check for /api/skills/register: that
+// endpoint deliberately accepts arbitrary display-style names from agent
+// hooks, but never path fragments or control characters.
+func validRegisterName(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	if strings.Contains(name, "/") || strings.Contains(name, `\`) || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
 // routes (download + scan) that stream bytes rather than returning JSON.
@@ -101,6 +119,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		Summary:       "Register a skill stub (no name format validation)",
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *registerInput) (*registerOutput, error) {
+		if !validRegisterName(input.Body.Name) {
+			return nil, huma.Error422UnprocessableEntity(
+				"skill name must not contain path separators, '..', or control characters")
+		}
 		sk, err := store.Create(ctx, input.Body.Name, "", "", "", json.RawMessage(`{}`))
 		if err != nil {
 			if platform.IsDuplicateKey(err) {

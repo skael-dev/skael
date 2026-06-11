@@ -508,6 +508,28 @@ func TestCreateSkill_NameValidation(t *testing.T) {
 	}
 }
 
+// -----------------------------------------------------------------
+// POST /api/skills/register — register endpoint name guards
+// -----------------------------------------------------------------
+
+func TestRegisterSkill_RejectsPathyNames(t *testing.T) {
+	handler, _, _ := setupTestAPI(t)
+
+	for _, name := range []string{"../escape", "a/b", `a\b`, "ctl\x07name"} {
+		rr := doJSON(t, handler, http.MethodPost, "/api/skills/register",
+			map[string]string{"name": name}, nil)
+		require.Equal(t, http.StatusUnprocessableEntity, rr.Code, "name %q must be rejected", name)
+	}
+}
+
+func TestRegisterSkill_KeepsPermissiveNames(t *testing.T) {
+	handler, _, _ := setupTestAPI(t)
+
+	rr := doJSON(t, handler, http.MethodPost, "/api/skills/register",
+		map[string]string{"name": "My Draft Skill (WIP)"}, nil)
+	require.Equal(t, http.StatusCreated, rr.Code)
+}
+
 func TestPublishVersion_NoOrphanedArchiveOnMissingSkillMD(t *testing.T) {
 	handler, _, storage := setupTestAPI(t)
 
