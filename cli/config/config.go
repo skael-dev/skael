@@ -62,7 +62,8 @@ func ReadConfig(dir string) (*Config, error) {
 	return &cfg, nil
 }
 
-// WriteState writes state to state.json in dir with mode 0644.
+// WriteState writes state.json atomically (temp file + rename) so a crash or
+// concurrent writer can never leave a torn file behind.
 func WriteState(dir string, state *SyncState) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -71,7 +72,25 @@ func WriteState(dir string, state *SyncState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "state.json"), data, 0644)
+	tmp, err := os.CreateTemp(dir, "state-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, "state.json"))
 }
 
 // ReadState reads state.json from dir.

@@ -100,3 +100,20 @@ func TestReadState_Corrupt_BacksUp(t *testing.T) {
 	_, statErr := os.Stat(stateFile + ".bak")
 	assert.NoError(t, statErr, "state.json.bak should exist after corrupt state recovery")
 }
+
+func TestWriteState_AtomicRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	st := &SyncState{}
+	require.NoError(t, WriteState(dir, st))
+
+	got, err := ReadState(dir)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Only state.json may remain — no temp leftovers.
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "state.json", entries[0].Name())
+}
