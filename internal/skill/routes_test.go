@@ -484,7 +484,7 @@ func TestCreateSkill_NameValidation(t *testing.T) {
 		wantStatus int
 	}{
 		// Rejected names
-		{"My-Skill", http.StatusUnprocessableEntity},  // uppercase
+		{"My-Skill", http.StatusUnprocessableEntity},   // uppercase
 		{"skill name", http.StatusUnprocessableEntity}, // space
 		{"skill-", http.StatusUnprocessableEntity},     // trailing hyphen
 		{"-skill", http.StatusUnprocessableEntity},     // leading hyphen

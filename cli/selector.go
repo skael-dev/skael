@@ -78,16 +78,16 @@ func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	selectorCursor    = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
-	selectorDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	selectorName      = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
-	selectorDesc      = lipgloss.NewStyle().Foreground(lipgloss.Color("#a0a0a0"))
-	selectorFiles     = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	selectorClean     = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-	selectorWarn      = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
-	selectorCritical  = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-	selectorExisting  = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	selectorHelp      = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	selectorCursor   = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
+	selectorDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	selectorName     = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
+	selectorDesc     = lipgloss.NewStyle().Foreground(lipgloss.Color("#a0a0a0"))
+	selectorFiles    = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	selectorClean    = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	selectorWarn     = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
+	selectorCritical = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	selectorExisting = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	selectorHelp     = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
 )
 
 func (m selectorModel) View() string {

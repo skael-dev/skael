@@ -1,12 +1,20 @@
 package platform_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/platform"
 )
 
 func TestLoadConfig_RequiresDatabaseURL(t *testing.T) {
+	// Ensure DATABASE_URL is absent even when .env is loaded by just.
+	orig, hadOrig := os.LookupEnv("DATABASE_URL")
+	os.Unsetenv("DATABASE_URL") //nolint:errcheck
+	if hadOrig {
+		t.Cleanup(func() { os.Setenv("DATABASE_URL", orig) }) //nolint:errcheck
+	}
+
 	_, err := platform.LoadConfig()
 	if err == nil {
 		t.Fatal("expected error when DATABASE_URL is not set, got nil")

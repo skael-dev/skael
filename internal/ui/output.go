@@ -64,11 +64,11 @@ func Summary(parts ...string) {
 // Error prints a structured error to stderr.
 // Format:
 //
-//	  ✗ message
+//	✗ message
 //
-//	    context
+//	  context
 //
-//	    Try: suggestion
+//	  Try: suggestion
 func Error(detail ErrorDetail) {
 	if JSONMode {
 		return

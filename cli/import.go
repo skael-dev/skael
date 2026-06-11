@@ -59,7 +59,7 @@ var (
 			Foreground(lipgloss.Color("#a0a0a0"))
 
 	importFilesStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666"))
+				Foreground(lipgloss.Color("#666666"))
 
 	scanCleanStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#22c55e"))

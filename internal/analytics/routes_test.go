@@ -56,8 +56,8 @@ func TestIngestEvent_EmptySkillName_Rejected(t *testing.T) {
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
-		"skill_name":  "",
-		"agent":       "claude-sonnet",
+		"skill_name":   "",
+		"agent":        "claude-sonnet",
 		"trigger_type": "auto",
 	})
 
@@ -71,8 +71,8 @@ func TestIngestEvent_EmptyAgent_Rejected(t *testing.T) {
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
-		"skill_name":  "code-review",
-		"agent":       "",
+		"skill_name":   "code-review",
+		"agent":        "",
 		"trigger_type": "auto",
 	})
 
@@ -86,11 +86,11 @@ func TestIngestEvent_ValidEvent(t *testing.T) {
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
-		"skill_name":      "code-review",
-		"agent":           "claude-sonnet",
-		"trigger_type":    "auto",
-		"project_hash":    "proj1",
-		"developer_hash":  "dev1",
+		"skill_name":     "code-review",
+		"agent":          "claude-sonnet",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
 	})
 
 	require.Equal(t, http.StatusNoContent, rr.Code,

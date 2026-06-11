@@ -2,7 +2,7 @@ package scan
 
 // Report is the result of scanning a skill archive or content for security issues.
 type Report struct {
-	Status   string    `json:"status"`   // clean, info, warn, critical
+	Status   string    `json:"status"` // clean, info, warn, critical
 	Findings []Finding `json:"findings"`
 	Summary  Summary   `json:"summary"`
 }

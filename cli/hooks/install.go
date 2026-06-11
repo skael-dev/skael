@@ -46,9 +46,9 @@ func InstallClaudeHook(configPath, endpoint, apiKey, scriptPath string) error {
 	cmd := fmt.Sprintf("SKAEL_AGENT=claude-code %s", scriptPath)
 
 	newHookEntry := map[string]any{
-		"type":          "command",
-		"command":       cmd,
-		"_managed_by":   managedBy,
+		"type":        "command",
+		"command":     cmd,
+		"_managed_by": managedBy,
 	}
 
 	// Ensure hooks section exists.

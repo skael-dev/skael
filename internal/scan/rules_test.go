@@ -509,14 +509,14 @@ func TestExfiltrationRules(t *testing.T) {
 
 		// --- AWS credentials file access ---
 		{
-			name:     "AWS credentials file tilde",
-			input:    "cat ~/aws/credentials",
-			wantHit:  false, // no match — path must be ~/.aws/credentials
+			name:    "AWS credentials file tilde",
+			input:   "cat ~/aws/credentials",
+			wantHit: false, // no match — path must be ~/.aws/credentials
 		},
 		{
-			name:     "AWS credentials file correct path",
-			input:    "cat ~/. aws/credentials",
-			wantHit:  false, // space breaks the pattern
+			name:    "AWS credentials file correct path",
+			input:   "cat ~/. aws/credentials",
+			wantHit: false, // space breaks the pattern
 		},
 		{
 			name:     "AWS credentials tilde correct",

@@ -758,4 +758,3 @@ func makeLatestScanHandler(store *Store) http.HandlerFunc {
 		w.Write(ver.ScanResult) //nolint:errcheck
 	}
 }
-
