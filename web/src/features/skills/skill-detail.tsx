@@ -74,7 +74,6 @@ function MetaCell({ label, value }: { label: string; value: string | number }) {
 type TabDef = {
   id: string;
   label: string;
-  disabled?: boolean;
 };
 
 function SlidingTabs({
@@ -102,23 +101,15 @@ function SlidingTabs({
         <button
           key={tab.id}
           ref={(el) => { refs.current[tab.id] = el; }}
-          disabled={tab.disabled}
-          onClick={() => !tab.disabled && onChange(tab.id)}
+          onClick={() => onChange(tab.id)}
           className={cn(
-            "flex items-center gap-1.5 px-3.5 py-3 text-[13px] font-normal font-sans border-none bg-transparent cursor-pointer transition-colors duration-150 outline-none",
-            tab.disabled
-              ? "text-text-tertiary cursor-not-allowed opacity-45"
-              : activeTab === tab.id
+            "px-3.5 py-3 text-[13px] font-normal font-sans border-none bg-transparent cursor-pointer transition-colors duration-150 outline-none",
+            activeTab === tab.id
               ? "text-text-primary font-medium"
               : "text-text-secondary hover:text-text-primary"
           )}
         >
           {tab.label}
-          {tab.disabled && (
-            <span className="text-[9px] font-mono px-1 py-px rounded bg-bg-tertiary text-text-tertiary">
-              P2
-            </span>
-          )}
         </button>
       ))}
       {/* Sliding accent underline */}
@@ -582,7 +573,7 @@ function TabSecurity({
   );
 }
 
-// ── Placeholder tab (for changelog) ──────────────────────────────
+// ── Placeholder tab ───────────────────────────────────────────────
 function TabPlaceholder({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center py-24 text-text-tertiary text-sm">
@@ -610,7 +601,6 @@ const TABS: TabDef[] = [
   { id: "versions", label: "Versions" },
   { id: "usage", label: "Usage" },
   { id: "security", label: "Security" },
-  { id: "changelog", label: "Changelog", disabled: true },
 ];
 
 // ── Fetch scan report (raw Chi route, not in generated client) ───

@@ -118,6 +118,21 @@ describe("SkillDetail", () => {
     expect(uniqueDevsLabels.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("does not render a disabled Changelog tab", async () => {
+    server.use(
+      http.get("/api/skills/:name", () => {
+        return HttpResponse.json(skillWithContent);
+      }),
+    );
+
+    renderDetail("code-review");
+
+    // Wait for the page to load
+    await screen.findByText("code-review");
+
+    expect(screen.queryByText("Changelog")).not.toBeInTheDocument();
+  });
+
   it("clicking Files tab shows file names from manifest", async () => {
     const user = userEvent.setup();
 
