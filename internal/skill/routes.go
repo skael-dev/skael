@@ -18,7 +18,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
@@ -356,6 +355,8 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			archiveName,
 			checksum,
 			changelog,
+			description,
+			body,
 			fmJSON,
 			manifest,
 			scanJSON,
@@ -363,13 +364,6 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if err != nil {
 			_ = storage.Delete(archiveName)
 			return nil, huma.Error500InternalServerError("creating version", err)
-		}
-
-		// 9. Update skill content and description.
-		// Non-fatal: the version is already committed. A stale metadata entry
-		// will be corrected on the next successful publish.
-		if err := store.UpdateContent(ctx, input.Name, description, body, fmJSON); err != nil {
-			log.Warn().Str("skill", input.Name).Err(err).Msg("publish: update skill metadata (non-fatal)")
 		}
 
 		return &publishOutput{Body: &publishBody{Version: *ver, Created: true}}, nil

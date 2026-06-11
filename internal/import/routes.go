@@ -290,16 +290,11 @@ func importSingleSkill(
 		return nil, false, fmt.Errorf("store archive: %w", err)
 	}
 
-	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog, fmJSON, manifest, scanJSON)
+	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog,
+		description, body, fmJSON, manifest, scanJSON)
 	if err != nil {
 		_ = storage.Delete(archiveName)
 		return nil, false, fmt.Errorf("create version: %w", err)
-	}
-
-	// Update skill metadata (non-fatal, same as publish).
-	// Note: UpdateContent takes skill name, not ID.
-	if err := skillStore.UpdateContent(ctx, ds.Name, description, body, fmJSON); err != nil {
-		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: update content failed (non-fatal)")
 	}
 
 	// Record provenance.

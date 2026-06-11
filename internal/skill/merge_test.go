@@ -16,8 +16,8 @@ func TestMerge(t *testing.T) {
 	source, _ := store.Create(ctx, "superpowers:brainstorming", "", "source", "", json.RawMessage(`{}`))
 	target, _ := store.Create(ctx, "brainstorming", "", "target", "", json.RawMessage(`{}`))
 
-	store.CreateVersion(ctx, source.ID, "s/archive.tar.gz", "checksum1", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`))
-	store.CreateVersion(ctx, target.ID, "t/archive.tar.gz", "checksum2", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`))
+	store.CreateVersion(ctx, source.ID, "s/archive.tar.gz", "checksum1", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`))
+	store.CreateVersion(ctx, target.ID, "t/archive.tar.gz", "checksum2", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`))
 
 	merged, err := store.Merge(ctx, "superpowers:brainstorming", "brainstorming")
 	if err != nil {

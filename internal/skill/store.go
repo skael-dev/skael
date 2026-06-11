@@ -96,24 +96,13 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// UpdateContent updates a skill's description, content, and frontmatter, bumping updated_at.
-func (s *Store) UpdateContent(ctx context.Context, name, description, content string, frontmatter json.RawMessage) error {
-	const q = `
-		UPDATE skills
-		SET description = $2, content = $3, frontmatter = $4, updated_at = now()
-		WHERE name = $1
-	`
-	if _, err := s.pool.Exec(ctx, q, name, description, content, frontmatter); err != nil {
-		return fmt.Errorf("skill.Store.UpdateContent: %w", err)
-	}
-	return nil
-}
-
-// CreateVersion increments latest_version on the parent skill and inserts a
-// new skill_versions row, all within a single transaction.
+// CreateVersion increments latest_version on the parent skill, updates its
+// description/content/frontmatter, and inserts a new skill_versions row, all
+// within a single transaction.
 func (s *Store) CreateVersion(
 	ctx context.Context,
 	skillID, archivePath, checksum, changelog string,
+	description, content string,
 	frontmatter json.RawMessage,
 	manifest []FileEntry,
 	scanResult json.RawMessage,
@@ -129,16 +118,17 @@ func (s *Store) CreateVersion(
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Increment latest_version, reset review columns, and return the new value.
+	// Increment latest_version, reset review columns, update metadata, and return the new value.
 	const updateSkill = `
 		UPDATE skills
 		SET latest_version = latest_version + 1, updated_at = now(),
-		    reviewed_at = NULL, reviewed_by = ''
+		    reviewed_at = NULL, reviewed_by = '',
+		    description = $2, content = $3, frontmatter = $4
 		WHERE id = $1
 		RETURNING latest_version
 	`
 	var newVersion int
-	if err := tx.QueryRow(ctx, updateSkill, skillID).Scan(&newVersion); err != nil {
+	if err := tx.QueryRow(ctx, updateSkill, skillID, description, content, frontmatter).Scan(&newVersion); err != nil {
 		return nil, fmt.Errorf("skill.Store.CreateVersion update skill: %w", err)
 	}
 

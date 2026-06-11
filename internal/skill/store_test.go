@@ -95,7 +95,7 @@ func TestStore_CreateVersion(t *testing.T) {
 		{Path: "README.md", Size: 256},
 	}
 	scanResult := json.RawMessage(`{"clean":true}`)
-	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", json.RawMessage(`{}`), manifest, scanResult)
+	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", "", "", json.RawMessage(`{}`), manifest, scanResult)
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)
@@ -110,26 +110,6 @@ func TestStore_CreateVersion(t *testing.T) {
 	require.Equal(t, 1, updated.LatestVersion)
 }
 
-func TestStore_UpdateContent(t *testing.T) {
-	pool := testutil.SetupTestDB(t)
-	s := skill.NewStore(pool)
-	ctx := context.Background()
-
-	_, err := s.Create(ctx, "update-skill", "Update Skill", "original description", "original content", json.RawMessage(`{}`))
-	require.NoError(t, err)
-
-	newFrontmatter := json.RawMessage(`{"tags":["updated"]}`)
-	err = s.UpdateContent(ctx, "update-skill", "new description", "new content body", newFrontmatter)
-	require.NoError(t, err)
-
-	got, err := s.GetByName(ctx, "update-skill")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Equal(t, "new description", got.Description)
-	require.Equal(t, "new content body", got.Content)
-	require.JSONEq(t, `{"tags":["updated"]}`, string(got.Frontmatter))
-}
-
 func TestStore_GetVersion(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
@@ -140,7 +120,7 @@ func TestStore_GetVersion(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
 	scanResult := json.RawMessage(`{"status":"clean"}`)
-	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", json.RawMessage(`{}`), manifest, scanResult)
+	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", "", "", json.RawMessage(`{}`), manifest, scanResult)
 	require.NoError(t, err)
 	require.Equal(t, 1, created.Version)
 
@@ -156,6 +136,26 @@ func TestStore_GetVersion(t *testing.T) {
 	require.Equal(t, "SKILL.md", ver.FileManifest[0].Path)
 }
 
+func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	store := skill.NewStore(pool)
+	ctx := context.Background()
+
+	sk, err := store.Create(ctx, "meta-skill", "", "old desc", "old content", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	_, err = store.CreateVersion(ctx, sk.ID, "meta-skill/abc.tar.gz", "abc", "",
+		"new desc", "new content",
+		json.RawMessage(`{"description":"new desc"}`), nil, json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	got, err := store.GetByName(ctx, "meta-skill")
+	require.NoError(t, err)
+	require.Equal(t, "new desc", got.Description)
+	require.Equal(t, "new content", got.Content)
+	require.Equal(t, 1, got.LatestVersion)
+}
+
 func TestStore_ListVersions(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
@@ -166,10 +166,10 @@ func TestStore_ListVersions(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "skill.md", Size: 512}}
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
 	require.NoError(t, err)
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
 	require.NoError(t, err)
 
 	versions, err := s.ListVersions(ctx, "multi-version-skill")

@@ -26,7 +26,7 @@ func insertTestVersion(t *testing.T, ctx context.Context, skillStore *skill.Stor
 	t.Helper()
 	scanResult := json.RawMessage(`{"status":"` + scanStatus + `","findings":[],"summary":{"critical":0,"high":0,"medium":0,"info":0}}`)
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
-	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", json.RawMessage(`{}`), manifest, scanResult)
+	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", "", "", json.RawMessage(`{}`), manifest, scanResult)
 	require.NoError(t, err)
 }
 
