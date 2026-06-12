@@ -18,8 +18,9 @@ just test                     # all tests (needs Docker for testcontainers)
 just test-fast                # fast tests without DB (instant)
 just test-pkg internal/scan   # single package
 just test-run TestStore_Create # single test by name
-just test-e2e                 # end-to-end scenario tests
-just check                    # vet + fmt-check + test (CI)
+just test-e2e                 # browser e2e (Playwright, needs dev server + db)
+just test-integration         # Go integration e2e (real server + testcontainers)
+just check                    # vet + fmt-check + test + integration e2e + web tests (CI)
 just scan ./path              # security scan a skill directory
 just migrate                  # run pending migrations
 just migrate-down             # rollback last migration
