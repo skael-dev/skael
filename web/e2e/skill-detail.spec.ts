@@ -57,41 +57,37 @@ test.describe("Skill detail page", () => {
     await login(page);
     await page.goto(`/skills/${TEST_SKILL_NAME}`);
 
-    // SlidingTabs renders plain <button> elements (not role="tab").
-    // Verify all expected tab buttons are visible by their label text.
-    // NOTE: The SlidingTabs component lacks role="tab" and aria-selected — see accessibility bug below.
-    await expect(page.getByRole("button", { name: /^content$/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^files$/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^versions$/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^usage$/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^security$/i })).toBeVisible();
+    // SlidingTabs now exposes role="tab" on each button and role="tablist" on the container.
+    await expect(page.getByRole("tab", { name: /^content$/i })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^files$/i })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^versions$/i })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^usage$/i })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^security$/i })).toBeVisible();
+
+    // Content tab is active by default — aria-selected should be "true"
+    await expect(page.getByRole("tab", { name: /^content$/i })).toHaveAttribute("aria-selected", "true");
+    // All other tabs should be aria-selected="false"
+    await expect(page.getByRole("tab", { name: /^files$/i })).toHaveAttribute("aria-selected", "false");
   });
 
   test("clicking tabs switches content", async ({ page }) => {
     await login(page);
     await page.goto(`/skills/${TEST_SKILL_NAME}`);
 
-    // Click the Versions tab button
-    const versionsTab = page.getByRole("button", { name: /^versions$/i });
+    // Click the Versions tab
+    const versionsTab = page.getByRole("tab", { name: /^versions$/i });
     await versionsTab.click();
 
-    // After clicking, the Versions tab button should still be visible (page didn't navigate away)
-    await expect(versionsTab).toBeVisible();
-    // NOTE: SlidingTabs does not expose aria-selected; active state is CSS-only.
-    // A proper ARIA tablist should set aria-selected="true" on the active tab — accessibility bug.
+    // After clicking, Versions tab should be selected and Content tab deselected
+    await expect(versionsTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: /^content$/i })).toHaveAttribute("aria-selected", "false");
   });
 
   test("security badge is visible on detail page", async ({ page }) => {
     await login(page);
     await page.goto(`/skills/${TEST_SKILL_NAME}`);
 
-    // Look for any security-related element: tab button, text, or status indicator
-    const securityElement = page
-      .getByRole("button", { name: /^security$/i })
-      .or(page.getByText(/security/i).first())
-      .or(page.locator('[data-testid*="security"]').first())
-      .or(page.locator('[aria-label*="security" i]').first());
-
-    await expect(securityElement).toBeVisible();
+    // The Security tab is now role="tab" — assert it's visible
+    await expect(page.getByRole("tab", { name: /^security$/i })).toBeVisible();
   });
 });

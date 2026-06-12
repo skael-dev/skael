@@ -96,11 +96,13 @@ function SlidingTabs({
   }, [activeTab]);
 
   return (
-    <div className="relative flex">
+    <div role="tablist" aria-label="Skill sections" className="relative flex">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           ref={(el) => { refs.current[tab.id] = el; }}
+          role="tab"
+          aria-selected={activeTab === tab.id}
           onClick={() => onChange(tab.id)}
           className={cn(
             "px-3.5 py-3 text-[13px] font-normal font-sans border-none bg-transparent cursor-pointer transition-colors duration-150 outline-none",
