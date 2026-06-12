@@ -133,6 +133,13 @@ describe("SkillDetail", () => {
     expect(screen.queryByText("Changelog")).not.toBeInTheDocument();
   });
 
+  it("shows 'Skill not found' error state for a 404 skill", async () => {
+    // MSW default handler returns 404 for unknown skill names
+    renderDetail("nonexistent-skill");
+
+    expect(await screen.findByText(/skill not found/i)).toBeInTheDocument();
+  });
+
   it("clicking Files tab shows file names from manifest", async () => {
     const user = userEvent.setup();
 

@@ -299,6 +299,7 @@ export function SkillList() {
     queryKey: ["analytics", "overview"],
     queryFn: async () => {
       const res = await analyticsOverview({ query: { days: 30 } });
+      if (res.error) throw res.error;
       return res.data as OverviewData | undefined;
     },
   });
@@ -313,6 +314,7 @@ export function SkillList() {
       const res = await analyticsSkills({
         query: { days: 30, limit: PAGE, offset: pageParam as number, sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "" },
       });
+      if (res.error) throw res.error;
       return (res.data as { skills: SkillAnalytics[] | null; total: number }) ?? { skills: [], total: 0 };
     },
     getNextPageParam: (_last, pages) => {
@@ -325,7 +327,11 @@ export function SkillList() {
 
   const tagsQuery = useQuery({
     queryKey: ["skills", "tags"],
-    queryFn: async () => (await skillsTags()).data?.tags ?? [],
+    queryFn: async () => {
+      const res = await skillsTags();
+      if (res.error) throw res.error;
+      return res.data?.tags ?? [];
+    },
   });
 
   const { data: unregisteredData } = useQuery({

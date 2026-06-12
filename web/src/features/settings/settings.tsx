@@ -146,6 +146,7 @@ function ApiSection() {
     queryKey: ["api-keys"],
     queryFn: async () => {
       const res = await listApiKeys();
+      if (res.error) throw res.error;
       return res.data as ListKeysBody | undefined;
     },
   });
@@ -155,6 +156,7 @@ function ApiSection() {
   const createMutation = useMutation({
     mutationFn: async (name: string) => {
       const res = await createApiKey({ body: { name } });
+      if (res.error) throw res.error;
       return res.data as CreateKeyResponse;
     },
     onSuccess: (data) => {
@@ -454,6 +456,7 @@ export function Settings() {
     queryKey: ["skills", "list"],
     queryFn: async () => {
       const res = await listSkills();
+      if (res.error) throw res.error;
       return res.data as ListBody | undefined;
     },
   });

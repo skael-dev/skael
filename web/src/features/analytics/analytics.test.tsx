@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "@/test/handlers";
 import { renderWithProviders, screen, waitFor } from "@/test/render";
 import { Analytics } from "./analytics";
 
@@ -50,5 +52,20 @@ describe("Analytics", () => {
     expect(await screen.findByRole("button", { name: "7d" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "30d" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "90d" })).toBeInTheDocument();
+  });
+
+  it("shows an error state when analytics requests fail", async () => {
+    server.use(
+      http.get("/api/analytics/overview", () =>
+        HttpResponse.json({ error: "boom" }, { status: 500 }),
+      ),
+      http.get("/api/analytics/skills", () =>
+        HttpResponse.json({ error: "boom" }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<Analytics />);
+    expect(
+      await screen.findByText(/couldn't load analytics/i),
+    ).toBeInTheDocument();
   });
 });

@@ -63,23 +63,37 @@ function TableSkeleton() {
 export function Analytics() {
   const [days, setDays] = useState<Days>(30);
 
-  const { data: overview, isLoading: overviewLoading } = useQuery({
+  const { data: overview, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ["analytics", "overview", days],
     queryFn: async () => {
       const res = await analyticsOverview({ query: { days } });
+      if (res.error) throw res.error;
       return res.data as OverviewData | undefined;
     },
   });
 
-  const { data: skills, isLoading: skillsLoading } = useQuery({
+  const { data: skills, isLoading: skillsLoading, isError: skillsError } = useQuery({
     queryKey: ["analytics", "skills", days],
     queryFn: async () => {
       const res = await analyticsSkills({ query: { days, limit: 100 } });
+      if (res.error) throw res.error;
       return (res.data?.skills as SkillAnalytics[] | null) ?? [];
     },
   });
 
   const isLoading = overviewLoading || skillsLoading;
+  const isError = overviewError || skillsError;
+
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-text-secondary">
+        <span className="text-text-tertiary text-sm">Couldn't load analytics — is the server reachable?</span>
+        <button onClick={() => window.location.reload()} className="text-accent text-sm hover:underline">
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">

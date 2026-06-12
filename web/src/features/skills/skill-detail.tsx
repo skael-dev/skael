@@ -299,10 +299,11 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
 
   const { data: periodActivations } = useQuery({
     queryKey: ["skill-activations", skill.name, period],
-    queryFn: () =>
-      getSkillActivations({ path: { name: skill.name }, query: { days: period } }).then(
-        (r) => r.data as ActivationSummary
-      ),
+    queryFn: async () => {
+      const r = await getSkillActivations({ path: { name: skill.name }, query: { days: period } });
+      if (r.error) throw r.error;
+      return r.data as ActivationSummary;
+    },
     enabled: period !== 30, // For 30d we already have the data
   });
 
@@ -573,15 +574,6 @@ function TabSecurity({
   );
 }
 
-// ── Placeholder tab ───────────────────────────────────────────────
-function TabPlaceholder({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-center py-24 text-text-tertiary text-sm">
-      {label} — coming soon
-    </div>
-  );
-}
-
 // ── Loading skeleton ──────────────────────────────────────────────
 function SkeletonLine({ className }: { className?: string }) {
   return (
@@ -625,25 +617,31 @@ export function SkillDetail() {
 
   const skillQuery = useQuery({
     queryKey: ["skill", name],
-    queryFn: () => getSkill({ path: { name: name! } }).then((r) => r.data as Skill),
+    queryFn: async () => {
+      const r = await getSkill({ path: { name: name! } });
+      if (r.error) throw r.error;
+      return r.data as Skill;
+    },
     enabled: !!name,
   });
 
   const activationsQuery = useQuery({
     queryKey: ["skill-activations", name],
-    queryFn: () =>
-      getSkillActivations({ path: { name: name! } }).then(
-        (r) => r.data as ActivationSummary
-      ),
+    queryFn: async () => {
+      const r = await getSkillActivations({ path: { name: name! } });
+      if (r.error) throw r.error;
+      return r.data as ActivationSummary;
+    },
     enabled: !!name,
   });
 
   const versionsQuery = useQuery({
     queryKey: ["skill-versions", name],
-    queryFn: () =>
-      listSkillVersions({ path: { name: name! } }).then(
-        (r) => (r.data as ListVersionsBody)?.versions ?? []
-      ),
+    queryFn: async () => {
+      const r = await listSkillVersions({ path: { name: name! } });
+      if (r.error) throw r.error;
+      return (r.data as ListVersionsBody)?.versions ?? [];
+    },
     enabled: !!name,
   });
 
@@ -873,9 +871,6 @@ export function SkillDetail() {
       {/* Tab content */}
       <div className="px-12 pt-7 pb-12 max-w-[1280px] w-full mx-auto">
         {activeTab === "content" && skill && <TabContent skill={skill} />}
-        {activeTab === "content" && !skill && !skillQuery.isLoading && (
-          <TabPlaceholder label="Content" />
-        )}
         {activeTab === "files" && skill && (
           <TabFiles skill={skill} versions={versions} />
         )}
