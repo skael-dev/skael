@@ -250,7 +250,11 @@ func importSingleSkill(
 
 	var fmJSON json.RawMessage
 	if fm != nil {
-		fmJSON, _ = json.Marshal(fm)
+		var err error
+		fmJSON, err = json.Marshal(fm)
+		if err != nil {
+			return nil, false, fmt.Errorf("import: marshal frontmatter: %w", err)
+		}
 	} else {
 		fmJSON = json.RawMessage(`{}`)
 	}
@@ -267,7 +271,10 @@ func importSingleSkill(
 	if err != nil {
 		return nil, false, fmt.Errorf("scan: %w", err)
 	}
-	scanJSON, _ := json.Marshal(report)
+	scanJSON, err := json.Marshal(report)
+	if err != nil {
+		return nil, false, fmt.Errorf("import: marshal scan result: %w", err)
+	}
 
 	sk, err := skillStore.GetByName(ctx, ds.Name)
 	if err != nil {
