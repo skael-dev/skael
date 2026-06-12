@@ -95,9 +95,20 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// hookAgentStatus is the machine-readable status for a single agent's hook.
+type hookAgentStatus struct {
+	Name       string `json:"name"`
+	Installed  bool   `json:"installed"`
+	ConfigPath string `json:"config_path,omitempty"`
+}
+
 func runHookStatus(cmd *cobra.Command, args []string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
+		if ui.JSONMode {
+			ui.PrintJSONError(fmt.Sprintf("cannot determine home directory: %s", err), "home_dir_error", "")
+			return nil
+		}
 		ui.Errorf("cannot determine home directory: %s", err)
 		return fmt.Errorf("home dir: %w", err)
 	}
@@ -110,26 +121,58 @@ func runHookStatus(cmd *cobra.Command, args []string) error {
 		&agents.Cursor{},
 	}
 
+	type agentLine struct {
+		status hookAgentStatus
+		line   string // styled stderr line
+	}
+	var agentLines []agentLine
+
 	for _, agent := range knownAgents {
 		name := agent.Name()
 
 		if !agent.Detected(home) {
-			fmt.Fprintf(os.Stderr, "  · %s: not detected\n", name)
+			agentLines = append(agentLines, agentLine{
+				status: hookAgentStatus{Name: name, Installed: false},
+				line:   fmt.Sprintf("  · %s: not detected", name),
+			})
 			continue
 		}
 
 		configPath := agent.ConfigPath(home)
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ! %s: config not readable (%s)\n", name, err)
+		data, readErr := os.ReadFile(configPath)
+		if readErr != nil {
+			agentLines = append(agentLines, agentLine{
+				status: hookAgentStatus{Name: name, Installed: false, ConfigPath: configPath},
+				line:   fmt.Sprintf("  ! %s: config not readable (%s)", name, readErr),
+			})
 			continue
 		}
 
-		if strings.Contains(string(data), "skael") {
-			fmt.Fprintf(os.Stderr, "  ✓ %s: hook installed\n", name)
+		installed := strings.Contains(string(data), "skael")
+		var line string
+		if installed {
+			line = fmt.Sprintf("  ✓ %s: hook installed", name)
 		} else {
-			fmt.Fprintf(os.Stderr, "  ! %s: hook not installed\n", name)
+			line = fmt.Sprintf("  ! %s: hook not installed", name)
 		}
+		agentLines = append(agentLines, agentLine{
+			status: hookAgentStatus{Name: name, Installed: installed, ConfigPath: configPath},
+			line:   line,
+		})
+	}
+
+	if ui.JSONMode {
+		statuses := make([]hookAgentStatus, len(agentLines))
+		for i, al := range agentLines {
+			statuses[i] = al.status
+		}
+		return ui.PrintJSON(struct {
+			Agents []hookAgentStatus `json:"agents"`
+		}{Agents: statuses})
+	}
+
+	for _, al := range agentLines {
+		fmt.Fprintln(os.Stderr, al.line)
 	}
 
 	return nil
