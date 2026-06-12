@@ -238,4 +238,4 @@ volumes:
   pg-data:
 ```
 
-In Kubernetes, use the `httpGet` probes above — no sidecar needed.
+This gates startup sequencing only. Once the sidecar exits, Docker Compose does not monitor server health. For continuous monitoring use the Kubernetes `httpGet` probes above, or put monitoring at the orchestration layer (systemd, an external uptime check).
