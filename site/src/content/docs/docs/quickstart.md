@@ -24,6 +24,9 @@ docker compose up -d
 ## 2. Install the CLI
 
 ```bash
+# macOS / Linux (curl installer — fastest)
+curl -fsSL skael.dev/install | sh
+
 # macOS / Linux (Homebrew)
 brew install skael-dev/skael/skael
 

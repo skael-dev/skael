@@ -115,7 +115,7 @@ tests/e2e/      → End-to-end integration tests
 
 ## Architecture
 
-Single Go binary embeds the API server and (soon) a React dashboard. Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem.
+Single Go binary embeds the API server and a React dashboard (served from the same process). Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem.
 
 The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, and manifest-based sync with checksum verification.
 
