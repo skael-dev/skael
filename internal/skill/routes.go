@@ -604,6 +604,14 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if sk == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
 		}
+		// Reject aliases that would shadow an existing skill name.
+		existing, err := store.GetByName(ctx, input.Body.Alias)
+		if err != nil {
+			return nil, fmt.Errorf("create alias: %w", err)
+		}
+		if existing != nil {
+			return nil, huma.Error409Conflict(fmt.Sprintf("a skill named %q already exists", input.Body.Alias))
+		}
 		if err := store.CreateAlias(ctx, input.Body.Alias, input.Name); err != nil {
 			return nil, fmt.Errorf("create alias: %w", err)
 		}

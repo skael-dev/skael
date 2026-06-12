@@ -126,6 +126,22 @@ func TestBulkReview_RouteNotConflicting(t *testing.T) {
 }
 
 // -----------------------------------------------------------------
+// POST /api/skills/{name}/aliases — alias shadowing guard
+// -----------------------------------------------------------------
+
+func TestCreateAlias_ConflictsWithExistingSkill_Returns409(t *testing.T) {
+	handler, _, _ := setupTestAPI(t)
+
+	createSkill(t, handler, "real-a", "first skill")
+	createSkill(t, handler, "real-b", "second skill")
+
+	// Attempt to create an alias on real-a whose name is real-b (an existing skill).
+	rr := doJSON(t, handler, http.MethodPost, "/api/skills/real-a/aliases",
+		map[string]string{"alias": "real-b"}, nil)
+	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
+}
+
+// -----------------------------------------------------------------
 // Publishing a new version resets reviewed_at to null (Task 1 CreateVersion change)
 // -----------------------------------------------------------------
 
