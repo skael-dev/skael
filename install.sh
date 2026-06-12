@@ -32,7 +32,10 @@ else
 fi
 
 if [ -z "$VERSION" ]; then
-  echo "Error: could not determine latest version" >&2
+  echo "Error: could not determine the latest release from the GitHub API." >&2
+  echo "This is usually a network issue or GitHub API rate limiting." >&2
+  echo "Retry in a minute, or download a release directly:" >&2
+  echo "  https://github.com/${REPO}/releases/latest" >&2
   exit 1
 fi
 
@@ -71,7 +74,8 @@ fi
 if [ -w "$INSTALL_DIR" ]; then
   mv "$BINARY" "$INSTALL_DIR/"
 else
-  echo "Installing to ${INSTALL_DIR} (requires sudo)..."
+  echo "Installing to ${INSTALL_DIR} — elevated privileges required."
+  echo "You may be prompted for your password (sudo)."
   sudo mv "$BINARY" "$INSTALL_DIR/"
 fi
 
