@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,46 @@ import (
 	"github.com/skael-dev/skael/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+// extractSkillAtomically unpacks archive into destDir using a temp-dir + rename
+// swap so that a mid-extraction failure (disk full, bad entry, etc.) never
+// leaves a partial or empty skill directory that the agent would load.
+//
+// Strategy:
+//  1. Unpack to a sibling temp dir (same parent ⇒ same filesystem → rename is
+//     a single metadata operation).
+//  2. On unpack failure: remove the temp dir and return the error; destDir is
+//     untouched.
+//  3. On success: remove the old destDir, then rename the temp dir into place.
+//     The failure window shrinks to the gap between RemoveAll and Rename — two
+//     fast syscalls — rather than spanning the entire extraction.
+func extractSkillAtomically(archive []byte, destDir string) error {
+	parent := filepath.Dir(destDir)
+	base := filepath.Base(destDir)
+
+	// Create the temp dir in the same parent so the rename stays on-filesystem.
+	tmpDir, err := os.MkdirTemp(parent, base+fmt.Sprintf(".tmp-%d-*", rand.Int63()))
+	if err != nil {
+		return fmt.Errorf("extractSkillAtomically: create temp dir: %w", err)
+	}
+
+	if err := skill.Unpack(bytes.NewReader(archive), tmpDir); err != nil {
+		// Extraction failed — clean up the temp dir and leave destDir intact.
+		_ = os.RemoveAll(tmpDir)
+		return err
+	}
+
+	// Extraction succeeded — swap in the new content atomically.
+	if err := os.RemoveAll(destDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return fmt.Errorf("extractSkillAtomically: remove old destDir: %w", err)
+	}
+	if err := os.Rename(tmpDir, destDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return fmt.Errorf("extractSkillAtomically: rename temp dir to destDir: %w", err)
+	}
+	return nil
+}
 
 var syncCmd = &cobra.Command{
 	Use:   "sync",
@@ -235,13 +276,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 		// Extract to each detected agent's skills directory.
 		// Track per-agent success so a partial failure doesn't corrupt state.
+		// extractSkillAtomically unpacks to a sibling temp dir first, so a
+		// mid-extraction failure leaves the previous skill version intact.
 		extractOK := 0
 		extractFail := 0
 		for _, agent := range detectedAgents {
 			destDir := filepath.Join(agentSkillsBase(agent, scope, home, projectRoot), ts.entry.Name)
-			// Clean previous version before extracting.
-			_ = os.RemoveAll(destDir)
-			if err := skill.Unpack(bytes.NewReader(archive), destDir); err != nil {
+			if err := extractSkillAtomically(archive, destDir); err != nil {
 				ui.Errorf("extract %s to %s: %s", ts.entry.Name, agent.Name(), err)
 				extractFail++
 			} else {

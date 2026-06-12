@@ -57,6 +57,12 @@ func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skil
 	}
 	rows.Close()
 
+	// Reparent each source version to the target skill.
+	// NOTE: archive_path values on skill_versions intentionally retain the
+	// source skill's name prefix (e.g. "old-skill/abc123.tar.gz"). Storage
+	// looks up archives by the stored path directly, so downloads continue to
+	// work after a merge. Never clean storage directories by skill-name prefix
+	// or these cross-name archives will be destroyed.
 	for i, v := range sourceVersions {
 		newVersion := targetLatest + i + 1
 		_, err := tx.Exec(ctx,
