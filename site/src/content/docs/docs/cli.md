@@ -3,7 +3,7 @@ title: CLI reference
 description: Every skael command.
 ---
 
-All commands accept `--json` for scriptable output.
+All commands accept `--json` for scriptable output and `--no-color` to disable styled output (the `NO_COLOR` env var works too).
 
 ## skael setup `<url> <api-key>`
 
