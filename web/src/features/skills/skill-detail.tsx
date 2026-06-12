@@ -274,7 +274,7 @@ function TabFiles({ skill, versions }: { skill: Skill; versions: Version[] }) {
   }
 
   return (
-    <div className="flex gap-6 max-w-[1200px] min-h-[480px]">
+    <div className="flex flex-col lg:flex-row gap-6 max-w-[1200px] min-h-[480px]">
       <FileTree
         files={fileManifest}
         activeFile={activeFile}
@@ -723,7 +723,7 @@ export function SkillDetail() {
   return (
     <div className="flex flex-col h-full overflow-auto">
       {/* Hero header */}
-      <div className="px-12 pt-12 pb-0 shrink-0 max-w-[1280px] w-full mx-auto">
+      <div className="px-5 pt-8 md:px-12 md:pt-12 pb-0 shrink-0 max-w-[1280px] w-full mx-auto">
         {/* Back link */}
         <button
           onClick={() => navigate("/")}
@@ -751,6 +751,14 @@ export function SkillDetail() {
             {/* Status dot */}
             <div className="relative flex items-center justify-center group/status">
               <span
+                role="img"
+                aria-label={
+                  skillStatus === "active"
+                    ? "Status: Active — used within 14 days"
+                    : skillStatus === "stale"
+                    ? "Status: Stale — not used in 14+ days"
+                    : "Status: Idle — not yet activated"
+                }
                 className={cn(
                   "size-2.5 rounded-full shrink-0",
                   skillStatus === "active"
@@ -872,12 +880,12 @@ export function SkillDetail() {
       </div>
 
       {/* Sticky tab bar */}
-      <div className="sticky top-0 z-10 flex px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto">
+      <div className="sticky top-0 z-10 flex px-5 md:px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto">
         <SlidingTabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
       </div>
 
       {/* Tab content */}
-      <div className="px-12 pt-7 pb-12 max-w-[1280px] w-full mx-auto">
+      <div className="px-5 md:px-12 pt-7 pb-12 max-w-[1280px] w-full mx-auto">
         {activeTab === "content" && skill && <TabContent skill={skill} />}
         {activeTab === "files" && skill && (
           <TabFiles skill={skill} versions={versions} />

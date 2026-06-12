@@ -60,6 +60,8 @@ export function VersionList({ versions }: VersionListProps) {
             >
               {/* Timeline dot */}
               <div
+                role="img"
+                aria-label={isLatest ? "Latest version" : "Previous version"}
                 className={cn(
                   "size-[22px] rounded-full shrink-0 z-[1] flex items-center justify-center text-[10px] font-semibold",
                   isLatest

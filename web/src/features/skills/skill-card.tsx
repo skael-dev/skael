@@ -116,6 +116,14 @@ export function SkillCard({
       {/* Status dot */}
       <div className="relative flex items-center justify-center group/status">
         <span
+          role="img"
+          aria-label={
+            status === "active"
+              ? "Status: Active — used within 14 days"
+              : status === "stale"
+              ? "Status: Stale — not used in 14+ days"
+              : "Status: Idle — not yet activated"
+          }
           className={cn(
             "size-1.5 rounded-full shrink-0",
             status === "active" ? "bg-accent" : status === "stale" ? "bg-warning" : "bg-text-tertiary"
