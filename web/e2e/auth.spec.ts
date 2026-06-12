@@ -12,17 +12,17 @@ test.describe("Auth flow", () => {
 
   test("signup creates account and lands on dashboard", async ({ page }) => {
     await page.goto("/signup");
-    await page.getByPlaceholder(/email/i).fill(email);
-    await page.getByPlaceholder(/name/i).fill(name);
-    await page.getByPlaceholder(/password/i).fill(password);
+    await page.getByLabel(/email/i).fill(email);
+    await page.getByLabel(/name/i).fill(name);
+    await page.getByLabel(/password/i).fill(password);
     await page.getByRole("button", { name: /sign up|create/i }).click();
     await expect(page).toHaveURL("/");
   });
 
   test("login with existing credentials works", async ({ page }) => {
     await page.goto("/login");
-    await page.getByPlaceholder(/email/i).fill(email);
-    await page.getByPlaceholder(/password/i).fill(password);
+    await page.getByLabel(/email/i).fill(email);
+    await page.getByLabel(/password/i).fill(password);
     await page.getByRole("button", { name: /log in|sign in/i }).click();
     await expect(page).toHaveURL("/");
   });
