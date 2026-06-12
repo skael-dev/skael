@@ -13,7 +13,7 @@ docker run -p 8080:8080 \
   ghcr.io/skael-dev/skael:latest
 ```
 
-Migrations run automatically on startup. The platform is at `http://localhost:8080` — sign up to create the first account and a personal API key.
+Migrations run automatically on startup. The platform is at `http://localhost:8080` — sign up to create the first account and a personal API key. (Port 8080 in use? Stop whatever holds it, or change the left side of `-p 8080:8080`.)
 
 No Postgres handy? Use Docker Compose, which bundles one:
 

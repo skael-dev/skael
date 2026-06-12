@@ -66,7 +66,7 @@ An invalid or missing key returns `401 Unauthorized`.
 | `GET` | `/api/health/ready` | Readiness probe — verifies DB and storage connectivity |
 | `GET` | `/api/capabilities` | Feature flags for this server edition |
 | `GET` | `/openapi.json` | OpenAPI 3.1 spec |
-| `POST` | `/api/auth/signup` | Create a user account |
+| `POST` | `/api/auth/signup` | Create a user account — body requires `name`, `email`, `password` |
 | `POST` | `/api/auth/login` | Log in (sets session cookie) |
 | `POST` | `/api/auth/logout` | Destroy session |
 | `GET` | `/api/auth/me` | Current user |
