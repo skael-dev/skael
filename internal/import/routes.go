@@ -163,7 +163,9 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 
 			// Auto-create reverse alias if namespace was applied.
 			if input.Body.Namespace != "" {
-				skillStore.CreateAlias(ctx, originalName, ds.Name)
+				if err := skillStore.CreateAlias(ctx, originalName, ds.Name); err != nil {
+					log.Warn().Err(err).Str("skill", ds.Name).Msg("import: create reverse alias failed (non-fatal)")
+				}
 			}
 
 			out.Body.Imported = append(out.Body.Imported, importedSkill{
@@ -371,6 +373,8 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Warn().Err(err).Msg("import upload: encode response failed (headers already sent)")
+		}
 	}
 }

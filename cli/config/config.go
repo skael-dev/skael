@@ -51,13 +51,14 @@ func WriteConfig(dir string, cfg *Config) error {
 
 // ReadConfig reads and parses config.json from dir.
 func ReadConfig(dir string) (*Config, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	path := filepath.Join(dir, "config.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config corrupt at %s (re-run skael setup): %w", path, err)
 	}
 	return &cfg, nil
 }

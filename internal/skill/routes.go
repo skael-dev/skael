@@ -216,7 +216,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 				fmt.Sprintf("skill %q not found", input.Name))
 		}
 		// Clean up archive files before deleting the DB record.
-		versions, _ := store.ListVersions(ctx, input.Name)
+		versions, err := store.ListVersions(ctx, input.Name)
+		if err != nil {
+			return nil, fmt.Errorf("delete skill: list versions for cleanup: %w", err)
+		}
 		for _, v := range versions {
 			if v.ArchivePath != "" {
 				_ = storage.Delete(v.ArchivePath)

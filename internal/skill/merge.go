@@ -56,6 +56,9 @@ func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skil
 		sourceVersions = append(sourceVersions, v)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("skill.Store.Merge iterate source versions: %w", err)
+	}
 
 	// Reparent each source version to the target skill.
 	// NOTE: archive_path values on skill_versions intentionally retain the

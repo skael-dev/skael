@@ -323,7 +323,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if err := config.WriteState(dir, newState); err != nil {
 		if ui.JSONMode {
 			ui.PrintJSONError(fmt.Sprintf("write state: %s", err), "state_error", "")
-			return nil
+			return fmt.Errorf("write state: %w", err)
 		}
 		ui.Errorf("write state: %s", err)
 		return fmt.Errorf("write state: %w", err)
