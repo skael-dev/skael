@@ -77,6 +77,18 @@ describe("SkillList", () => {
     });
   });
 
+  it("shows error state when skills endpoint returns 500", async () => {
+    server.use(
+      http.get("/api/analytics/skills", () => {
+        return HttpResponse.json({ detail: "internal server error" }, { status: 500 });
+      }),
+    );
+
+    renderWithProviders(<SkillList />);
+
+    expect(await screen.findByText(/couldn't load skills/i)).toBeInTheDocument();
+  });
+
   it("stat tiles show numbers from overview data", async () => {
     renderWithProviders(<SkillList />);
 

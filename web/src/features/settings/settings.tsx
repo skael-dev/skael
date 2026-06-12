@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, Check, Plus, Trash2, AlertTriangle, Key } from "lucide-react";
+import { toast } from "sonner";
 import { listSkills, listApiKeys, createApiKey, deleteApiKey } from "@/api/sdk.gen";
 import type { ListBody, ListKeysBody, ApiKeyInfo, CreateKeyResponse } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
@@ -142,7 +143,7 @@ function ApiSection() {
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const { data: keysData, isLoading } = useQuery({
+  const { data: keysData, isLoading, isError: keysError, refetch: refetchKeys } = useQuery({
     queryKey: ["api-keys"],
     queryFn: async () => {
       const res = await listApiKeys();
@@ -167,11 +168,15 @@ function ApiSection() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      await deleteApiKey({ path: { id } });
+      const res = await deleteApiKey({ path: { id } });
+      if (res.error) throw res.error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       setDeleteTarget(null);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete API key");
     },
   });
 
@@ -201,6 +206,16 @@ function ApiSection() {
         {isLoading ? (
           <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">
             Loading keys...
+          </div>
+        ) : keysError ? (
+          <div className="px-3.5 py-6 text-center">
+            <div className="text-[13px] text-text-secondary mb-1">Couldn't load API keys</div>
+            <button
+              onClick={() => refetchKeys()}
+              className="text-[11px] text-accent hover:underline"
+            >
+              Retry
+            </button>
           </div>
         ) : keys.length === 0 ? (
           <div className="px-3.5 py-6 text-center">
@@ -452,6 +467,7 @@ export function Settings() {
   );
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Intentionally fail-soft: skillsTotal is decorative; 0 is acceptable if this call fails.
   const { data: listData } = useQuery({
     queryKey: ["skills", "list"],
     queryFn: async () => {

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
+import { toast } from "sonner";
 import { ImportModal } from "@/features/import/import-modal";
 import { UnregisteredTab } from "@/features/skills/unregistered-tab";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -295,6 +296,7 @@ export function SkillList() {
   }, []);
 
   // Data fetching
+  // Intentionally fail-soft: stat tiles show zeros if the overview call fails.
   const { data: overviewData } = useQuery({
     queryKey: ["analytics", "overview"],
     queryFn: async () => {
@@ -324,7 +326,9 @@ export function SkillList() {
     },
   });
   const isLoading = skillsQuery.isLoading;
+  const isError = skillsQuery.isError;
 
+  // Intentionally fail-soft: tag filter chips are decorative; absence is acceptable.
   const tagsQuery = useQuery({
     queryKey: ["skills", "tags"],
     queryFn: async () => {
@@ -366,11 +370,15 @@ export function SkillList() {
   // Bulk review mutation
   const bulkReview = useMutation({
     mutationFn: async (names: string[]) => {
-      await bulkReviewSkills({ body: { names } });
+      const res = await bulkReviewSkills({ body: { names } });
+      if (res.error) throw res.error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["analytics"] });
       setSelected(new Set());
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to mark skills as reviewed");
     },
   });
 
@@ -442,6 +450,18 @@ export function SkillList() {
             </div>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  // ── Error state — server unreachable ─────────────────────
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-text-secondary">
+        <span className="text-text-tertiary text-sm">Couldn't load skills — is the server reachable?</span>
+        <button onClick={() => skillsQuery.refetch()} className="text-accent text-sm hover:underline">
+          Retry
+        </button>
       </div>
     );
   }

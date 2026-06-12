@@ -453,7 +453,11 @@ function TabSecurity({
   const queryClient = useQueryClient();
 
   const reviewMutation = useMutation({
-    mutationFn: () => reviewSkill({ path: { name: skill.name } }),
+    mutationFn: async () => {
+      const res = await reviewSkill({ path: { name: skill.name } });
+      if (res.error) throw res.error;
+      return res.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
       toast.success("Skill marked as reviewed");
@@ -464,7 +468,11 @@ function TabSecurity({
   });
 
   const unreviewMutation = useMutation({
-    mutationFn: () => unreviewSkill({ path: { name: skill.name } }),
+    mutationFn: async () => {
+      const res = await unreviewSkill({ path: { name: skill.name } });
+      if (res.error) throw res.error;
+      return res.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
       toast.success("Review status removed");
