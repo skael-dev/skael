@@ -65,7 +65,7 @@ sudo mv skael-server /usr/local/bin/skael-server
 
 ```bash
 just build-server
-# or with go directly (module path is cmd/server, binary name is skael-server)
+# or with go directly — installs the binary as `server` (release artifacts name it skael-server)
 go install github.com/skael-dev/skael/cmd/server@latest
 ```
 
