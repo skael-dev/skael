@@ -18,7 +18,7 @@ import (
 
 var importCmd = &cobra.Command{
 	Use:   "import <url|path>",
-	Short: "Import skills from GitHub, local directory, or skills.sh",
+	Short: "Import skills from GitHub or local directory",
 	Long: `Import skills into the Skael registry from external sources.
 
 Examples:
