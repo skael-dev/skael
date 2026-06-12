@@ -8,6 +8,7 @@ import { SkillList } from "@/features/skills/skill-list";
 import { SkillDetail } from "@/features/skills/skill-detail";
 import { Analytics } from "@/features/analytics/analytics";
 import { Settings } from "@/features/settings/settings";
+import { NotFound } from "@/features/not-found";
 
 function ErrorFallback() {
   return (
@@ -51,6 +52,7 @@ export function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </AuthProvider>
     </ErrorBoundary>
