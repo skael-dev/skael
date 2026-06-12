@@ -40,7 +40,7 @@ Two mechanisms are supported:
 - **`X-API-Key` header** — for CLI, scripts, and automation. Create keys in the dashboard or via `POST /api/auth/keys`.
 - **Session cookie** — for the dashboard only. The browser acquires it on login; you do not manage it manually.
 
-Every endpoint except `/api/health`, `/api/health/ready`, `/api/capabilities`, and `/api/openapi.json` requires authentication.
+Every endpoint except `/api/health`, `/api/health/ready`, and `/api/capabilities` requires authentication. The OpenAPI spec (`/openapi.json`) is not under `/api/` and requires no key.
 
 ```bash
 curl http://localhost:8080/api/skills \
@@ -65,7 +65,7 @@ An invalid or missing key returns `401 Unauthorized`.
 | `GET` | `/api/health` | Liveness probe — returns `{"status":"ok"}` unconditionally |
 | `GET` | `/api/health/ready` | Readiness probe — verifies DB and storage connectivity |
 | `GET` | `/api/capabilities` | Feature flags for this server edition |
-| `GET` | `/api/openapi.json` | OpenAPI 3.1 spec |
+| `GET` | `/openapi.json` | OpenAPI 3.1 spec |
 | `POST` | `/api/auth/signup` | Create a user account |
 | `POST` | `/api/auth/login` | Log in (sets session cookie) |
 | `POST` | `/api/auth/logout` | Destroy session |
@@ -98,6 +98,7 @@ An invalid or missing key returns `401 Unauthorized`.
 | `GET` | `/api/analytics/timeseries` | Daily activation counts for chart |
 | `GET` | `/api/analytics/unregistered` | Skills seen in events but not in registry |
 | `POST` | `/api/analytics/dismiss` | Dismiss an unregistered skill |
+| `GET` | `/api/search` | Full-text + fuzzy skill search (`?q=...&limit=N`) |
 | `GET` | `/api/sync/manifest` | Manifest used by `skael sync` (skill names + checksums) |
 | `POST` | `/api/import/resolve` | Preview skills available for import from a URL |
 | `POST` | `/api/import` | Import selected skills from a resolved source |
@@ -172,7 +173,7 @@ After the merge, `GET /api/skills/old-deploy` returns `404`. `GET /api/skills/de
 ]
 ```
 
-The `skael sync` client uses the alias during sync to map old names to their canonical skill.
+After the merge, `skael sync` tracks the canonical name automatically — the old row is gone. The alias is an audit record of the rename; the sync client resolves canonical names only.
 
 ## Aliases
 
@@ -180,7 +181,7 @@ Aliases are alternative names for a skill. They are stored in a separate `skill_
 
 **Resolution scope:** aliases are consulted by `Store.ResolveAlias` — which the sync manifest and merge path call directly. The `GET /api/skills/{name}` endpoint does **not** transparently resolve aliases; it looks up the canonical name only. If you request an alias name directly, you get `404`. Use `GET /api/skills/{canonical}/aliases` to discover what aliases exist, then dereference to the canonical name.
 
-Constraint: you cannot create an alias whose name collides with an existing skill — `CreateAlias` uses `INSERT … ON CONFLICT DO UPDATE`, so it will silently overwrite a previous alias with the same name, but the skills table uniqueness constraint prevents an alias from matching a real skill name at the DB level.
+Constraint: creating an alias whose name matches an existing skill is rejected with `409 Conflict`.
 
 ### List aliases
 
@@ -210,7 +211,7 @@ curl -X POST http://localhost:8080/api/skills/db-migrate/aliases \
   -d '{"alias":"migrate-db"}'
 ```
 
-Returns `201 No Content` on success. The target skill must exist; if it does not you get `404`.
+Returns `201 Created` on success. The target skill must exist; if it does not you get `404`.
 
 ### Delete an alias
 
