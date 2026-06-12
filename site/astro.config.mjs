@@ -33,6 +33,7 @@ export default defineConfig({
         { label: 'Reference', items: [
           { label: 'CLI', slug: 'docs/cli' },
           { label: 'Self-hosting', slug: 'docs/self-hosting' },
+          { label: 'Production deployment', slug: 'docs/production' },
         ] },
         { label: 'Why skael', items: [
           { label: 'Why not just git?', slug: 'docs/why-not-git' },
