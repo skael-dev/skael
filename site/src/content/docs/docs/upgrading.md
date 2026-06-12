@@ -47,24 +47,26 @@ docker pull ghcr.io/skael-dev/skael:latest
 docker compose up -d server   # recreates the container with the new image
 ```
 
-**Binary (install script)** — re-run the installer to replace the binary:
+**Binary (GitHub releases)** — download the `skael-server` archive for your platform from the [releases page](https://github.com/skael-dev/skael/releases/latest), extract, and replace the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skael-dev/skael/main/install.sh | sh
+# example: Linux amd64
+VERSION=0.5.0   # replace with target version
+curl -fsSL https://github.com/skael-dev/skael/releases/download/v${VERSION}/skael-server_${VERSION}_linux_amd64.tar.gz \
+  | tar xz skael-server
+sudo mv skael-server /usr/local/bin/skael-server
 ```
 
-**Homebrew** — update the tap and upgrade:
-
-```bash
-brew upgrade skael-dev/skael/skael
-```
+:::note[Homebrew ships the CLI only]
+`brew install skael-dev/skael/skael` installs the `skael` CLI binary. There is no Homebrew formula for the server. Use Docker or a binary download from GitHub releases to upgrade the server.
+:::
 
 **From source** — rebuild and replace:
 
 ```bash
-go install github.com/skael-dev/skael/cmd/skael-server@latest
-# or build from repo
 just build-server
+# or with go directly (module path is cmd/server, binary name is skael-server)
+go install github.com/skael-dev/skael/cmd/server@latest
 ```
 
 ### 4. Start and verify
