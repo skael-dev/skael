@@ -32,6 +32,7 @@ export default defineConfig({
         ] },
         { label: 'Reference', items: [
           { label: 'CLI', slug: 'docs/cli' },
+          { label: 'HTTP API', slug: 'docs/api' },
           { label: 'Self-hosting', slug: 'docs/self-hosting' },
         ] },
         { label: 'Operate', items: [
