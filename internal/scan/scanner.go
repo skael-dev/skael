@@ -139,6 +139,11 @@ func scanContent(filename, content string, report *Report) {
 		scanVariants(filename, combined, i+1, report)
 	}
 
+	// Structural shell-AST analysis (Phase 2): catches dangerous shell
+	// constructs the line-based regexes miss (split pipelines, eval of dynamic
+	// content, etc.). Runs on shell scripts and fenced shell blocks in markdown.
+	scanShell(filename, content, report)
+
 	// Deduplicate: keep only the first finding for each rule+file+line combination.
 	seen := map[string]bool{}
 	deduped := []Finding{}
