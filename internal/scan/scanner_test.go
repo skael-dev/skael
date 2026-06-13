@@ -109,10 +109,11 @@ func TestScan_StatusReflectsSeverity(t *testing.T) {
 	}
 }
 
-// TestScanDir_SkipsBinaryFiles verifies that ScanDir does not crash when a
-// directory contains a binary file alongside SKILL.md, and that the binary
-// file is silently skipped.
-func TestScanDir_SkipsBinaryFiles(t *testing.T) {
+// TestScanDir_FlagsBinaryFiles verifies that ScanDir does not crash when a
+// directory contains a binary file alongside SKILL.md, that the binary content
+// is not regex-scanned, and that the binary is surfaced as a non-blocking
+// informational finding (rather than silently dropped).
+func TestScanDir_FlagsBinaryFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a clean SKILL.md.
@@ -134,9 +135,12 @@ func TestScanDir_SkipsBinaryFiles(t *testing.T) {
 	if report == nil {
 		t.Fatal("ScanDir returned nil report")
 	}
-	// The binary file should not cause a crash or add spurious findings.
-	if report.Status != "clean" {
-		t.Errorf("expected status %q, got %q (findings: %+v)", "clean", report.Status, report.Findings)
+	// The binary should be surfaced as informational, never as a blocker.
+	if findingWithRule(report.Findings, "UNSCANNED_FILE") == nil {
+		t.Errorf("expected an UNSCANNED_FILE finding for the binary, got: %+v", report.Findings)
+	}
+	if report.Status == "critical" || report.Status == "warn" {
+		t.Errorf("binary file must not block publishing; got status %q", report.Status)
 	}
 }
 

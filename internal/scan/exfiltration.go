@@ -32,6 +32,16 @@ var exfiltrationRules = []Rule{
 		Message: "Attempts to access AWS credentials",
 	},
 	{
+		Name:       "SENSITIVE_FILE_ACCESS",
+		Category:   "exfiltration",
+		Severity:   "medium",
+		Confidence: "medium",
+		// User config directory — often holds gcloud/gh/cloud credentials. Kept at
+		// medium so it surfaces for review without blocking publish.
+		Pattern: regexp.MustCompile(`~/\.config/|\$HOME/\.config/`),
+		Message: "Attempts to access ~/.config (may contain credentials)",
+	},
+	{
 		Name:       "DATA_EXFILTRATION",
 		Category:   "exfiltration",
 		Severity:   "critical",
@@ -45,8 +55,9 @@ var exfiltrationRules = []Rule{
 		Category:   "exfiltration",
 		Severity:   "critical",
 		Confidence: "high",
-		// /dev/tcp reverse shell pattern
-		Pattern: regexp.MustCompile(`/dev/tcp/[a-zA-Z0-9\.\-]+/[0-9]+`),
+		// /dev/tcp reverse shell pattern. Host class includes ':' and '[]' so IPv6
+		// targets (e.g. /dev/tcp/::1/4444) are caught, not just IPv4/hostnames.
+		Pattern: regexp.MustCompile(`/dev/tcp/[a-zA-Z0-9.:\[\]\-]+/[0-9]+`),
 		Message: "Dangerous shell: /dev/tcp reverse shell pattern detected",
 	},
 	{
@@ -66,5 +77,33 @@ var exfiltrationRules = []Rule{
 		// "fetch and execute" remote script instructions
 		Pattern: regexp.MustCompile(`(?i)\bfetch\s+and\s+(execute|run)\b`),
 		Message: "Instruction to fetch and execute remote code",
+	},
+	{
+		Name:       "DATA_EXFILTRATION",
+		Category:   "exfiltration",
+		Severity:   "critical",
+		Confidence: "high",
+		// PowerShell download-and-execute cradle: IEX (New-Object ...).DownloadString
+		Pattern: regexp.MustCompile(`(?i)(iex|invoke-expression).{0,40}downloadstring`),
+		Message: "PowerShell download-and-execute cradle (RCE pattern)",
+	},
+	{
+		Name:       "DATA_EXFILTRATION",
+		Category:   "exfiltration",
+		Severity:   "critical",
+		Confidence: "high",
+		// Anything piped into Invoke-Expression (e.g. iwr ... | iex).
+		Pattern: regexp.MustCompile(`(?i)\|\s*iex\b`),
+		Message: "Remote content piped to Invoke-Expression (RCE pattern)",
+	},
+	{
+		Name:       "DATA_EXFILTRATION",
+		Category:   "exfiltration",
+		Severity:   "critical",
+		Confidence: "high",
+		// Download a remote file then execute it: curl/wget URL -o FILE && <run>,
+		// where <run> is ./file, a shell, an interpreter, or chmod +x.
+		Pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*https?://.*\s-(o|O|-output)\s+\S+\s*(&&|;)\s*(\./|sh\b|bash\b|zsh\b|source\b|chmod|python[0-9.]*\b|node\b|ruby\b|perl\b|php\b)`),
+		Message: "Download remote file then execute it (RCE pattern)",
 	},
 }

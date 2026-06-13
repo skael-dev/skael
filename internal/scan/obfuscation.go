@@ -41,4 +41,24 @@ var obfuscationRules = []Rule{
 		Pattern: regexp.MustCompile(`(\\x[0-9a-fA-F]{2}){8,}`),
 		Message: "Obfuscation: hex-encoded payload detected",
 	},
+	{
+		Name:       "OBFUSCATION",
+		Category:   "obfuscation",
+		Severity:   "high",
+		Confidence: "high",
+		// Bidirectional control characters (Trojan-Source style): these reorder how
+		// text renders vs. how it is parsed and never legitimately appear in skills.
+		Pattern: regexp.MustCompile(`[\x{202A}-\x{202E}\x{2066}-\x{2069}]`),
+		Message: "Obfuscation: bidirectional control characters (hidden/reordered text)",
+	},
+	{
+		Name:       "OBFUSCATION",
+		Category:   "obfuscation",
+		Severity:   "medium",
+		Confidence: "medium",
+		// Zero-width / invisible formatting characters used to hide or split text.
+		// A leading BOM is stripped before scanning, so this only fires in-content.
+		Pattern: regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{2060}\x{FEFF}\x{00AD}]`),
+		Message: "Obfuscation: zero-width or invisible characters in content",
+	},
 }
