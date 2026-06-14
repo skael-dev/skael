@@ -145,16 +145,30 @@ func scanContent(filename, content string, report *Report) {
 	scanShell(filename, content, report)
 
 	// Deduplicate: keep only the first finding for each rule+file+line combination.
+	report.Findings = dedupeFindings(report.Findings)
+}
+
+// dedupeFindings keeps only the first finding for each rule+file+line key.
+func dedupeFindings(findings []Finding) []Finding {
 	seen := map[string]bool{}
-	deduped := []Finding{}
-	for _, f := range report.Findings {
+	deduped := make([]Finding, 0, len(findings))
+	for _, f := range findings {
 		key := fmt.Sprintf("%s:%s:%d", f.Rule, f.File, f.Line)
 		if !seen[key] {
 			seen[key] = true
 			deduped = append(deduped, f)
 		}
 	}
-	report.Findings = deduped
+	return deduped
+}
+
+// Finalize dedupes the report's findings and recomputes its summary and status.
+// Call it after merging in findings from an external scanner so the publish
+// block-on-status logic sees the combined result.
+func Finalize(report *Report) {
+	report.Findings = dedupeFindings(report.Findings)
+	report.Summary = computeSummary(report)
+	report.Status = computeStatus(report)
 }
 
 // maskMatch truncates long matches to avoid leaking sensitive values in reports.

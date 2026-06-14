@@ -239,3 +239,28 @@ volumes:
 ```
 
 This gates startup sequencing only. Once the sidecar exits, Docker Compose does not monitor server health. For continuous monitoring use the Kubernetes `httpGet` probes above, or put monitoring at the orchestration layer (systemd, an external uptime check).
+
+## Security scanning
+
+Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally. **Critical and high-severity findings block the publish**; `skael publish --force` overrides for skills that legitimately document an anti-pattern.
+
+### Optional external scanner
+
+You can layer a second, free/open-source scanner on top via `EXTERNAL_SCAN_CMD`. skael runs it over each skill on publish/import, parses its SARIF output, and merges the findings (a SARIF `error` blocks; `warning`/`note` are advisory). It is opt-in and best-effort — if the tool is missing or errors, skael logs a warning and continues on the built-in scan alone.
+
+```bash
+# {dir} is replaced with the skill directory; the command must print SARIF to stdout.
+EXTERNAL_SCAN_CMD=gitleaks dir {dir} --report-format sarif --report-path /dev/stdout --exit-code 0
+EXTERNAL_SCAN_TIMEOUT=60s
+```
+
+Two free, offline options:
+
+- **[gitleaks](https://github.com/gitleaks/gitleaks)** (MIT) — a single static Go binary; hardens secret detection with a frequently-updated ruleset. Secrets only.
+- **[Cisco AI skill-scanner](https://github.com/cisco-ai-defense/skill-scanner)** (Apache-2.0) — purpose-built for `SKILL.md` + bundled scripts; matches skael's threat model most closely. `EXTERNAL_SCAN_CMD=skill-scanner scan {dir} --format sarif`. Run only its local analyzers — **do not** enable its optional LLM/VirusTotal/cloud features, which need paid third-party keys.
+
+**Caveats (read before enabling):**
+
+- The official `ghcr.io/skael-dev/skael` image is distroless — no shell, no `curl`, no Python. `EXTERNAL_SCAN_CMD` shells out, so the tool must exist in the container. Build a derived image that `COPY`s in the gitleaks static binary (easy), or for skill-scanner use a base image with Python 3.10+ (heavier). On bare-metal, just install the tool on the host.
+- Each free general-purpose tool covers one layer: gitleaks = secrets, Semgrep = dangerous code in scripts, ClamAV/YARA = known-bad binaries. Only the purpose-built SKILL.md scanners (Cisco skill-scanner) cover the prompt-injection prose that is the core skill threat — and they carry a Python dependency. There is no single free, pure-Go, SKILL.md-aware external scanner.
+- Snyk's "agent-scan" is **not** a fit: its real detection is a hosted API that needs a Snyk account/token and uploads your skill contents to a third party.

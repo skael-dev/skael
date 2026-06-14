@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 )
 
 // Config holds all runtime configuration for the skael server.
@@ -13,6 +14,14 @@ type Config struct {
 	ListenAddr    string
 	DisableSignup bool
 	GitHubToken   string
+
+	// ExternalScanCmd, when set, is an opt-in external security scanner command
+	// run over each skill on publish/import (Phase 2). The token "{dir}" is
+	// replaced with the skill directory and the command must emit SARIF on
+	// stdout, e.g. "gitleaks dir {dir} --report-format sarif --report-path
+	// /dev/stdout". Empty disables the feature.
+	ExternalScanCmd     string
+	ExternalScanTimeout time.Duration
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -26,12 +35,25 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		DatabaseURL:   dbURL,
-		StoragePath:   envDefault("STORAGE_PATH", "./data/skills"),
-		ListenAddr:    envDefault("LISTEN_ADDR", ":8080"),
-		DisableSignup: os.Getenv("DISABLE_SIGNUP") == "true",
-		GitHubToken:   os.Getenv("GITHUB_TOKEN"),
+		DatabaseURL:         dbURL,
+		StoragePath:         envDefault("STORAGE_PATH", "./data/skills"),
+		ListenAddr:          envDefault("LISTEN_ADDR", ":8080"),
+		DisableSignup:       os.Getenv("DISABLE_SIGNUP") == "true",
+		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+		ExternalScanCmd:     os.Getenv("EXTERNAL_SCAN_CMD"),
+		ExternalScanTimeout: envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
 	}, nil
+}
+
+// envDuration parses a Go duration (e.g. "90s", "2m") from key, or returns
+// fallback when unset or invalid.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
 }
 
 // NewStorageFromConfig builds the Storage backend selected by STORAGE_PATH:

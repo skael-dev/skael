@@ -21,7 +21,13 @@ import (
 	"github.com/skael-dev/skael/internal/skill"
 )
 
-func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher) {
+func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher, ext ...*scan.ExternalScanner) {
+	// external is the optional opt-in external scanner (Phase 2); nil disables it.
+	var external *scan.ExternalScanner
+	if len(ext) > 0 {
+		external = ext[0]
+	}
+
 	// Rate limit: 10 requests per minute for the resolve endpoint.
 	resolveLimiter := rate.NewLimiter(rate.Every(time.Minute/10), 1)
 
@@ -154,7 +160,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				ds.Name = input.Body.Namespace + ":" + ds.Name
 			}
 
-			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage)
+			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -220,7 +226,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	})
 
 	// POST /api/import/upload — local upload for CLI
-	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage))
+	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external))
 }
 
 func importSingleSkill(
@@ -231,6 +237,7 @@ func importSingleSkill(
 	skillStore *skill.Store,
 	importStore *Store,
 	storage platform.Storage,
+	external *scan.ExternalScanner,
 ) (*skill.Version, bool, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
@@ -271,6 +278,7 @@ func importSingleSkill(
 	if err != nil {
 		return nil, false, fmt.Errorf("scan: %w", err)
 	}
+	scan.MergeExternal(ctx, external, skillDir, report)
 	scanJSON, err := json.Marshal(report)
 	if err != nil {
 		return nil, false, fmt.Errorf("import: marshal scan result: %w", err)
@@ -321,7 +329,7 @@ func importSingleSkill(
 	return ver, true, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
@@ -370,7 +378,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 		}
 
 		for _, ds := range discovered {
-			ver, created, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage)
+			ver, created, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue

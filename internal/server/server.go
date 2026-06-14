@@ -24,6 +24,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
 	skweb "github.com/skael-dev/skael/web"
@@ -145,9 +146,14 @@ func (b *Builder) Build() (*Server, error) {
 	// 11. Register auth routes.
 	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
 
-	// 12. Register skill routes.
+	// 12. Register skill routes. An opt-in external scanner (EXTERNAL_SCAN_CMD)
+	// is merged into the publish/import security scan when configured.
+	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
+	if externalScanner != nil {
+		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
+	}
 	skillStore := skill.NewStore(b.pool)
-	skill.RegisterRoutes(api, router, skillStore, storage)
+	skill.RegisterRoutes(api, router, skillStore, storage, externalScanner)
 
 	// 13. Register sync manifest route.
 	syncStore := gosync.NewStore(b.pool)
@@ -174,7 +180,7 @@ func (b *Builder) Build() (*Server, error) {
 	// 15. Register import routes.
 	importStore := skillimport.NewStore(b.pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
-	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher)
+	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, externalScanner)
 
 	// 16. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {

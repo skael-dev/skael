@@ -59,7 +59,13 @@ func validRegisterName(name string) bool {
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
 // routes (download + scan) that stream bytes rather than returning JSON.
-func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage) {
+func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage, ext ...*scan.ExternalScanner) {
+	// external is the optional opt-in external scanner (Phase 2); nil disables it.
+	var external *scan.ExternalScanner
+	if len(ext) > 0 {
+		external = ext[0]
+	}
+
 	// -----------------------------------------------------------------
 	// POST /api/skills — create a skill
 	// -----------------------------------------------------------------
@@ -274,11 +280,12 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 				fmt.Sprintf("invalid archive: %s", err))
 		}
 
-		// 3. Security scan.
+		// 3. Security scan (native), then merge the optional external scanner.
 		report, err := scan.ScanDir(tmpDir)
 		if err != nil {
 			return nil, fmt.Errorf("publish: scan: %w", err)
 		}
+		scan.MergeExternal(ctx, external, tmpDir, report)
 		if report.Status == "critical" || report.Status == "warn" {
 			scanJSON, _ := json.Marshal(report)
 			return nil, huma.NewError(
