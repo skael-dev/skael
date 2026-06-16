@@ -101,6 +101,63 @@ func TestReadState_Corrupt_BacksUp(t *testing.T) {
 	assert.NoError(t, statErr, "state.json.bak should exist after corrupt state recovery")
 }
 
+func TestSyncedSkill_PlacementRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	state := &SyncState{
+		LastSync: "2026-06-16T10:00:00Z",
+		Skills: []SyncedSkill{
+			{
+				Name:     "my-skill",
+				Version:  2,
+				Checksum: "abc123",
+				Placements: []Placement{
+					{Agent: "claude", Path: "/home/user/.claude/skills/my-skill", Scope: "user"},
+					{Agent: "cursor", Path: "/projects/foo/.cursor/skills/my-skill", Scope: "project"},
+				},
+			},
+			{
+				Name:     "old-skill",
+				Version:  1,
+				Checksum: "def456",
+			},
+		},
+	}
+
+	err := WriteState(dir, state)
+	require.NoError(t, err)
+
+	got, err := ReadState(dir)
+	require.NoError(t, err)
+	require.Len(t, got.Skills, 2)
+
+	assert.Equal(t, "my-skill", got.Skills[0].Name)
+	require.Len(t, got.Skills[0].Placements, 2)
+	assert.Equal(t, "claude", got.Skills[0].Placements[0].Agent)
+	assert.Equal(t, "/home/user/.claude/skills/my-skill", got.Skills[0].Placements[0].Path)
+	assert.Equal(t, "user", got.Skills[0].Placements[0].Scope)
+	assert.Equal(t, "cursor", got.Skills[0].Placements[1].Agent)
+	assert.Equal(t, "project", got.Skills[0].Placements[1].Scope)
+
+	assert.Equal(t, "old-skill", got.Skills[1].Name)
+	assert.Empty(t, got.Skills[1].Placements)
+}
+
+func TestSyncedSkill_PlacementsOmittedWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	state := &SyncState{
+		LastSync: "2026-06-16T10:00:00Z",
+		Skills: []SyncedSkill{
+			{Name: "bare-skill", Version: 1, Checksum: "abc"},
+		},
+	}
+
+	require.NoError(t, WriteState(dir, state))
+
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "placements", "placements key should be omitted when empty")
+}
+
 func TestWriteState_AtomicRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 

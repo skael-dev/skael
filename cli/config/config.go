@@ -21,11 +21,19 @@ type SyncState struct {
 	Skills   []SyncedSkill `json:"skills"`
 }
 
+// Placement records where a synced skill was extracted.
+type Placement struct {
+	Agent string `json:"agent"`
+	Path  string `json:"path"`
+	Scope string `json:"scope"`
+}
+
 // SyncedSkill records a skill name, version, and content checksum.
 type SyncedSkill struct {
-	Name     string `json:"name"`
-	Version  int    `json:"version"`
-	Checksum string `json:"checksum"`
+	Name       string      `json:"name"`
+	Version    int         `json:"version"`
+	Checksum   string      `json:"checksum"`
+	Placements []Placement `json:"placements,omitempty"`
 }
 
 // DefaultDir returns the default configuration directory (~/.skael).
