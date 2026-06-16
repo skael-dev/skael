@@ -311,6 +311,80 @@ func TestClient_DownloadVersion_NotFound(t *testing.T) {
 	}
 }
 
+// TestRetryOn503 verifies that doWithRetry retries on 503 responses and
+// succeeds when the server eventually returns 200.
+func TestRetryOn503(t *testing.T) {
+	attempts := 0
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer srv.Close()
+
+	c.httpClient.Timeout = 5 * time.Second
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/health", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.doWithRetry(req)
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	resp.Body.Close()
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+// TestNoRetryOn4xx verifies that doWithRetry does not retry on 4xx responses.
+func TestNoRetryOn4xx(t *testing.T) {
+	attempts := 0
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/health", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.doWithRetry(req)
+	if err != nil {
+		t.Fatalf("expected non-retry response returned as-is, got: %v", err)
+	}
+	resp.Body.Close()
+	if attempts != 1 {
+		t.Errorf("expected exactly 1 attempt for 4xx, got %d", attempts)
+	}
+}
+
+// TestRetryOnConnectionError verifies that doWithRetry retries on connection errors.
+func TestRetryOnConnectionError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	c := New(srv.URL, "test-key")
+	c.httpClient.Timeout = 2 * time.Second
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/health", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	_, err = c.doWithRetry(req)
+	if err == nil {
+		t.Fatal("expected error when connecting to closed server")
+	}
+	if !strings.Contains(err.Error(), "after 3 attempts") {
+		t.Errorf("expected 'after 3 attempts' in error, got: %v", err)
+	}
+}
+
 // TestClient_GetManifest verifies that the manifest array is parsed and returns
 // the expected number of entries.
 func TestClient_GetManifest(t *testing.T) {
