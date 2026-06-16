@@ -2,7 +2,6 @@ package platform
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -114,16 +113,3 @@ func RateLimiter(requestsPerMinute int, _ time.Duration) func(http.Handler) http
 	}
 }
 
-// envInt reads an integer from an environment variable, returning fallback on
-// parse error or missing value.
-func envInt(key string, fallback int) int {
-	v := envDefault(key, "")
-	if v == "" {
-		return fallback
-	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
-		return fallback
-	}
-	return n
-}

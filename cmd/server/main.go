@@ -93,7 +93,7 @@ func resetPassword(args []string) {
 	}
 
 	ctx := context.Background()
-	pool, err := platform.NewPool(ctx, dbURL)
+	pool, err := platform.NewPool(ctx, dbURL, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "database connection error: %v\n", err)
 		os.Exit(1)
