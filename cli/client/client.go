@@ -67,6 +67,29 @@ func New(endpoint, apiKey string) *Client {
 	}
 }
 
+// doWithRetry executes req up to 3 times, backing off 1 s then 2 s between
+// attempts. It retries on connection errors and on 502/503/504 responses.
+func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("server returned %d", resp.StatusCode)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, fmt.Errorf("after 3 attempts: %w", lastErr)
+}
+
 // do performs an HTTP request against the API, attaching the X-API-Key header.
 // It returns the raw *http.Response so callers can decode the body themselves.
 // On non-2xx responses it reads the body, attempts to extract a JSON "message"
@@ -81,7 +104,7 @@ func (c *Client) do(method, path string, body io.Reader, contentType string) (*h
 		req.Header.Set("Content-Type", contentType)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithRetry(req)
 	if err != nil {
 		return nil, fmt.Errorf("http %s %s: %w", method, path, err)
 	}
