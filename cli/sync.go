@@ -140,9 +140,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// 2. Create client and get manifest.
+	sp := StartSpinner("Fetching manifest...")
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 	manifest, err := c.GetManifest()
 	if err != nil {
+		sp.Stop()
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "api_error", "")
 			return nil
@@ -200,6 +202,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// 6. If no changes and nothing to prune, print up-to-date and summary.
 	if len(pending) == 0 && !hasPrunable {
+		sp.Stop()
 		if ui.JSONMode {
 			out := struct {
 				Synced int      `json:"synced"`
@@ -229,6 +232,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// 7. If --dry-run, show what would happen and return.
+	sp.Stop()
 	if syncDryRun {
 		if !syncQuiet {
 			ui.Info("scope: %s", scope)
@@ -278,7 +282,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	for _, ts := range pending {
+	for i, ts := range pending {
+		sp.Update(fmt.Sprintf("Downloading %s (%d/%d)...", ts.entry.Name, i+1, len(pending)))
 		archive, dlErr := c.DownloadVersion(ts.entry.Name, ts.entry.Version)
 		if dlErr != nil {
 			ui.Errorf("download %s v%d: %s", ts.entry.Name, ts.entry.Version, dlErr)
@@ -364,6 +369,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			newSkills = append(newSkills, local)
 			continue
 		}
+		sp.Update(fmt.Sprintf("Removing %s...", local.Name))
 		for _, p := range local.Placements {
 			if err := os.RemoveAll(p.Path); err != nil {
 				ui.Errorf("prune %s from %s: %s", local.Name, p.Agent, err)
@@ -373,6 +379,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 		pruned++
 	}
+
+	sp.Stop()
 
 	// 10. Write new state file.
 	newState := &config.SyncState{
