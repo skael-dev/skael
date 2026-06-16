@@ -22,6 +22,10 @@ type Config struct {
 	// /dev/stdout". Empty disables the feature.
 	ExternalScanCmd     string
 	ExternalScanTimeout time.Duration
+
+	CORSOrigins   string
+	LogLevel      string
+	RateLimitAuth int
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -42,6 +46,9 @@ func LoadConfig() (*Config, error) {
 		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
 		ExternalScanCmd:     os.Getenv("EXTERNAL_SCAN_CMD"),
 		ExternalScanTimeout: envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
+		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
+		LogLevel:            envDefault("LOG_LEVEL", "info"),
+		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
 	}, nil
 }
 
