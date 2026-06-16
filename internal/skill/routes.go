@@ -398,6 +398,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, huma.Error500InternalServerError("creating version", err)
 		}
 
+		// 9. Extract and persist spec-compliance metadata.
+		spec := ValidateSpec(fm, sk.Name)
+		_ = store.UpdateSpecFields(ctx, sk.Name, spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
+
 		return &publishOutput{Body: &publishBody{Version: *ver, Created: true}}, nil
 	})
 

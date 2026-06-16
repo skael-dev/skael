@@ -12,7 +12,9 @@ import (
 // trigram rank. Limit caps the number of returned results.
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Skill, error) {
 	const q = `
-		SELECT id, name, display_name, description, '', latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by,
+		SELECT id, name, display_name, description, '', latest_version, frontmatter,
+		       author, license, compatibility, tags, spec_compliance,
+		       created_at, updated_at, reviewed_at, reviewed_by,
 		    ts_rank(search_vector, websearch_to_tsquery('english', $1)) AS fts_rank,
 		    similarity(name, $1) AS trgm_rank
 		FROM skills
@@ -40,6 +42,11 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Skill, e
 			&sk.Content,
 			&sk.LatestVersion,
 			&rawFrontmatter,
+			&sk.Author,
+			&sk.License,
+			&sk.Compatibility,
+			&sk.Tags,
+			&sk.SpecCompliance,
 			&sk.CreatedAt,
 			&sk.UpdatedAt,
 			&sk.ReviewedAt,
@@ -51,6 +58,9 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Skill, e
 			return nil, fmt.Errorf("skill.Store.Search scan: %w", err)
 		}
 		sk.Frontmatter = rawFrontmatter
+		if sk.Tags == nil {
+			sk.Tags = []string{}
+		}
 		skills = append(skills, sk)
 	}
 	if err := rows.Err(); err != nil {

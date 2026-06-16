@@ -25,7 +25,9 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 	const q = `
 		INSERT INTO skills (name, display_name, description, content, frontmatter)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+		RETURNING id, name, display_name, description, content, latest_version, frontmatter,
+		          author, license, compatibility, tags, spec_compliance,
+		          created_at, updated_at, reviewed_at, reviewed_by
 	`
 	row := s.pool.QueryRow(ctx, q, name, displayName, description, content, frontmatter)
 	sk, err := scanSkill(row)
@@ -38,7 +40,9 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 // GetByName retrieves a skill by its unique name. Returns nil, nil when not found.
 func (s *Store) GetByName(ctx context.Context, name string) (*Skill, error) {
 	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+		SELECT id, name, display_name, description, content, latest_version, frontmatter,
+		       author, license, compatibility, tags, spec_compliance,
+		       created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
 		WHERE name = $1
 	`
@@ -62,7 +66,9 @@ func (s *Store) List(ctx context.Context, limit, offset int) ([]Skill, int, erro
 	}
 
 	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+		SELECT id, name, display_name, description, content, latest_version, frontmatter,
+		       author, license, compatibility, tags, spec_compliance,
+		       created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -221,6 +227,11 @@ func scanSkill(row scanner) (*Skill, error) {
 		&sk.Content,
 		&sk.LatestVersion,
 		&rawFrontmatter,
+		&sk.Author,
+		&sk.License,
+		&sk.Compatibility,
+		&sk.Tags,
+		&sk.SpecCompliance,
 		&sk.CreatedAt,
 		&sk.UpdatedAt,
 		&sk.ReviewedAt,
@@ -230,6 +241,9 @@ func scanSkill(row scanner) (*Skill, error) {
 		return nil, err
 	}
 	sk.Frontmatter = json.RawMessage(rawFrontmatter)
+	if sk.Tags == nil {
+		sk.Tags = []string{}
+	}
 	return &sk, nil
 }
 
@@ -268,6 +282,24 @@ func (s *Store) BulkSetReview(ctx context.Context, names []string, reviewedBy st
 		return 0, fmt.Errorf("skill.Store.BulkSetReview: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// UpdateSpecFields updates the spec-derived metadata columns on a skill row.
+func (s *Store) UpdateSpecFields(ctx context.Context, name, author, license, compat, compliance, displayName string, tags []string) error {
+	const q = `
+		UPDATE skills
+		SET author = $2, license = $3, compatibility = $4,
+		    spec_compliance = $5, display_name = $6, tags = $7
+		WHERE name = $1
+	`
+	tag, err := s.pool.Exec(ctx, q, name, author, license, compat, compliance, displayName, tags)
+	if err != nil {
+		return fmt.Errorf("skill.Store.UpdateSpecFields: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill.Store.UpdateSpecFields: skill %q not found", name)
+	}
+	return nil
 }
 
 func scanVersion(row scanner) (*Version, error) {
