@@ -82,6 +82,7 @@ These exist for good reasons — don't weaken them without understanding why:
 - `Unpack` rejects symlinks, hardlinks, unknown tar entry types, files >1MiB, and total extraction >50MB
 - `MaxBytesReader` middleware caps request bodies at 10MB (must be < `maxUnpackSize`)
 - Scanner runs on publish — `critical` and `warn` (high severity) block publishing
+- API key hashes are compared via `crypto/subtle.ConstantTimeCompare` (after SHA-256 + hex.DecodeString) to prevent timing attacks
 - Hook scripts read credentials from `~/.skael/config.json` at runtime — never embedded in agent config files
 - Sync verifies downloaded archive checksums against the manifest before extracting
 - File permissions are masked to `0o777` during extraction (no setuid/setgid)
