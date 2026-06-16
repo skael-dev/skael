@@ -1,10 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { User } from "@/api/types.gen";
 
+interface LoginResult {
+  password_reset_required?: boolean;
+}
+
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   signup: (email: string, name: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -27,7 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setIsLoading(false));
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -37,8 +41,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const err = await res.json().catch(() => ({ error: "Login failed" }));
       throw new Error(err.detail || err.error || "Invalid credentials");
     }
-    const data = (await res.json()) as User;
+    const data = (await res.json()) as User & { password_reset_required?: boolean };
     setUser(data);
+    return { password_reset_required: data.password_reset_required };
   }, []);
 
   const signup = useCallback(async (email: string, name: string, password: string) => {
