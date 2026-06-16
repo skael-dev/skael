@@ -21,12 +21,18 @@ type Client struct {
 
 // Skill is the client-side representation of a skill returned by the API.
 type Skill struct {
-	Name          string          `json:"name"`
-	Description   string          `json:"description"`
-	LatestVersion int             `json:"latest_version"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	Frontmatter   json.RawMessage `json:"frontmatter"`
+	Name           string          `json:"name"`
+	DisplayName    string          `json:"display_name,omitempty"`
+	Description    string          `json:"description"`
+	LatestVersion  int             `json:"latest_version"`
+	Author         string          `json:"author"`
+	License        string          `json:"license"`
+	Compatibility  string          `json:"compatibility"`
+	Tags           []string        `json:"tags"`
+	SpecCompliance string          `json:"spec_compliance"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	Frontmatter    json.RawMessage `json:"frontmatter"`
 }
 
 // Version is the client-side representation of a published skill version.

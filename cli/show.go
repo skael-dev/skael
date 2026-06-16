@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -102,22 +101,22 @@ func runShow(cmd *cobra.Command, args []string) error {
 		return ui.PrintJSON(out)
 	}
 
-	fm := parseFrontmatter(sk.Frontmatter)
-
 	fmt.Fprintf(os.Stdout, "\n  %s v%d\n", ui.Bold(sk.Name), sk.LatestVersion)
 	fmt.Fprintln(os.Stdout, "")
 
 	metaParts := []string{}
-	if author := fmString(fm, "author"); author != "" {
-		metaParts = append(metaParts, "By: "+author)
+	if sk.Author != "" {
+		metaParts = append(metaParts, "By: "+sk.Author)
 	}
-	if license := fmString(fm, "license"); license != "" {
-		metaParts = append(metaParts, "License: "+license)
+	if sk.License != "" {
+		metaParts = append(metaParts, "License: "+sk.License)
 	}
-	hasSpec := fmString(fm, "spec") != ""
-	if hasSpec {
-		metaParts = append(metaParts, "Spec: ✓")
-	} else {
+	switch sk.SpecCompliance {
+	case "full":
+		metaParts = append(metaParts, "Spec: ✓ compliant")
+	case "partial":
+		metaParts = append(metaParts, "Spec: ~ partial")
+	default:
 		metaParts = append(metaParts, "Spec: ·")
 	}
 	if len(metaParts) > 0 {
@@ -128,9 +127,8 @@ func runShow(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stdout, "    %s\n", sk.Description)
 	}
 
-	tags := fmTags(fm)
-	if len(tags) > 0 {
-		fmt.Fprintf(os.Stdout, "    Tags: %s\n", strings.Join(tags, ", "))
+	if len(sk.Tags) > 0 {
+		fmt.Fprintf(os.Stdout, "    Tags: %s\n", strings.Join(sk.Tags, ", "))
 	}
 
 	fmt.Fprintf(os.Stdout, "    Last published: %s\n", formatAge(sk.UpdatedAt))
@@ -175,49 +173,3 @@ func runShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// parseFrontmatter decodes a JSON frontmatter blob into a map. Returns nil on error.
-func parseFrontmatter(raw json.RawMessage) map[string]interface{} {
-	if len(raw) == 0 {
-		return nil
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil
-	}
-	return m
-}
-
-// fmString returns the string value of key in the frontmatter map, or "".
-func fmString(fm map[string]interface{}, key string) string {
-	if fm == nil {
-		return ""
-	}
-	v, ok := fm[key]
-	if !ok {
-		return ""
-	}
-	s, _ := v.(string)
-	return s
-}
-
-// fmTags returns the []string value of the "tags" key, or nil.
-func fmTags(fm map[string]interface{}) []string {
-	if fm == nil {
-		return nil
-	}
-	v, ok := fm["tags"]
-	if !ok {
-		return nil
-	}
-	raw, ok := v.([]interface{})
-	if !ok {
-		return nil
-	}
-	tags := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if s, ok := item.(string); ok {
-			tags = append(tags, s)
-		}
-	}
-	return tags
-}
