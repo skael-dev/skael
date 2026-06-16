@@ -303,14 +303,14 @@ func importSingleSkill(
 	}
 
 	archiveName := fmt.Sprintf("%s/%s.tar.gz", ds.Name, checksum[:16])
-	if _, err := storage.Write(archiveName, bytes.NewReader(archive)); err != nil {
+	if _, err := storage.Write(ctx, archiveName, bytes.NewReader(archive)); err != nil {
 		return nil, false, fmt.Errorf("store archive: %w", err)
 	}
 
 	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog,
 		description, body, fmJSON, manifest, scanJSON)
 	if err != nil {
-		_ = storage.Delete(archiveName)
+		_ = storage.Delete(ctx, archiveName)
 		return nil, false, fmt.Errorf("create version: %w", err)
 	}
 

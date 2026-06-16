@@ -452,7 +452,7 @@ func TestDeleteSkill_CleansUpArchive(t *testing.T) {
 	require.NotEmpty(t, archivePath, "published version should have an archive path")
 
 	// Confirm the archive file exists in storage before deletion.
-	rc, err := storage.Read(archivePath)
+	rc, err := storage.Read(context.Background(), archivePath)
 	require.NoError(t, err, "archive should exist in storage before delete")
 	rc.Close()
 
@@ -468,7 +468,7 @@ func TestDeleteSkill_CleansUpArchive(t *testing.T) {
 	require.Nil(t, sk)
 
 	// Confirm the archive file has been removed from storage.
-	_, err = storage.Read(archivePath)
+	_, err = storage.Read(context.Background(), archivePath)
 	require.Error(t, err, "archive file should have been deleted from storage")
 }
 
@@ -557,6 +557,6 @@ func TestPublishVersion_NoOrphanedArchiveOnMissingSkillMD(t *testing.T) {
 	// Archive name is content-addressable: {name}/{sha256[:16]}.tar.gz
 	sum := sha256.Sum256(payload)
 	archiveName := fmt.Sprintf("orphan-skill/%s.tar.gz", hex.EncodeToString(sum[:])[:16])
-	_, err = storage.Read(archiveName)
+	_, err = storage.Read(context.Background(), archiveName)
 	require.Error(t, err, "orphaned archive left in storage after failed publish")
 }

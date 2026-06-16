@@ -23,12 +23,12 @@ func TestStorage_WriteAndRead(t *testing.T) {
 	}
 
 	content := "hello, skael"
-	path, err := s.Write("archives/test.tar.gz", strings.NewReader(content))
+	path, err := s.Write(context.Background(), "archives/test.tar.gz", strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	rc, err := s.Read("archives/test.tar.gz")
+	rc, err := s.Read(context.Background(), "archives/test.tar.gz")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -56,16 +56,16 @@ func TestStorage_Delete(t *testing.T) {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
-	_, err = s.Write("to-delete.tar.gz", strings.NewReader("data"))
+	_, err = s.Write(context.Background(), "to-delete.tar.gz", strings.NewReader("data"))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	if err := s.Delete("to-delete.tar.gz"); err != nil {
+	if err := s.Delete(context.Background(), "to-delete.tar.gz"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	_, err = s.Read("to-delete.tar.gz")
+	_, err = s.Read(context.Background(), "to-delete.tar.gz")
 	if err == nil {
 		t.Fatal("Read after Delete: expected error, got nil")
 	}
@@ -81,7 +81,7 @@ func TestStorage_WriteAtomic(t *testing.T) {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
-	_, err = s.Write("atomic.tar.gz", strings.NewReader("payload"))
+	_, err = s.Write(context.Background(), "atomic.tar.gz", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestStorage_PathTraversal_Rejected(t *testing.T) {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
-	_, err = s.Write("../../etc/evil.tar.gz", strings.NewReader("evil"))
+	_, err = s.Write(context.Background(), "../../etc/evil.tar.gz", strings.NewReader("evil"))
 	if err == nil {
 		t.Fatal("expected error for path traversal, got nil")
 	}
@@ -128,7 +128,7 @@ func TestStorage_PathTraversal_NestedEscape(t *testing.T) {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 
-	_, err = s.Write("skills/../../../etc/passwd", strings.NewReader("evil"))
+	_, err = s.Write(context.Background(), "skills/../../../etc/passwd", strings.NewReader("evil"))
 	if err == nil {
 		t.Fatal("expected error for nested path traversal, got nil")
 	}
@@ -143,18 +143,18 @@ func runStorageConformance(t *testing.T, s Storage) {
 	content := []byte("hello-archive")
 	key := "skill-x/abc123.tar.gz"
 
-	got, err := s.Write(key, bytes.NewReader(content))
+	got, err := s.Write(context.Background(), key, bytes.NewReader(content))
 	require.NoError(t, err)
 	require.Equal(t, key, got)
 
-	rc, err := s.Read(key)
+	rc, err := s.Read(context.Background(), key)
 	require.NoError(t, err)
 	data, err := io.ReadAll(rc)
 	rc.Close()
 	require.NoError(t, err)
 	require.Equal(t, content, data)
 
-	require.NoError(t, s.Delete(key))
+	require.NoError(t, s.Delete(context.Background(), key))
 }
 
 func TestLocalStorage_Conformance(t *testing.T) {

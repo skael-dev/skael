@@ -87,12 +87,12 @@ func (s *S3Storage) key(name string) (string, error) {
 	return path.Join(s.prefix, clean), nil
 }
 
-func (s *S3Storage) Write(name string, r io.Reader) (string, error) {
+func (s *S3Storage) Write(ctx context.Context, name string, r io.Reader) (string, error) {
 	key, err := s.key(name)
 	if err != nil {
 		return "", err
 	}
-	_, err = s.client.PutObject(context.Background(), s.bucket, key, r, -1,
+	_, err = s.client.PutObject(ctx, s.bucket, key, r, -1,
 		minio.PutObjectOptions{ContentType: "application/gzip"})
 	if err != nil {
 		return "", fmt.Errorf("storage: s3 put %q: %w", name, err)
@@ -100,24 +100,24 @@ func (s *S3Storage) Write(name string, r io.Reader) (string, error) {
 	return name, nil
 }
 
-func (s *S3Storage) Read(name string) (io.ReadCloser, error) {
+func (s *S3Storage) Read(ctx context.Context, name string) (io.ReadCloser, error) {
 	key, err := s.key(name)
 	if err != nil {
 		return nil, err
 	}
-	obj, err := s.client.GetObject(context.Background(), s.bucket, key, minio.GetObjectOptions{})
+	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("storage: s3 get %q: %w", name, err)
 	}
 	return obj, nil
 }
 
-func (s *S3Storage) Delete(name string) error {
+func (s *S3Storage) Delete(ctx context.Context, name string) error {
 	key, err := s.key(name)
 	if err != nil {
 		return err
 	}
-	return s.client.RemoveObject(context.Background(), s.bucket, key, minio.RemoveObjectOptions{})
+	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
 // Ping verifies the bucket is reachable.
