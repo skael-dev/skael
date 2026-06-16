@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -14,8 +15,29 @@ import (
 //go:embed migrate/*.sql
 var migrations embed.FS
 
-func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+// PoolConfig holds optional pgxpool tuning parameters. A nil value keeps
+// pgxpool's built-in defaults.
+type PoolConfig struct {
+	MaxConns          int
+	MinConns          int
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
+}
+
+func NewPool(ctx context.Context, databaseURL string, cfg *PoolConfig) (*pgxpool.Pool, error) {
+	poolCfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database URL: %w", err)
+	}
+	if cfg != nil {
+		poolCfg.MaxConns = int32(cfg.MaxConns)
+		poolCfg.MinConns = int32(cfg.MinConns)
+		poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
+		poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
+		poolCfg.HealthCheckPeriod = cfg.HealthCheckPeriod
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create pgxpool: %w", err)
 	}

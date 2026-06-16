@@ -44,7 +44,13 @@ func main() {
 		log.Fatal().Err(err).Msg("configuration error")
 	}
 
-	pool, err := platform.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := platform.NewPool(ctx, cfg.DatabaseURL, &platform.PoolConfig{
+		MaxConns:          cfg.DBMaxConns,
+		MinConns:          cfg.DBMinConns,
+		MaxConnLifetime:   cfg.DBMaxConnLifetime,
+		MaxConnIdleTime:   cfg.DBMaxConnIdleTime,
+		HealthCheckPeriod: cfg.DBHealthCheckPeriod,
+	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("database connection error")
 	}

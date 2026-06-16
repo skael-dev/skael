@@ -40,7 +40,7 @@ func SetupTestDB(t *testing.T) *pgxpool.Pool {
 	}
 
 	// Create the pgxpool.
-	pool, err := platform.NewPool(ctx, connStr)
+	pool, err := platform.NewPool(ctx, connStr, nil)
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
