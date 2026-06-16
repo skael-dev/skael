@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/skael-dev/skael/cli/agents"
 	"github.com/skael-dev/skael/cli/client"
@@ -11,12 +13,13 @@ import (
 	"github.com/skael-dev/skael/cli/hooks"
 	"github.com/skael-dev/skael/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var setupCmd = &cobra.Command{
-	Use:   "setup <url> <api-key>",
+	Use:   "setup <url> [api-key]",
 	Short: "One-command onboarding: validate, configure, sync, install hooks",
-	Args:  cobra.RangeArgs(0, 2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE:  runSetup,
 }
 
@@ -46,6 +49,24 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 	if apiKey == "" {
 		apiKey = os.Getenv("SKAEL_KEY")
+	}
+
+	if apiKey == "" {
+		fmt.Fprint(os.Stderr, "API key: ")
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			if err != nil {
+				ui.Errorf("read API key: %s", err)
+				return fmt.Errorf("read API key: %w", err)
+			}
+			fmt.Fprintln(os.Stderr)
+			apiKey = strings.TrimSpace(string(raw))
+		} else {
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				apiKey = strings.TrimSpace(scanner.Text())
+			}
+		}
 	}
 
 	if endpoint == "" || apiKey == "" {

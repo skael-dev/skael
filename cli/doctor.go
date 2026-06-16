@@ -117,6 +117,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	knownAgents := []agents.Agent{
 		&agents.ClaudeCode{},
 		&agents.Codex{},
+		&agents.OpenCode{},
+		&agents.Cursor{},
 	}
 
 	for _, agent := range knownAgents {
