@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
+import { SpecBadge } from "@/features/skills/spec-badge";
 import type { SkillAnalytics } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
 
@@ -144,6 +145,7 @@ export function SkillCard({
                 <span className="font-mono font-medium text-[13px] text-text-primary whitespace-nowrap">
                   {bare}
                 </span>
+                <SpecBadge compliance={skill.spec_compliance} />
                 {namespace && (
                   <span className="text-[10px] text-text-tertiary whitespace-nowrap">
                     {namespace}
@@ -164,9 +166,16 @@ export function SkillCard({
             </span>
           )}
         </div>
-        <span className="text-xs text-text-tertiary truncate min-w-0">
-          {skill.description}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs text-text-tertiary truncate min-w-0">
+            {skill.description}
+          </span>
+          {skill.author && (
+            <span className="text-[11px] text-text-tertiary whitespace-nowrap shrink-0">
+              By: {skill.author}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Invocations */}

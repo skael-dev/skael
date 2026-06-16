@@ -13,6 +13,7 @@ import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
 import { ScanFindings } from "@/features/security/scan-findings";
 import type { ScanReport } from "@/features/security/scan-findings";
+import { SpecBadge } from "@/features/skills/spec-badge";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +49,9 @@ function formatRelativeTime(dateString: string | null): string {
 }
 
 function extractTags(skill: Skill): string[] {
+  if (Array.isArray(skill.tags) && skill.tags.length > 0) {
+    return skill.tags.filter((t): t is string => typeof t === "string");
+  }
   if (!skill.frontmatter) return [];
   const fm = skill.frontmatter as Record<string, unknown>;
   if (Array.isArray(fm.tags)) {
@@ -584,6 +588,71 @@ function TabSecurity({
   );
 }
 
+// ── Metadata Tab ────────────────────────────────────────────────
+function TabMetadata({ skill }: { skill: Skill }) {
+  const tags = extractTags(skill);
+  const author = skill.author ?? (skill.frontmatter as Record<string, unknown> | null)?.author as string | undefined ?? "";
+  const license = skill.license ?? "";
+  const compatibility = skill.compatibility ?? "";
+  const specCompliance = skill.spec_compliance ?? "none";
+
+  const complianceLabel =
+    specCompliance === "full" ? "Full" : specCompliance === "partial" ? "Partial" : "None";
+
+  return (
+    <div className="max-w-[640px]">
+      <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-4">
+        Skill Metadata
+      </div>
+
+      <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">
+        <div className="flex justify-between items-center gap-3 px-3.5 py-3 border-b border-border">
+          <span className="text-[13px] text-text-secondary whitespace-nowrap shrink-0">Author</span>
+          <span className="text-[13px] text-text-primary text-right">{author || "—"}</span>
+        </div>
+        <div className="flex justify-between items-center gap-3 px-3.5 py-3 border-b border-border">
+          <span className="text-[13px] text-text-secondary whitespace-nowrap shrink-0">License</span>
+          <span className="text-[13px] text-text-primary font-mono text-right">{license || "—"}</span>
+        </div>
+        <div className="flex justify-between items-center gap-3 px-3.5 py-3 border-b border-border">
+          <span className="text-[13px] text-text-secondary whitespace-nowrap shrink-0">Compatibility</span>
+          <span className="text-[13px] text-text-primary text-right">{compatibility || "—"}</span>
+        </div>
+        <div className="flex justify-between items-center gap-3 px-3.5 py-3 border-b border-border">
+          <span className="text-[13px] text-text-secondary whitespace-nowrap shrink-0">Spec Compliance</span>
+          <span className="flex items-center gap-2 text-[13px] text-text-primary text-right">
+            <SpecBadge compliance={specCompliance} />
+            {complianceLabel}
+          </span>
+        </div>
+        <div className="flex justify-between items-start gap-3 px-3.5 py-3">
+          <span className="text-[13px] text-text-secondary whitespace-nowrap shrink-0 pt-0.5">Tags</span>
+          <div className="flex gap-2 flex-wrap justify-end">
+            {tags.length > 0 ? (
+              tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1.5 text-[11px] text-text-secondary"
+                >
+                  <span
+                    className={cn(
+                      "size-[5px] rounded-full shrink-0",
+                      TAG_COLORS[tag] ?? "bg-text-tertiary"
+                    )}
+                  />
+                  {tag}
+                </span>
+              ))
+            ) : (
+              <span className="text-[13px] text-text-tertiary">—</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Loading skeleton ──────────────────────────────────────────────
 function SkeletonLine({ className }: { className?: string }) {
   return (
@@ -599,6 +668,7 @@ function SkeletonLine({ className }: { className?: string }) {
 // ── Main SkillDetail component ────────────────────────────────────
 const TABS: TabDef[] = [
   { id: "content", label: "Content" },
+  { id: "metadata", label: "Metadata" },
   { id: "files", label: "Files" },
   { id: "versions", label: "Versions" },
   { id: "usage", label: "Usage" },
@@ -700,7 +770,7 @@ export function SkillDetail() {
 
   const author = (() => {
     if (!skill) return "—";
-    // Try to get published_by from latest version via frontmatter or reviewed_by
+    if (skill.author) return skill.author;
     const fm = skill.frontmatter as Record<string, unknown> | null;
     if (fm && typeof fm.author === "string") return fm.author;
     if (skill.reviewed_by) return skill.reviewed_by;
@@ -746,9 +816,12 @@ export function SkillDetail() {
             {skillQuery.isLoading ? (
               <SkeletonLine className="h-9 w-64" />
             ) : (
-              <h1 className="font-mono text-3xl font-medium tracking-tight text-text-primary m-0 whitespace-nowrap">
-                {skill?.name}
-              </h1>
+              <>
+                <h1 className="font-mono text-3xl font-medium tracking-tight text-text-primary m-0 whitespace-nowrap">
+                  {skill?.name}
+                </h1>
+                <SpecBadge compliance={skill?.spec_compliance} />
+              </>
             )}
             {/* Status dot */}
             <div className="relative flex items-center justify-center group/status">
@@ -889,6 +962,7 @@ export function SkillDetail() {
       {/* Tab content */}
       <div className="px-5 md:px-12 pt-7 pb-12 max-w-[1280px] w-full mx-auto">
         {activeTab === "content" && skill && <TabContent skill={skill} />}
+        {activeTab === "metadata" && skill && <TabMetadata skill={skill} />}
         {activeTab === "files" && skill && (
           <TabFiles skill={skill} versions={versions} />
         )}
