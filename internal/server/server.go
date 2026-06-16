@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/analytics"
@@ -113,6 +114,12 @@ func (b *Builder) Build() (*Server, error) {
 		authRateLimit = 20
 	}
 	router.Use(platform.RateLimiter(authRateLimit, time.Minute))
+
+	metricsEnabled := os.Getenv("METRICS_ENABLED") != "false"
+	if metricsEnabled {
+		router.Use(platform.MetricsMiddleware)
+		router.Get("/metrics", promhttp.Handler().ServeHTTP)
+	}
 
 	router.Use(sessionManager.LoadAndSave)
 	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
