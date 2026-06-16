@@ -59,11 +59,13 @@ This validates the connection, saves config, syncs all skills, and installs acti
 ## What it does
 
 ```bash
-skael publish ./my-skill    # publish a skill to the registry
+skael init my-skill          # scaffold a new spec-compliant skill
+skael publish ./my-skill     # publish a skill to the registry
 skael sync                   # pull latest skills to all your agents
 skael scan ./my-skill        # security scan before publishing
 skael search "review"        # find skills
 skael list                   # see everything published
+skael show my-skill          # skill details, versions, activations
 skael doctor                 # check your setup
 skael hook install           # set up activation tracking
 ```
@@ -93,8 +95,10 @@ Run `just` to see all available commands.
 ```
 cmd/server/     → API server binary (Huma v2 + Chi + Postgres)
 cmd/skael/      → CLI binary (Cobra + Lipgloss)
-internal/       → Server packages (skill, scan, analytics, auth, platform, sync)
+internal/       → Server packages (skill, scan, analytics, auth, platform, server, import, sync)
 cli/            → CLI packages (commands, client, config, agents, hooks)
+web/            → React 19 SPA (Vite 8, Tailwind 4, TanStack Query) — embedded into server binary
+examples/       → Example skills (hello-world, code-review, scanner demo)
 tests/e2e/      → End-to-end integration tests
 ```
 
@@ -103,7 +107,7 @@ tests/e2e/      → End-to-end integration tests
 | Command | What it does |
 |---|---|
 | `just build` | Build both binaries to `bin/` |
-| `just dev` | Run server with hot reload (reads `.env`) |
+| `just dev` | Run server (reads `.env`) |
 | `just db` | Start Postgres 17 in Docker |
 | `just test` | All tests (needs Docker for testcontainers) |
 | `just test-pkg internal/scan` | Test a single package |
@@ -115,9 +119,11 @@ tests/e2e/      → End-to-end integration tests
 
 ## Architecture
 
-Single Go binary embeds the API server and a React dashboard (served from the same process). Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem.
+Single Go binary embeds the API server and a React dashboard (served from the same process). Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem or S3-compatible object storage.
 
-The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, and manifest-based sync with checksum verification.
+The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, and manifest-based sync with checksum verification. Supports Claude Code, Codex, OpenCode, and Cursor.
+
+The server exposes a Prometheus `/metrics` endpoint for monitoring, supports CORS for separate frontend deployments, and includes rate limiting, security headers, and request tracing out of the box.
 
 ## License
 

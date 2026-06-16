@@ -36,7 +36,7 @@ Server reads config from `.env` (see `.env.example`). Copy it before first run: 
 
 Two binaries from one Go module (`github.com/skael-dev/skael`):
 
-**`cmd/server`** — HTTP API server. Chi router + Huma v2 (auto-generates OpenAPI spec). Embeds a React SPA via `embed.FS` (Plan 3, not yet built). Auth is a single API key checked via `X-API-Key` header; middleware skips `/api/health` and `/api/openapi.json`.
+**`cmd/server`** — HTTP API server. Chi router + Huma v2 (auto-generates OpenAPI spec). Embeds a React SPA via `embed.FS` from `web/dist/`. Auth via user accounts (bcrypt passwords, session cookies) + personal API keys (SHA-256, `X-API-Key` header). Middleware stack: security headers, request ID, CORS, rate limiting, request logging. Auth middleware skips `/api/health`, `/api/health/ready`, `/api/openapi.json`, `/api/capabilities`, `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout`, and `/metrics`. Subcommand `reset-password --email` for admin password recovery.
 
 **`cmd/skael`** — CLI. Cobra commands, Lipgloss styling. Talks to the server API via `cli/client/`. Config at `~/.skael/config.json`, sync state at `~/.skael/state.json`.
 
@@ -45,16 +45,19 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - `internal/skill/` — Core domain. `Store` (Postgres CRUD + versioning), `RegisterRoutes` (Huma endpoints), `Pack`/`Unpack` (tar.gz archives), `ParseFrontmatter` (YAML), `Search` (FTS + pg_trgm).
 - `internal/scan/` — Security scanner. Regex rules in `secrets.go`, `injection.go`, `exfiltration.go`, `obfuscation.go`, `execution.go`. A `Rule` may carry an optional `Reject` regex that suppresses matches (RE2 has no lookahead). `ScanDir` walks a directory; `ScanContent` scans a single file. Each line is scanned raw and (when it changes) NFKC-normalized with zero-width/bidi chars stripped, so unicode-obfuscated payloads can't evade. Line-pair scanning catches secrets split across lines. `shellast.go` (Phase 2) additionally parses shell scripts and fenced shell blocks in markdown with `mvdan.cc/sh` and detects dangerous constructs *structurally* (pipe-to-shell RCE, `eval` of dynamic content, `/dev/tcp` reverse shells) regardless of spacing/line-splitting/comments. Secret matches are always masked in the report; binary and oversized files are flagged (non-blocking) instead of silently skipped.
 - `internal/analytics/` — Activation tracking. `POST /api/events` ingests hook events; `GET /api/skills/{name}/activations` returns per-skill summary with agent breakdown.
-- `internal/platform/` — Infrastructure. `Config` (env vars), `NewPool` + `RunMigrations` (pgx + embedded SQL), `Storage` (local filesystem with path traversal validation).
-- `internal/auth/` — `Middleware(apiKey)` returns Chi middleware with constant-time key comparison.
+- `internal/platform/` — Infrastructure. `Config` (env vars), `NewPool` + `RunMigrations` (pgx + embedded SQL), `Storage` (local filesystem or S3 with path traversal validation), `middleware.go` (security headers, request ID, rate limiting), `metrics.go` (Prometheus HTTP instrumentation), `logging.go` (request logger with health-check exclusion).
+- `internal/auth/` — User accounts, sessions, API keys. `Middleware(sessionManager, userStore, keyStore)` enforces auth on `/api/` routes. Password reset (change own + admin reset with temporary password).
+- `internal/import/` — GitHub skill import. `POST /api/import` discovers and imports skills from GitHub repos. Uses `GITHUB_TOKEN` for API rate limits.
+- `internal/server/` — Server assembly. `Builder` pattern wires stores, middleware, routes, and the embedded SPA. `Capabilities` endpoint (`/api/capabilities`) reports edition/features. `Readiness` check (`/api/health/ready`) verifies DB + storage. Enterprise extension points (`WithAuthorizer`, `WithExtraRoutes`).
 - `internal/sync/` — `GetManifest()` query joining skills + latest versions for sync diffing.
+- `internal/testutil/` — `SetupTestDB(t)` spins up Postgres 17 via testcontainers per test.
 - `internal/ui/` — Lipgloss styles and output helpers (`Success`, `Error`, `Warn`, `Download`, `Summary`). `JSONMode` flag suppresses styled output; commands write JSON to stdout instead.
-- `cli/` — Cobra commands (one file per command). `cli/client/` is the HTTP client, `cli/config/` handles `~/.skael/`, `cli/agents/` detects installed agents, `cli/hooks/` manages activation tracking hook scripts.
+- `cli/` — Cobra commands (one file per command): `setup`, `list`, `search`, `show`, `publish`, `sync`, `scan`, `init`, `doctor`, `hook`, `import`. `cli/client/` is the HTTP client (with retry), `cli/config/` handles `~/.skael/`, `cli/agents/` detects installed agents (Claude Code, Codex, OpenCode, Cursor), `cli/hooks/` manages activation tracking hook scripts.
 
 ### Key patterns
 
 - **Huma v2 routes:** JSON endpoints use `huma.Register(api, huma.Operation{...}, handler)`. Binary endpoints (download, scan results) use Chi router directly.
-- **`skill.RegisterRoutes` takes `(api huma.API, router chi.Router, store *Store, storage *platform.Storage)`** — it needs both the Huma API and the underlying Chi router.
+- **`skill.RegisterRoutes` takes `(api huma.API, router chi.Router, store *Store, storage platform.Storage, ext ...*scan.ExternalScanner)`** — it needs both the Huma API and the underlying Chi router.
 - **Testcontainers:** DB-backed tests use `testutil.SetupTestDB(t)` which spins up Postgres 17 per test. Each test gets a fresh migrated database.
 - **Content-addressable archives:** Published archives are stored at `{skillName}/{checksum[:16]}.tar.gz`, not by version number. This prevents race conditions on concurrent publishes.
 - **Skill names:** Must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`, max 128 chars. Colons support namespaced names (e.g., `superpowers:brainstorming`).
@@ -80,6 +83,8 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 | `CORS_ORIGINS` | no | — | Comma-separated allowed origins for CORS (e.g. `https://app.skael.dev,http://localhost:5173`) |
 | `LOG_LEVEL` | no | `info` | Zerolog level: `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` |
 | `RATE_LIMIT_AUTH` | no | `20` | Per-IP requests-per-minute for the global rate limiter |
+| `METRICS_ENABLED` | no | `true` | Set to `false` to disable the `/metrics` Prometheus endpoint |
+| `GITHUB_TOKEN` | no | — | GitHub personal access token for import; raises API rate limits |
 
 Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
 
