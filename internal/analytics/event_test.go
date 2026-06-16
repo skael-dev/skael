@@ -12,6 +12,9 @@ import (
 )
 
 func TestStore_InsertAndQuery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	store := analytics.NewStore(pool)
 	ctx := context.Background()
@@ -41,6 +44,9 @@ func TestStore_InsertAndQuery(t *testing.T) {
 }
 
 func TestStore_GetActivations_NoEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	store := analytics.NewStore(pool)
 	ctx := context.Background()
@@ -55,6 +61,9 @@ func TestStore_GetActivations_NoEvents(t *testing.T) {
 }
 
 func TestStore_GetSkillTimeSeries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	store := analytics.NewStore(pool)
 	ctx := context.Background()
@@ -97,6 +106,9 @@ func TestStore_GetSkillTimeSeries(t *testing.T) {
 }
 
 func TestStore_GetSkillTimeSeries_NoEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	store := analytics.NewStore(pool)
 	ctx := context.Background()

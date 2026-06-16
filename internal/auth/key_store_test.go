@@ -24,6 +24,9 @@ func createTestUser(t *testing.T, store *auth.UserStore, email string) string {
 }
 
 func TestKeyStore_CreateAndGetByPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	userStore := auth.NewUserStore(pool)
@@ -77,6 +80,9 @@ func TestKeyStore_CreateAndGetByPrefix(t *testing.T) {
 }
 
 func TestKeyStore_ListByUser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	userStore := auth.NewUserStore(pool)
@@ -105,6 +111,9 @@ func TestKeyStore_ListByUser(t *testing.T) {
 }
 
 func TestKeyStore_Delete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	userStore := auth.NewUserStore(pool)
@@ -135,6 +144,9 @@ func TestKeyStore_Delete(t *testing.T) {
 }
 
 func TestKeyStore_GetByPrefix_NotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	keyStore := auth.NewKeyStore(pool)
@@ -149,6 +161,9 @@ func TestKeyStore_GetByPrefix_NotFound(t *testing.T) {
 }
 
 func TestKeyStore_UpdateLastUsed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	userStore := auth.NewUserStore(pool)

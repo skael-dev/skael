@@ -16,6 +16,9 @@ import (
 // -----------------------------------------------------------------
 
 func TestReviewSkill_200(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "reviewed-skill", "will be reviewed")
@@ -35,6 +38,9 @@ func TestReviewSkill_200(t *testing.T) {
 }
 
 func TestReviewSkill_404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	rr := doJSON(t, handler, http.MethodPut, "/api/skills/no-such-skill/review", nil, nil)
@@ -46,6 +52,9 @@ func TestReviewSkill_404(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestUnreviewSkill_204(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "unreviewed-skill", "will be unreviewed")
@@ -73,6 +82,9 @@ func TestUnreviewSkill_204(t *testing.T) {
 }
 
 func TestUnreviewSkill_404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/skills/no-such-skill/review", nil)
@@ -86,6 +98,9 @@ func TestUnreviewSkill_404(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestBulkReviewSkills(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "bulk-a", "first")
@@ -111,6 +126,9 @@ func TestBulkReviewSkills(t *testing.T) {
 // TestBulkReview_RouteNotConflicting verifies that the static /api/skills/review
 // path is not captured by the parameterized /api/skills/{name} routes.
 func TestBulkReview_RouteNotConflicting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "route-check", "routing test")
@@ -130,6 +148,9 @@ func TestBulkReview_RouteNotConflicting(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestCreateAlias_ConflictsWithExistingSkill_Returns409(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "real-a", "first skill")
@@ -146,6 +167,9 @@ func TestCreateAlias_ConflictsWithExistingSkill_Returns409(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestPublishVersion_ResetsReviewedAt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "reset-review-skill", "will be reviewed then published")

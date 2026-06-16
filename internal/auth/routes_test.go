@@ -88,6 +88,9 @@ func decodeJSON(t *testing.T, resp *http.Response, v interface{}) {
 }
 
 func TestAuthRoutes_SignupFirstUser_Owner(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	resp := doPost(t, client, srv.URL+"/api/auth/signup", map[string]string{
@@ -106,6 +109,9 @@ func TestAuthRoutes_SignupFirstUser_Owner(t *testing.T) {
 }
 
 func TestAuthRoutes_SignupSecondUser_Admin(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// First user → owner.
@@ -136,6 +142,9 @@ func TestAuthRoutes_SignupSecondUser_Admin(t *testing.T) {
 }
 
 func TestAuthRoutes_SignupDuplicateEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	body := map[string]string{
@@ -159,6 +168,9 @@ func TestAuthRoutes_SignupDuplicateEmail(t *testing.T) {
 }
 
 func TestAuthRoutes_SignupShortPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	resp := doPost(t, client, srv.URL+"/api/auth/signup", map[string]string{
@@ -171,6 +183,9 @@ func TestAuthRoutes_SignupShortPassword(t *testing.T) {
 }
 
 func TestAuthRoutes_LoginSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up first.
@@ -200,6 +215,9 @@ func TestAuthRoutes_LoginSuccess(t *testing.T) {
 }
 
 func TestAuthRoutes_LoginWrongPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up.
@@ -224,6 +242,9 @@ func TestAuthRoutes_LoginWrongPassword(t *testing.T) {
 }
 
 func TestAuthRoutes_LoginNonexistentEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	resp := doPost(t, client, srv.URL+"/api/auth/login", map[string]string{
@@ -235,6 +256,9 @@ func TestAuthRoutes_LoginNonexistentEmail(t *testing.T) {
 }
 
 func TestAuthRoutes_MeWithSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up (creates a session).
@@ -257,6 +281,9 @@ func TestAuthRoutes_MeWithSession(t *testing.T) {
 }
 
 func TestAuthRoutes_MeWithoutSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	resp := doGet(t, client, srv.URL+"/api/auth/me")
@@ -265,6 +292,9 @@ func TestAuthRoutes_MeWithoutSession(t *testing.T) {
 }
 
 func TestAuthRoutes_Logout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up.
@@ -288,6 +318,9 @@ func TestAuthRoutes_Logout(t *testing.T) {
 }
 
 func TestAuthRoutes_CreateKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up.
@@ -322,6 +355,9 @@ func TestAuthRoutes_CreateKey(t *testing.T) {
 }
 
 func TestAuthRoutes_ListKeys(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up.
@@ -364,6 +400,9 @@ func TestAuthRoutes_ListKeys(t *testing.T) {
 }
 
 func TestAuthRoutes_DeleteKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, client := setupAuthAPI(t, false)
 
 	// Sign up.

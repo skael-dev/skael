@@ -14,6 +14,9 @@ import (
 // TestReadinessChecks_OK verifies that readinessChecks returns ("ok","ok",true)
 // when both the database and local storage are healthy.
 func TestReadinessChecks_OK(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	dir := t.TempDir()
 	storage, err := platform.NewLocalStorage(dir)
@@ -30,6 +33,9 @@ func TestReadinessChecks_OK(t *testing.T) {
 //   - checks.Storage is "unavailable" (not the real error message / temp path)
 //   - the temp dir path does not leak into either check field
 func TestReadinessChecks_StorageFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	dir := t.TempDir()
 	storage, err := platform.NewLocalStorage(dir)

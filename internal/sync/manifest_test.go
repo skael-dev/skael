@@ -12,6 +12,9 @@ import (
 )
 
 func TestManifest_ReflectsState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
