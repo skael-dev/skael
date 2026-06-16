@@ -60,3 +60,11 @@ func CheckAPIKey(hash, key string) bool {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:]) == hash
 }
+
+func GenerateTemporaryPassword() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
