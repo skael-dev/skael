@@ -76,8 +76,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run local security scan and print findings
+	sp := StartSpinner("Scanning...")
 	report, err := scan.ScanDir(dir)
 	if err != nil {
+		sp.Stop()
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "scan_error", "")
 			return nil
@@ -85,6 +87,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		ui.Errorf("%s", err)
 		return nil
 	}
+	sp.Stop()
 
 	if !ui.JSONMode {
 		if report.Status == "clean" {
@@ -114,8 +117,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	// Pack the skill directory into a tar.gz archive
+	sp = StartSpinner("Packing archive...")
 	archive, _, entries, err := skill.Pack(dir)
 	if err != nil {
+		sp.Stop()
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "pack_error", "")
 			return nil
@@ -123,6 +128,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		ui.Errorf("%s", err)
 		return nil
 	}
+	sp.Stop()
 
 	sizekb := float64(len(archive)) / 1024.0
 	if !ui.JSONMode {
@@ -146,8 +152,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
 	// Check if skill exists, create if not
+	sp = StartSpinner("Uploading...")
 	existing, err := c.GetSkill(name)
 	if err != nil {
+		sp.Stop()
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "api_error", "")
 			return nil
@@ -158,6 +166,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if existing == nil {
 		_, err = c.CreateSkill(name, description)
 		if err != nil {
+			sp.Stop()
 			if ui.JSONMode {
 				ui.PrintJSONError(err.Error(), "api_error", "")
 				return nil
@@ -169,6 +178,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	// Publish the new version
 	ver, _, pubErr := c.PublishVersion(name, archive)
+	sp.Stop()
 	if pubErr != nil {
 		if apiErr, ok := pubErr.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
 			if ui.JSONMode {

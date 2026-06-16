@@ -140,9 +140,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// 2. Create client and get manifest.
+	sp := StartSpinner("Fetching manifest...")
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 	manifest, err := c.GetManifest()
 	if err != nil {
+		sp.Stop()
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "api_error", "")
 			return nil
@@ -185,17 +187,33 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 6. If no changes, print up-to-date and summary.
-	if len(pending) == 0 {
+	// 5b. Check if any local skills need pruning.
+	manifestSet := make(map[string]struct{}, len(manifest))
+	for _, entry := range manifest {
+		manifestSet[entry.Name] = struct{}{}
+	}
+	hasPrunable := false
+	for _, s := range state.Skills {
+		if _, inManifest := manifestSet[s.Name]; !inManifest && len(s.Placements) > 0 {
+			hasPrunable = true
+			break
+		}
+	}
+
+	// 6. If no changes and nothing to prune, print up-to-date and summary.
+	if len(pending) == 0 && !hasPrunable {
+		sp.Stop()
 		if ui.JSONMode {
 			out := struct {
 				Synced int      `json:"synced"`
 				Failed int      `json:"failed"`
+				Pruned int      `json:"pruned"`
 				Agents []string `json:"agents"`
 				Total  int      `json:"total"`
 			}{
 				Synced: 0,
 				Failed: 0,
+				Pruned: 0,
 				Agents: []string{},
 				Total:  len(manifest),
 			}
@@ -206,6 +224,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			ui.Summary(
 				fmt.Sprintf("0 updated"),
 				fmt.Sprintf("0 failed"),
+				fmt.Sprintf("0 removed"),
 				fmt.Sprintf("%d total", len(manifest)),
 			)
 		}
@@ -213,6 +232,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// 7. If --dry-run, show what would happen and return.
+	sp.Stop()
 	if syncDryRun {
 		if !syncQuiet {
 			ui.Info("scope: %s", scope)
@@ -244,8 +264,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 	var results []syncResult
 	var newSkills []config.SyncedSkill
 
-	// Carry over skills that didn't need updating.
+	// Carry over skills that didn't need updating and are still in the manifest.
+	// Skills not in the manifest are handled by the prune step below.
 	for name, local := range localMap {
+		if _, inManifest := manifestSet[name]; !inManifest {
+			continue
+		}
 		needsUpdate := false
 		for _, ts := range pending {
 			if ts.entry.Name == name {
@@ -258,7 +282,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	for _, ts := range pending {
+	for i, ts := range pending {
+		sp.Update(fmt.Sprintf("Downloading %s (%d/%d)...", ts.entry.Name, i+1, len(pending)))
 		archive, dlErr := c.DownloadVersion(ts.entry.Name, ts.entry.Version)
 		if dlErr != nil {
 			ui.Errorf("download %s v%d: %s", ts.entry.Name, ts.entry.Version, dlErr)
@@ -280,6 +305,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		// mid-extraction failure leaves the previous skill version intact.
 		extractOK := 0
 		extractFail := 0
+		var placements []config.Placement
 		for _, agent := range detectedAgents {
 			destDir := filepath.Join(agentSkillsBase(agent, scope, home, projectRoot), ts.entry.Name)
 			if err := extractSkillAtomically(archive, destDir); err != nil {
@@ -287,6 +313,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 				extractFail++
 			} else {
 				extractOK++
+				placements = append(placements, config.Placement{
+					Agent: agent.Name(),
+					Path:  destDir,
+					Scope: string(scope),
+				})
 			}
 		}
 
@@ -308,12 +339,48 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			results = append(results, syncResult{name: ts.entry.Name, version: ts.entry.Version, failed: false})
 			newSkills = append(newSkills, config.SyncedSkill{
-				Name:     ts.entry.Name,
-				Version:  ts.entry.Version,
-				Checksum: ts.entry.Checksum,
+				Name:       ts.entry.Name,
+				Version:    ts.entry.Version,
+				Checksum:   ts.entry.Checksum,
+				Placements: placements,
 			})
 		}
 	}
+
+	// 9b. Prune skills that exist in state but no longer appear in the manifest.
+	pruned := 0
+	for _, local := range state.Skills {
+		if _, inManifest := manifestSet[local.Name]; inManifest {
+			continue
+		}
+		if len(local.Placements) == 0 {
+			if !syncQuiet {
+				ui.Info("skip prune %s: no recorded placements (old state format)", local.Name)
+			}
+			newSkills = append(newSkills, local)
+			continue
+		}
+		if syncDryRun {
+			if !syncQuiet {
+				for _, p := range local.Placements {
+					ui.Warn("would remove %s from %s (%s)", local.Name, p.Agent, p.Path)
+				}
+			}
+			newSkills = append(newSkills, local)
+			continue
+		}
+		sp.Update(fmt.Sprintf("Removing %s...", local.Name))
+		for _, p := range local.Placements {
+			if err := os.RemoveAll(p.Path); err != nil {
+				ui.Errorf("prune %s from %s: %s", local.Name, p.Agent, err)
+			} else if !syncQuiet {
+				ui.Warn("removed %s from %s (%s)", local.Name, p.Agent, p.Path)
+			}
+		}
+		pruned++
+	}
+
+	sp.Stop()
 
 	// 10. Write new state file.
 	newState := &config.SyncState{
@@ -350,19 +417,21 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// 12. If JSONMode: print JSON.
 	if ui.JSONMode {
 		out := struct {
-			Synced int               `json:"synced"`
-			Failed int               `json:"failed"`
-			Agents []string          `json:"agents"`
-			Scope  string            `json:"scope"`
-			Dests  map[string]string `json:"dests"`
-			Total  int               `json:"total"`
+			Synced  int               `json:"synced"`
+			Failed  int               `json:"failed"`
+			Pruned  int               `json:"pruned"`
+			Agents  []string          `json:"agents"`
+			Scope   string            `json:"scope"`
+			Dests   map[string]string `json:"dests"`
+			Total   int               `json:"total"`
 		}{
-			Synced: synced,
-			Failed: failed,
-			Agents: agentNames,
-			Scope:  string(scope),
-			Dests:  dests,
-			Total:  len(manifest),
+			Synced:  synced,
+			Failed:  failed,
+			Pruned:  pruned,
+			Agents:  agentNames,
+			Scope:   string(scope),
+			Dests:   dests,
+			Total:   len(manifest),
 		}
 		return ui.PrintJSON(out)
 	}
@@ -371,6 +440,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		parts := []string{
 			fmt.Sprintf("%d updated", synced),
 			fmt.Sprintf("%d failed", failed),
+			fmt.Sprintf("%d removed", pruned),
 			fmt.Sprintf("%d total", len(manifest)),
 		}
 		if len(agentNames) > 0 {
