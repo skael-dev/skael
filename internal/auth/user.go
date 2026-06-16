@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 
@@ -56,7 +57,11 @@ func HashAPIKey(key string) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
-func CheckAPIKey(hash, key string) bool {
+func CheckAPIKey(storedHash, key string) bool {
 	h := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(h[:]) == hash
+	expected, err := hex.DecodeString(storedHash)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(h[:], expected) == 1
 }
