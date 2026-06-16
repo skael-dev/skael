@@ -177,6 +177,16 @@ func (b *Builder) Build() (*Server, error) {
 	analyticsStore := analytics.NewStore(b.pool)
 	analytics.RegisterRoutes(api, analyticsStore)
 
+	// 14a. Run event retention cleanup on startup.
+	if cfg.EventRetentionDays > 0 {
+		deleted, err := analyticsStore.CleanupOldEvents(context.Background(), cfg.EventRetentionDays)
+		if err != nil {
+			log.Warn().Err(err).Msg("event retention cleanup failed")
+		} else if deleted > 0 {
+			log.Info().Int64("deleted", deleted).Int("retention_days", cfg.EventRetentionDays).Msg("event retention cleanup complete")
+		}
+	}
+
 	// 15. Register import routes.
 	importStore := skillimport.NewStore(b.pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)

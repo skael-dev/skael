@@ -36,6 +36,17 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// CleanupOldEvents deletes events older than retentionDays and returns the
+// number of rows removed. Pass 0 to disable (caller should check before calling).
+func (s *Store) CleanupOldEvents(ctx context.Context, retentionDays int) (int64, error) {
+	const q = `DELETE FROM skill_events WHERE created_at < NOW() - ($1 || ' days')::interval`
+	tag, err := s.pool.Exec(ctx, q, retentionDays)
+	if err != nil {
+		return 0, fmt.Errorf("analytics.Store.CleanupOldEvents: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Insert writes a single activation event into skill_events.
 func (s *Store) Insert(ctx context.Context, e Event) error {
 	const q = `
