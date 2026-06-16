@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +23,12 @@ type Config struct {
 	// /dev/stdout". Empty disables the feature.
 	ExternalScanCmd     string
 	ExternalScanTimeout time.Duration
+
+	DBMaxConns          int
+	DBMinConns          int
+	DBMaxConnLifetime   time.Duration
+	DBMaxConnIdleTime   time.Duration
+	DBHealthCheckPeriod time.Duration
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -42,6 +49,11 @@ func LoadConfig() (*Config, error) {
 		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
 		ExternalScanCmd:     os.Getenv("EXTERNAL_SCAN_CMD"),
 		ExternalScanTimeout: envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
+		DBMaxConns:          envInt("DB_MAX_CONNS", 25),
+		DBMinConns:          envInt("DB_MIN_CONNS", 5),
+		DBMaxConnLifetime:   envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
+		DBMaxConnIdleTime:   envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
+		DBHealthCheckPeriod: envDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
 	}, nil
 }
 
@@ -68,6 +80,16 @@ func NewStorageFromConfig(cfg *Config) (Storage, error) {
 func envDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// envInt parses an integer from key, or returns fallback when unset or invalid.
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

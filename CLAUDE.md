@@ -71,6 +71,11 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 | `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
 | `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run on publish/import; `{dir}` → skill dir, must emit SARIF on stdout (e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`). Findings merge into the native scan. |
 | `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
+| `DB_MAX_CONNS` | no | `25` | Maximum number of connections in the pool |
+| `DB_MIN_CONNS` | no | `5` | Minimum number of idle connections the pool maintains |
+| `DB_MAX_CONN_LIFETIME` | no | `1h` | Maximum lifetime of a connection before it is closed (Go duration) |
+| `DB_MAX_CONN_IDLE_TIME` | no | `30m` | Maximum idle time before a connection is closed (Go duration) |
+| `DB_HEALTH_CHECK_PERIOD` | no | `1m` | Interval between pool health checks (Go duration) |
 
 Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
 
