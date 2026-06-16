@@ -90,8 +90,15 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 	type loginInput struct {
 		Body loginBody
 	}
+	type loginResponse struct {
+		ID                    string `json:"id"`
+		Email                 string `json:"email"`
+		Name                  string `json:"name"`
+		Role                  string `json:"role"`
+		PasswordResetRequired bool   `json:"password_reset_required"`
+	}
 	type loginOutput struct {
-		Body User
+		Body loginResponse
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "auth-login",
@@ -109,11 +116,12 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 
 		sessionManager.Put(ctx, "user_id", row.ID)
 
-		return &loginOutput{Body: User{
-			ID:    row.ID,
-			Email: row.Email,
-			Name:  row.Name,
-			Role:  row.Role,
+		return &loginOutput{Body: loginResponse{
+			ID:                    row.ID,
+			Email:                 row.Email,
+			Name:                  row.Name,
+			Role:                  row.Role,
+			PasswordResetRequired: row.PasswordResetRequired,
 		}}, nil
 	})
 
@@ -272,5 +280,156 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		}
 
 		return nil, nil
+	})
+
+	// -----------------------------------------------------------------
+	// POST /api/auth/change-password — authenticated user changes own password
+	// -----------------------------------------------------------------
+	type changePasswordBody struct {
+		CurrentPassword string `json:"current_password" minLength:"1"`
+		NewPassword     string `json:"new_password" minLength:"8"`
+	}
+	type changePasswordInput struct {
+		Body changePasswordBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "change-password",
+		Method:        http.MethodPost,
+		Path:          "/api/auth/change-password",
+		Summary:       "Change the current user's password",
+		DefaultStatus: http.StatusNoContent,
+	}, func(ctx context.Context, input *changePasswordInput) (*struct{}, error) {
+		userID := sessionManager.GetString(ctx, "user_id")
+		if userID == "" {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+
+		row, err := userStore.GetByID(ctx, userID)
+		if err != nil || row == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+
+		if !CheckPassword(row.PasswordHash, input.Body.CurrentPassword) {
+			return nil, huma.Error403Forbidden("current password is incorrect")
+		}
+
+		hash, err := HashPassword(input.Body.NewPassword)
+		if err != nil {
+			return nil, fmt.Errorf("change password: hash: %w", err)
+		}
+
+		if err := userStore.UpdatePassword(ctx, userID, hash); err != nil {
+			return nil, fmt.Errorf("change password: update: %w", err)
+		}
+
+		return nil, nil
+	})
+
+	// -----------------------------------------------------------------
+	// POST /api/admin/reset-password — owner resets another user's password
+	// -----------------------------------------------------------------
+	type adminResetBody struct {
+		Email string `json:"email" maxLength:"255"`
+	}
+	type adminResetInput struct {
+		Body adminResetBody
+	}
+	type adminResetResponse struct {
+		TemporaryPassword string `json:"temporary_password"`
+	}
+	type adminResetOutput struct {
+		Body adminResetResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-reset-password",
+		Method:      http.MethodPost,
+		Path:        "/api/admin/reset-password",
+		Summary:     "Reset a user's password (owner only)",
+	}, func(ctx context.Context, input *adminResetInput) (*adminResetOutput, error) {
+		user := UserFromContext(ctx)
+		if user == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if user.Role != "owner" {
+			return nil, huma.Error403Forbidden("owner role required")
+		}
+
+		target, err := userStore.GetByEmail(ctx, input.Body.Email)
+		if err != nil {
+			return nil, fmt.Errorf("admin reset: lookup: %w", err)
+		}
+		if target == nil {
+			return nil, huma.Error404NotFound("user not found")
+		}
+
+		tempPass, err := GenerateTemporaryPassword()
+		if err != nil {
+			return nil, fmt.Errorf("admin reset: generate: %w", err)
+		}
+
+		hash, err := HashPassword(tempPass)
+		if err != nil {
+			return nil, fmt.Errorf("admin reset: hash: %w", err)
+		}
+
+		if err := userStore.UpdatePassword(ctx, target.ID, hash); err != nil {
+			return nil, fmt.Errorf("admin reset: update password: %w", err)
+		}
+		if err := userStore.SetResetRequired(ctx, target.ID, true); err != nil {
+			return nil, fmt.Errorf("admin reset: set flag: %w", err)
+		}
+
+		return &adminResetOutput{Body: adminResetResponse{
+			TemporaryPassword: tempPass,
+		}}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// GET /api/admin/users — owner lists all users
+	// -----------------------------------------------------------------
+	type adminUserInfo struct {
+		ID        string    `json:"id"`
+		Email     string    `json:"email"`
+		Name      string    `json:"name"`
+		Role      string    `json:"role"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	type adminUsersBody struct {
+		Users []adminUserInfo `json:"users"`
+	}
+	type adminUsersOutput struct {
+		Body adminUsersBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-list-users",
+		Method:      http.MethodGet,
+		Path:        "/api/admin/users",
+		Summary:     "List all users (owner only)",
+	}, func(ctx context.Context, input *struct{}) (*adminUsersOutput, error) {
+		user := UserFromContext(ctx)
+		if user == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if user.Role != "owner" {
+			return nil, huma.Error403Forbidden("owner role required")
+		}
+
+		rows, err := userStore.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("admin list users: %w", err)
+		}
+
+		users := make([]adminUserInfo, len(rows))
+		for i, r := range rows {
+			users[i] = adminUserInfo{
+				ID:        r.ID,
+				Email:     r.Email,
+				Name:      r.Name,
+				Role:      r.Role,
+				CreatedAt: r.CreatedAt,
+			}
+		}
+
+		return &adminUsersOutput{Body: adminUsersBody{Users: users}}, nil
 	})
 }

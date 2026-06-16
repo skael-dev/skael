@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,6 +38,11 @@ func main() {
 		}
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
+		resetPassword(os.Args[2:])
+		return
+	}
+
 	ctx := context.Background()
 
 	cfg, err := platform.LoadConfig()
@@ -68,6 +74,65 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal().Err(err).Msg("server error")
 	}
+}
+
+func resetPassword(args []string) {
+	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
+	email := fs.String("email", "", "email of the user to reset")
+	fs.Parse(args)
+
+	if *email == "" {
+		fmt.Fprintln(os.Stderr, "usage: skael-server reset-password --email <email>")
+		os.Exit(1)
+	}
+
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		fmt.Fprintln(os.Stderr, "DATABASE_URL is required")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	pool, err := platform.NewPool(ctx, dbURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database connection error: %v\n", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	userStore := auth.NewUserStore(pool)
+	row, err := userStore.GetByEmail(ctx, *email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lookup error: %v\n", err)
+		os.Exit(1)
+	}
+	if row == nil {
+		fmt.Fprintf(os.Stderr, "user not found: %s\n", *email)
+		os.Exit(1)
+	}
+
+	tempPass, err := auth.GenerateTemporaryPassword()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate password error: %v\n", err)
+		os.Exit(1)
+	}
+
+	hash, err := auth.HashPassword(tempPass)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hash password error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := userStore.UpdatePassword(ctx, row.ID, hash); err != nil {
+		fmt.Fprintf(os.Stderr, "update password error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := userStore.SetResetRequired(ctx, row.ID, true); err != nil {
+		fmt.Fprintf(os.Stderr, "set reset flag error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(tempPass)
 }
 
 func printOpenAPISpec() {

@@ -65,3 +65,11 @@ func CheckAPIKey(storedHash, key string) bool {
 	}
 	return subtle.ConstantTimeCompare(h[:], expected) == 1
 }
+
+func GenerateTemporaryPassword() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

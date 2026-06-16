@@ -11,12 +11,13 @@ import (
 )
 
 type UserRow struct {
-	ID           string
-	Email        string
-	Name         string
-	PasswordHash string
-	Role         string
-	CreatedAt    time.Time
+	ID                    string
+	Email                 string
+	Name                  string
+	PasswordHash          string
+	Role                  string
+	PasswordResetRequired bool
+	CreatedAt             time.Time
 }
 
 type UserStore struct {
@@ -31,11 +32,11 @@ func (s *UserStore) Create(ctx context.Context, email, name, passwordHash string
 	const q = `
         INSERT INTO users (email, name, password_hash)
         VALUES ($1, $2, $3)
-        RETURNING id, email, name, password_hash, role, created_at
+        RETURNING id, email, name, password_hash, role, password_reset_required, created_at
     `
 	var u UserRow
 	err := s.pool.QueryRow(ctx, q, email, name, passwordHash).Scan(
-		&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.CreatedAt,
+		&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.PasswordResetRequired, &u.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("auth.UserStore.Create: %w", err)
@@ -47,11 +48,11 @@ func (s *UserStore) CreateWithRole(ctx context.Context, email, name, passwordHas
 	const q = `
         INSERT INTO users (email, name, password_hash, role)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, email, name, password_hash, role, created_at
+        RETURNING id, email, name, password_hash, role, password_reset_required, created_at
     `
 	var u UserRow
 	err := s.pool.QueryRow(ctx, q, email, name, passwordHash, role).Scan(
-		&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.CreatedAt,
+		&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.PasswordResetRequired, &u.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("auth.UserStore.CreateWithRole: %w", err)
@@ -60,9 +61,9 @@ func (s *UserStore) CreateWithRole(ctx context.Context, email, name, passwordHas
 }
 
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (*UserRow, error) {
-	const q = `SELECT id, email, name, password_hash, role, created_at FROM users WHERE email = $1`
+	const q = `SELECT id, email, name, password_hash, role, password_reset_required, created_at FROM users WHERE email = $1`
 	var u UserRow
-	err := s.pool.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.PasswordResetRequired, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -73,9 +74,9 @@ func (s *UserStore) GetByEmail(ctx context.Context, email string) (*UserRow, err
 }
 
 func (s *UserStore) GetByID(ctx context.Context, id string) (*UserRow, error) {
-	const q = `SELECT id, email, name, password_hash, role, created_at FROM users WHERE id = $1`
+	const q = `SELECT id, email, name, password_hash, role, password_reset_required, created_at FROM users WHERE id = $1`
 	var u UserRow
-	err := s.pool.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.PasswordResetRequired, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -92,4 +93,35 @@ func (s *UserStore) Count(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("auth.UserStore.Count: %w", err)
 	}
 	return n, nil
+}
+
+func (s *UserStore) UpdatePassword(ctx context.Context, id, passwordHash string) error {
+	const q = `UPDATE users SET password_hash = $2, password_reset_required = false WHERE id = $1`
+	_, err := s.pool.Exec(ctx, q, id, passwordHash)
+	return err
+}
+
+func (s *UserStore) SetResetRequired(ctx context.Context, id string, required bool) error {
+	const q = `UPDATE users SET password_reset_required = $2 WHERE id = $1`
+	_, err := s.pool.Exec(ctx, q, id, required)
+	return err
+}
+
+func (s *UserStore) List(ctx context.Context) ([]UserRow, error) {
+	const q = `SELECT id, email, name, password_hash, role, password_reset_required, created_at FROM users ORDER BY created_at`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("auth.UserStore.List: %w", err)
+	}
+	defer rows.Close()
+
+	var users []UserRow
+	for rows.Next() {
+		var u UserRow
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.PasswordResetRequired, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("auth.UserStore.List: scan: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
