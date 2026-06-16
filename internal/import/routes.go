@@ -308,7 +308,7 @@ func importSingleSkill(
 	}
 
 	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog,
-		description, body, fmJSON, manifest, scanJSON)
+		description, body, fmJSON, manifest, scanJSON, "import")
 	if err != nil {
 		_ = storage.Delete(ctx, archiveName)
 		return nil, false, fmt.Errorf("create version: %w", err)

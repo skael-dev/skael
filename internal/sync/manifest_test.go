@@ -23,14 +23,14 @@ func TestManifest_ReflectsState(t *testing.T) {
 	require.NoError(t, err)
 
 	manifest1 := []skill.FileEntry{{Path: "skill.md", Size: 512}}
-	_, err = skillStore.CreateVersion(ctx, sk1.ID, "/archives/alpha-v1.tar.gz", "checksumAlpha1", "initial alpha", "", "", json.RawMessage(`{}`), manifest1, json.RawMessage(`{}`))
+	_, err = skillStore.CreateVersion(ctx, sk1.ID, "/archives/alpha-v1.tar.gz", "checksumAlpha1", "initial alpha", "", "", json.RawMessage(`{}`), manifest1, json.RawMessage(`{}`), "test@example.com")
 	require.NoError(t, err)
 
 	sk2, err := skillStore.Create(ctx, "beta-skill", "Beta Skill", "Second skill", "content beta", json.RawMessage(`{}`))
 	require.NoError(t, err)
 
 	manifest2 := []skill.FileEntry{{Path: "skill.md", Size: 256}}
-	_, err = skillStore.CreateVersion(ctx, sk2.ID, "/archives/beta-v1.tar.gz", "checksumBeta1", "initial beta", "", "", json.RawMessage(`{}`), manifest2, json.RawMessage(`{}`))
+	_, err = skillStore.CreateVersion(ctx, sk2.ID, "/archives/beta-v1.tar.gz", "checksumBeta1", "initial beta", "", "", json.RawMessage(`{}`), manifest2, json.RawMessage(`{}`), "test@example.com")
 	require.NoError(t, err)
 
 	// GetManifest should return both entries.

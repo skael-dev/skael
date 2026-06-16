@@ -95,7 +95,7 @@ func TestStore_CreateVersion(t *testing.T) {
 		{Path: "README.md", Size: 256},
 	}
 	scanResult := json.RawMessage(`{"clean":true}`)
-	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", "", "", json.RawMessage(`{}`), manifest, scanResult)
+	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)
@@ -120,7 +120,7 @@ func TestStore_GetVersion(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
 	scanResult := json.RawMessage(`{"status":"clean"}`)
-	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", "", "", json.RawMessage(`{}`), manifest, scanResult)
+	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com")
 	require.NoError(t, err)
 	require.Equal(t, 1, created.Version)
 
@@ -146,7 +146,7 @@ func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
 
 	_, err = store.CreateVersion(ctx, sk.ID, "meta-skill/abc.tar.gz", "abc", "",
 		"new desc", "new content",
-		json.RawMessage(`{"description":"new desc"}`), nil, json.RawMessage(`{}`))
+		json.RawMessage(`{"description":"new desc"}`), nil, json.RawMessage(`{}`), "test@example.com")
 	require.NoError(t, err)
 
 	got, err := store.GetByName(ctx, "meta-skill")
@@ -166,10 +166,10 @@ func TestStore_ListVersions(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "skill.md", Size: 512}}
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com")
 	require.NoError(t, err)
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`))
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com")
 	require.NoError(t, err)
 
 	versions, err := s.ListVersions(ctx, "multi-version-skill")
