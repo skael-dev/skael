@@ -57,23 +57,52 @@ func (s *Store) GetByName(ctx context.Context, name string) (*Skill, error) {
 	return sk, nil
 }
 
+// ListOptions holds optional filter parameters for List.
+type ListOptions struct {
+	Limit   int
+	Offset  int
+	Author  string
+	Tag     string
+	License string
+}
+
 // List returns a paginated slice of skills along with the total row count.
-func (s *Store) List(ctx context.Context, limit, offset int) ([]Skill, int, error) {
-	const countQ = `SELECT COUNT(*) FROM skills`
+// Filters are applied when the corresponding ListOptions fields are non-empty.
+func (s *Store) List(ctx context.Context, opts ListOptions) ([]Skill, int, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 20
+	}
+
+	args := []any{}
+	next := func(v any) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
+
+	where := ""
+	if opts.Author != "" {
+		where += fmt.Sprintf(" AND author = %s", next(opts.Author))
+	}
+	if opts.Tag != "" {
+		where += fmt.Sprintf(" AND %s = ANY(tags)", next(opts.Tag))
+	}
+	if opts.License != "" {
+		where += fmt.Sprintf(" AND license = %s", next(opts.License))
+	}
+
+	countQ := `SELECT COUNT(*) FROM skills WHERE 1=1` + where
 	var total int
-	if err := s.pool.QueryRow(ctx, countQ).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("skill.Store.List count: %w", err)
 	}
 
-	const q = `
+	q := `
 		SELECT id, name, display_name, description, content, latest_version, frontmatter,
 		       author, license, compatibility, tags, spec_compliance,
 		       created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
+		WHERE 1=1` + where + `
 		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-	`
-	rows, err := s.pool.Query(ctx, q, limit, offset)
+		LIMIT ` + next(opts.Limit) + ` OFFSET ` + next(opts.Offset)
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("skill.Store.List query: %w", err)
 	}

@@ -170,8 +170,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	// GET /api/skills — list skills
 	// -----------------------------------------------------------------
 	type listInput struct {
-		Limit  int `query:"limit"  default:"20" minimum:"1" maximum:"100"`
-		Offset int `query:"offset" default:"0"  minimum:"0"`
+		Limit   int    `query:"limit"   default:"20" minimum:"1" maximum:"100"`
+		Offset  int    `query:"offset"  default:"0"  minimum:"0"`
+		Author  string `query:"author"`
+		Tag     string `query:"tag"`
+		License string `query:"license"`
 	}
 	type listBody struct {
 		Skills []Skill `json:"skills"`
@@ -190,7 +193,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if limit == 0 {
 			limit = 20
 		}
-		skills, total, err := store.List(ctx, limit, input.Offset)
+		skills, total, err := store.List(ctx, ListOptions{
+			Limit:   limit,
+			Offset:  input.Offset,
+			Author:  input.Author,
+			Tag:     input.Tag,
+			License: input.License,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list skills: %w", err)
 		}
