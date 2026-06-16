@@ -271,6 +271,55 @@ func (c *Client) SearchSkills(query string, limit int) ([]Skill, error) {
 	return body.Skills, nil
 }
 
+// ActivationSummary holds the activation analytics for a single skill.
+type ActivationSummary struct {
+	TotalCount    int            `json:"total_count"`
+	UniqueDevs    int            `json:"unique_devs"`
+	LastTriggered *time.Time     `json:"last_triggered"`
+	ByAgent       map[string]int `json:"by_agent"`
+}
+
+// GetActivations calls GET /api/skills/{name}/activations and returns the
+// activation summary for the given skill. Returns a zero-value summary when
+// the server responds with 404.
+func (c *Client) GetActivations(name string) (*ActivationSummary, error) {
+	resp, err := c.do(http.MethodGet, "/api/skills/"+url.PathEscape(name)+"/activations", nil, "")
+	if err != nil {
+		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == http.StatusNotFound {
+			return &ActivationSummary{ByAgent: map[string]int{}}, nil
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var summary ActivationSummary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		return nil, fmt.Errorf("decode activations response: %w", err)
+	}
+	if summary.ByAgent == nil {
+		summary.ByAgent = map[string]int{}
+	}
+	return &summary, nil
+}
+
+// ListVersions calls GET /api/skills/{name}/versions and returns all versions
+// for the skill in ascending order.
+func (c *Client) ListVersions(name string) ([]Version, error) {
+	resp, err := c.do(http.MethodGet, "/api/skills/"+url.PathEscape(name)+"/versions", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Versions []Version `json:"versions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode list versions response: %w", err)
+	}
+	return body.Versions, nil
+}
+
 // GetManifest calls GET /api/sync/manifest and returns the list of manifest
 // entries used for client-side sync diffing.
 func (c *Client) GetManifest() ([]ManifestEntry, error) {
