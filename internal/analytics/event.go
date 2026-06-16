@@ -36,6 +36,17 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// CleanupOldEvents deletes events older than retentionDays and returns the
+// number of rows removed. Pass 0 to disable (caller should check before calling).
+func (s *Store) CleanupOldEvents(ctx context.Context, retentionDays int) (int64, error) {
+	const q = `DELETE FROM skill_events WHERE created_at < NOW() - ($1 || ' days')::interval`
+	tag, err := s.pool.Exec(ctx, q, retentionDays)
+	if err != nil {
+		return 0, fmt.Errorf("analytics.Store.CleanupOldEvents: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Insert writes a single activation event into skill_events.
 func (s *Store) Insert(ctx context.Context, e Event) error {
 	const q = `
@@ -199,7 +210,7 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 		where += fmt.Sprintf(" AND (s.name ILIKE %s OR s.description ILIKE %s)", p, p)
 	}
 	if opts.Tag != "" {
-		where += fmt.Sprintf(" AND COALESCE(s.frontmatter->'tags','[]'::jsonb) @> to_jsonb(%s::text)", next(opts.Tag))
+		where += fmt.Sprintf(" AND %s = ANY(s.tags)", next(opts.Tag))
 	}
 	q := `
 		SELECT
@@ -212,7 +223,7 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			s.reviewed_at,
 			s.latest_version,
 			s.updated_at,
-			s.frontmatter->'tags'                                 AS raw_tags,
+			s.tags                                                AS raw_tags,
 			COUNT(*) OVER() AS total_count
 		FROM skills s
 		LEFT JOIN (
@@ -241,7 +252,6 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 	total := 0
 	for rows.Next() {
 		var sa SkillAnalytics
-		var rawTags []byte
 		var rowTotal int
 		if err := rows.Scan(
 			&sa.Name,
@@ -253,13 +263,10 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			&sa.ReviewedAt,
 			&sa.LatestVersion,
 			&sa.UpdatedAt,
-			&rawTags,
+			&sa.Tags,
 			&rowTotal,
 		); err != nil {
 			return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)
-		}
-		if rawTags != nil {
-			_ = json.Unmarshal(rawTags, &sa.Tags)
 		}
 		if sa.Tags == nil {
 			sa.Tags = []string{}
@@ -279,9 +286,9 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 // GetAllTags returns the distinct, sorted set of tags across all skills.
 func (s *Store) GetAllTags(ctx context.Context) ([]string, error) {
 	const q = `
-		SELECT DISTINCT t AS tag
-		FROM skills s, jsonb_array_elements_text(s.frontmatter->'tags') AS t
-		WHERE jsonb_typeof(s.frontmatter->'tags') = 'array'
+		SELECT DISTINCT unnest(tags) AS tag
+		FROM skills
+		WHERE tags != '{}'
 		ORDER BY tag`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {

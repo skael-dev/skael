@@ -69,6 +69,7 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 | `S3_ENDPOINT` / `S3_REGION` | no | AWS / `us-east-1` | Only when `STORAGE_PATH=s3://…` |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Fall back to `AWS_*`; omit both for IAM instance role |
 | `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
+| `EVENT_RETENTION_DAYS` | no | `90` | Days of skill_events to keep; older rows are purged on startup. `0` disables cleanup |
 | `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run on publish/import; `{dir}` → skill dir, must emit SARIF on stdout (e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`). Findings merge into the native scan. |
 | `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
 | `DB_MAX_CONNS` | no | `25` | Maximum number of connections in the pool |

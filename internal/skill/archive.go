@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -234,4 +236,117 @@ func ParseFrontmatter(content string) (map[string]interface{}, string, error) {
 	}
 
 	return fm, body, nil
+}
+
+// SpecValidation holds the result of validating a skill's frontmatter against
+// the Agent Skills spec format.
+type SpecValidation struct {
+	Compliance  string
+	Author      string
+	License     string
+	Compat      string
+	Tags        []string
+	DisplayName string
+	Warnings    []string
+}
+
+// specKebab matches valid spec-format names: 1-64 lowercase kebab-case.
+var specKebab = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// ValidateSpec extracts spec-defined metadata from parsed frontmatter and
+// computes a compliance level ("full", "partial", or "none").
+func ValidateSpec(fm map[string]interface{}, skillName string) *SpecValidation {
+	v := &SpecValidation{
+		Tags: []string{},
+	}
+
+	if fm == nil {
+		v.Compliance = "none"
+		v.Warnings = append(v.Warnings, "no frontmatter found")
+		return v
+	}
+
+	// Extract description.
+	desc, _ := fm["description"].(string)
+
+	// Extract metadata bag fields.
+	if meta, ok := fm["metadata"].(map[string]interface{}); ok {
+		if a, ok := meta["author"].(string); ok {
+			v.Author = a
+		}
+		if rawTags, ok := meta["tags"].([]interface{}); ok {
+			for _, t := range rawTags {
+				if s, ok := t.(string); ok {
+					v.Tags = append(v.Tags, s)
+				}
+			}
+		}
+	}
+
+	// Top-level author/tags override metadata bag if present.
+	if a, ok := fm["author"].(string); ok && a != "" {
+		v.Author = a
+	}
+	if rawTags, ok := fm["tags"].([]interface{}); ok {
+		tags := make([]string, 0, len(rawTags))
+		for _, t := range rawTags {
+			if s, ok := t.(string); ok {
+				tags = append(tags, s)
+			}
+		}
+		if len(tags) > 0 {
+			v.Tags = tags
+		}
+	}
+
+	// Top-level license and compatibility.
+	if l, ok := fm["license"].(string); ok {
+		v.License = l
+	}
+	if c, ok := fm["compatibility"].(string); ok {
+		v.Compat = c
+	}
+
+	// Name check — used for display_name extraction and format warnings.
+	if fmName, ok := fm["name"].(string); ok && fmName != "" {
+		hasUpper := false
+		hasSpace := false
+		for _, r := range fmName {
+			if unicode.IsUpper(r) {
+				hasUpper = true
+			}
+			if unicode.IsSpace(r) {
+				hasSpace = true
+			}
+		}
+		if hasUpper || hasSpace {
+			v.DisplayName = fmName
+		}
+
+		normalized := strings.ToLower(strings.ReplaceAll(fmName, " ", "-"))
+		if normalized != skillName {
+			if specKebab.MatchString(normalized) && len(normalized) <= 64 {
+				v.Warnings = append(v.Warnings,
+					fmt.Sprintf("frontmatter name %q differs from skill name %q", fmName, skillName))
+			} else {
+				v.Warnings = append(v.Warnings,
+					fmt.Sprintf("frontmatter name %q does not match spec format (1-64 kebab-case)", fmName))
+			}
+		}
+	}
+
+	// Compute compliance level.
+	switch {
+	case desc == "":
+		v.Compliance = "partial"
+		v.Warnings = append(v.Warnings, "missing description")
+	case len(desc) > 1024:
+		v.Compliance = "partial"
+		v.Warnings = append(v.Warnings,
+			fmt.Sprintf("description exceeds 1024 chars (%d)", len(desc)))
+	default:
+		v.Compliance = "full"
+	}
+
+	return v
 }

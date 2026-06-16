@@ -16,6 +16,10 @@ type Config struct {
 	DisableSignup bool
 	GitHubToken   string
 
+	// EventRetentionDays controls how many days of skill_events to keep.
+	// Events older than this are purged on startup. 0 disables cleanup.
+	EventRetentionDays int
+
 	// ExternalScanCmd, when set, is an opt-in external security scanner command
 	// run over each skill on publish/import (Phase 2). The token "{dir}" is
 	// replaced with the skill directory and the command must emit SARIF on
@@ -51,6 +55,7 @@ func LoadConfig() (*Config, error) {
 		ListenAddr:          envDefault("LISTEN_ADDR", ":8080"),
 		DisableSignup:       os.Getenv("DISABLE_SIGNUP") == "true",
 		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+		EventRetentionDays:  envInt("EVENT_RETENTION_DAYS", 90),
 		ExternalScanCmd:     os.Getenv("EXTERNAL_SCAN_CMD"),
 		ExternalScanTimeout: envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
 		DBMaxConns:          envInt("DB_MAX_CONNS", 25),
@@ -82,6 +87,15 @@ func NewStorageFromConfig(cfg *Config) (Storage, error) {
 		return newS3Storage(cfg.StoragePath)
 	}
 	return NewLocalStorage(cfg.StoragePath)
+}
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 func envDefault(key, fallback string) string {

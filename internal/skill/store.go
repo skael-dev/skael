@@ -25,7 +25,9 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 	const q = `
 		INSERT INTO skills (name, display_name, description, content, frontmatter)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+		RETURNING id, name, display_name, description, content, latest_version, frontmatter,
+		          author, license, compatibility, tags, spec_compliance,
+		          created_at, updated_at, reviewed_at, reviewed_by
 	`
 	row := s.pool.QueryRow(ctx, q, name, displayName, description, content, frontmatter)
 	sk, err := scanSkill(row)
@@ -38,7 +40,9 @@ func (s *Store) Create(ctx context.Context, name, displayName, description, cont
 // GetByName retrieves a skill by its unique name. Returns nil, nil when not found.
 func (s *Store) GetByName(ctx context.Context, name string) (*Skill, error) {
 	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+		SELECT id, name, display_name, description, content, latest_version, frontmatter,
+		       author, license, compatibility, tags, spec_compliance,
+		       created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
 		WHERE name = $1
 	`
@@ -53,21 +57,52 @@ func (s *Store) GetByName(ctx context.Context, name string) (*Skill, error) {
 	return sk, nil
 }
 
+// ListOptions holds optional filter parameters for List.
+type ListOptions struct {
+	Limit   int
+	Offset  int
+	Author  string
+	Tag     string
+	License string
+}
+
 // List returns a paginated slice of skills along with the total row count.
-func (s *Store) List(ctx context.Context, limit, offset int) ([]Skill, int, error) {
-	const countQ = `SELECT COUNT(*) FROM skills`
+// Filters are applied when the corresponding ListOptions fields are non-empty.
+func (s *Store) List(ctx context.Context, opts ListOptions) ([]Skill, int, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 20
+	}
+
+	args := []any{}
+	next := func(v any) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
+
+	where := ""
+	if opts.Author != "" {
+		where += fmt.Sprintf(" AND author = %s", next(opts.Author))
+	}
+	if opts.Tag != "" {
+		where += fmt.Sprintf(" AND %s = ANY(tags)", next(opts.Tag))
+	}
+	if opts.License != "" {
+		where += fmt.Sprintf(" AND license = %s", next(opts.License))
+	}
+
+	countQ := `SELECT COUNT(*) FROM skills WHERE 1=1` + where
 	var total int
-	if err := s.pool.QueryRow(ctx, countQ).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("skill.Store.List count: %w", err)
 	}
 
-	const q = `
-		SELECT id, name, display_name, description, content, latest_version, frontmatter, created_at, updated_at, reviewed_at, reviewed_by
+	q := `
+		SELECT id, name, display_name, description, content, latest_version, frontmatter,
+		       author, license, compatibility, tags, spec_compliance,
+		       created_at, updated_at, reviewed_at, reviewed_by
 		FROM skills
+		WHERE 1=1` + where + `
 		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-	`
-	rows, err := s.pool.Query(ctx, q, limit, offset)
+		LIMIT ` + next(opts.Limit) + ` OFFSET ` + next(opts.Offset)
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("skill.Store.List query: %w", err)
 	}
@@ -222,6 +257,11 @@ func scanSkill(row scanner) (*Skill, error) {
 		&sk.Content,
 		&sk.LatestVersion,
 		&rawFrontmatter,
+		&sk.Author,
+		&sk.License,
+		&sk.Compatibility,
+		&sk.Tags,
+		&sk.SpecCompliance,
 		&sk.CreatedAt,
 		&sk.UpdatedAt,
 		&sk.ReviewedAt,
@@ -231,6 +271,9 @@ func scanSkill(row scanner) (*Skill, error) {
 		return nil, err
 	}
 	sk.Frontmatter = json.RawMessage(rawFrontmatter)
+	if sk.Tags == nil {
+		sk.Tags = []string{}
+	}
 	return &sk, nil
 }
 
@@ -269,6 +312,24 @@ func (s *Store) BulkSetReview(ctx context.Context, names []string, reviewedBy st
 		return 0, fmt.Errorf("skill.Store.BulkSetReview: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// UpdateSpecFields updates the spec-derived metadata columns on a skill row.
+func (s *Store) UpdateSpecFields(ctx context.Context, name, author, license, compat, compliance, displayName string, tags []string) error {
+	const q = `
+		UPDATE skills
+		SET author = $2, license = $3, compatibility = $4,
+		    spec_compliance = $5, display_name = $6, tags = $7
+		WHERE name = $1
+	`
+	tag, err := s.pool.Exec(ctx, q, name, author, license, compat, compliance, displayName, tags)
+	if err != nil {
+		return fmt.Errorf("skill.Store.UpdateSpecFields: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill.Store.UpdateSpecFields: skill %q not found", name)
+	}
+	return nil
 }
 
 func scanVersion(row scanner) (*Version, error) {

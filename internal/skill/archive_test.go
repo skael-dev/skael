@@ -330,3 +330,144 @@ func TestParseFrontmatter_NoFrontmatter(t *testing.T) {
 		t.Errorf("body:\ngot:  %q\nwant: %q", body, input)
 	}
 }
+
+// --- ValidateSpec tests ---
+
+func TestValidateSpec_FullCompliance(t *testing.T) {
+	fm := map[string]interface{}{
+		"name":          "code-review",
+		"description":   "A helpful code review skill",
+		"license":       "MIT",
+		"compatibility": "claude",
+		"metadata": map[string]interface{}{
+			"author": "alice",
+			"tags":   []interface{}{"review", "code"},
+		},
+	}
+	v := ValidateSpec(fm, "code-review")
+
+	if v.Compliance != "full" {
+		t.Errorf("compliance: got %q, want %q", v.Compliance, "full")
+	}
+	if v.Author != "alice" {
+		t.Errorf("author: got %q, want %q", v.Author, "alice")
+	}
+	if v.License != "MIT" {
+		t.Errorf("license: got %q, want %q", v.License, "MIT")
+	}
+	if v.Compat != "claude" {
+		t.Errorf("compat: got %q, want %q", v.Compat, "claude")
+	}
+	if len(v.Tags) != 2 || v.Tags[0] != "review" || v.Tags[1] != "code" {
+		t.Errorf("tags: got %v, want [review code]", v.Tags)
+	}
+	if len(v.Warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", v.Warnings)
+	}
+}
+
+func TestValidateSpec_Partial_MissingDescription(t *testing.T) {
+	fm := map[string]interface{}{
+		"name":   "test-skill",
+		"author": "bob",
+	}
+	v := ValidateSpec(fm, "test-skill")
+
+	if v.Compliance != "partial" {
+		t.Errorf("compliance: got %q, want %q", v.Compliance, "partial")
+	}
+	if v.Author != "bob" {
+		t.Errorf("author: got %q, want %q", v.Author, "bob")
+	}
+	found := false
+	for _, w := range v.Warnings {
+		if strings.Contains(w, "missing description") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about missing description, got %v", v.Warnings)
+	}
+}
+
+func TestValidateSpec_Partial_LongDescription(t *testing.T) {
+	fm := map[string]interface{}{
+		"name":        "test-skill",
+		"description": strings.Repeat("a", 1025),
+	}
+	v := ValidateSpec(fm, "test-skill")
+
+	if v.Compliance != "partial" {
+		t.Errorf("compliance: got %q, want %q", v.Compliance, "partial")
+	}
+	found := false
+	for _, w := range v.Warnings {
+		if strings.Contains(w, "exceeds 1024") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about description length, got %v", v.Warnings)
+	}
+}
+
+func TestValidateSpec_None_NilFrontmatter(t *testing.T) {
+	v := ValidateSpec(nil, "test-skill")
+
+	if v.Compliance != "none" {
+		t.Errorf("compliance: got %q, want %q", v.Compliance, "none")
+	}
+	if len(v.Warnings) == 0 {
+		t.Error("expected warnings for nil frontmatter")
+	}
+}
+
+func TestValidateSpec_DisplayName(t *testing.T) {
+	fm := map[string]interface{}{
+		"name":        "Code Review Helper",
+		"description": "A skill",
+	}
+	v := ValidateSpec(fm, "code-review-helper")
+
+	if v.DisplayName != "Code Review Helper" {
+		t.Errorf("display_name: got %q, want %q", v.DisplayName, "Code Review Helper")
+	}
+}
+
+func TestValidateSpec_TopLevelOverridesMetadata(t *testing.T) {
+	fm := map[string]interface{}{
+		"description": "A skill",
+		"author":      "top-author",
+		"tags":        []interface{}{"top-tag"},
+		"metadata": map[string]interface{}{
+			"author": "meta-author",
+			"tags":   []interface{}{"meta-tag"},
+		},
+	}
+	v := ValidateSpec(fm, "test-skill")
+
+	if v.Author != "top-author" {
+		t.Errorf("author: got %q, want %q (top-level should override)", v.Author, "top-author")
+	}
+	if len(v.Tags) != 1 || v.Tags[0] != "top-tag" {
+		t.Errorf("tags: got %v, want [top-tag] (top-level should override)", v.Tags)
+	}
+}
+
+func TestValidateSpec_NameMismatchWarning(t *testing.T) {
+	fm := map[string]interface{}{
+		"name":        "different-name",
+		"description": "A skill",
+	}
+	v := ValidateSpec(fm, "my-skill")
+
+	found := false
+	for _, w := range v.Warnings {
+		if strings.Contains(w, "differs from skill name") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected name mismatch warning, got %v", v.Warnings)
+	}
+}

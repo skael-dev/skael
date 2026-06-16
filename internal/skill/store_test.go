@@ -68,7 +68,7 @@ func TestStore_List(t *testing.T) {
 	_, err = s.Create(ctx, "skill-beta", "Skill Beta", "Second skill", "", json.RawMessage(`{}`))
 	require.NoError(t, err)
 
-	skills, total, err := s.List(ctx, 10, 0)
+	skills, total, err := s.List(ctx, skill.ListOptions{Limit: 10, Offset: 0})
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
 	require.Len(t, skills, 2)
@@ -175,6 +175,70 @@ func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
 	require.Equal(t, "new desc", got.Description)
 	require.Equal(t, "new content", got.Content)
 	require.Equal(t, 1, got.LatestVersion)
+}
+
+func TestStore_List_FilterByAuthor(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+
+	sk1, err := s.Create(ctx, "skill-a", "", "first", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	err = s.UpdateSpecFields(ctx, sk1.Name, "alice", "", "", "full", "", []string{})
+	require.NoError(t, err)
+
+	sk2, err := s.Create(ctx, "skill-b", "", "second", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	err = s.UpdateSpecFields(ctx, sk2.Name, "bob", "", "", "full", "", []string{})
+	require.NoError(t, err)
+
+	skills, total, err := s.List(ctx, skill.ListOptions{Limit: 10, Author: "alice"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, skills, 1)
+	require.Equal(t, "skill-a", skills[0].Name)
+}
+
+func TestStore_List_FilterByTag(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+
+	sk1, err := s.Create(ctx, "skill-tagged", "", "tagged", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	err = s.UpdateSpecFields(ctx, sk1.Name, "", "", "", "", "", []string{"go", "testing"})
+	require.NoError(t, err)
+
+	_, err = s.Create(ctx, "skill-untagged", "", "untagged", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	skills, total, err := s.List(ctx, skill.ListOptions{Limit: 10, Tag: "go"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, skills, 1)
+	require.Equal(t, "skill-tagged", skills[0].Name)
+}
+
+func TestStore_List_FilterByLicense(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+
+	sk1, err := s.Create(ctx, "skill-mit", "", "mit-licensed", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	err = s.UpdateSpecFields(ctx, sk1.Name, "", "MIT", "", "", "", []string{})
+	require.NoError(t, err)
+
+	sk2, err := s.Create(ctx, "skill-apache", "", "apache-licensed", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	err = s.UpdateSpecFields(ctx, sk2.Name, "", "Apache-2.0", "", "", "", []string{})
+	require.NoError(t, err)
+
+	skills, total, err := s.List(ctx, skill.ListOptions{Limit: 10, License: "MIT"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, skills, 1)
+	require.Equal(t, "skill-mit", skills[0].Name)
 }
 
 func TestStore_ListVersions(t *testing.T) {

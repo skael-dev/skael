@@ -7,17 +7,22 @@ import (
 
 // Skill represents a skill entry in the registry.
 type Skill struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"display_name,omitempty"`
-	Description   string          `json:"description"`
-	Content       string          `json:"content,omitempty"`
-	LatestVersion int             `json:"latest_version"`
-	Frontmatter   json.RawMessage `json:"frontmatter"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	ReviewedAt    *time.Time      `json:"reviewed_at"`
-	ReviewedBy    string          `json:"reviewed_by"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	DisplayName    string          `json:"display_name,omitempty"`
+	Description    string          `json:"description"`
+	Content        string          `json:"content,omitempty"`
+	LatestVersion  int             `json:"latest_version"`
+	Frontmatter    json.RawMessage `json:"frontmatter"`
+	Author         string          `json:"author"`
+	License        string          `json:"license"`
+	Compatibility  string          `json:"compatibility"`
+	Tags           []string        `json:"tags"`
+	SpecCompliance string          `json:"spec_compliance"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	ReviewedAt     *time.Time      `json:"reviewed_at"`
+	ReviewedBy     string          `json:"reviewed_by"`
 }
 
 // Version represents a specific published version of a skill.
