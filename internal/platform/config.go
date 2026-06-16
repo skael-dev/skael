@@ -29,6 +29,10 @@ type Config struct {
 	DBMaxConnLifetime   time.Duration
 	DBMaxConnIdleTime   time.Duration
 	DBHealthCheckPeriod time.Duration
+
+	CORSOrigins   string
+	LogLevel      string
+	RateLimitAuth int
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -54,6 +58,9 @@ func LoadConfig() (*Config, error) {
 		DBMaxConnLifetime:   envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
 		DBMaxConnIdleTime:   envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		DBHealthCheckPeriod: envDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
+		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
+		LogLevel:            envDefault("LOG_LEVEL", "info"),
+		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
 	}, nil
 }
 

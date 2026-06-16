@@ -15,13 +15,22 @@ func RequestLogger(next http.Handler) http.Handler {
 		ww := &responseWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(ww, r)
 
-		log.Info().
+		if r.URL.Path == "/api/health" || r.URL.Path == "/api/health/ready" {
+			return
+		}
+
+		evt := log.Info().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", ww.status).
 			Dur("duration", time.Since(start)).
-			Str("ip", r.RemoteAddr).
-			Msg("request")
+			Str("ip", r.RemoteAddr)
+
+		if reqID := RequestIDFromContext(r.Context()); reqID != "" {
+			evt = evt.Str("request_id", reqID)
+		}
+
+		evt.Msg("request")
 	})
 }
 

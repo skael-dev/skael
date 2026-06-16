@@ -13,11 +13,11 @@ import (
 // Names are relative keys, e.g. "code-review/abc123.tar.gz".
 type Storage interface {
 	// Write stores r under name and returns the stored key (name).
-	Write(name string, r io.Reader) (string, error)
+	Write(ctx context.Context, name string, r io.Reader) (string, error)
 	// Read opens the blob stored under name; caller closes the ReadCloser.
-	Read(name string) (io.ReadCloser, error)
+	Read(ctx context.Context, name string) (io.ReadCloser, error)
 	// Delete removes the blob stored under name.
-	Delete(name string) error
+	Delete(ctx context.Context, name string) error
 	// Ping verifies the backing store is reachable (readiness checks).
 	Ping(ctx context.Context) error
 }
@@ -58,7 +58,7 @@ func (s *LocalStorage) validatePath(name string) (string, error) {
 // It uses an atomic write: content is first written to a .tmp file which is
 // then renamed to the final destination, ensuring no partial files are visible.
 // Returns the full path of the written file.
-func (s *LocalStorage) Write(name string, r io.Reader) (string, error) {
+func (s *LocalStorage) Write(_ context.Context, name string, r io.Reader) (string, error) {
 	dest, err := s.validatePath(name)
 	if err != nil {
 		return "", err
@@ -95,7 +95,7 @@ func (s *LocalStorage) Write(name string, r io.Reader) (string, error) {
 
 // Read opens the file stored under name (relative to BasePath) for reading.
 // The caller is responsible for closing the returned ReadCloser.
-func (s *LocalStorage) Read(name string) (io.ReadCloser, error) {
+func (s *LocalStorage) Read(_ context.Context, name string) (io.ReadCloser, error) {
 	path, err := s.validatePath(name)
 	if err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func (s *LocalStorage) Read(name string) (io.ReadCloser, error) {
 }
 
 // Delete removes the file stored under name (relative to BasePath).
-func (s *LocalStorage) Delete(name string) error {
+func (s *LocalStorage) Delete(_ context.Context, name string) error {
 	path, err := s.validatePath(name)
 	if err != nil {
 		return err

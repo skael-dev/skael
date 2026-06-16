@@ -228,7 +228,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		}
 		for _, v := range versions {
 			if v.ArchivePath != "" {
-				_ = storage.Delete(v.ArchivePath)
+				_ = storage.Delete(ctx, v.ArchivePath)
 			}
 		}
 		if err := store.Delete(ctx, input.Name); err != nil {
@@ -374,13 +374,19 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, fmt.Errorf("publish: marshal scan result: %w", err)
 		}
 
-		// 7. Write archive to storage. All validation has passed; write last so
+		// 7. Determine publisher identity from auth context.
+		publishedBy := "system"
+		if u := auth.UserFromContext(ctx); u != nil {
+			publishedBy = u.Email
+		}
+
+		// 8. Write archive to storage. All validation has passed; write last so
 		// that no orphaned blobs are left behind when earlier steps fail.
-		if _, err := storage.Write(archiveName, bytes.NewReader(input.RawBody)); err != nil {
+		if _, err := storage.Write(ctx, archiveName, bytes.NewReader(input.RawBody)); err != nil {
 			return nil, fmt.Errorf("publish: store archive: %w", err)
 		}
 
-		// 8. Create version record. Store the relative archiveName so that
+		// 9. Create version record. Store the relative archiveName so that
 		// storage.Read can locate the file without needing the absolute basePath.
 		ver, err := store.CreateVersion(ctx,
 			sk.ID,
@@ -392,9 +398,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			fmJSON,
 			manifest,
 			scanJSON,
+			publishedBy,
 		)
 		if err != nil {
-			_ = storage.Delete(archiveName)
+			_ = storage.Delete(ctx, archiveName)
 			return nil, huma.Error500InternalServerError("creating version", err)
 		}
 
@@ -723,7 +730,7 @@ func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFun
 			return
 		}
 
-		rc, err := storage.Read(ver.ArchivePath)
+		rc, err := storage.Read(r.Context(), ver.ArchivePath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.NotFound(w, r)

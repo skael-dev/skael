@@ -106,6 +106,7 @@ func (s *Store) CreateVersion(
 	frontmatter json.RawMessage,
 	manifest []FileEntry,
 	scanResult json.RawMessage,
+	publishedBy string,
 ) (*Version, error) {
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
@@ -134,13 +135,13 @@ func (s *Store) CreateVersion(
 
 	// Insert the version row.
 	const insertVersion = `
-		INSERT INTO skill_versions (skill_id, version, archive_path, checksum, changelog, frontmatter, file_manifest, scan_result)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO skill_versions (skill_id, version, archive_path, checksum, changelog, frontmatter, file_manifest, scan_result, published_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter, file_manifest, scan_result, published_by, created_at
 	`
 	row := tx.QueryRow(ctx, insertVersion,
 		skillID, newVersion, archivePath, checksum, changelog,
-		frontmatter, manifestJSON, scanResult,
+		frontmatter, manifestJSON, scanResult, publishedBy,
 	)
 	ver, err := scanVersion(row)
 	if err != nil {

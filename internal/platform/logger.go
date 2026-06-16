@@ -14,12 +14,19 @@ import (
 func InitLogger() {
 	zerolog.TimeFieldFormat = time.RFC3339
 
+	level := zerolog.InfoLevel
+	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
+		if parsed, err := zerolog.ParseLevel(lvl); err == nil {
+			level = parsed
+		}
+	}
+
 	if os.Getenv("LOG_FORMAT") == "pretty" || os.Getenv("LOG_PRETTY") == "true" {
 		log.Logger = zerolog.New(zerolog.ConsoleWriter{
 			Out:        os.Stderr,
 			TimeFormat: "15:04:05",
-		}).With().Timestamp().Logger()
+		}).With().Timestamp().Logger().Level(level)
 	} else {
-		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger().Level(level)
 	}
 }

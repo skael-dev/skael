@@ -18,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/analytics"
@@ -55,15 +56,22 @@ func (b *Builder) Build() (*Server, error) {
 
 	cfg := b.config
 
+	// Startup warnings.
+	cookieSecure := os.Getenv("COOKIE_SECURE") == "true"
+	if !cookieSecure {
+		log.Warn().Msg("COOKIE_SECURE is not set")
+	}
+	if os.Getenv("DISABLE_SIGNUP") != "true" {
+		log.Warn().Msg("DISABLE_SIGNUP is not set")
+	}
+
 	// 4. Initialize session manager.
 	sessionManager := scs.New()
 	sessionManager.Store = pgxstore.NewWithCleanupInterval(b.pool, 30*time.Minute)
 	sessionManager.Cookie.Name = "skael_session"
 	sessionManager.Cookie.HttpOnly = true
 	sessionManager.Cookie.SameSite = http.SameSiteLaxMode
-	// Secure defaults to false for self-hosted ease (HTTP). Set COOKIE_SECURE=true
-	// in production behind a TLS-terminating reverse proxy.
-	sessionManager.Cookie.Secure = os.Getenv("COOKIE_SECURE") == "true"
+	sessionManager.Cookie.Secure = cookieSecure
 	sessionManager.Lifetime = 7 * 24 * time.Hour
 
 	// 5. Create storage (local filesystem or S3, per STORAGE_PATH).
@@ -78,9 +86,34 @@ func (b *Builder) Build() (*Server, error) {
 
 	// 7. Create chi router with middleware.
 	router := chi.NewMux()
+	router.Use(platform.SecurityHeaders(cookieSecure))
+	router.Use(platform.RequestID)
+
+	if cfg.CORSOrigins != "" {
+		origins := strings.Split(cfg.CORSOrigins, ",")
+		for i := range origins {
+			origins[i] = strings.TrimSpace(origins[i])
+		}
+		router.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   origins,
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"},
+			ExposedHeaders:   []string{"X-Request-ID"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		}))
+	}
+
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RealIP)
 	router.Use(platform.RequestLogger)
+
+	authRateLimit := cfg.RateLimitAuth
+	if authRateLimit <= 0 {
+		authRateLimit = 20
+	}
+	router.Use(platform.RateLimiter(authRateLimit, time.Minute))
+
 	router.Use(sessionManager.LoadAndSave)
 	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
 
