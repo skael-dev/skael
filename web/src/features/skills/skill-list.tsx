@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -273,6 +273,7 @@ export function SkillList() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>("updated");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
@@ -384,7 +385,16 @@ export function SkillList() {
 
   // Derived data — filtering/sorting happen server-side; the list IS the result.
   const allTags = tagsQuery.data ?? [];
-  const filtered = skills;
+  const allAuthors = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of skills) {
+      if (s.author) set.add(s.author);
+    }
+    return Array.from(set).sort();
+  }, [skills]);
+  const filtered = authorFilter
+    ? skills.filter((s) => s.author === authorFilter)
+    : skills;
 
   const anyChecked = selected.size > 0;
   const allChecked = filtered.length > 0 && selected.size === filtered.length;
@@ -590,6 +600,22 @@ export function SkillList() {
                   />
                 ))}
               </div>
+
+              {/* Author filter */}
+              {allAuthors.length > 0 && (
+                <div className="flex items-center gap-1.5 px-2.5 h-8 border border-border rounded-md text-text-secondary text-xs shrink-0">
+                  <select
+                    value={authorFilter ?? ""}
+                    onChange={(e) => setAuthorFilter(e.target.value || null)}
+                    className="bg-transparent border-none outline-none text-text-secondary text-xs font-sans cursor-pointer pr-3.5"
+                  >
+                    <option value="">All authors</option>
+                    {allAuthors.map((a) => (
+                      <option key={a} value={a}>{a}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Sort dropdown */}
               <div className="flex items-center gap-1.5 px-2.5 h-8 border border-border rounded-md text-text-secondary text-xs shrink-0">
