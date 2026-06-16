@@ -9,6 +9,9 @@ import (
 )
 
 func TestAlias_CreateAndList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)
@@ -32,6 +35,9 @@ func TestAlias_CreateAndList(t *testing.T) {
 }
 
 func TestAlias_Resolve(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)
@@ -57,6 +63,9 @@ func TestAlias_Resolve(t *testing.T) {
 }
 
 func TestAlias_Delete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)
@@ -72,6 +81,9 @@ func TestAlias_Delete(t *testing.T) {
 }
 
 func TestAlias_Idempotent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)

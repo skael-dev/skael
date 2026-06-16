@@ -111,6 +111,9 @@ func signupUser(t *testing.T, srv *httptest.Server, email, name, password string
 }
 
 func TestMiddleware_NonAPIPath_PassesThrough(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	// Non-API paths should pass through without auth.
@@ -125,6 +128,9 @@ func TestMiddleware_NonAPIPath_PassesThrough(t *testing.T) {
 }
 
 func TestMiddleware_HealthEndpoint_PassesThrough(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)
@@ -135,6 +141,9 @@ func TestMiddleware_HealthEndpoint_PassesThrough(t *testing.T) {
 }
 
 func TestMiddleware_AuthLoginEndpoint_PassesThrough(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	// /api/auth/login should be accessible without auth (the login handler itself
@@ -150,6 +159,9 @@ func TestMiddleware_AuthLoginEndpoint_PassesThrough(t *testing.T) {
 }
 
 func TestMiddleware_ValidSession_PassesWithUser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	// Sign up to get a session cookie.
@@ -167,6 +179,9 @@ func TestMiddleware_ValidSession_PassesWithUser(t *testing.T) {
 }
 
 func TestMiddleware_ValidAPIKey_PassesWithUser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, keyStore := setupMiddlewareTest(t)
 
 	// Sign up to create a user, then create an API key for them.
@@ -199,6 +214,9 @@ func TestMiddleware_ValidAPIKey_PassesWithUser(t *testing.T) {
 }
 
 func TestMiddleware_NoAuth_Returns401(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)
@@ -213,6 +231,9 @@ func TestMiddleware_NoAuth_Returns401(t *testing.T) {
 }
 
 func TestMiddleware_InvalidAPIKey_Returns401(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	srv, _, _, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)

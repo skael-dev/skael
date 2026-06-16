@@ -35,6 +35,9 @@ func insertTestVersion(t *testing.T, ctx context.Context, skillStore *skill.Stor
 // TestGetOverview_WithData verifies that GET /api/analytics/overview returns
 // correct counts when skills and events exist in the database.
 func TestGetOverview_WithData(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -87,6 +90,9 @@ func TestGetOverview_WithData(t *testing.T) {
 // TestGetOverview_EmptyDB verifies that GET /api/analytics/overview returns
 // zero values (not an error) when the database is empty.
 func TestGetOverview_EmptyDB(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := analytics.NewStore(pool)
@@ -105,6 +111,9 @@ func TestGetOverview_EmptyDB(t *testing.T) {
 // TestGetOverview_ViaHTTP verifies that the HTTP endpoint returns 200 and a
 // parseable JSON body.
 func TestGetOverview_ViaHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/analytics/overview?days=30", nil)
@@ -118,6 +127,9 @@ func TestGetOverview_ViaHTTP(t *testing.T) {
 // TestGetSkillsAnalytics_WithData verifies that GET /api/analytics/skills returns
 // per-skill rows with correct activation counts.
 func TestGetSkillsAnalytics_WithData(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -162,6 +174,9 @@ func TestGetSkillsAnalytics_WithData(t *testing.T) {
 // TestGetSkillsAnalytics_EmptyDB verifies that GET /api/analytics/skills returns
 // an empty array (not an error) when there are no skills.
 func TestGetSkillsAnalytics_EmptyDB(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := analytics.NewStore(pool)
@@ -176,6 +191,9 @@ func TestGetSkillsAnalytics_EmptyDB(t *testing.T) {
 // TestGetSkillsAnalytics_ViaHTTP verifies that the HTTP endpoint returns 200
 // and a parseable JSON array.
 func TestGetSkillsAnalytics_ViaHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/analytics/skills?days=30", nil)
@@ -202,6 +220,9 @@ func insertTestSkillTagged(t *testing.T, ctx context.Context, skillStore *skill.
 }
 
 func TestGetSkillsAnalytics_Pagination(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := analytics.NewStore(pool)
@@ -249,6 +270,9 @@ func TestGetSkillsAnalytics_Pagination(t *testing.T) {
 }
 
 func TestAnalyticsSkills_PaginatedShapeViaHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/analytics/skills?limit=1&sort=name", nil)

@@ -11,6 +11,9 @@ import (
 )
 
 func TestSearch_ByName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -28,6 +31,9 @@ func TestSearch_ByName(t *testing.T) {
 }
 
 func TestSearch_ByContent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -42,6 +48,9 @@ func TestSearch_ByContent(t *testing.T) {
 }
 
 func TestSearch_FuzzyByName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -57,6 +66,9 @@ func TestSearch_FuzzyByName(t *testing.T) {
 }
 
 func TestSearch_NoResults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()

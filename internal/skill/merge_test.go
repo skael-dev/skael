@@ -9,6 +9,9 @@ import (
 )
 
 func TestMerge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)

@@ -11,6 +11,9 @@ import (
 )
 
 func TestStore_CreateAndGet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -39,6 +42,9 @@ func TestStore_CreateAndGet(t *testing.T) {
 }
 
 func TestStore_GetByName_NotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -49,6 +55,9 @@ func TestStore_GetByName_NotFound(t *testing.T) {
 }
 
 func TestStore_List(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -66,6 +75,9 @@ func TestStore_List(t *testing.T) {
 }
 
 func TestStore_Delete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -82,6 +94,9 @@ func TestStore_Delete(t *testing.T) {
 }
 
 func TestStore_CreateVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -111,6 +126,9 @@ func TestStore_CreateVersion(t *testing.T) {
 }
 
 func TestStore_GetVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()
@@ -137,6 +155,9 @@ func TestStore_GetVersion(t *testing.T) {
 }
 
 func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	store := skill.NewStore(pool)
 	ctx := context.Background()
@@ -157,6 +178,9 @@ func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
 }
 
 func TestStore_ListVersions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	s := skill.NewStore(pool)
 	ctx := context.Background()

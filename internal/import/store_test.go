@@ -10,6 +10,9 @@ import (
 )
 
 func TestStore_UpsertAndGet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -50,6 +53,9 @@ func TestStore_UpsertAndGet(t *testing.T) {
 }
 
 func TestStore_UpsertUpdatesExisting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -71,6 +77,9 @@ func TestStore_UpsertUpdatesExisting(t *testing.T) {
 }
 
 func TestStore_GetBySkillName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -105,6 +114,9 @@ func TestStore_GetBySkillName(t *testing.T) {
 }
 
 func TestStore_ListAll(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 

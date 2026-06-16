@@ -53,6 +53,9 @@ func doJSONAnalytics(t *testing.T, handler http.Handler, method, path string, bo
 // TestIngestEvent_EmptySkillName_Rejected verifies that POSTing an event with
 // an empty skill_name is rejected with 422 Unprocessable Entity.
 func TestIngestEvent_EmptySkillName_Rejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
@@ -68,6 +71,9 @@ func TestIngestEvent_EmptySkillName_Rejected(t *testing.T) {
 // TestIngestEvent_EmptyAgent_Rejected verifies that POSTing an event with an
 // empty agent field is rejected with 422 Unprocessable Entity.
 func TestIngestEvent_EmptyAgent_Rejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
@@ -83,6 +89,9 @@ func TestIngestEvent_EmptyAgent_Rejected(t *testing.T) {
 // TestIngestEvent_ValidEvent verifies that POSTing a fully-populated event is
 // accepted with 204 No Content.
 func TestIngestEvent_ValidEvent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
@@ -100,6 +109,9 @@ func TestIngestEvent_ValidEvent(t *testing.T) {
 // TestGetActivations_ViaHTTP verifies that the GET /api/skills/{name}/activations
 // endpoint returns 200 with a valid JSON body.
 func TestGetActivations_ViaHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/code-review/activations", nil)
@@ -117,6 +129,9 @@ func TestGetActivations_ViaHTTP(t *testing.T) {
 // TestGetSkillTimeSeries_ViaHTTP verifies that the GET /api/skills/{name}/timeseries
 // endpoint returns 200 with per-agent daily data in flat JSON shape.
 func TestGetSkillTimeSeries_ViaHTTP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store := setupAnalyticsAPI(t)
 	ctx := context.Background()
 
@@ -140,6 +155,9 @@ func TestGetSkillTimeSeries_ViaHTTP(t *testing.T) {
 
 // TestGetSkillTimeSeries_ViaHTTP_Empty verifies empty timeseries returns gap-filled days.
 func TestGetSkillTimeSeries_ViaHTTP_Empty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _ := setupAnalyticsAPI(t)
 
 	rr := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/nonexistent/timeseries?days=7", nil)

@@ -9,6 +9,9 @@ import (
 )
 
 func TestUserStore_CreateAndGet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
@@ -63,6 +66,9 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 }
 
 func TestUserStore_CreateDuplicateEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
@@ -84,6 +90,9 @@ func TestUserStore_CreateDuplicateEmail(t *testing.T) {
 }
 
 func TestUserStore_Count(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
@@ -115,6 +124,9 @@ func TestUserStore_Count(t *testing.T) {
 }
 
 func TestUserStore_GetByID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
@@ -151,6 +163,9 @@ func TestUserStore_GetByID(t *testing.T) {
 }
 
 func TestUserStore_GetByEmail_NotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
@@ -165,6 +180,9 @@ func TestUserStore_GetByEmail_NotFound(t *testing.T) {
 }
 
 func TestUserStore_CreateWithRole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)

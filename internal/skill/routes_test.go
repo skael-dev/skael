@@ -125,6 +125,9 @@ func publishVersion(t *testing.T, handler http.Handler, skillName string, archiv
 // -----------------------------------------------------------------
 
 func TestCreateSkill_201(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	sk := createSkill(t, handler, "my-skill", "A test skill")
@@ -134,6 +137,9 @@ func TestCreateSkill_201(t *testing.T) {
 }
 
 func TestCreateSkill_NoDescription_201(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	// description is omitempty so this should succeed.
@@ -145,6 +151,9 @@ func TestCreateSkill_NoDescription_201(t *testing.T) {
 }
 
 func TestCreateSkill_409_Duplicate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "dup-skill", "first")
@@ -160,6 +169,9 @@ func TestCreateSkill_409_Duplicate(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestGetSkill_200(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "get-skill", "A gettable skill")
@@ -172,6 +184,9 @@ func TestGetSkill_200(t *testing.T) {
 }
 
 func TestGetSkill_404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	rr := doJSON(t, handler, http.MethodGet, "/api/skills/nonexistent", nil, nil)
@@ -183,6 +198,9 @@ func TestGetSkill_404(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestListSkills_200(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "alpha", "first")
@@ -201,6 +219,9 @@ func TestListSkills_200(t *testing.T) {
 }
 
 func TestListSkills_EmptyDB(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	var resp struct {
@@ -215,6 +236,9 @@ func TestListSkills_EmptyDB(t *testing.T) {
 }
 
 func TestListSkills_Pagination(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	for _, name := range []string{"skill-1", "skill-2", "skill-3", "skill-4", "skill-5"} {
@@ -236,6 +260,9 @@ func TestListSkills_Pagination(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestDeleteSkill_204(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "to-delete", "temporary")
@@ -252,6 +279,9 @@ func TestDeleteSkill_204(t *testing.T) {
 }
 
 func TestDeleteSkill_404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/skills/nobody", nil)
@@ -265,6 +295,9 @@ func TestDeleteSkill_404(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestPublishVersion_201(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "pub-skill", "A published skill")
@@ -278,6 +311,9 @@ func TestPublishVersion_201(t *testing.T) {
 }
 
 func TestPublishVersion_404_NoSkill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	archiveBytes := buildTestArchive(t, "ghost-skill", "nonexistent")
@@ -291,6 +327,9 @@ func TestPublishVersion_404_NoSkill(t *testing.T) {
 }
 
 func TestPublishVersion_400_InvalidArchive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "bad-archive-skill", "test")
@@ -305,6 +344,9 @@ func TestPublishVersion_400_InvalidArchive(t *testing.T) {
 }
 
 func TestPublishVersion_UpdatesSkillContent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "content-skill", "old description")
@@ -324,6 +366,9 @@ func TestPublishVersion_UpdatesSkillContent(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestListVersions_200(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "versioned-skill", "versioning test")
@@ -346,6 +391,9 @@ func TestListVersions_200(t *testing.T) {
 }
 
 func TestListVersions_404_NoSkill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	rr := doJSON(t, handler, http.MethodGet, "/api/skills/no-such-skill/versions", nil, nil)
@@ -357,6 +405,9 @@ func TestListVersions_404_NoSkill(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestDownloadVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "dl-skill", "download test")
@@ -377,6 +428,9 @@ func TestDownloadVersion(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestGetScanResult(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "scan-skill", "scan test")
@@ -395,6 +449,9 @@ func TestGetScanResult(t *testing.T) {
 }
 
 func TestGetScanResult_NoVersions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	createSkill(t, handler, "unscannable", "no versions")
@@ -409,6 +466,9 @@ func TestGetScanResult_NoVersions(t *testing.T) {
 // TestDownloadVersion_SkillNotFound verifies that downloading a version for a
 // nonexistent skill returns 404.
 func TestDownloadVersion_SkillNotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/skills/ghost-skill/versions/1/download", nil)
@@ -421,6 +481,9 @@ func TestDownloadVersion_SkillNotFound(t *testing.T) {
 // TestGetScanResult_SkillNotFound verifies that requesting scan results for a
 // nonexistent skill returns 404.
 func TestGetScanResult_SkillNotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/skills/no-such-skill/scan", nil)
@@ -437,6 +500,9 @@ func TestGetScanResult_SkillNotFound(t *testing.T) {
 // TestDeleteSkill_CleansUpArchive verifies that deleting a skill also removes
 // its published archive file from storage.
 func TestDeleteSkill_CleansUpArchive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, store, storage := setupTestAPI(t)
 
 	// Create a skill, publish one version so an archive file is written.
@@ -479,6 +545,9 @@ func TestDeleteSkill_CleansUpArchive(t *testing.T) {
 // TestCreateSkill_NameValidation exercises the name regex: verifies that invalid
 // names are rejected with 422 and valid names are accepted with 201.
 func TestCreateSkill_NameValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	cases := []struct {
 		name       string
 		wantStatus int
@@ -513,6 +582,9 @@ func TestCreateSkill_NameValidation(t *testing.T) {
 // -----------------------------------------------------------------
 
 func TestRegisterSkill_RejectsPathyNames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	for _, name := range []string{"../escape", "a/b", `a\b`, "ctl\x07name"} {
@@ -523,6 +595,9 @@ func TestRegisterSkill_RejectsPathyNames(t *testing.T) {
 }
 
 func TestRegisterSkill_KeepsPermissiveNames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, _ := setupTestAPI(t)
 
 	rr := doJSON(t, handler, http.MethodPost, "/api/skills/register",
@@ -531,6 +606,9 @@ func TestRegisterSkill_KeepsPermissiveNames(t *testing.T) {
 }
 
 func TestPublishVersion_NoOrphanedArchiveOnMissingSkillMD(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	handler, _, storage := setupTestAPI(t)
 
 	createSkill(t, handler, "orphan-skill", "test")

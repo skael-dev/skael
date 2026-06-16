@@ -10,6 +10,9 @@ import (
 )
 
 func TestGetUnregisteredSkills(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 
@@ -48,6 +51,9 @@ func TestGetUnregisteredSkills(t *testing.T) {
 }
 
 func TestDismissSkill_Idempotent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
 	pool := testutil.SetupTestDB(t)
 	ctx := context.Background()
 	store := NewStore(pool)
