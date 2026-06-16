@@ -85,6 +85,8 @@ type SkillAnalytics struct {
 	Name           string     `json:"name"`
 	Description    string     `json:"description"`
 	Tags           []string   `json:"tags"`
+	Author         string     `json:"author"`
+	SpecCompliance string     `json:"spec_compliance"`
 	Activations    int        `json:"activations"`
 	UniqueDevs     int        `json:"unique_devs"`
 	LastTriggered  *time.Time `json:"last_triggered"`
@@ -224,6 +226,8 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			s.latest_version,
 			s.updated_at,
 			s.tags                                                AS raw_tags,
+			s.author,
+			s.spec_compliance,
 			COUNT(*) OVER() AS total_count
 		FROM skills s
 		LEFT JOIN (
@@ -264,6 +268,8 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			&sa.LatestVersion,
 			&sa.UpdatedAt,
 			&sa.Tags,
+			&sa.Author,
+			&sa.SpecCompliance,
 			&rowTotal,
 		); err != nil {
 			return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)

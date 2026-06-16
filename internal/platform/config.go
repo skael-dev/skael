@@ -105,12 +105,3 @@ func envDefault(key, fallback string) string {
 	return fallback
 }
 
-// envInt parses an integer from key, or returns fallback when unset or invalid.
-func envInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
-}
