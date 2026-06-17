@@ -54,21 +54,27 @@ go install github.com/skael-dev/skael/cmd/skael@latest
 skael setup http://localhost:8080 <your-api-key>
 ```
 
-This validates the connection, saves config, syncs all skills, and installs activation tracking hooks for every detected agent.
+This validates the connection, saves config, and installs activation tracking and auto-sync hooks for every detected agent. Pass `--no-auto-sync` to skip auto-sync hook installation.
 
 ## What it does
 
 ```bash
-skael init my-skill          # scaffold a new spec-compliant skill
-skael publish ./my-skill     # publish a skill to the registry
-skael sync                   # pull latest skills to all your agents
-skael scan ./my-skill        # security scan before publishing
-skael search "review"        # find skills
-skael list                   # see everything published
-skael show my-skill          # skill details, versions, activations
-skael doctor                 # check your setup
-skael hook install           # set up activation tracking
+skael add my-skill               # install a skill from the registry
+skael add my-skill --scope project  # install to project scope only
+skael remove my-skill            # uninstall a skill
+skael sync                       # update installed skills to latest versions
+skael list                       # see everything published on the registry
+skael list --installed           # see what you have installed locally
+skael init my-skill              # scaffold a new spec-compliant skill
+skael publish ./my-skill         # publish a skill to the registry
+skael scan ./my-skill            # security scan before publishing
+skael search "review"            # find skills
+skael show my-skill              # skill details, versions, activations
+skael doctor                     # check your setup
+skael hook install               # set up activation tracking + auto-sync
 ```
+
+Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
 
 Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings block publishing.
 
@@ -121,7 +127,7 @@ tests/e2e/      → End-to-end integration tests
 
 Single Go binary embeds the API server and a React dashboard (served from the same process). Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem or S3-compatible object storage.
 
-The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, and manifest-based sync with checksum verification. Supports Claude Code, Codex, OpenCode, and Cursor.
+The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, selective sync with checksum verification, and auto-sync via debounced hooks. Supports Claude Code, Codex, OpenCode, and Cursor.
 
 The server exposes a Prometheus `/metrics` endpoint for monitoring, supports CORS for separate frontend deployments, and includes rate limiting, security headers, and request tracing out of the box.
 

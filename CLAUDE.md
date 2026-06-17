@@ -52,7 +52,7 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - `internal/sync/` — `GetManifest()` query joining skills + latest versions for sync diffing.
 - `internal/testutil/` — `SetupTestDB(t)` spins up Postgres 17 via testcontainers per test.
 - `internal/ui/` — Lipgloss styles and output helpers (`Success`, `Error`, `Warn`, `Download`, `Summary`). `JSONMode` flag suppresses styled output; commands write JSON to stdout instead.
-- `cli/` — Cobra commands (one file per command): `setup`, `list`, `search`, `show`, `publish`, `sync`, `scan`, `init`, `doctor`, `hook`, `import`. `cli/client/` is the HTTP client (with retry), `cli/config/` handles `~/.skael/`, `cli/agents/` detects installed agents (Claude Code, Codex, OpenCode, Cursor), `cli/hooks/` manages activation tracking hook scripts.
+- `cli/` — Cobra commands (one file per command): `setup`, `list`, `search`, `show`, `publish`, `sync`, `scan`, `init`, `doctor`, `hook`, `import`, `add`, `remove`. `cli/client/` is the HTTP client (with retry), `cli/config/` handles `~/.skael/` (config.json tracks installed skills like package.json, state.json caches sync state), `cli/agents/` detects installed agents (Claude Code, Codex, OpenCode, Cursor), `cli/hooks/` manages activation tracking and auto-sync hook scripts.
 
 ### Key patterns
 
@@ -61,6 +61,8 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - **Testcontainers:** DB-backed tests use `testutil.SetupTestDB(t)` which spins up Postgres 17 per test. Each test gets a fresh migrated database.
 - **Content-addressable archives:** Published archives are stored at `{skillName}/{checksum[:16]}.tar.gz`, not by version number. This prevents race conditions on concurrent publishes.
 - **Skill names:** Must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`, max 128 chars. Colons support namespaced names (e.g., `superpowers:brainstorming`).
+- **Selective sync:** Skills are installed explicitly via `skael add`, tracked in `config.json`'s `skills` array. `skael sync` only updates installed skills (not the full registry). Legacy configs without a `skills` key are auto-migrated from `state.json` on first run.
+- **Auto-sync hooks:** A debounced bash script (`~/.skael/hooks/skael-autosync.sh`) checks `state.json`'s `last_sync` timestamp — if <30 minutes old, it's a no-op. Installed as `UserPromptSubmit` (Claude Code), `sessionStart` (Cursor), `pre_tool_use` (Codex). Hook entries use `"_managed_by": "skael-autosync"` to distinguish from activation tracking hooks (`"_managed_by": "skael"`).
 
 ## Server env vars
 
