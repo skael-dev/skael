@@ -99,6 +99,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Endpoint: endpoint,
 		APIKey:   apiKey,
 		Scope:    setupScope,
+		Skills:   []config.SkillEntry{},
 	}
 	if err := config.WriteConfig(dir, cfg); err != nil {
 		ui.Errorf("write config: %s", err)
