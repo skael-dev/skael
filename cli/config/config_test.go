@@ -370,3 +370,62 @@ func TestMigrateSkillsFromState_NoPlacementsUsesEmpty(t *testing.T) {
 	require.Len(t, cfg.Skills, 1)
 	assert.Equal(t, "", cfg.Skills[0].Scope, "no placements means empty scope (falls back to global default)")
 }
+
+func TestEnsureSkillsKey_LegacyConfigMigrates(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a legacy config (no skills key).
+	raw := `{"endpoint":"https://api.skael.dev","api_key":"sk-test","scope":"user"}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0600))
+
+	// Write a state file with one skill.
+	state := &SyncState{
+		Skills: []SyncedSkill{
+			{Name: "my-skill", Version: 2, Placements: []Placement{
+				{Agent: "claude-code", Path: "/x", Scope: "user"},
+			}},
+		},
+	}
+	require.NoError(t, WriteState(dir, state))
+
+	cfg, migrated, err := EnsureSkillsKey(dir)
+	require.NoError(t, err)
+	require.Len(t, migrated, 1)
+	assert.Equal(t, "my-skill", migrated[0])
+	require.Len(t, cfg.Skills, 1)
+	assert.Equal(t, "user", cfg.Skills[0].Scope)
+
+	// Config file should now have the skills key persisted.
+	reloaded, err := ReadConfig(dir)
+	require.NoError(t, err)
+	require.Len(t, reloaded.Skills, 1)
+}
+
+func TestEnsureSkillsKey_AlreadyHasSkills(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+		Skills:   []SkillEntry{{Name: "existing"}},
+	}
+	require.NoError(t, WriteConfig(dir, cfg))
+
+	got, migrated, err := EnsureSkillsKey(dir)
+	require.NoError(t, err)
+	assert.Nil(t, migrated, "no migration should happen")
+	require.Len(t, got.Skills, 1)
+	assert.Equal(t, "existing", got.Skills[0].Name)
+}
+
+func TestEnsureSkillsKey_EmptySkillsNoMigration(t *testing.T) {
+	dir := t.TempDir()
+	// Write config with explicit empty skills array.
+	raw := `{"endpoint":"https://api.skael.dev","api_key":"sk-test","skills":[]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0600))
+
+	cfg, migrated, err := EnsureSkillsKey(dir)
+	require.NoError(t, err)
+	assert.Nil(t, migrated)
+	assert.NotNil(t, cfg.Skills)
+	assert.Len(t, cfg.Skills, 0)
+}

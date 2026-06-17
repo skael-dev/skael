@@ -206,6 +206,53 @@ func ReadState(dir string) (*SyncState, error) {
 	return &state, nil
 }
 
+// hasSkillsKey reads the raw config file and checks if the "skills" JSON key is present.
+func hasSkillsKey(dir string) (bool, error) {
+	path := filepath.Join(dir, "config.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false, err
+	}
+	_, ok := raw["skills"]
+	return ok, nil
+}
+
+// EnsureSkillsKey loads config from dir and ensures the skills key exists.
+// If the config is legacy (no skills key), it migrates from state.json,
+// writes the updated config, and returns the migrated skill names.
+// If the config already has a skills key, migrated is nil.
+func EnsureSkillsKey(dir string) (cfg *Config, migrated []string, err error) {
+	cfg, err = ReadConfig(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	has, err := hasSkillsKey(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("check skills key: %w", err)
+	}
+	if has {
+		return cfg, nil, nil
+	}
+
+	// Legacy config — migrate from state.
+	state, err := ReadState(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read state for migration: %w", err)
+	}
+
+	migrated = MigrateSkillsFromState(cfg, state)
+	if err := WriteConfig(dir, cfg); err != nil {
+		return nil, nil, fmt.Errorf("write migrated config: %w", err)
+	}
+
+	return cfg, migrated, nil
+}
+
 // LoadConfig resolves configuration with environment variables taking precedence.
 // It checks SKAEL_URL and SKAEL_KEY first, then falls back to ReadConfig(DefaultDir()).
 // If only one of the two env vars is set, it returns an error naming the missing one.
