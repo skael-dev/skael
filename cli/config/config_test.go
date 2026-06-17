@@ -304,3 +304,69 @@ func TestConfig_RemoveSkill(t *testing.T) {
 	assert.False(t, removed)
 	assert.Len(t, cfg.Skills, 2)
 }
+
+func TestMigrateSkillsFromState_WithSkills(t *testing.T) {
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+	}
+
+	state := &SyncState{
+		LastSync: "2026-06-17T10:00:00Z",
+		Skills: []SyncedSkill{
+			{
+				Name:    "brainstorming",
+				Version: 2,
+				Placements: []Placement{
+					{Agent: "claude-code", Path: "/home/.claude/skills/brainstorming", Scope: "user"},
+				},
+			},
+			{
+				Name:    "api-patterns",
+				Version: 1,
+				Placements: []Placement{
+					{Agent: "cursor", Path: "/proj/.cursor/skills/api-patterns", Scope: "project"},
+				},
+			},
+		},
+	}
+
+	migrated := MigrateSkillsFromState(cfg, state)
+	require.Len(t, migrated, 2)
+	assert.Equal(t, "brainstorming", migrated[0])
+	assert.Equal(t, "api-patterns", migrated[1])
+
+	require.Len(t, cfg.Skills, 2)
+	assert.Equal(t, "brainstorming", cfg.Skills[0].Name)
+	assert.Equal(t, "user", cfg.Skills[0].Scope)
+	assert.Equal(t, "api-patterns", cfg.Skills[1].Name)
+	assert.Equal(t, "project", cfg.Skills[1].Scope)
+}
+
+func TestMigrateSkillsFromState_EmptyState(t *testing.T) {
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+	}
+
+	state := &SyncState{}
+
+	migrated := MigrateSkillsFromState(cfg, state)
+	assert.Empty(t, migrated)
+	assert.NotNil(t, cfg.Skills)
+	assert.Len(t, cfg.Skills, 0)
+}
+
+func TestMigrateSkillsFromState_NoPlacementsUsesEmpty(t *testing.T) {
+	cfg := &Config{Endpoint: "https://x", APIKey: "sk-y"}
+	state := &SyncState{
+		Skills: []SyncedSkill{
+			{Name: "old-skill", Version: 1},
+		},
+	}
+
+	migrated := MigrateSkillsFromState(cfg, state)
+	require.Len(t, migrated, 1)
+	require.Len(t, cfg.Skills, 1)
+	assert.Equal(t, "", cfg.Skills[0].Scope, "no placements means empty scope (falls back to global default)")
+}

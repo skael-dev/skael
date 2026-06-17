@@ -72,6 +72,23 @@ func (c *Config) RemoveSkill(name string) bool {
 	return true
 }
 
+// MigrateSkillsFromState populates cfg.Skills from the given SyncState.
+// Used on first run after upgrading from a legacy config that has no "skills" key.
+// Returns the names of migrated skills (for user messaging).
+func MigrateSkillsFromState(cfg *Config, state *SyncState) []string {
+	cfg.Skills = make([]SkillEntry, 0, len(state.Skills))
+	var names []string
+	for _, s := range state.Skills {
+		scope := ""
+		if len(s.Placements) > 0 {
+			scope = s.Placements[0].Scope
+		}
+		cfg.Skills = append(cfg.Skills, SkillEntry{Name: s.Name, Scope: scope})
+		names = append(names, s.Name)
+	}
+	return names
+}
+
 // DefaultDir returns the default configuration directory (~/.skael).
 func DefaultDir() string {
 	home, err := os.UserHomeDir()
