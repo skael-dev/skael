@@ -495,21 +495,21 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// 12. If JSONMode: print JSON.
 	if ui.JSONMode {
 		out := struct {
-			Synced  int               `json:"synced"`
-			Failed  int               `json:"failed"`
-			Pruned  int               `json:"pruned"`
-			Agents  []string          `json:"agents"`
-			Scope   string            `json:"scope"`
-			Dests   map[string]string `json:"dests"`
-			Total   int               `json:"total"`
+			Synced int               `json:"synced"`
+			Failed int               `json:"failed"`
+			Pruned int               `json:"pruned"`
+			Agents []string          `json:"agents"`
+			Scope  string            `json:"scope"`
+			Dests  map[string]string `json:"dests"`
+			Total  int               `json:"total"`
 		}{
-			Synced:  synced,
-			Failed:  failed,
-			Pruned:  pruned,
-			Agents:  agentNames,
-			Scope:   string(scope),
-			Dests:   dests,
-			Total:   len(cfg.Skills),
+			Synced: synced,
+			Failed: failed,
+			Pruned: pruned,
+			Agents: agentNames,
+			Scope:  string(scope),
+			Dests:  dests,
+			Total:  len(cfg.Skills),
 		}
 		return ui.PrintJSON(out)
 	}
