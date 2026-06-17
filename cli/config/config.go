@@ -8,11 +8,18 @@ import (
 	"path/filepath"
 )
 
+// SkillEntry records a skill the user has explicitly installed.
+type SkillEntry struct {
+	Name  string `json:"name"`
+	Scope string `json:"scope,omitempty"`
+}
+
 // Config holds the CLI configuration stored in config.json.
 type Config struct {
-	Endpoint string `json:"endpoint"`
-	APIKey   string `json:"api_key"`
-	Scope    string `json:"scope,omitempty"`
+	Endpoint string       `json:"endpoint"`
+	APIKey   string       `json:"api_key"`
+	Scope    string       `json:"scope,omitempty"`
+	Skills   []SkillEntry `json:"skills"`
 }
 
 // SyncState records the last sync timestamp and each synced skill.

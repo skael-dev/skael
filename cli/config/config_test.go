@@ -174,3 +174,58 @@ func TestWriteState_AtomicRoundTrip(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "state.json", entries[0].Name())
 }
+
+func TestConfig_SkillsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+		Scope:    "project",
+		Skills: []SkillEntry{
+			{Name: "superpowers:brainstorming", Scope: "user"},
+			{Name: "my-project:api-patterns"},
+		},
+	}
+
+	err := WriteConfig(dir, cfg)
+	require.NoError(t, err)
+
+	got, err := ReadConfig(dir)
+	require.NoError(t, err)
+	require.Len(t, got.Skills, 2)
+	assert.Equal(t, "superpowers:brainstorming", got.Skills[0].Name)
+	assert.Equal(t, "user", got.Skills[0].Scope)
+	assert.Equal(t, "my-project:api-patterns", got.Skills[1].Name)
+	assert.Equal(t, "", got.Skills[1].Scope)
+}
+
+func TestConfig_NilSkillsMeansLegacy(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"endpoint":"https://api.skael.dev","api_key":"sk-test"}`
+	err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0600)
+	require.NoError(t, err)
+
+	cfg, err := ReadConfig(dir)
+	require.NoError(t, err)
+	assert.Nil(t, cfg.Skills, "missing skills key should unmarshal as nil")
+}
+
+func TestConfig_EmptySkillsIsNotNil(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+		Skills:   []SkillEntry{},
+	}
+
+	err := WriteConfig(dir, cfg)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"skills": []`)
+
+	got, err := ReadConfig(dir)
+	require.NoError(t, err)
+	assert.Len(t, got.Skills, 0)
+}
