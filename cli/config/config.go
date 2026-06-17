@@ -43,6 +43,35 @@ type SyncedSkill struct {
 	Placements []Placement `json:"placements,omitempty"`
 }
 
+// FindSkill returns the entry and index for the given name, or (-1) if not found.
+func (c *Config) FindSkill(name string) (SkillEntry, int) {
+	for i, s := range c.Skills {
+		if s.Name == name {
+			return s, i
+		}
+	}
+	return SkillEntry{}, -1
+}
+
+// AddSkill adds a skill to the config, or updates its scope if already present.
+func (c *Config) AddSkill(name, scope string) {
+	if _, idx := c.FindSkill(name); idx >= 0 {
+		c.Skills[idx].Scope = scope
+		return
+	}
+	c.Skills = append(c.Skills, SkillEntry{Name: name, Scope: scope})
+}
+
+// RemoveSkill removes a skill from the config by name. Returns true if found.
+func (c *Config) RemoveSkill(name string) bool {
+	_, idx := c.FindSkill(name)
+	if idx < 0 {
+		return false
+	}
+	c.Skills = append(c.Skills[:idx], c.Skills[idx+1:]...)
+	return true
+}
+
 // DefaultDir returns the default configuration directory (~/.skael).
 func DefaultDir() string {
 	home, err := os.UserHomeDir()

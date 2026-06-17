@@ -245,3 +245,62 @@ func TestWriteConfig_AtomicNoTempLeftovers(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "config.json", entries[0].Name())
 }
+
+func TestConfig_FindSkill(t *testing.T) {
+	cfg := &Config{
+		Skills: []SkillEntry{
+			{Name: "alpha", Scope: "user"},
+			{Name: "beta"},
+		},
+	}
+
+	entry, idx := cfg.FindSkill("alpha")
+	assert.Equal(t, 0, idx)
+	assert.Equal(t, "alpha", entry.Name)
+	assert.Equal(t, "user", entry.Scope)
+
+	entry, idx = cfg.FindSkill("beta")
+	assert.Equal(t, 1, idx)
+	assert.Equal(t, "beta", entry.Name)
+
+	_, idx = cfg.FindSkill("gamma")
+	assert.Equal(t, -1, idx)
+}
+
+func TestConfig_AddSkill(t *testing.T) {
+	cfg := &Config{Skills: []SkillEntry{}}
+
+	cfg.AddSkill("new-skill", "user")
+	require.Len(t, cfg.Skills, 1)
+	assert.Equal(t, "new-skill", cfg.Skills[0].Name)
+	assert.Equal(t, "user", cfg.Skills[0].Scope)
+
+	// Adding the same skill again should not duplicate.
+	cfg.AddSkill("new-skill", "user")
+	assert.Len(t, cfg.Skills, 1)
+
+	// Adding with different scope should update the scope.
+	cfg.AddSkill("new-skill", "project")
+	require.Len(t, cfg.Skills, 1)
+	assert.Equal(t, "project", cfg.Skills[0].Scope)
+}
+
+func TestConfig_RemoveSkill(t *testing.T) {
+	cfg := &Config{
+		Skills: []SkillEntry{
+			{Name: "alpha"},
+			{Name: "beta"},
+			{Name: "gamma"},
+		},
+	}
+
+	removed := cfg.RemoveSkill("beta")
+	assert.True(t, removed)
+	require.Len(t, cfg.Skills, 2)
+	assert.Equal(t, "alpha", cfg.Skills[0].Name)
+	assert.Equal(t, "gamma", cfg.Skills[1].Name)
+
+	removed = cfg.RemoveSkill("nonexistent")
+	assert.False(t, removed)
+	assert.Len(t, cfg.Skills, 2)
+}
