@@ -326,15 +326,9 @@ func TestInstallCursorHook_NewFile(t *testing.T) {
 	hooksObj, ok := hooksFile["hooks"].(map[string]any)
 	require.True(t, ok)
 
-	// Must have sessionStart hook.
-	sessionStart, ok := hooksObj["sessionStart"].([]any)
-	require.True(t, ok, "sessionStart array must exist")
-	require.Len(t, sessionStart, 1)
-
-	ssEntry, ok := sessionStart[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "skael", ssEntry["_managed_by"])
-	assert.Contains(t, ssEntry["command"], "skael sync --agent cursor --quiet")
+	// sessionStart is now managed by auto-sync hooks, not activation tracking.
+	_, hasSessionStart := hooksObj["sessionStart"]
+	assert.False(t, hasSessionStart, "sessionStart must NOT be created by activation tracking installer")
 
 	// Must have stop hook.
 	stopArr, ok := hooksObj["stop"].([]any)
@@ -357,9 +351,9 @@ func TestInstallCursorHook_Idempotent(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 
-	// Exactly 2 _managed_by entries: one in sessionStart, one in stop.
+	// Exactly 1 _managed_by entry (stop only; sessionStart moved to auto-sync).
 	count := strings.Count(string(data), `"_managed_by"`)
-	assert.Equal(t, 2, count, "must have exactly 2 skael-managed entries (sessionStart + stop)")
+	assert.Equal(t, 1, count, "must have exactly 1 skael-managed entry (stop)")
 
 	// Second install's path must be used.
 	assert.Contains(t, string(data), "/path/v2/skael-cursor-stop.sh")
