@@ -229,3 +229,19 @@ func TestConfig_EmptySkillsIsNotNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got.Skills, 0)
 }
+
+func TestWriteConfig_AtomicNoTempLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Endpoint: "https://api.skael.dev",
+		APIKey:   "sk-test",
+		Skills:   []SkillEntry{{Name: "test-skill"}},
+	}
+
+	require.NoError(t, WriteConfig(dir, cfg))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "config.json", entries[0].Name())
+}

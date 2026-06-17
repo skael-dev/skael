@@ -52,7 +52,8 @@ func DefaultDir() string {
 	return filepath.Join(home, ".skael")
 }
 
-// WriteConfig creates dir if needed and writes cfg to config.json with mode 0600.
+// WriteConfig creates dir if needed and writes cfg to config.json atomically
+// (temp file + rename) with mode 0600.
 func WriteConfig(dir string, cfg *Config) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -61,7 +62,31 @@ func WriteConfig(dir string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "config.json"), data, 0600)
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(dir, "config-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	target := filepath.Join(dir, "config.json")
+	if err := os.Rename(tmpName, target); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // ReadConfig reads and parses config.json from dir.
