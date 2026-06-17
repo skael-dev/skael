@@ -92,6 +92,21 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Install auto-sync hooks.
+	autoSyncPath, autoSyncErr := hooks.WriteAutoSyncScript(dir)
+	if autoSyncErr != nil {
+		ui.Warn("write auto-sync script: %s", autoSyncErr)
+	} else {
+		for _, agent := range detectedAgents {
+			configPath := agent.ConfigPath(home)
+			if instErr := hooks.InstallAutoSyncForAgent(agent.Name(), configPath, autoSyncPath); instErr != nil {
+				ui.Errorf("install auto-sync for %s: %s", agent.Name(), instErr)
+			} else {
+				ui.Success("Auto-sync installed for %s", agent.Name())
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -197,6 +212,10 @@ func runHookUninstall(cmd *cobra.Command, args []string) error {
 			ui.Errorf("uninstall hook for %s: %s", agent.Name(), err)
 		} else {
 			ui.Success("Hook uninstalled for %s", agent.Name())
+		}
+		// Also uninstall auto-sync hooks.
+		if err := hooks.UninstallAutoSyncForAgent(agent.Name(), configPath); err != nil {
+			ui.Errorf("uninstall auto-sync for %s: %s", agent.Name(), err)
 		}
 	}
 

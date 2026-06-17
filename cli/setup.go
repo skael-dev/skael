@@ -24,11 +24,13 @@ var setupCmd = &cobra.Command{
 }
 
 var setupSkipSync, setupSkipHooks bool
+var setupNoAutoSync bool
 var setupScope string
 
 func init() {
 	setupCmd.Flags().BoolVar(&setupSkipSync, "skip-sync", false, "Skip initial sync")
 	setupCmd.Flags().BoolVar(&setupSkipHooks, "skip-hooks", false, "Skip hook installation")
+	setupCmd.Flags().BoolVar(&setupNoAutoSync, "no-auto-sync", false, "Skip auto-sync hook installation")
 	setupCmd.Flags().StringVar(&setupScope, "scope", "project", "Default skill placement scope: project|user")
 	rootCmd.AddCommand(setupCmd)
 }
@@ -153,6 +155,23 @@ func runSetup(cmd *cobra.Command, args []string) error {
 					ui.Warn("install hook for %s: %s", agent.Name(), instErr)
 				} else {
 					ui.Success("Hook installed for %s", agent.Name())
+				}
+			}
+		}
+
+		// Install auto-sync hooks unless --no-auto-sync was passed.
+		if !setupNoAutoSync {
+			autoSyncPath, autoSyncErr := hooks.WriteAutoSyncScript(dir)
+			if autoSyncErr != nil {
+				ui.Warn("write auto-sync script: %s", autoSyncErr)
+			} else {
+				for _, agent := range detectedAgents {
+					configPath := agent.ConfigPath(home)
+					if instErr := hooks.InstallAutoSyncForAgent(agent.Name(), configPath, autoSyncPath); instErr != nil {
+						ui.Warn("install auto-sync for %s: %s", agent.Name(), instErr)
+					} else {
+						ui.Success("Auto-sync hook installed for %s", agent.Name())
+					}
 				}
 			}
 		}
