@@ -18,7 +18,12 @@ var listCmd = &cobra.Command{
 	RunE:  runList,
 }
 
-func init() { rootCmd.AddCommand(listCmd) }
+var listInstalled bool
+
+func init() {
+	listCmd.Flags().BoolVar(&listInstalled, "installed", false, "Show only installed skills with their scope")
+	rootCmd.AddCommand(listCmd)
+}
 
 func runList(cmd *cobra.Command, args []string) error {
 	cfg, err := config.LoadConfig()
@@ -32,6 +37,10 @@ func runList(cmd *cobra.Command, args []string) error {
 			Suggestion: "skael setup <url> <api-key>",
 		})
 		return nil
+	}
+
+	if listInstalled {
+		return runListInstalled(cfg)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
@@ -122,4 +131,67 @@ func plural(n int, singular, pluralForm string) string {
 		return singular
 	}
 	return pluralForm
+}
+
+func runListInstalled(cfg *config.Config) error {
+	dir := config.DefaultDir()
+	fullCfg, _, err := config.EnsureSkillsKey(dir)
+	if err != nil {
+		ui.Errorf("load config: %s", err)
+		return nil
+	}
+
+	state, _ := config.ReadState(dir)
+	stateMap := make(map[string]config.SyncedSkill, len(state.Skills))
+	for _, s := range state.Skills {
+		stateMap[s.Name] = s
+	}
+
+	if ui.JSONMode {
+		type installedSkill struct {
+			Name    string `json:"name"`
+			Scope   string `json:"scope"`
+			Version int    `json:"version,omitempty"`
+		}
+		var out []installedSkill
+		for _, s := range fullCfg.Skills {
+			scope := s.Scope
+			if scope == "" {
+				scope = fullCfg.Scope
+				if scope == "" {
+					scope = "project"
+				}
+			}
+			ver := 0
+			if synced, ok := stateMap[s.Name]; ok {
+				ver = synced.Version
+			}
+			out = append(out, installedSkill{Name: s.Name, Scope: scope, Version: ver})
+		}
+		return ui.PrintJSON(map[string]interface{}{"skills": out, "total": len(out)})
+	}
+
+	if len(fullCfg.Skills) == 0 {
+		fmt.Fprintln(os.Stdout, "  No skills installed.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "  Try: skael add <skill-name>")
+		return nil
+	}
+
+	for _, s := range fullCfg.Skills {
+		scope := s.Scope
+		if scope == "" {
+			scope = fullCfg.Scope
+			if scope == "" {
+				scope = "project"
+			}
+		}
+		ver := "not synced"
+		if synced, ok := stateMap[s.Name]; ok {
+			ver = fmt.Sprintf("v%d", synced.Version)
+		}
+		fmt.Fprintf(os.Stdout, "  %-24s %-8s  %s\n", s.Name, ver, scope)
+	}
+	fmt.Fprintf(os.Stdout, "\n  %d %s\n", len(fullCfg.Skills), plural(len(fullCfg.Skills), "skill", "skills"))
+	return nil
 }
