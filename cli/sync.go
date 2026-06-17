@@ -81,8 +81,9 @@ func init() {
 
 // runSync is a package-level function so setup.go (Task 10) can call it directly.
 func runSync(cmd *cobra.Command, args []string) error {
-	// 1. Load config.
-	cfg, err := config.LoadConfig()
+	// 1. Load config with skills-key migration.
+	dir := config.DefaultDir()
+	cfg, migrated, err := config.EnsureSkillsKey(dir)
 	if err != nil {
 		if ui.JSONMode {
 			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
@@ -92,6 +93,46 @@ func runSync(cmd *cobra.Command, args []string) error {
 			Message:    "not configured",
 			Suggestion: "skael setup <url> <api-key>",
 		})
+		return nil
+	}
+
+	// Print migration message if applicable.
+	if migrated != nil && !syncQuiet && !ui.JSONMode {
+		if len(migrated) > 0 {
+			ui.Success("Migrated to selective sync. Added %d %s from your current state:",
+				len(migrated), plural(len(migrated), "skill", "skills"))
+			for _, name := range migrated {
+				entry, _ := cfg.FindSkill(name)
+				scopeLabel := entry.Scope
+				if scopeLabel == "" {
+					scopeLabel = cfg.Scope
+					if scopeLabel == "" {
+						scopeLabel = "project"
+					}
+				}
+				fmt.Fprintf(os.Stderr, "  %s (%s)\n", name, scopeLabel)
+			}
+			ui.Info("Run \"skael add/remove <name>\" to manage your skill list.")
+		} else {
+			ui.Info("No skills installed. Run \"skael add <name>\" to get started.")
+		}
+	}
+
+	// Check for empty skills list (no-op sync).
+	if len(cfg.Skills) == 0 {
+		if ui.JSONMode {
+			out := struct {
+				Synced int      `json:"synced"`
+				Failed int      `json:"failed"`
+				Pruned int      `json:"pruned"`
+				Agents []string `json:"agents"`
+				Total  int      `json:"total"`
+			}{Agents: []string{}}
+			return ui.PrintJSON(out)
+		}
+		if !syncQuiet {
+			ui.Info("No skills installed. Run \"skael add <name>\" to get started.")
+		}
 		return nil
 	}
 
@@ -114,8 +155,18 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Resolve projectRoot if the global scope is project OR any per-skill scope is project.
 	var projectRoot string
-	if scope == ScopeProject {
+	needsProjectRoot := scope == ScopeProject
+	if !needsProjectRoot {
+		for _, s := range cfg.Skills {
+			if resolveScope(s.Scope, cfg.Scope) == ScopeProject {
+				needsProjectRoot = true
+				break
+			}
+		}
+	}
+	if needsProjectRoot {
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
 			ui.Errorf("cannot determine working directory: %s", wdErr)
@@ -153,8 +204,33 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// 2b. Filter manifest to only skills in config.
+	wantedSet := make(map[string]struct{}, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		wantedSet[s.Name] = struct{}{}
+	}
+
+	var filtered []client.ManifestEntry
+	for _, entry := range manifest {
+		if _, wanted := wantedSet[entry.Name]; wanted {
+			filtered = append(filtered, entry)
+		}
+	}
+
+	// Warn about skills in config that aren't in the manifest.
+	manifestSet := make(map[string]struct{}, len(manifest))
+	for _, entry := range manifest {
+		manifestSet[entry.Name] = struct{}{}
+	}
+	for _, s := range cfg.Skills {
+		if _, inManifest := manifestSet[s.Name]; !inManifest {
+			if !syncQuiet {
+				ui.Warn("skill %q not found on registry — skipping", s.Name)
+			}
+		}
+	}
+
 	// 3. Read local state.
-	dir := config.DefaultDir()
 	state, err := config.ReadState(dir)
 	if err != nil {
 		if ui.JSONMode {
@@ -171,14 +247,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 		localMap[s.Name] = s
 	}
 
-	// 5. Compute diff.
+	// 5. Compute diff against filtered manifest (only wanted skills).
 	type toSync struct {
 		entry client.ManifestEntry
 		isNew bool
 	}
 	var pending []toSync
 
-	for _, entry := range manifest {
+	for _, entry := range filtered {
 		local, exists := localMap[entry.Name]
 		if !exists {
 			pending = append(pending, toSync{entry: entry, isNew: true})
@@ -187,14 +263,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 5b. Check if any local skills need pruning.
-	manifestSet := make(map[string]struct{}, len(manifest))
-	for _, entry := range manifest {
-		manifestSet[entry.Name] = struct{}{}
-	}
+	// 5b. Check if any local skills need pruning (not in config).
 	hasPrunable := false
 	for _, s := range state.Skills {
-		if _, inManifest := manifestSet[s.Name]; !inManifest && len(s.Placements) > 0 {
+		if _, inConfig := wantedSet[s.Name]; !inConfig && len(s.Placements) > 0 {
 			hasPrunable = true
 			break
 		}
@@ -215,7 +287,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 				Failed: 0,
 				Pruned: 0,
 				Agents: []string{},
-				Total:  len(manifest),
+				Total:  len(cfg.Skills),
 			}
 			return ui.PrintJSON(out)
 		}
@@ -225,7 +297,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 				fmt.Sprintf("0 updated"),
 				fmt.Sprintf("0 failed"),
 				fmt.Sprintf("0 removed"),
-				fmt.Sprintf("%d total", len(manifest)),
+				fmt.Sprintf("%d total", len(cfg.Skills)),
 			)
 		}
 		return nil
@@ -249,7 +321,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			ui.Summary(
 				fmt.Sprintf("%d to sync", len(pending)),
-				fmt.Sprintf("%d total", len(manifest)),
+				fmt.Sprintf("%d total", len(cfg.Skills)),
 			)
 		}
 		return nil
@@ -264,10 +336,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 	var results []syncResult
 	var newSkills []config.SyncedSkill
 
-	// Carry over skills that didn't need updating and are still in the manifest.
-	// Skills not in the manifest are handled by the prune step below.
+	// Carry over skills that didn't need updating and are still in config.
+	// Skills not in config are handled by the prune step below.
 	for name, local := range localMap {
-		if _, inManifest := manifestSet[name]; !inManifest {
+		if _, inConfig := wantedSet[name]; !inConfig {
 			continue
 		}
 		needsUpdate := false
@@ -299,6 +371,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Resolve per-skill scope: skill config scope > flag > global config > default.
+		skillScope := scope
+		if entry, idx := cfg.FindSkill(ts.entry.Name); idx >= 0 && entry.Scope != "" {
+			skillScope = Scope(entry.Scope)
+		}
+
 		// Extract to each detected agent's skills directory.
 		// Track per-agent success so a partial failure doesn't corrupt state.
 		// extractSkillAtomically unpacks to a sibling temp dir first, so a
@@ -307,7 +385,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		extractFail := 0
 		var placements []config.Placement
 		for _, agent := range detectedAgents {
-			destDir := filepath.Join(agentSkillsBase(agent, scope, home, projectRoot), ts.entry.Name)
+			destDir := filepath.Join(agentSkillsBase(agent, skillScope, home, projectRoot), ts.entry.Name)
 			if err := extractSkillAtomically(archive, destDir); err != nil {
 				ui.Errorf("extract %s to %s: %s", ts.entry.Name, agent.Name(), err)
 				extractFail++
@@ -316,7 +394,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 				placements = append(placements, config.Placement{
 					Agent: agent.Name(),
 					Path:  destDir,
-					Scope: string(scope),
+					Scope: string(skillScope),
 				})
 			}
 		}
@@ -347,10 +425,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 9b. Prune skills that exist in state but no longer appear in the manifest.
+	// 9b. Prune skills that exist in state but are no longer in config.
 	pruned := 0
 	for _, local := range state.Skills {
-		if _, inManifest := manifestSet[local.Name]; inManifest {
+		if _, inConfig := wantedSet[local.Name]; inConfig {
 			continue
 		}
 		if len(local.Placements) == 0 {
@@ -431,7 +509,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			Agents:  agentNames,
 			Scope:   string(scope),
 			Dests:   dests,
-			Total:   len(manifest),
+			Total:   len(cfg.Skills),
 		}
 		return ui.PrintJSON(out)
 	}
@@ -441,7 +519,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			fmt.Sprintf("%d updated", synced),
 			fmt.Sprintf("%d failed", failed),
 			fmt.Sprintf("%d removed", pruned),
-			fmt.Sprintf("%d total", len(manifest)),
+			fmt.Sprintf("%d total", len(cfg.Skills)),
 		}
 		if len(agentNames) > 0 {
 			parts = append(parts, strings.Join(agentNames, ", "))
