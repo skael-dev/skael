@@ -15,7 +15,7 @@ Self-hosted and open source.
 ## Where to go next
 
 - **[Quickstart](/docs/quickstart)** — get the platform and CLI running in a couple of minutes.
-- **[Core concepts](/docs/concepts)** — skills, versions, sync, scanning, activations.
+- **[Core concepts](/docs/concepts)** — skills, versions, selective sync, auto-sync, scanning, activations.
 - **[CLI reference](/docs/cli)** — every `skael` command.
 - **[Self-hosting](/docs/self-hosting)** — run the platform on your own infrastructure.
 - **[Why not just git?](/docs/why-not-git)** — how skael differs from a shared repo or native agent sharing.

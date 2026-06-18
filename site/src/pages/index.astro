@@ -68,13 +68,13 @@ const faqLd = {
     <div class="container">
       <span class="pill">
         <span class="pill-tag">New</span>
-        Open source · v0.6.0
+        Open source · v0.8.0
       </span>
       <h1 class="headline">
         Your team's AI skills, in one place — and on <span class="accent">every agent</span>.
       </h1>
       <p class="sub">
-        Publish once — skael versions it, scans it for secrets and prompt injection, and syncs it to Claude Code, Cursor, Codex, and OpenCode on every machine. The only registry that shows you which skills actually fire — by which agent, how often, even in headless Claude Code runs.
+        Publish once — skael versions it, scans it for secrets and prompt injection, and syncs it to Claude Code, Cursor, Codex, and OpenCode on every machine. Install what you need, auto-sync keeps it current. The only registry that shows you which skills actually fire — by which agent, how often.
       </p>
       <div class="hero-ctas">
         <a href="https://github.com/skael-dev/skael" class="btn btn-primary btn-lg">Get started</a>
@@ -98,13 +98,15 @@ const faqLd = {
 <span class="term-line"><span class="prompt">$</span> <span class="term-cmd">skael setup https://skills.company.com sk-xxx</span></span>
 <span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Connected to skills.company.com</span></span>
 <span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Configuration saved</span></span>
-<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Hook installed for claude-code</span></span>
-<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Hook installed for codex</span></span>
-<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Setup complete. Skills are live.</span></span>
+<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Hooks installed for claude-code, codex</span></span>
+<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> Auto-sync enabled (30 min debounce)</span></span>
 <span class="term-line"> </span>
-<span class="term-line"><span class="prompt">$</span> <span class="term-cmd">skael publish ./code-review</span></span>
+<span class="term-line"><span class="prompt">$</span> <span class="term-cmd">skael add code-review</span></span>
+<span class="term-line"><span class="term-out">  </span><span class="term-ok">✓</span><span class="term-out"> installed </span><span class="term-cmd">code-review v5</span><span class="term-out"> → claude-code, codex</span></span>
+<span class="term-line"> </span>
+<span class="term-line"><span class="prompt">$</span> <span class="term-cmd">skael publish ./my-skill</span></span>
 <span class="term-line"><span class="term-out">  → scanning for security issues… </span><span class="term-ok">ok</span></span>
-<span class="term-line"><span class="term-out">  → published </span><span class="term-cmd">code-review v5</span><span class="term-out"> (checksum </span><span class="term-dim">a3f8…</span><span class="term-out">)</span></span>
+<span class="term-line"><span class="term-out">  → published </span><span class="term-cmd">my-skill v1</span><span class="term-out"> (checksum </span><span class="term-dim">a3f8…</span><span class="term-out">)</span></span>
 <span class="term-line"> </span>
 <span class="term-line"><span class="prompt">$</span><span class="caret"></span></span>
         </div>
@@ -157,7 +159,7 @@ const faqLd = {
             </svg>
           </div>
           <h3>Centralize, don't copy-paste</h3>
-          <p>One source of truth for every skill. <span class="mono-inline">skael sync</span> places them in each developer's Claude Code, Cursor, Codex, and OpenCode — across every project and machine. Update once; everyone gets it.</p>
+          <p>One source of truth for every skill. <span class="mono-inline">skael add</span> installs what you need; auto-sync keeps it current across Claude Code, Cursor, Codex, and OpenCode — every project and machine. Update once; everyone gets it.</p>
         </div>
 
         <div class="feat">
@@ -257,14 +259,14 @@ const faqLd = {
         <div class="step">
           <div class="step-num">02 / SETUP</div>
           <h3>Connect to your registry.</h3>
-          <p>One command configures the CLI, syncs all skills, and installs activation tracking hooks for every detected agent.</p>
+          <p>One command configures the CLI and installs activation tracking and auto-sync hooks for every detected agent.</p>
           <div class="step-code"><span class="p">$</span> skael setup https://skills.company.com sk-xxx</div>
         </div>
         <div class="step">
-          <div class="step-num">03 / PUBLISH</div>
-          <h3>Share a skill.</h3>
-          <p>Security scan runs automatically. Next time anyone runs <span class="mono-inline">skael sync</span>, they get it.</p>
-          <div class="step-code"><span class="p">$</span> skael publish ./code-review</div>
+          <div class="step-num">03 / ADD</div>
+          <h3>Install what you need.</h3>
+          <p>Pick skills from the registry. Auto-sync keeps them up to date in the background — no manual pulls.</p>
+          <div class="step-code"><span class="p">$</span> skael add code-review</div>
         </div>
       </div>
     </div>
@@ -355,7 +357,7 @@ const faqLd = {
       </div>
       <div class="foot-bottom">
         <span>© 2026 skael</span>
-        <span>v0.6.0 · open source</span>
+        <span>v0.8.0 · open source</span>
       </div>
     </div>
   </footer>

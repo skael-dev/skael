@@ -7,17 +7,30 @@ All commands accept `--json` for scriptable output and `--no-color` to disable s
 
 ## skael setup `<url> <api-key>`
 
-One-command onboarding: validates the key, writes `~/.skael/config.json`, detects installed agents, runs the first sync, and installs activation-tracking hooks.
+One-command onboarding: validates the key, writes `~/.skael/config.json`, detects installed agents, and installs activation-tracking and auto-sync hooks.
 
 | Flag | Default | Description |
 |---|---|---|
 | `--scope project\|user` | `project` | Default skill placement scope saved to config |
 | `--skip-sync` | false | Skip the initial sync |
 | `--skip-hooks` | false | Skip hook installation |
+| `--no-auto-sync` | false | Skip auto-sync hook installation |
+
+## skael add `<name>`
+
+Installs a skill from the registry. Downloads the latest version, verifies the checksum, extracts to all detected agent directories, and adds the skill to `~/.skael/config.json`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--scope project\|user` | config default | Override skill placement scope |
+
+## skael remove `<name>`
+
+Uninstalls a skill. Removes files from agent directories and removes the skill from `~/.skael/config.json`.
 
 ## skael sync
 
-Pulls the latest skills from the platform and places them in every detected agent's directory. Only changed skills are downloaded. Supports `--dry-run`.
+Updates installed skills to the latest versions from the platform. Only skills listed in `~/.skael/config.json` are synced — not the full registry. Only changed skills are downloaded. Supports `--dry-run`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -52,7 +65,7 @@ Full-text search across the registry (with fuzzy matching on names).
 
 ## skael list
 
-Lists all skills on the platform.
+Lists all skills on the platform. Use `--installed` to show only locally installed skills with their scope and version.
 
 ## skael doctor
 
@@ -60,9 +73,9 @@ Diagnostic health check: config, connectivity, agent detection, hook status.
 
 ## skael hook `install` | `uninstall` | `status`
 
-Standalone management of the activation-tracking hooks.
+Standalone management of activation-tracking and auto-sync hooks.
 
-- `install` — write hook scripts for all detected agents
+- `install` — write hook scripts for all detected agents (activation tracking + auto-sync)
 - `uninstall` — remove hook scripts from all detected agents
 - `status` — show which agents have hooks installed
 

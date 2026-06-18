@@ -11,9 +11,13 @@ A directory containing a `SKILL.md` (YAML frontmatter + markdown) and optional `
 
 Every publish creates a new immutable version (sequential integers — `1`, `2`, `3`, not semver). Archives are content-addressable, so concurrent publishes never clobber each other. You can always see and roll back to which version your team is on.
 
-## Sync
+## Selective sync
 
-`skael sync` diffs a manifest (`{name, version, checksum}`) against what's installed and downloads only what changed, placing each skill into every detected agent's skills directory. Downloaded archives are checksum-verified before extraction.
+Skills are installed explicitly with `skael add`, which tracks them in `~/.skael/config.json` (like `package.json` for skills). `skael sync` only updates skills you've installed — not the full registry. Downloaded archives are checksum-verified before extraction. `skael remove` uninstalls a skill and removes it from your config.
+
+## Auto-sync
+
+A debounced hook script runs `skael sync` automatically in the background. It checks your last sync timestamp and skips if less than 30 minutes old. Installed for Claude Code (`UserPromptSubmit`), Cursor (`sessionStart`), and Codex (`pre_tool_use`). Your agents always have the latest versions of your installed skills without manual intervention.
 
 ## Scanning
 
