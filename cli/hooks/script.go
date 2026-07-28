@@ -42,6 +42,9 @@ if command -v jq >/dev/null 2>&1; then
   TOOL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // .tool // ""' 2>/dev/null || true)"
 else
   TOOL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
+  if [ -z "$TOOL_NAME" ]; then
+    TOOL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"tool"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
+  fi
 fi
 
 case "$TOOL_NAME" in

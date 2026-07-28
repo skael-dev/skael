@@ -119,6 +119,86 @@ func (e *hookEnv) run(t *testing.T, scriptPath, payload string, extraEnv ...stri
 	return exitCode, bodies
 }
 
+// jqLessFallbackBins lists the external binaries the grep/sed fallback path
+// actually needs, in the order runWithoutJQ resolves them: bash to run the
+// script, cat to read stdin, grep/sed/head/cut for field extraction. The
+// hashing tool is resolved separately since it's an either/or choice.
+var jqLessFallbackBins = []string{"bash", "cat", "grep", "sed", "head", "cut"}
+
+// runWithoutJQ runs scriptPath the same way run does, but with a PATH built
+// from scratch out of symlinks to only the binaries the jq-less fallback
+// needs — no jq anywhere on it — so the fallback code path actually executes
+// instead of the jq path. It skips the test if any required binary (or
+// neither sha256sum nor shasum) can't be resolved on the host.
+func (e *hookEnv) runWithoutJQ(t *testing.T, scriptPath, payload string, extraEnv ...string) (int, []map[string]any) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	for _, name := range jqLessFallbackBins {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not found on PATH; skipping jq-less fallback test", name)
+		}
+		require.NoError(t, os.Symlink(p, filepath.Join(binDir, name)))
+	}
+
+	hashBin := ""
+	for _, candidate := range []string{"sha256sum", "shasum"} {
+		if p, err := exec.LookPath(candidate); err == nil {
+			hashBin = candidate
+			require.NoError(t, os.Symlink(p, filepath.Join(binDir, candidate)))
+			break
+		}
+	}
+	if hashBin == "" {
+		t.Skip("neither sha256sum nor shasum found on PATH; skipping jq-less fallback test")
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "curl"), []byte(fakeCurl), 0o755))
+
+	cmd := exec.Command(filepath.Join(binDir, "bash"), scriptPath)
+	cmd.Stdin = strings.NewReader(payload)
+	cmd.Env = append([]string{},
+		"HOME="+e.home,
+		"PATH="+binDir,
+		"SKAEL_TEST_CAPTURE="+e.capture,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+
+	exitCode := 0
+	if err := cmd.Run(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		require.Truef(t, ok, "running %s: %v", scriptPath, err)
+		exitCode = exitErr.ExitCode()
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(e.capture); err == nil && strings.TrimSpace(string(data)) != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	data, err := os.ReadFile(e.capture)
+	if os.IsNotExist(err) {
+		return exitCode, nil
+	}
+	require.NoError(t, err)
+
+	var bodies []map[string]any
+	for _, record := range strings.Split(string(data), "\x00") {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		var body map[string]any
+		require.NoErrorf(t, json.Unmarshal([]byte(record), &body), "captured body is not JSON: %s", record)
+		bodies = append(bodies, body)
+	}
+	return exitCode, bodies
+}
+
 func TestHookScript_PostsSkillActivation(t *testing.T) {
 	requireJQ(t)
 
@@ -213,4 +293,44 @@ func TestHookScript_RejectsMalformedSkillName(t *testing.T) {
 		assert.Equal(t, 0, code, "name %q", name)
 		assert.Emptyf(t, bodies, "malformed skill name %q must not be posted", name)
 	}
+}
+
+// TestHookScript_IgnoresToolInputNameFallback isolates the .tool_input.name
+// removal specifically: tool_name "Skill" passes the tool-name gate on its
+// own, so the only thing standing between this payload and a false-positive
+// post is whether the skill-name jq filter still falls back to
+// .tool_input.name. A regression that reintroduced that fallback would slip
+// past every other test in this file but must fail this one.
+func TestHookScript_IgnoresToolInputNameFallback(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Skill","tool_input":{"name":"whatever"}}`,
+		"SKAEL_AGENT=claude-code")
+
+	assert.Equal(t, 0, code)
+	assert.Empty(t, bodies, "tool_input.name is not a skill name; the extraction filter must not fall back to it")
+}
+
+// TestHookScript_FallbackGatesOnToolKeyToo exercises the grep/sed fallback
+// path used when jq is not on PATH. The fallback must gate on both "tool_name"
+// and "tool" the same way the jq filter (.tool_name // .tool // "") does —
+// otherwise a payload using "tool" instead of "tool_name" falls through the
+// allowlist's empty-string branch on machines without jq and gets its
+// tool_input.skill_name posted as if it were a real skill invocation.
+func TestHookScript_FallbackGatesOnToolKeyToo(t *testing.T) {
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	code, bodies := env.runWithoutJQ(t, scriptPath,
+		`{"tool":"apply_patch","tool_input":{"skill_name":"whatever"}}`,
+		"SKAEL_AGENT=codex")
+
+	assert.Equal(t, 0, code)
+	assert.Empty(t, bodies, "the jq-less fallback must reject apply_patch via the \"tool\" key, not just \"tool_name\"")
 }
