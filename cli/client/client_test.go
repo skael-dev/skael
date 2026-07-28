@@ -2,9 +2,11 @@ package client
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -382,6 +384,52 @@ func TestRetryOnConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "after 3 attempts") {
 		t.Errorf("expected 'after 3 attempts' in error, got: %v", err)
+	}
+}
+
+// TestPublishVersion_RetryResendsBody verifies that when a request is retried
+// after a 503, the request body is resent (not empty).
+func TestPublishVersion_RetryResendsBody(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+
+		mu.Lock()
+		bodies = append(bodies, string(raw))
+		n := len(bodies)
+		mu.Unlock()
+
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"version":3,"checksum":"abc","created":true}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "sk-test")
+
+	ver, _, err := c.PublishVersion("demo", []byte("archive-bytes"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ver == nil {
+		t.Fatal("expected non-nil version")
+	}
+	if ver.Version != 3 {
+		t.Errorf("expected version 3, got %d", ver.Version)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("expected 2 request bodies (503 retry), got %d", len(bodies))
+	}
+	if bodies[1] != "archive-bytes" {
+		t.Errorf("expected retried request to resend body 'archive-bytes', got %q", bodies[1])
 	}
 }
 

@@ -75,11 +75,25 @@ func New(endpoint, apiKey string) *Client {
 
 // doWithRetry executes req up to 3 times, backing off 1 s then 2 s between
 // attempts. It retries on connection errors and on 502/503/504 responses.
+// The request body is rewound before each retry attempt.
 func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+
+			// The previous attempt consumed the body. Without rewinding it the
+			// retry would send an empty request and the server would reject it.
+			if req.Body != nil {
+				if req.GetBody == nil {
+					return nil, fmt.Errorf("retry: request body cannot be replayed: %w", lastErr)
+				}
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, fmt.Errorf("retry: rewind request body: %w", err)
+				}
+				req.Body = body
+			}
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
