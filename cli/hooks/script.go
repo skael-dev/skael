@@ -34,11 +34,27 @@ if [ -z "$ENDPOINT" ] || [ -z "$API_KEY" ]; then exit 0; fi
 # Read stdin (agent hook payload).
 PAYLOAD="$(cat)"
 
-# Extract skill name from tool_input (where agents put skill parameters).
-# Claude Code Skill tool: .tool_input.skill
-# Fallback chain covers other agents and payload formats.
+# Identify the invoking tool. Codex has no matcher mechanism, so every tool call
+# reaches this script and the filter has to live here. An empty tool name means
+# an agent whose payload shape we do not recognise — fall through and let the
+# skill-name checks below decide.
 if command -v jq >/dev/null 2>&1; then
-  SKILL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.skill // .tool_input.skill_name // .tool_input.name // .skill_name // .skillName // "" ' 2>/dev/null || true)"
+  TOOL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // .tool // ""' 2>/dev/null || true)"
+else
+  TOOL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
+fi
+
+case "$TOOL_NAME" in
+  ""|Skill|skill|skills|skills_*) ;;
+  *) exit 0 ;;
+esac
+
+# Extract the skill name. Claude Code's Skill tool puts it in .tool_input.skill;
+# other agents use skill_name/skillName. There is deliberately no generic
+# .tool_input.name fallback — it matches unrelated tools' name parameters and
+# records them as activations.
+if command -v jq >/dev/null 2>&1; then
+  SKILL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.skill // .tool_input.skill_name // .tool_input.skillName // .skill_name // .skillName // ""' 2>/dev/null || true)"
 else
   SKILL_NAME="$(printf '%s' "$PAYLOAD" | grep -o '"skill"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
   if [ -z "$SKILL_NAME" ]; then
@@ -51,6 +67,14 @@ fi
 
 # Normalize OpenCode prefix.
 SKILL_NAME="${SKILL_NAME#skills_}"
+
+# No skill name means this was not a skill invocation. Posting "unknown" here
+# would corrupt the activation data the product is built on.
+if [ -z "$SKILL_NAME" ] || [ "$SKILL_NAME" = "null" ]; then exit 0; fi
+
+# Same shape and length the registry enforces. Anything else is not a skill.
+if [ "${#SKILL_NAME}" -gt 128 ]; then exit 0; fi
+if ! printf '%s' "$SKILL_NAME" | grep -Eq '^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$'; then exit 0; fi
 
 # Cross-platform hash: try sha256sum (Linux) then shasum (macOS), fall back to nohash.
 if command -v sha256sum &>/dev/null; then
@@ -72,7 +96,7 @@ fi
 # Build JSON payload — use jq if available to handle arbitrary skill names safely.
 if command -v jq &>/dev/null; then
   EVENT_JSON="$(jq -n \
-    --arg sn "${SKILL_NAME:-unknown}" \
+    --arg sn "$SKILL_NAME" \
     --arg ag "$AGENT" \
     --arg tt "auto" \
     --arg ph "$PROJECT_HASH" \
@@ -80,7 +104,7 @@ if command -v jq &>/dev/null; then
     '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh}')"
 else
   # Escape double quotes so the JSON is not malformed.
-  SKILL_NAME_ESCAPED="$(printf '%s' "${SKILL_NAME:-unknown}" | sed 's/"/\\"/g')"
+  SKILL_NAME_ESCAPED="$(printf '%s' "$SKILL_NAME" | sed 's/"/\\"/g')"
   EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s"}' \
     "$SKILL_NAME_ESCAPED" \
     "$AGENT" \

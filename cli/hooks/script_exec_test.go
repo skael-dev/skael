@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,4 +152,65 @@ func TestHookScript_StripsOpenCodeSkillsPrefix(t *testing.T) {
 	require.Equal(t, 0, code)
 	require.Len(t, bodies, 1)
 	assert.Equal(t, "code-review", bodies[0]["skill_name"])
+}
+
+func TestHookScript_SilentWhenNoSkillName(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`,
+		"SKAEL_AGENT=codex")
+
+	assert.Equal(t, 0, code, "hook must never fail the tool call")
+	assert.Empty(t, bodies, "a tool call with no skill name must post nothing")
+}
+
+func TestHookScript_IgnoresUnrelatedNameParameter(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Read","tool_input":{"name":"config.json"}}`,
+		"SKAEL_AGENT=codex")
+
+	assert.Equal(t, 0, code)
+	assert.Empty(t, bodies, "another tool's name parameter is not a skill activation")
+}
+
+func TestHookScript_IgnoresNonSkillTools(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"apply_patch","tool_input":{"skill_name":"whatever"}}`,
+		"SKAEL_AGENT=codex")
+
+	assert.Equal(t, 0, code)
+	assert.Empty(t, bodies, "only skill-invocation tools produce activations")
+}
+
+func TestHookScript_RejectsMalformedSkillName(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	for _, name := range []string{"../../etc/passwd", "Not A Skill", "trailing-", ""} {
+		env := newHookEnv(t)
+		payload := `{"tool_name":"Skill","tool_input":{"skill":` + strconv.Quote(name) + `}}`
+		code, bodies := env.run(t, scriptPath, payload, "SKAEL_AGENT=claude-code")
+
+		assert.Equal(t, 0, code, "name %q", name)
+		assert.Emptyf(t, bodies, "malformed skill name %q must not be posted", name)
+	}
 }
