@@ -32,6 +32,58 @@ import (
 	skweb "github.com/skael-dev/skael/web"
 )
 
+// InstallEdgeMiddleware registers every middleware a request passes through
+// before it reaches session handling, authentication, or any route: security
+// headers, request ID, CORS, panic recovery, request logging, and rate
+// limiting (plus Prometheus instrumentation unless METRICS_ENABLED=false).
+//
+// Order matters here, and it is the reason this lives in its own function
+// rather than inline in Build: the rate limiter and the request logger both
+// need to agree on who a request came from, so anything that establishes the
+// client identity must run before either of them. Exporting it lets tests
+// exercise the real chain — in the real order — without a database.
+//
+// It returns mountMetrics, which registers the /metrics endpoint. Callers must
+// call it only after adding every middleware of their own: chi panics if Use
+// is called once any route exists on the mux, and route registration order has
+// no effect on which middleware a route runs through.
+func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure bool) (mountMetrics func()) {
+	router.Use(platform.SecurityHeaders(cookieSecure))
+	router.Use(platform.RequestID)
+
+	if cfg.CORSOrigins != "" {
+		origins := strings.Split(cfg.CORSOrigins, ",")
+		for i := range origins {
+			origins[i] = strings.TrimSpace(origins[i])
+		}
+		router.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   origins,
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"},
+			ExposedHeaders:   []string{"X-Request-ID"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		}))
+	}
+
+	router.Use(middleware.Recoverer)
+	router.Use(middleware.RealIP)
+	router.Use(platform.RequestLogger)
+
+	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{
+		Auth:   cfg.RateLimitAuth,
+		Events: cfg.RateLimitEvents,
+		Read:   cfg.RateLimitRead,
+		Write:  cfg.RateLimitWrite,
+	}))
+
+	if os.Getenv("METRICS_ENABLED") != "false" {
+		router.Use(platform.MetricsMiddleware)
+		return func() { router.Get("/metrics", promhttp.Handler().ServeHTTP) }
+	}
+	return func() {}
+}
+
 // Server wraps the assembled HTTP handler and configuration needed to start
 // listening. Build() produces a Server; ListenAndServe() runs it.
 type Server struct {
@@ -87,40 +139,7 @@ func (b *Builder) Build() (*Server, error) {
 
 	// 7. Create chi router with middleware.
 	router := chi.NewMux()
-	router.Use(platform.SecurityHeaders(cookieSecure))
-	router.Use(platform.RequestID)
-
-	if cfg.CORSOrigins != "" {
-		origins := strings.Split(cfg.CORSOrigins, ",")
-		for i := range origins {
-			origins[i] = strings.TrimSpace(origins[i])
-		}
-		router.Use(cors.Handler(cors.Options{
-			AllowedOrigins:   origins,
-			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"},
-			ExposedHeaders:   []string{"X-Request-ID"},
-			AllowCredentials: true,
-			MaxAge:           300,
-		}))
-	}
-
-	router.Use(middleware.Recoverer)
-	router.Use(middleware.RealIP)
-	router.Use(platform.RequestLogger)
-
-	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{
-		Auth:   cfg.RateLimitAuth,
-		Events: cfg.RateLimitEvents,
-		Read:   cfg.RateLimitRead,
-		Write:  cfg.RateLimitWrite,
-	}))
-
-	metricsEnabled := os.Getenv("METRICS_ENABLED") != "false"
-	if metricsEnabled {
-		router.Use(platform.MetricsMiddleware)
-		router.Get("/metrics", promhttp.Handler().ServeHTTP)
-	}
+	mountMetrics := InstallEdgeMiddleware(router, cfg, cookieSecure)
 
 	router.Use(sessionManager.LoadAndSave)
 	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
@@ -133,7 +152,10 @@ func (b *Builder) Build() (*Server, error) {
 		})
 	})
 
-	// 9. Create Huma API.
+	// 9. All middleware is registered; routes may now be mounted.
+	mountMetrics()
+
+	// 9a. Create Huma API.
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
