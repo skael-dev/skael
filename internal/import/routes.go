@@ -295,6 +295,19 @@ func importSingleSkill(
 		}
 	}
 
+	// Persist spec-derived metadata. UpdateSpecFields is the only writer of the
+	// tags, author, license, compatibility and spec_compliance columns, and the
+	// dashboard's tag filter and tag list endpoint read tags directly — an
+	// imported skill that skips this is invisible to both. Done before the
+	// unchanged-checksum return below so that re-importing also repairs a skill
+	// imported before this was wired up.
+	spec := skill.ValidateSpec(fm, sk.Name)
+	if err := skillStore.UpdateSpecFields(ctx, sk.Name,
+		spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags,
+	); err != nil {
+		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: persist spec metadata failed (non-fatal)")
+	}
+
 	if sk.LatestVersion > 0 {
 		latest, err := skillStore.GetVersion(ctx, ds.Name, sk.LatestVersion)
 		if err == nil && latest != nil && latest.Checksum == checksum {
