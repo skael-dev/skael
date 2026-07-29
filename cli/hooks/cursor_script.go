@@ -29,7 +29,7 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then exit 0; fi
 
 SKILL_NAMES=$(jq -r '
   .. | strings
-  | match("skills/([a-z0-9][a-z0-9:._-]*[a-z0-9])/SKILL\\.md"; "g")
+  | match("skills/([a-z0-9][a-z0-9:.-]*[a-z0-9])/SKILL\\.md"; "g")
   | .captures[0].string
 ' "$TRANSCRIPT_PATH" 2>/dev/null | sort -u || true)
 

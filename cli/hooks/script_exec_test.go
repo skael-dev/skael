@@ -1,3 +1,5 @@
+//go:build unix
+
 package hooks_test
 
 import (
@@ -420,6 +422,30 @@ func TestCursorStopScript_ReportsTranscriptScanSource(t *testing.T) {
 	assert.Equal(t, "brainstorming", bodies[0]["skill_name"])
 	assert.Equal(t, "cursor", bodies[0]["agent"])
 	assert.Equal(t, "transcript_scan", bodies[0]["event_source"])
+}
+
+// TestCursorStopScript_IgnoresUnderscoreInSkillName verifies the transcript
+// regex's character class agrees with the canonical skill name rule
+// (^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$, no underscore). A name containing "_"
+// must never be extracted and POSTed — the ingest validator rejects it
+// anyway, so a mismatch here only wastes a round trip, but the two patterns
+// must not disagree.
+func TestCursorStopScript_IgnoresUnderscoreInSkillName(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteCursorStopScript(t.TempDir())
+	require.NoError(t, err)
+
+	transcript := filepath.Join(t.TempDir(), "transcript.json")
+	require.NoError(t, os.WriteFile(transcript,
+		[]byte(`{"messages":["read skills/under_score/SKILL.md for guidance"]}`), 0o644))
+
+	env := newHookEnv(t)
+	payload := `{"transcript_path":` + strconv.Quote(transcript) + `,"cwd":"/tmp/project"}`
+	code, bodies := env.run(t, scriptPath, payload)
+
+	require.Equal(t, 0, code)
+	assert.Empty(t, bodies, "a skill name containing an underscore must not be extracted or posted")
 }
 
 func TestOpenCodePlugin_ReportsToolInvocationSource(t *testing.T) {
