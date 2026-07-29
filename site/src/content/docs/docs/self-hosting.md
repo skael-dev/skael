@@ -12,6 +12,7 @@ skael is a single Go binary that embeds the dashboard and serves the API. It nee
 | `DATABASE_URL` | yes | — | Postgres connection string |
 | `STORAGE_PATH` | no | `./data/skills` | Archive storage: a local directory, or `s3://bucket/prefix` for S3 |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
+| `TRUSTED_PROXIES` | no | — | Comma-separated addresses or CIDR blocks whose `X-Forwarded-For` / `X-Real-IP` are believed. Unset means neither header is trusted. Set it when running behind a reverse proxy — see [Production](/docs/production#telling-skael-about-the-proxy) |
 
 Migrations run automatically on startup. Auth is via user accounts and personal API keys — there is no static server key; sign up to create the first account.
 

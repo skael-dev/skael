@@ -3,7 +3,7 @@ title: Production deployment
 description: Run skael behind TLS with a locked-down setup.
 ---
 
-The [quickstart](/docs/quickstart) gets you running in minutes. Production adds five things: TLS termination, secure session cookies, encrypted Postgres connections, persistent storage, and locked-down signups. This page covers all five.
+The [quickstart](/docs/quickstart) gets you running in minutes. Production adds six things: TLS termination, secure session cookies, a declared proxy, encrypted Postgres connections, persistent storage, and locked-down signups. This page covers all six.
 
 ## Production checklist
 
@@ -11,6 +11,7 @@ The [quickstart](/docs/quickstart) gets you running in minutes. Production adds 
 |---|---|---|
 | TLS | Put a reverse proxy in front | skael serves plain HTTP; TLS must be terminated upstream |
 | `COOKIE_SECURE=true` | Uncomment in `.env` | Session cookie is refused over plain HTTP when set; login breaks without a proxy |
+| `TRUSTED_PROXIES` | Set to your proxy's address once one is in front | Without it every request looks like it came from the proxy, so all clients share one rate-limit bucket |
 | `DATABASE_URL` with `sslmode=require` | Change from `sslmode=disable` | Encrypts traffic between skael and Postgres |
 | Persistent volume or S3 | Mount a volume or set `STORAGE_PATH=s3://…` | Archives are lost on container restart without one |
 | `DISABLE_SIGNUP=true` | Set after creating all accounts | Prevents anyone with network access from registering |
@@ -70,6 +71,24 @@ server {
 `nginx` was not available in this environment. The block above was verified against the nginx `ngx_http_proxy_module` documentation. All directives are standard nginx 1.18+ syntax.
 :::
 
+### Telling skael about the proxy
+
+Both configs above set `X-Forwarded-For` and `X-Real-IP`. skael ignores those headers by default — they are plain client input, and a server reachable from the internet that believed them would let anyone claim a new source address on every request, which defeats per-IP rate limiting entirely. That default is the right one for a directly-exposed instance and needs no configuration.
+
+Once a proxy is in front, tell skael which peer is allowed to speak for its clients:
+
+```ini
+# The address skael sees the proxy connecting from. Same host as skael:
+TRUSTED_PROXIES=127.0.0.1
+# Proxy or load balancer elsewhere on the network — CIDR blocks work too,
+# IPv4 or IPv6, comma-separated:
+# TRUSTED_PROXIES=10.0.0.0/8,fd00::/8
+```
+
+Set this to the proxy, not to your clients. Forwarding headers are read only when the machine that opened the connection falls inside the list; from anyone else they are ignored and the socket address is used. `X-Forwarded-For` is walked right to left with trusted hops discarded, so the first address no trusted proxy vouched for is the one skael attributes the request to — a client that prepends its own entry to the header gains nothing.
+
+Leaving it unset behind a proxy is safe but blunt: every request appears to come from the proxy, so all your users share a single rate-limit budget and every log line names the same IP.
+
 ## Environment
 
 A production `.env` differs from the default in three places:
@@ -88,6 +107,11 @@ LISTEN_ADDR=127.0.0.1:8080
 # If you set this without a TLS proxy in front, login stops working.
 COOKIE_SECURE=true
 
+# The reverse proxy's address. Only a peer in this list has its
+# X-Forwarded-For / X-Real-IP believed; leave it unset if nothing sits
+# in front of skael.
+TRUSTED_PROXIES=127.0.0.1
+
 # Lock down signups after initial setup (see below).
 DISABLE_SIGNUP=true
 
@@ -95,7 +119,7 @@ DISABLE_SIGNUP=true
 # STORAGE_PATH=s3://my-bucket/skael
 ```
 
-**Every variable above is read by the server.** Verified against `internal/platform/config.go` (`DATABASE_URL`, `STORAGE_PATH`, `LISTEN_ADDR`, `DISABLE_SIGNUP`) and `internal/server/server.go` (`COOKIE_SECURE`).
+**Every variable above is read by the server.** Verified against `internal/platform/config.go` (`DATABASE_URL`, `STORAGE_PATH`, `LISTEN_ADDR`, `DISABLE_SIGNUP`, `TRUSTED_PROXIES`) and `internal/server/server.go` (`COOKIE_SECURE`).
 
 :::caution[COOKIE_SECURE and HTTP]
 Setting `COOKIE_SECURE=true` without a TLS proxy causes login to silently fail. The browser refuses to send the cookie on plain HTTP, so every request after login appears unauthenticated. Set this only when you have TLS termination in front.

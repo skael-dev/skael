@@ -71,7 +71,7 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 	// 5. Create chi router with auth middleware (mirrors server.Build exactly).
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.RealIP)
+	router.Use(platform.ClientIP(platform.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
 	router.Use(sessionManager.LoadAndSave)
 	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
 

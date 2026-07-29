@@ -37,6 +37,11 @@ type Config struct {
 	CORSOrigins string
 	LogLevel    string
 
+	// TrustedProxies is the comma-separated list of proxy addresses and CIDR
+	// blocks whose X-Forwarded-For / X-Real-IP headers may be believed. Empty
+	// means trust none of them — see ParseTrustedProxies.
+	TrustedProxies string
+
 	RateLimitAuth   int
 	RateLimitEvents int
 	RateLimitRead   int
@@ -68,6 +73,7 @@ func LoadConfig() (*Config, error) {
 		DBMaxConnIdleTime:   envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		DBHealthCheckPeriod: envDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
 		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
+		TrustedProxies:      os.Getenv("TRUSTED_PROXIES"),
 		LogLevel:            envDefault("LOG_LEVEL", "info"),
 		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
 		RateLimitEvents:     envInt("RATE_LIMIT_EVENTS", 600),

@@ -67,7 +67,7 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 	}
 
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.RealIP)
+	router.Use(platform.ClientIP(platform.ParseTrustedProxies(cfg.TrustedProxies)))
 	router.Use(platform.RequestLogger)
 
 	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{

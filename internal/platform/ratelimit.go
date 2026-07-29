@@ -3,7 +3,6 @@ package platform
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -94,12 +93,15 @@ func rateLimitSubject(r *http.Request) string {
 // ipSubject identifies a request by source IP only, ignoring any API key. It
 // is the sole subject for the auth class, and the ceiling-bucket subject for
 // every other class.
+//
+// The address comes from ClientIPFromRequest, which yields a forwarded address
+// only when the peer is a configured trusted proxy and the socket address
+// otherwise. That distinction is what makes this bucket meaningful: a value
+// taken straight from X-Forwarded-For would let one attacker mint a new
+// identity per request, escaping every budget below and growing these maps
+// without bound.
 func ipSubject(r *http.Request) string {
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	return "ip:" + ip
+	return "ip:" + ClientIPFromRequest(r)
 }
 
 // limiterSet holds one token bucket per subject for a single budget (either

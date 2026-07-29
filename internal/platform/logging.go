@@ -8,7 +8,11 @@ import (
 )
 
 // RequestLogger is a Chi-compatible middleware that logs every request
-// using zerolog. Logs method, path, status, duration, and remote IP.
+// using zerolog. Logs method, path, status, duration, and client IP.
+//
+// The IP is the one ClientIP resolved, so the logs name the same client the
+// rate limiter charged — reading a 429 against the wrong address would make
+// every limiter incident impossible to trace.
 func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -24,7 +28,7 @@ func RequestLogger(next http.Handler) http.Handler {
 			Str("path", r.URL.Path).
 			Int("status", ww.status).
 			Dur("duration", time.Since(start)).
-			Str("ip", r.RemoteAddr)
+			Str("ip", ClientIPFromRequest(r))
 
 		if reqID := RequestIDFromContext(r.Context()); reqID != "" {
 			evt = evt.Str("request_id", reqID)

@@ -66,6 +66,8 @@ Every account has one of three roles: `owner` (exactly one per instance, set aut
 
 Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying `X-API-Key` are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified).
 
+"Source IP" means the address the connection came from, not whatever `X-Forwarded-For` claims — those headers are read only from a peer listed in `TRUSTED_PROXIES`. Behind a reverse proxy, set that variable or every client is budgeted as one; see [Production](/docs/production#telling-skael-about-the-proxy).
+
 The events/read/write classes also enforce a shared ceiling per source IP — ten times that class's limit — checked before the per-key budget, so a whole team behind one office IP can't collectively exceed it no matter how many distinct API keys they present between them; raising the class's env var raises this ceiling proportionally. If requests fail with the per-key budget apparently unused, this shared IP ceiling is almost always why.
 
 A request over budget gets `429 Too Many Requests` with a `Retry-After` header, which the CLI honours automatically.
