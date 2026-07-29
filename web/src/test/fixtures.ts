@@ -135,9 +135,14 @@ export const mockActivations: ActivationSummary = {
     cursor: 72,
     copilot: 30,
   },
+  // by_agent and by_source are aggregated from the same rows (see
+  // internal/analytics/event.go GetActivations) and must sum to the same
+  // total_count. Cursor is the only transcript-scanning reporter, so its
+  // count maps to transcript_scan; claude-code + copilot map to
+  // tool_invocation: 210 + 30 = 240, plus cursor's 72 = 312.
   by_source: {
-    tool_invocation: 34,
-    transcript_scan: 8,
+    tool_invocation: 240,
+    transcript_scan: 72,
   },
 };
 

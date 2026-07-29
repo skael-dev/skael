@@ -118,6 +118,84 @@ describe("SkillDetail", () => {
     expect(uniqueDevsLabels.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("usage tab shows per-source breakdown with a non-comparable note for multiple sources", async () => {
+    const user = userEvent.setup();
+
+    server.use(
+      http.get("/api/skills/:name", () => {
+        return HttpResponse.json(skillWithContent);
+      }),
+    );
+
+    renderDetail("code-review");
+
+    await screen.findByText("code-review");
+
+    const usageTab = screen.getByText("Usage");
+    await user.click(usageTab);
+
+    // mockActivations.by_source sums to total_count (312) split as
+    // tool_invocation: 240, transcript_scan: 72 -- both sources present,
+    // so the not-directly-comparable clause must render.
+    expect(
+      await screen.findByText(
+        "240 via explicit tool invocation · 72 via transcript scan — measured differently, not directly comparable.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("usage tab omits the non-comparable note when only one source is reported", async () => {
+    const user = userEvent.setup();
+
+    server.use(
+      http.get("/api/skills/:name", () => {
+        return HttpResponse.json(skillWithContent);
+      }),
+      http.get("/api/skills/:name/activations", () => {
+        return HttpResponse.json({
+          total_count: 50,
+          unique_devs: 5,
+          last_triggered: "2026-05-24T16:45:00Z",
+          by_agent: { "claude-code": 50 },
+          by_source: { tool_invocation: 50 },
+        });
+      }),
+    );
+
+    renderDetail("code-review");
+
+    await screen.findByText("code-review");
+
+    const usageTab = screen.getByText("Usage");
+    await user.click(usageTab);
+
+    expect(
+      await screen.findByText("50 via explicit tool invocation"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/not directly comparable/)).not.toBeInTheDocument();
+  });
+
+  it("usage tab states the measurement limit for tool invocations vs transcript scans", async () => {
+    const user = userEvent.setup();
+
+    server.use(
+      http.get("/api/skills/:name", () => {
+        return HttpResponse.json(skillWithContent);
+      }),
+    );
+
+    renderDetail("code-review");
+
+    await screen.findByText("code-review");
+
+    const usageTab = screen.getByText("Usage");
+    await user.click(usageTab);
+
+    expect(
+      await screen.findByText(/Tool invocations count explicit calls only/),
+    ).toBeInTheDocument();
+  });
+
   it("does not render a disabled Changelog tab", async () => {
     server.use(
       http.get("/api/skills/:name", () => {

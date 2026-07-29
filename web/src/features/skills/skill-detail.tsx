@@ -457,8 +457,9 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
               </div>
             )}
             <div className="mt-1">
-              Counts explicit skill invocations only. A skill that is read but not
-              invoked carries no attribution.
+              Tool invocations count explicit calls only — skills read but not
+              invoked are missed. Transcript scans match skill files referenced
+              in a session, so they may count skills that were only read.
             </div>
           </div>
         </>
