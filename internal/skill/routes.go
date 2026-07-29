@@ -18,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
@@ -54,6 +55,19 @@ func validRegisterName(name string) bool {
 		}
 	}
 	return true
+}
+
+// publishOverrideAllowed reports whether the caller may publish a version whose
+// scan came back blocking. Only an authenticated admin can, and only when they
+// asked for it explicitly. Without this escape hatch a skill that trips a
+// heuristic is unpublishable by any route, which is worse than a recorded,
+// deliberate override.
+func publishOverrideAllowed(ctx context.Context, requested bool) bool {
+	if !requested {
+		return false
+	}
+	user := auth.UserFromContext(ctx)
+	return user != nil && user.Role == "admin"
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -250,8 +264,9 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	// POST /api/skills/{name}/versions — publish a new version
 	// -----------------------------------------------------------------
 	type publishInput struct {
-		Name    string `path:"name"`
-		RawBody []byte `contentType:"application/gzip,application/octet-stream"`
+		Name     string `path:"name"`
+		Override bool   `query:"override" doc:"Publish despite blocking scan findings. Admin only; recorded server-side."`
+		RawBody  []byte `contentType:"application/gzip,application/octet-stream"`
 	}
 	type publishBody struct {
 		Version
@@ -296,12 +311,22 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		}
 		scan.MergeExternal(ctx, external, tmpDir, report)
 		if report.Status == "critical" || report.Status == "warn" {
-			scanJSON, _ := json.Marshal(report)
-			return nil, huma.NewError(
-				http.StatusUnprocessableEntity,
-				"archive rejected: critical security findings",
-				fmt.Errorf("%s", scanJSON),
-			)
+			if !publishOverrideAllowed(ctx, input.Override) {
+				scanJSON, _ := json.Marshal(report)
+				return nil, huma.NewError(
+					http.StatusUnprocessableEntity,
+					"archive rejected: resolve the findings below, or have an admin publish with override",
+					fmt.Errorf("%s", scanJSON),
+				)
+			}
+			user := auth.UserFromContext(ctx)
+			log.Warn().
+				Str("skill", input.Name).
+				Str("user", user.Email).
+				Str("scan_status", report.Status).
+				Int("critical", report.Summary.Critical).
+				Int("high", report.Summary.High).
+				Msg("publish override: admin published a skill with blocking scan findings")
 		}
 
 		// 4. Compute checksum and compare against latest version.
