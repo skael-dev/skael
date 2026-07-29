@@ -94,6 +94,8 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 
 Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
 
+Each of the events/read/write classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
+
 ## Security constraints
 
 These exist for good reasons — don't weaken them without understanding why:
