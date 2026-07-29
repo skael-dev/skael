@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockServer starts a test HTTP server with the given handler and returns both
@@ -121,12 +124,12 @@ func TestClient_PublishVersion_Success(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ver, scanBody, err := c.PublishVersion("my-skill", []byte("fake-archive"))
+	ver, report, err := c.PublishVersion("my-skill", []byte("fake-archive"), false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if scanBody != nil {
-		t.Errorf("expected nil scanBody on success, got: %s", scanBody)
+	if report != nil {
+		t.Errorf("expected nil report on success, got: %+v", report)
 	}
 	if ver == nil {
 		t.Fatal("expected non-nil version")
@@ -140,7 +143,8 @@ func TestClient_PublishVersion_Success(t *testing.T) {
 }
 
 // TestClient_PublishVersion_ScanBlocked verifies that a 422 response results in
-// a non-nil error and a non-nil scanBody carrying the scan report.
+// a non-nil error. The response here carries no recognizable scan report
+// envelope, so the report should come back nil rather than error out.
 func TestClient_PublishVersion_ScanBlocked(t *testing.T) {
 	scanReport := map[string]interface{}{
 		"blocked": true,
@@ -153,16 +157,49 @@ func TestClient_PublishVersion_ScanBlocked(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ver, scanBody, err := c.PublishVersion("bad-skill", []byte("malicious-archive"))
+	ver, report, err := c.PublishVersion("bad-skill", []byte("malicious-archive"), false)
 	if err == nil {
 		t.Fatal("expected error for 422")
 	}
 	if ver != nil {
 		t.Errorf("expected nil version on scan block, got: %+v", ver)
 	}
-	if scanBody == nil {
-		t.Error("expected non-nil scanBody on scan block")
+	if report != nil {
+		t.Errorf("expected nil report when the body carries no scan envelope, got: %+v", report)
 	}
+}
+
+// TestPublishVersion_ReturnsServerScanReport verifies that PublishVersion
+// forwards the override flag as a query parameter and, on a 422 rejection,
+// decodes the server's scan report out of the Huma error envelope so the
+// caller can show the findings that actually blocked the publish.
+func TestPublishVersion_ReturnsServerScanReport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "true", r.URL.Query().Get("override"),
+			"the override flag must reach the server")
+
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{
+			"title": "Unprocessable Entity",
+			"detail": "archive rejected: resolve the findings below, or have an owner or admin publish with override",
+			"errors": [{"message": "{\"status\":\"warn\",\"findings\":[{\"rule\":\"pipe-to-shell\",\"severity\":\"high\",\"file\":\"SKILL.md\",\"line\":12,\"message\":\"pipes a downloaded script into a shell\"}],\"summary\":{\"critical\":0,\"high\":1,\"medium\":0,\"info\":0}}"}]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "sk-test")
+
+	ver, report, err := c.PublishVersion("demo", []byte("archive"), true)
+	require.Error(t, err)
+	assert.Nil(t, ver)
+
+	require.NotNil(t, report, "the server's scan report must reach the caller")
+	assert.Equal(t, "warn", report.Status)
+	require.Len(t, report.Findings, 1)
+	assert.Equal(t, "SKILL.md", report.Findings[0].File)
+	assert.Equal(t, 12, report.Findings[0].Line)
+	assert.Contains(t, report.Findings[0].Message, "pipes a downloaded script")
 }
 
 // TestClient_SearchSkills verifies that the query parameter is forwarded and

@@ -214,7 +214,7 @@ func TestE2E_PublishAndRetrieve(t *testing.T) {
 
 	// Publish version 1 using the clean testdata archive.
 	archiveBytes := packTestdataDir(t, "clean-skill")
-	ver, _, err := c.PublishVersion("e2e-test-skill", archiveBytes)
+	ver, _, err := c.PublishVersion("e2e-test-skill", archiveBytes, false)
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)
@@ -248,7 +248,7 @@ func TestE2E_SyncFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	archiveBytes := packTestdataDir(t, "clean-skill")
-	_, _, err = c.PublishVersion("e2e-test-skill", archiveBytes)
+	_, _, err = c.PublishVersion("e2e-test-skill", archiveBytes, false)
 	require.NoError(t, err)
 
 	// Fetch the manifest.
@@ -293,7 +293,7 @@ func TestE2E_SecurityScanBlocks(t *testing.T) {
 	archiveBytes := packTestdataDir(t, "bad-skill")
 
 	// PublishVersion should fail with a 422 Unprocessable Entity.
-	ver, scanBody, err := c.PublishVersion("bad-skill", archiveBytes)
+	ver, report, err := c.PublishVersion("bad-skill", archiveBytes, false)
 	require.Error(t, err, "expected publish to be rejected by security scan")
 	require.Nil(t, ver)
 
@@ -302,12 +302,10 @@ func TestE2E_SecurityScanBlocks(t *testing.T) {
 	require.True(t, ok, "expected *client.APIError, got %T: %v", err, err)
 	require.Equal(t, http.StatusUnprocessableEntity, apiErr.StatusCode)
 
-	// The scan body returned by the client should be non-nil.
-	require.NotNil(t, scanBody, "scan body should be present in the error response")
-
-	// Verify the scan report is valid JSON.
-	var report interface{}
-	require.NoError(t, json.Unmarshal(scanBody, &report), "scan body should be valid JSON")
+	// The scan report returned by the client should be present and carry the
+	// findings that actually blocked the publish.
+	require.NotNil(t, report, "scan report should be present in the error response")
+	require.NotEmpty(t, report.Status, "scan report should carry a status")
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +323,7 @@ func TestE2E_ActivationTracking(t *testing.T) {
 	_, err := c.CreateSkill("tracked-skill", "activation tracking test")
 	require.NoError(t, err)
 	archiveBytes := packTestdataDir(t, "clean-skill")
-	_, _, err = c.PublishVersion("tracked-skill", archiveBytes)
+	_, _, err = c.PublishVersion("tracked-skill", archiveBytes, false)
 	require.NoError(t, err)
 
 	// Post 2 events from 2 distinct developers/agents.
@@ -422,7 +420,7 @@ func TestE2E_FailedPublishLeavesCleanState(t *testing.T) {
 
 	// POST a corrupt body that is not a valid gzip archive → expect HTTP 400.
 	corrupt := []byte("this is not a valid gzip archive")
-	ver, _, err := c.PublishVersion("clean-state", corrupt)
+	ver, _, err := c.PublishVersion("clean-state", corrupt, false)
 	require.Error(t, err, "expected corrupt archive to be rejected")
 	require.Nil(t, ver)
 	apiErr, ok := err.(*client.APIError)
@@ -432,7 +430,7 @@ func TestE2E_FailedPublishLeavesCleanState(t *testing.T) {
 	// POST a valid archive — must succeed with version == 1, proving the failed
 	// attempt left no version row or partial state behind.
 	archiveBytes := packTestdataDir(t, "clean-skill")
-	ver, _, err = c.PublishVersion("clean-state", archiveBytes)
+	ver, _, err = c.PublishVersion("clean-state", archiveBytes, false)
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)
@@ -455,7 +453,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	archiveBytes := packTestdataDir(t, "clean-skill")
-	ver, _, err := c.PublishVersion(skillName, archiveBytes)
+	ver, _, err := c.PublishVersion(skillName, archiveBytes, false)
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)

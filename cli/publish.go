@@ -22,10 +22,21 @@ var publishCmd = &cobra.Command{
 	RunE:  runPublish,
 }
 
-var publishForce bool
+var (
+	publishSkipLocalScan bool
+	publishOverride      bool
+	publishForce         bool // deprecated alias for --skip-local-scan
+)
 
 func init() {
-	publishCmd.Flags().BoolVar(&publishForce, "force", false, "Publish even with critical findings")
+	publishCmd.Flags().BoolVar(&publishSkipLocalScan, "skip-local-scan", false,
+		"Skip the local security scan and let the server decide")
+	publishCmd.Flags().BoolVar(&publishOverride, "override", false,
+		"Publish despite blocking findings (owner/admin only, recorded server-side)")
+	publishCmd.Flags().BoolVar(&publishForce, "force", false,
+		"Deprecated alias for --skip-local-scan")
+	_ = publishCmd.Flags().MarkDeprecated("force",
+		"use --skip-local-scan to skip the local scan, or --override to publish despite findings")
 	rootCmd.AddCommand(publishCmd)
 }
 
@@ -103,15 +114,19 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Block on critical or warn findings unless --force
-	if (report.Status == "critical" || report.Status == "warn") && !publishForce {
+	// --skip-local-scan only skips this check; the server scans again and can
+	// still reject. --override is what actually gets past a blocking finding.
+	skipLocalScan := publishSkipLocalScan || publishForce
+	const blockedSuggestion = "fix the findings above, or ask an owner or admin to publish with --override"
+
+	if (report.Status == "critical" || report.Status == "warn") && !skipLocalScan && !publishOverride {
 		if ui.JSONMode {
-			ui.PrintJSONError("critical security findings block publish", "scan_blocked", "skael publish --force")
+			ui.PrintJSONError("security findings block publish", "scan_blocked", blockedSuggestion)
 			return nil
 		}
 		ui.Error(ui.ErrorDetail{
-			Message:    "critical security findings block publish",
-			Suggestion: "skael publish --force",
+			Message:    "security findings block publish",
+			Suggestion: blockedSuggestion,
 		})
 		return nil
 	}
@@ -177,17 +192,29 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	// Publish the new version
-	ver, _, pubErr := c.PublishVersion(name, archive)
+	ver, serverReport, pubErr := c.PublishVersion(name, archive, publishOverride)
 	sp.Stop()
 	if pubErr != nil {
 		if apiErr, ok := pubErr.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
 			if ui.JSONMode {
-				ui.PrintJSONError("publish blocked by server-side security scan", "scan_blocked", "skael publish --force")
+				ui.PrintJSONError("publish blocked by server-side security scan", "scan_blocked", blockedSuggestion)
 				return nil
+			}
+			// Show what the server actually objected to. Repeating the local
+			// scan's verdict here would be guesswork — the server may run an
+			// external scanner the client does not have.
+			if serverReport != nil && len(serverReport.Findings) > 0 {
+				fmt.Fprintln(os.Stdout, "\n  Server scan findings:")
+				for _, f := range serverReport.Findings {
+					fmt.Fprintf(os.Stdout, "  %s:%d\t%-10s  %s\n",
+						f.File, f.Line, f.Severity, f.Message)
+				}
+			} else {
+				fmt.Fprintf(os.Stdout, "\n  %s\n", apiErr.Message)
 			}
 			ui.Error(ui.ErrorDetail{
 				Message:    "publish blocked by server-side security scan",
-				Suggestion: "skael publish --force",
+				Suggestion: blockedSuggestion,
 			})
 			return nil
 		}

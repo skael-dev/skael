@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/skael-dev/skael/internal/scan"
 )
 
 // Client communicates with the skael platform API. Every request includes the
@@ -57,6 +59,10 @@ type ManifestEntry struct {
 type APIError struct {
 	StatusCode int
 	Message    string
+	// Raw is the unparsed response body. Some endpoints attach a structured
+	// payload — the publish endpoint embeds its scan report — that does not
+	// survive being flattened into Message.
+	Raw []byte
 }
 
 func (e *APIError) Error() string {
@@ -205,7 +211,7 @@ func (c *Client) do(method, path string, body io.Reader, contentType string) (*h
 			}
 		}
 
-		return nil, &APIError{StatusCode: resp.StatusCode, Message: msg}
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: msg, Raw: raw}
 	}
 
 	return resp, nil
@@ -288,31 +294,24 @@ func (c *Client) CreateSkill(name, description string) (*Skill, error) {
 }
 
 // PublishVersion uploads archive (a gzip-compressed tar) to
-// POST /api/skills/{name}/versions.
+// POST /api/skills/{name}/versions. Set override to publish despite blocking
+// scan findings; the server accepts it only from an owner or admin and
+// records it.
 //
-// On success it returns the new Version record.
-// On 422 (critical security scan) it returns (nil, scanBody, err) where
-// scanBody is the raw JSON scan report embedded in the error response.
-func (c *Client) PublishVersion(name string, archive []byte) (*Version, json.RawMessage, error) {
-	resp, err := c.do(
-		http.MethodPost,
-		"/api/skills/"+url.PathEscape(name)+"/versions",
-		bytes.NewReader(archive),
-		"application/gzip",
-	)
+// On success it returns the new Version record. When the server rejects the
+// archive on its own scan it returns the parsed scan report alongside the
+// error, so the caller can show the findings that actually blocked the publish
+// instead of guessing.
+func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Version, *scan.Report, error) {
+	path := "/api/skills/" + url.PathEscape(name) + "/versions"
+	if override {
+		path += "?override=true"
+	}
+
+	resp, err := c.do(http.MethodPost, path, bytes.NewReader(archive), "application/gzip")
 	if err != nil {
 		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
-			// The raw scan JSON is embedded in the error message by the server.
-			// Try to recover it as-is; fall back to the plain message string.
-			var scanBody json.RawMessage
-			if json.Unmarshal([]byte(apiErr.Message), &scanBody) == nil {
-				return nil, scanBody, err
-			}
-			// The server may wrap the scan JSON inside a detail/errors field — hand
-			// back whatever we have as a JSON string so callers always receive
-			// valid JSON.
-			scanBody = json.RawMessage(strconv.Quote(apiErr.Message))
-			return nil, scanBody, err
+			return nil, parseScanReport(apiErr.Raw), err
 		}
 		return nil, nil, err
 	}
@@ -323,6 +322,28 @@ func (c *Client) PublishVersion(name string, archive []byte) (*Version, json.Raw
 		return nil, nil, fmt.Errorf("decode publish version response: %w", err)
 	}
 	return &ver, nil, nil
+}
+
+// parseScanReport digs the scan report out of a Huma error envelope. The
+// publish endpoint marshals the report into the error's detail list, so it
+// arrives as a JSON string inside errors[].message. Returns nil when the body
+// carries no report.
+func parseScanReport(raw []byte) *scan.Report {
+	var envelope struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return nil
+	}
+	for _, e := range envelope.Errors {
+		var report scan.Report
+		if json.Unmarshal([]byte(e.Message), &report) == nil && report.Status != "" {
+			return &report
+		}
+	}
+	return nil
 }
 
 // SearchSkills calls GET /api/search?q=&limit= and returns the matching skills.
