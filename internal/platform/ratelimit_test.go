@@ -1,8 +1,10 @@
 package platform
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,6 +105,109 @@ func TestClassifiedRateLimiter_KeysAreIndependent(t *testing.T) {
 		return r
 	})
 	assert.Equal(t, 3, allowedB, "a second key behind the same IP keeps its own budget")
+}
+
+// TestClassifiedRateLimiter_AuthClassIgnoresAPIKeyHeader is the regression
+// test for the forged-key auth bypass: /api/auth/login is unauthenticated,
+// so X-API-Key on it is unverified. An attacker rotating a fresh key on every
+// attempt must not be able to mint a fresh budget each time — the auth class
+// must be keyed on IP alone.
+func TestClassifiedRateLimiter_AuthClassIgnoresAPIKeyHeader(t *testing.T) {
+	mw := ClassifiedRateLimiter(RateLimitConfig{Auth: 5, Events: 1000, Read: 1000, Write: 1000})
+
+	i := 0
+	allowed := send(t, mw, 1000, func() *http.Request {
+		i++
+		r := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+		r.RemoteAddr = "10.0.0.1:5000"
+		r.Header.Set("X-API-Key", fmt.Sprintf("sk-forged-%d", i))
+		return r
+	})
+
+	assert.LessOrEqualf(t, allowed, 5, "a rotating forged API key must not escape the auth budget (got %d/1000 allowed)", allowed)
+}
+
+// TestClassifiedRateLimiter_IPCeilingCapsRotationButNotFixedKeys proves both
+// halves of the two-bucket design hold at once: two real developers behind
+// one NAT, identified by distinct fixed API keys, each keep their own full
+// per-key budget; an attacker behind the same IP rotating a fresh key on
+// every request is bounded by the shared IP ceiling regardless.
+func TestClassifiedRateLimiter_IPCeilingCapsRotationButNotFixedKeys(t *testing.T) {
+	// Read: 3 per subject: IP ceiling = 3 * ipCeilingFactor(10) = 30.
+	mw := ClassifiedRateLimiter(RateLimitConfig{Auth: 20, Events: 20, Read: 3, Write: 20})
+	const ip = "10.0.0.55:5000"
+
+	build := func(key string) func() *http.Request {
+		return func() *http.Request {
+			r := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+			r.RemoteAddr = ip
+			r.Header.Set("X-API-Key", key)
+			return r
+		}
+	}
+
+	// Two fixed, distinct developer keys behind the same IP: each gets its
+	// own independent per-key budget of 3, unaffected by the other. Every
+	// attempt (allowed or not) is charged one IP-ceiling token, since the IP
+	// bucket is checked before the per-key bucket denies.
+	allowedA := send(t, mw, 5, build("sk-fixed-aaaaaaaaaaaa"))
+	require.Equal(t, 3, allowedA, "first fixed key should get its full independent budget")
+
+	allowedB := send(t, mw, 5, build("sk-fixed-bbbbbbbbbbbb"))
+	require.Equal(t, 3, allowedB, "second fixed key behind the same IP keeps its own budget")
+
+	// 10 IP-ceiling tokens have now been spent (5 attempts each, all charged
+	// regardless of the per-key outcome), leaving 20 of the 30-token ceiling.
+	// A key-rotating attacker behind the same IP never trips its own per-key
+	// bucket (every key is brand new), so it is bounded purely by what's left
+	// of the shared IP ceiling.
+	i := 0
+	allowedRotating := send(t, mw, 40, func() *http.Request {
+		i++
+		return build(fmt.Sprintf("sk-rotate-%d", i))()
+	})
+	assert.Equal(t, 20, allowedRotating, "the shared IP ceiling must bound a key-rotating attacker")
+}
+
+// TestClassifiedRateLimiter_ConcurrentAccess exercises the middleware from
+// many goroutines across all four classes and a mix of fixed and rotating
+// subjects, so `go test -race` can verify the locking discipline under
+// contention rather than just in sequential tests.
+func TestClassifiedRateLimiter_ConcurrentAccess(t *testing.T) {
+	mw := ClassifiedRateLimiter(RateLimitConfig{Auth: 50, Events: 50, Read: 50, Write: 50})
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/auth/login"},
+		{http.MethodPost, "/api/events"},
+		{http.MethodGet, "/api/skills"},
+		{http.MethodPost, "/api/skills/demo/versions"},
+	}
+
+	const goroutines = 64
+	const perGoroutine = 200
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				rc := requests[(g+i)%len(requests)]
+				r := httptest.NewRequest(rc.method, rc.path, nil)
+				r.RemoteAddr = fmt.Sprintf("10.0.%d.%d:5000", g%256, i%256)
+				r.Header.Set("X-API-Key", fmt.Sprintf("sk-%d-%d", g, i%5))
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+			}
+		}(g)
+	}
+	wg.Wait()
 }
 
 func TestClassifiedRateLimiter_SetsRetryAfter(t *testing.T) {
