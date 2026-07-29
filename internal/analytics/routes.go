@@ -4,9 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 
 	"github.com/danielgtaylor/huma/v2"
 )
+
+// validEventSkillName mirrors the registry's name rule. Events arrive from hook
+// scripts on developer machines carrying nothing but an API key, so the name is
+// untrusted input and must not be stored on the strength of the key alone.
+var validEventSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
 // RegisterRoutes wires up all analytics-related HTTP endpoints onto the
 // provided Huma API.
@@ -31,6 +37,10 @@ func RegisterRoutes(api huma.API, store *Store) {
 		Summary:       "Ingest a skill activation event",
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, input *ingestInput) (*struct{}, error) {
+		if !validEventSkillName.MatchString(input.Body.SkillName) {
+			return nil, huma.Error422UnprocessableEntity(
+				fmt.Sprintf("invalid skill_name %q", input.Body.SkillName))
+		}
 		if err := store.Insert(ctx, Event{
 			SkillName:     input.Body.SkillName,
 			Agent:         input.Body.Agent,

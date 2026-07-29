@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/analytics"
@@ -120,4 +121,56 @@ func TestStore_GetSkillTimeSeries_NoEvents(t *testing.T) {
 	for _, row := range series {
 		require.Empty(t, row.Agents)
 	}
+}
+
+func TestStore_Insert_RecordsRegistrationAtIngest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	store := analytics.NewStore(pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO skills (name, description, content) VALUES ('known-skill', 'd', 'c')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "known-skill", Agent: "claude-code", TriggerType: "auto",
+	}))
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "never-registered", Agent: "claude-code", TriggerType: "auto",
+	}))
+
+	var registered bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT registered FROM skill_events WHERE skill_name = 'known-skill'`).Scan(&registered))
+	assert.True(t, registered)
+
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT registered FROM skill_events WHERE skill_name = 'never-registered'`).Scan(&registered))
+	assert.False(t, registered, "a name not in the registry must be recorded as unregistered")
+}
+
+func TestStore_GetOverview_SeparatesUnregisteredActivations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	store := analytics.NewStore(pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO skills (name, description, content) VALUES ('known-skill', 'd', 'c')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "known-skill", Agent: "claude-code"}))
+	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "made-up", Agent: "claude-code"}))
+	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "also-made-up", Agent: "claude-code"}))
+
+	overview, err := store.GetOverview(ctx, 30)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, overview.TotalActivations, "unknown names must not count as activations")
+	assert.Equal(t, 2, overview.UnregisteredActivations, "they belong in their own bucket")
 }

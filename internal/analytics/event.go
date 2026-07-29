@@ -49,9 +49,14 @@ func (s *Store) CleanupOldEvents(ctx context.Context, retentionDays int) (int64,
 
 // Insert writes a single activation event into skill_events.
 func (s *Store) Insert(ctx context.Context, e Event) error {
+	// The registration check runs inside the INSERT so ingest stays one round
+	// trip. Alias resolution matches the read path.
 	const q = `
-		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash, registered)
+		VALUES ($1, $2, $3, $4, $5, EXISTS (
+			SELECT 1 FROM skills s
+			WHERE s.name = COALESCE((SELECT a.canonical FROM skill_aliases a WHERE a.alias = $1), $1)
+		))
 	`
 	if _, err := s.pool.Exec(ctx, q,
 		e.SkillName, e.Agent, e.TriggerType, e.ProjectHash, e.DeveloperHash,
@@ -68,6 +73,11 @@ type OverviewData struct {
 	TotalActivations int             `json:"total_activations"`
 	UnreviewedSkills int             `json:"unreviewed_skills"`
 	Security         SecuritySummary `json:"security"`
+
+	// UnregisteredActivations counts events whose skill name was not in the
+	// registry when they arrived. They are deliberately excluded from
+	// TotalActivations — unvalidated names are not proof of use.
+	UnregisteredActivations int `json:"unregistered_activations"`
 }
 
 // SecuritySummary aggregates skill security statuses.
@@ -127,6 +137,17 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 		return nil, fmt.Errorf("analytics.Store.GetOverview total_activations: %w", err)
 	}
 
+	const unregisteredQ = `
+		SELECT COUNT(*)
+		FROM skill_events
+		WHERE registered = FALSE
+		  AND created_at > now() - make_interval(days => $1)
+	`
+	var unregisteredActivations int
+	if err := s.pool.QueryRow(ctx, unregisteredQ, days).Scan(&unregisteredActivations); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetOverview unregistered_activations: %w", err)
+	}
+
 	// Count skills by scan status of their latest version.
 	// Skills with no versions are treated as "clean".
 	const secQ = `
@@ -171,11 +192,12 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 	}
 
 	return &OverviewData{
-		TotalSkills:      total,
-		ActiveSkills:     active,
-		TotalActivations: totalActivations,
-		UnreviewedSkills: unreviewed,
-		Security:         sec,
+		TotalSkills:             total,
+		ActiveSkills:            active,
+		TotalActivations:        totalActivations,
+		UnreviewedSkills:        unreviewed,
+		Security:                sec,
+		UnregisteredActivations: unregisteredActivations,
 	}, nil
 }
 

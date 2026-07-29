@@ -167,3 +167,38 @@ func TestGetSkillTimeSeries_ViaHTTP_Empty(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &series))
 	require.Equal(t, 8, len(series))
 }
+
+func TestIngestEvent_RejectsMalformedSkillName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, _ := setupAnalyticsAPI(t)
+
+	for _, name := range []string{"../../etc/passwd", "Not A Skill", "trailing-", "under_score"} {
+		rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+			"skill_name":     name,
+			"agent":          "claude-code",
+			"trigger_type":   "auto",
+			"project_hash":   "proj1",
+			"developer_hash": "dev1",
+		})
+		require.Equalf(t, http.StatusUnprocessableEntity, rr.Code,
+			"expected 422 for skill_name %q, got %d: %s", name, rr.Code, rr.Body.String())
+	}
+}
+
+func TestIngestEvent_AcceptsNamespacedSkillName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, _ := setupAnalyticsAPI(t)
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "superpowers:brainstorming",
+		"agent":          "claude-code",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+}
