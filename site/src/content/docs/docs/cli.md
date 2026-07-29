@@ -45,7 +45,9 @@ Validates, security-scans, packs, and uploads a skill directory. Blocked on crit
 
 | Flag | Default | Description |
 |---|---|---|
-| `--force` | false | Publish even with critical findings — **bypasses the security gate; use with caution** |
+| `--skip-local-scan` | false | Skip the local security scan and let the server decide (the server still scans independently) |
+| `--override` | false | Publish despite blocking findings — **owner or admin role required; recorded server-side** |
+| `--force` | false | **Deprecated** alias for `--skip-local-scan` |
 
 ## skael scan `<dir>`
 

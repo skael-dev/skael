@@ -22,6 +22,10 @@ Subsequent startups when already at the current version:
 
 **CLI and server are independent.** The CLI has no version-negotiation handshake — it does not call `/api/capabilities` or send a version header. Mixed versions generally work; upgrade the server first so any new API fields are available when the updated CLI calls them.
 
+### Behavior change: roles (upgrading to a version with role support)
+
+Before roles existed, every account but the first was created with an `admin`-equivalent role by default. The migration that introduces `owner`/`admin`/`member` roles leaves the first account (`owner`) untouched and downgrades every other existing account to `member`. On a multi-user instance this is a live change: anyone who previously relied on being able to `skael publish --override` a blocked skill loses that ability until the owner re-promotes them via `PUT /api/admin/users/{id}/role` or the dashboard. See [Roles](/docs/production#roles).
+
 ## Procedure
 
 ### 1. Back up first

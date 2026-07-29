@@ -120,7 +120,7 @@ environment:
 
 Do this once, after all accounts are created.
 
-1. Deploy with `DISABLE_SIGNUP` unset (or `false`). Sign up to create the admin account.
+1. Deploy with `DISABLE_SIGNUP` unset (or `false`). Sign up to create the owner account — the first account created on any instance automatically becomes the owner. See [Roles](#roles) below.
 2. Log in to the dashboard. Go to **Settings → API keys** and create keys for each teammate who needs CLI access.
 3. Distribute the API keys. Each person runs `skael setup <url> <key>` to connect their CLI.
 4. Set `DISABLE_SIGNUP=true` in `.env` and restart the server.
@@ -139,6 +139,22 @@ Expected response when signups are disabled — HTTP 403:
 ```
 
 If you see anything other than a 403, `DISABLE_SIGNUP=true` is not active. Check that the restart completed and the env var is set in the process environment, not only in `.env`.
+
+## Roles
+
+Every account has one of three roles:
+
+| Role | Granted | Can do |
+|---|---|---|
+| `owner` | Automatically, to the first account created on the instance. Exactly one per instance, and it never changes hands via the API. | Everything, plus role management: `PUT /api/admin/users/{id}/role` (promote to `admin`/`member`), `GET /api/admin/users` (list all users), `POST /api/admin/reset-password` (issue another user a temporary password). |
+| `admin` | By the owner, via the role-management endpoint above (or the dashboard). | Normal use, plus `skael publish --override` to publish a skill past a blocking scan finding. |
+| `member` | Default for every new signup. | Normal use: publish, sync, browse. Cannot override a blocked publish. |
+
+The owner cannot change their own role, and no one can be promoted to owner — an instance always has exactly one, set at account-creation time, so there is no path to a lockout.
+
+:::caution[Upgrading from a pre-role build]
+Before roles existed, every account but the first signed up with role `admin` by default. The upgrade migration leaves the first account's `owner` role untouched and downgrades every other existing `admin` account to `member` — a live behavior change on any multi-user instance. Log in as the owner afterward and re-promote anyone who needs `admin` (publish-override) access via `PUT /api/admin/users/{id}/role` or the dashboard — see [Upgrading](/docs/upgrading).
+:::
 
 ## Health probes
 
@@ -242,7 +258,7 @@ This gates startup sequencing only. Once the sidecar exits, Docker Compose does 
 
 ## Security scanning
 
-Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally. **Critical and high-severity findings block the publish**; `skael publish --force` overrides for skills that legitimately document an anti-pattern.
+Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally. **Critical and high-severity findings block the publish**; an owner or admin can publish anyway with `skael publish --override`, which is recorded server-side. (`skael publish --force` is a deprecated alias for `--skip-local-scan` — it skips the client-side scan only, and does not bypass the server's own gate.)
 
 ### Optional external scanner
 

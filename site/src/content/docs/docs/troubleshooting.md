@@ -96,9 +96,9 @@ Source: `cli/sync.go` — the warning fires when the SHA-256 of the downloaded a
   /tmp/my-skill/SKILL.md:8	critical    AWS access key ID detected
 
   2 critical · 0 high · 0 medium · 0 info
-  ✗ critical security findings block publish
+  ✗ security findings block publish
 
-    Try: skael publish --force
+    Try: fix the findings above, or ask an owner or admin to publish with --override
 ```
 
 **Why:** The scanner found a secret (AWS key, token, private key, etc.) in the skill files. Both `critical` and `warn` (high severity) block publishing to protect your team.
@@ -106,7 +106,7 @@ Source: `cli/sync.go` — the warning fires when the SHA-256 of the downloaded a
 **Fix:**
 1. Run `skael scan <dir>` locally to see every finding with file and line numbers. Exit codes: `0` = clean, `1` = warn/high, `2` = critical.
 2. Remove or replace the secret. Use environment variables or `~/.skael/config.json` patterns instead of hard-coded values.
-3. Re-publish. If the finding is a deliberate example (documentation, test fixture), use `skael publish --force` — but only when you're certain the value is not a live credential.
+3. Re-publish. If the finding is a deliberate example (documentation, test fixture) and you hold the `owner` or `admin` role, re-publish with `skael publish --override` — but only when you're certain the value is not a live credential. `--override` is recorded server-side. (`--skip-local-scan` only skips the client-side pre-check; the server scans again and still blocks on its own findings.)
 
 ---
 

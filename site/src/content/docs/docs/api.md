@@ -58,6 +58,14 @@ Response:
 
 An invalid or missing key returns `401 Unauthorized`.
 
+## Roles
+
+Every account has one of three roles: `owner` (exactly one per instance, set automatically on the first signup), `admin` (granted by the owner), and `member` (the default for every new signup). Role only gates two things today: the `/api/admin/*` routes above, which require `owner`, and publishing past a blocking security scan with `?override=true` (or `skael publish --override`), which requires `owner` or `admin`. Everything else — publish, sync, browse, search — is open to any authenticated account.
+
+## Rate limiting
+
+Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying `X-API-Key` are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified). A request over budget gets `429 Too Many Requests` with a `Retry-After` header, which the CLI honours automatically.
+
 ## Endpoint overview
 
 | Method | Path | Purpose |
@@ -73,13 +81,16 @@ An invalid or missing key returns `401 Unauthorized`.
 | `GET` | `/api/auth/keys` | List API keys |
 | `POST` | `/api/auth/keys` | Create an API key |
 | `DELETE` | `/api/auth/keys/{id}` | Delete an API key |
+| `GET` | `/api/admin/users` | List all users (owner only) |
+| `PUT` | `/api/admin/users/{id}/role` | Set a user's role to `admin` or `member` (owner only) — see [Roles](#roles) |
+| `POST` | `/api/admin/reset-password` | Issue another user a temporary password (owner only) |
 | `GET` | `/api/skills` | List skills (paginated) |
 | `POST` | `/api/skills` | Create a skill |
 | `GET` | `/api/skills/{name}` | Get a skill by name |
 | `DELETE` | `/api/skills/{name}` | Delete a skill and its archives |
 | `POST` | `/api/skills/register` | Register a skill stub (accepts display-style names; used by agent hooks) |
 | `GET` | `/api/skills/{name}/versions` | List versions |
-| `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed) |
+| `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed). `?override=true` publishes despite blocking scan findings — owner/admin only, recorded server-side |
 | `GET` | `/api/skills/{name}/versions/{version}/download` | Download version archive |
 | `GET` | `/api/skills/{name}/scan` | Scan results for the latest version |
 | `PUT` | `/api/skills/{name}/review` | Mark skill as reviewed |

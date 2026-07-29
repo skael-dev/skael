@@ -36,7 +36,7 @@ Server reads config from `.env` (see `.env.example`). Copy it before first run: 
 
 Two binaries from one Go module (`github.com/skael-dev/skael`):
 
-**`cmd/server`** — HTTP API server. Chi router + Huma v2 (auto-generates OpenAPI spec). Embeds a React SPA via `embed.FS` from `web/dist/`. Auth via user accounts (bcrypt passwords, session cookies) + personal API keys (SHA-256, `X-API-Key` header). Middleware stack: security headers, request ID, CORS, rate limiting, request logging. Auth middleware skips `/api/health`, `/api/health/ready`, `/api/openapi.json`, `/api/capabilities`, `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout`, and `/metrics`. Subcommand `reset-password --email` for admin password recovery.
+**`cmd/server`** — HTTP API server. Chi router + Huma v2 (auto-generates OpenAPI spec). Embeds a React SPA via `embed.FS` from `web/dist/`. Auth via user accounts (bcrypt passwords, session cookies) + personal API keys (SHA-256, `X-API-Key` header). Middleware stack: security headers, request ID, CORS, per-route-class rate limiting, request logging. Auth middleware skips `/api/health`, `/api/health/ready`, `/api/openapi.json`, `/api/capabilities`, `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout`, and `/metrics`. Subcommand `reset-password --email` for admin password recovery.
 
 **`cmd/skael`** — CLI. Cobra commands, Lipgloss styling. Talks to the server API via `cli/client/`. Config at `~/.skael/config.json`, sync state at `~/.skael/state.json`.
 
@@ -44,9 +44,9 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 
 - `internal/skill/` — Core domain. `Store` (Postgres CRUD + versioning), `RegisterRoutes` (Huma endpoints), `Pack`/`Unpack` (tar.gz archives), `ParseFrontmatter` (YAML), `Search` (FTS + pg_trgm).
 - `internal/scan/` — Security scanner. Regex rules in `secrets.go`, `injection.go`, `exfiltration.go`, `obfuscation.go`, `execution.go`. A `Rule` may carry an optional `Reject` regex that suppresses matches (RE2 has no lookahead). `ScanDir` walks a directory; `ScanContent` scans a single file. Each line is scanned raw and (when it changes) NFKC-normalized with zero-width/bidi chars stripped, so unicode-obfuscated payloads can't evade. Line-pair scanning catches secrets split across lines. `shellast.go` (Phase 2) additionally parses shell scripts and fenced shell blocks in markdown with `mvdan.cc/sh` and detects dangerous constructs *structurally* (pipe-to-shell RCE, `eval` of dynamic content, `/dev/tcp` reverse shells) regardless of spacing/line-splitting/comments. Secret matches are always masked in the report; binary and oversized files are flagged (non-blocking) instead of silently skipped.
-- `internal/analytics/` — Activation tracking. `POST /api/events` ingests hook events; `GET /api/skills/{name}/activations` returns per-skill summary with agent breakdown.
-- `internal/platform/` — Infrastructure. `Config` (env vars), `NewPool` + `RunMigrations` (pgx + embedded SQL), `Storage` (local filesystem or S3 with path traversal validation), `middleware.go` (security headers, request ID, rate limiting), `metrics.go` (Prometheus HTTP instrumentation), `logging.go` (request logger with health-check exclusion).
-- `internal/auth/` — User accounts, sessions, API keys. `Middleware(sessionManager, userStore, keyStore)` enforces auth on `/api/` routes. Password reset (change own + admin reset with temporary password).
+- `internal/analytics/` — Activation tracking. `POST /api/events` ingests hook events; `GET /api/skills/{name}/activations` returns per-skill summary with agent breakdown. Events carry an `event_source` (`tool_invocation` | `transcript_scan`) because agents measure activations differently; skill names are validated at ingest and unregistered names are counted separately from activations.
+- `internal/platform/` — Infrastructure. `Config` (env vars), `NewPool` + `RunMigrations` (pgx + embedded SQL), `Storage` (local filesystem or S3 with path traversal validation), `middleware.go` (security headers, request ID), `ratelimit.go` (per-route-class limits keyed by API key, falling back to IP), `metrics.go` (Prometheus HTTP instrumentation), `logging.go` (request logger with health-check exclusion).
+- `internal/auth/` — User accounts, sessions, API keys. `Middleware(sessionManager, userStore, keyStore)` enforces auth on `/api/` routes. Three roles: `owner` (first account created, sole role-granter, exactly one per instance), `admin` (granted by the owner; can override a blocked publish), `member` (default for every new account). `PUT /api/admin/users/{id}/role` (owner only) sets another user's role to `admin` or `member`; the owner's own role cannot be changed. `GET /api/admin/users` lists all users (owner only). Password reset: change own + `POST /api/admin/reset-password` (owner only) issues a temporary password.
 - `internal/import/` — GitHub skill import. `POST /api/import` discovers and imports skills from GitHub repos. Uses `GITHUB_TOKEN` for API rate limits.
 - `internal/server/` — Server assembly. `Builder` pattern wires stores, middleware, routes, and the embedded SPA. `Capabilities` endpoint (`/api/capabilities`) reports edition/features. `Readiness` check (`/api/health/ready`) verifies DB + storage. Enterprise extension points (`WithAuthorizer`, `WithExtraRoutes`).
 - `internal/sync/` — `GetManifest()` query joining skills + latest versions for sync diffing.
@@ -63,6 +63,7 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - **Skill names:** Must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`, max 128 chars. Colons support namespaced names (e.g., `superpowers:brainstorming`).
 - **Selective sync:** Skills are installed explicitly via `skael add`, tracked in `config.json`'s `skills` array. `skael sync` only updates installed skills (not the full registry). Legacy configs without a `skills` key are auto-migrated from `state.json` on first run.
 - **Auto-sync hooks:** A debounced bash script (`~/.skael/hooks/skael-autosync.sh`) checks `state.json`'s `last_sync` timestamp — if <30 minutes old, it's a no-op. Installed as `UserPromptSubmit` (Claude Code), `sessionStart` (Cursor), `pre_tool_use` (Codex). Hook entries use `"_managed_by": "skael-autosync"` to distinguish from activation tracking hooks (`"_managed_by": "skael"`).
+- **Activation measurement:** hooks report explicit skill invocations only. A skill that is read but not invoked carries no attribution. `event_source` distinguishes an agent reporting a tool call (`tool_invocation`) from a hook scanning a transcript afterwards (`transcript_scan`) — the two are not comparable (transcript scans can catch skills that were only read, and miss nothing an invocation would catch; tool invocations miss skills that were read but never invoked) — never sum across sources without labelling them.
 
 ## Server env vars
 
@@ -84,7 +85,10 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 | `DB_HEALTH_CHECK_PERIOD` | no | `1m` | Interval between pool health checks (Go duration) |
 | `CORS_ORIGINS` | no | — | Comma-separated allowed origins for CORS (e.g. `https://app.skael.dev,http://localhost:5173`) |
 | `LOG_LEVEL` | no | `info` | Zerolog level: `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` |
-| `RATE_LIMIT_AUTH` | no | `20` | Per-IP requests-per-minute for the global rate limiter |
+| `RATE_LIMIT_AUTH` | no | `20` | Per-minute request budget for `/api/auth/*`, keyed by IP only (unauthenticated by definition) |
+| `RATE_LIMIT_EVENTS` | no | `600` | Per-minute budget for `POST /api/events`, keyed by API key where present, else IP |
+| `RATE_LIMIT_READ` | no | `300` | Per-minute budget for GET/HEAD routes (list, search, manifest, downloads), keyed by API key where present, else IP |
+| `RATE_LIMIT_WRITE` | no | `60` | Per-minute budget for all other mutating routes (publish, import, delete), keyed by API key where present, else IP |
 | `METRICS_ENABLED` | no | `true` | Set to `false` to disable the `/metrics` Prometheus endpoint |
 | `GITHUB_TOKEN` | no | — | GitHub personal access token for import; raises API rate limits |
 
