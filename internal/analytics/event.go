@@ -46,7 +46,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // CleanupOldEvents deletes events older than retentionDays and returns the
 // number of rows removed. Pass 0 to disable (caller should check before calling).
 func (s *Store) CleanupOldEvents(ctx context.Context, retentionDays int) (int64, error) {
-	const q = `DELETE FROM skill_events WHERE created_at < NOW() - ($1 || ' days')::interval`
+	// make_interval takes the day count as an integer. Concatenating it into a
+	// string instead makes Postgres infer a text parameter, which pgx cannot
+	// encode an int into — the purge then failed on every startup.
+	const q = `DELETE FROM skill_events WHERE created_at < now() - make_interval(days => $1)`
 	tag, err := s.pool.Exec(ctx, q, retentionDays)
 	if err != nil {
 		return 0, fmt.Errorf("analytics.Store.CleanupOldEvents: %w", err)
