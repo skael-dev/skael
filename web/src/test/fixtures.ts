@@ -118,6 +118,7 @@ export const mockOverview: OverviewData = {
   total_skills: 3,
   active_skills: 2,
   total_activations: 468,
+  unregistered_activations: 0,
   security: {
     clean: 3,
     warning: 0,
@@ -133,6 +134,10 @@ export const mockActivations: ActivationSummary = {
     "claude-code": 210,
     cursor: 72,
     copilot: 30,
+  },
+  by_source: {
+    tool_invocation: 34,
+    transcript_scan: 8,
   },
 };
 

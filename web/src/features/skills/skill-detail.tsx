@@ -299,6 +299,13 @@ function TabFiles({ skill, versions }: { skill: Skill; versions: Version[] }) {
   );
 }
 
+// An explicit tool invocation and a transcript scan measure different things.
+// They are shown side by side and never added together.
+const SOURCE_LABELS: Record<string, string> = {
+  tool_invocation: "explicit tool invocation",
+  transcript_scan: "transcript scan",
+};
+
 // ── Usage Tab ────────────────────────────────────────────────────
 function TabUsage({ skill, activations }: { skill: Skill; activations: ActivationSummary | undefined }) {
   const [period, setPeriod] = useState<number>(30);
@@ -320,6 +327,8 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
   const avgPerDay = period > 0 ? Math.round(totalCount / period) : 0;
   const lastTriggered = data?.last_triggered;
   const byAgent = data?.by_agent ?? {};
+  const bySource = data?.by_source ?? {};
+  const sourceEntries = Object.entries(bySource).sort(([, a], [, b]) => b - a);
 
   // Format last triggered time
   const lastTriggeredText = lastTriggered
@@ -433,6 +442,24 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
                   </div>
                 );
               })}
+          </div>
+
+          <div className="mt-3 text-[11px] text-text-tertiary leading-relaxed">
+            {sourceEntries.length > 0 && (
+              <div>
+                {sourceEntries
+                  .map(([source, count]) =>
+                    `${count.toLocaleString()} via ${SOURCE_LABELS[source] ?? source}`
+                  )
+                  .join(" · ")}
+                {sourceEntries.length > 1 &&
+                  " — measured differently, not directly comparable."}
+              </div>
+            )}
+            <div className="mt-1">
+              Counts explicit skill invocations only. A skill that is read but not
+              invoked carries no attribution.
+            </div>
           </div>
         </>
       )}
