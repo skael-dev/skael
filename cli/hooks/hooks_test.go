@@ -163,6 +163,15 @@ func TestInstallCodexHook_NewFile(t *testing.T) {
 	assert.Contains(t, content, "[[hooks.PreToolUse]]", "TOML hook section must use the PascalCase event key")
 	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "TOML hook section must not use the stale snake_case event key")
 	assert.Contains(t, content, "SKAEL_AGENT=codex", "agent env var must be set to codex")
+
+	// The handler command must live in a nested [[hooks.PreToolUse.hooks]]
+	// array-of-tables, not as a flat `command` field on [[hooks.PreToolUse]]
+	// itself — Codex's MatcherGroup type parses the flat shape as valid TOML
+	// but registers zero handlers from it. Asserted on the exact expected
+	// block text (rather than pulling in a TOML parser as a test-only
+	// dependency) so a regression back to the flat shape fails this test.
+	expectedBlock := "\n# managed_by = skael\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"SKAEL_AGENT=codex /home/user/.skael/hooks/skael-hook.sh\"\n# end managed_by = skael\n"
+	assert.Contains(t, content, expectedBlock, "hook command must sit in a nested [[hooks.PreToolUse.hooks]] table")
 }
 
 // TestInstallCodexHook_Idempotent verifies that installing twice results in
@@ -201,6 +210,7 @@ func TestUninstallCodexHook(t *testing.T) {
 	assert.NotContains(t, string(data), "# managed_by = skael", "managed block must be removed after uninstall")
 	assert.NotContains(t, string(data), "[[hooks.PreToolUse]]", "hook section must be removed after uninstall")
 	assert.NotContains(t, string(data), "[[hooks.pre_tool_use]]", "hook section must be removed after uninstall")
+	assert.NotContains(t, string(data), "[[hooks.PreToolUse.hooks]]", "nested hook handler table must be removed after uninstall")
 }
 
 // TestInstallCodexHook_UpgradesStaleSnakeCaseBlock verifies that a config.toml
@@ -233,6 +243,10 @@ command = "SKAEL_AGENT=codex /old/path/skael-hook.sh"
 	assert.Contains(t, content, "/new/path/skael-hook.sh", "new script path must be written")
 	assert.NotContains(t, content, "/old/path/skael-hook.sh", "old script path must not remain")
 	assert.Contains(t, content, `model = "gpt-5.5"`, "unrelated user config must be preserved")
+
+	// The upgrade must also fix the flat-vs-nested structure, not just the key casing.
+	expectedBlock := "\n# managed_by = skael\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"SKAEL_AGENT=codex /new/path/skael-hook.sh\"\n# end managed_by = skael\n"
+	assert.Contains(t, content, expectedBlock, "upgraded block must use the nested [[hooks.PreToolUse.hooks]] shape")
 
 	require.NoError(t, hooks.UninstallForAgent("codex", configPath))
 
@@ -270,6 +284,9 @@ command = "/old/path/skael-autosync.sh"
 	assert.Contains(t, content, "/new/path/skael-autosync.sh")
 	assert.NotContains(t, content, "/old/path/skael-autosync.sh")
 
+	expectedBlock := "\n# managed_by = skael-autosync\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"/new/path/skael-autosync.sh\"\n# end managed_by = skael-autosync\n"
+	assert.Contains(t, content, expectedBlock, "upgraded autosync block must use the nested [[hooks.PreToolUse.hooks]] shape")
+
 	require.NoError(t, hooks.UninstallCodexAutoSync(configPath))
 
 	data, err = os.ReadFile(configPath)
@@ -278,6 +295,63 @@ command = "/old/path/skael-autosync.sh"
 	assert.NotContains(t, content, "managed_by = skael-autosync")
 	assert.NotContains(t, content, "[[hooks.PreToolUse]]")
 	assert.NotContains(t, content, "[[hooks.pre_tool_use]]")
+}
+
+// TestInstallCodexHook_AutoSyncBlockPresentFirst is a regression test for a
+// substring bug: codexBlockStart ("# managed_by = skael") is a literal
+// substring of codexAutoSyncBlockStart ("# managed_by = skael-autosync"), so
+// a naive strings.Contains(content, codexBlockStart) check falsely reports
+// the regular hook block as already present when only the autosync block
+// exists — silently no-op'ing the install with no error. This installs
+// autosync first, then the regular hook, and requires both end up present.
+func TestInstallCodexHook_AutoSyncBlockPresentFirst(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/path/to/skael-autosync.sh"))
+
+	// Sanity check: only the autosync block exists so far.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "# managed_by = skael-autosync")
+	require.NotContains(t, string(data), "# managed_by = skael\n", "regular hook block must not exist yet")
+
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
+
+	data, err = os.ReadFile(configPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	// Both managed blocks must now be present, each exactly once.
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael\n"), "regular hook block must have been written, not skipped")
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "autosync block must still be present")
+	assert.Contains(t, content, "/path/to/skael-autosync.sh", "autosync command must be preserved")
+	assert.Contains(t, content, "SKAEL_AGENT=codex /path/to/skael-hook.sh", "regular hook command must have been written")
+
+	// Two independent [[hooks.PreToolUse.hooks]] handler tables — one per block.
+	assert.Equal(t, 2, strings.Count(content, "[[hooks.PreToolUse.hooks]]"), "each managed block must contribute its own handler table")
+}
+
+// TestInstallCodexAutoSync_RegularBlockPresentFirst is the mirror-image
+// check: install the regular hook first, then autosync, and confirm autosync
+// is not falsely treated as already-installed (it isn't — codexAutoSyncBlockStart
+// is not a substring of codexBlockStart — but this pins that behavior).
+func TestInstallCodexAutoSync_RegularBlockPresentFirst(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
+	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/path/to/skael-autosync.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael\n"), "regular hook block must still be present")
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "autosync block must have been written")
+	assert.Contains(t, content, "SKAEL_AGENT=codex /path/to/skael-hook.sh")
+	assert.Contains(t, content, "/path/to/skael-autosync.sh")
+	assert.Equal(t, 2, strings.Count(content, "[[hooks.PreToolUse.hooks]]"), "each managed block must contribute its own handler table")
 }
 
 // TestHookScript_ReadsConfigFile verifies the hook script reads credentials from config.json.

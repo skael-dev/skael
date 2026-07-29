@@ -274,6 +274,14 @@ const (
 // block is found and replaced (not left alongside the new one) because lookup
 // is keyed on the surrounding marker comments, not on the TOML key inside them.
 //
+// The handler command lives in a nested [[hooks.PreToolUse.hooks]] array-of-
+// tables, not as a flat `command` field on [[hooks.PreToolUse]] itself.
+// Codex's MatcherGroup type is { matcher: Option<String>, hooks: Vec<...> } —
+// a flat `command` field parses as valid TOML but lands nowhere, so Codex
+// silently registers zero handlers. Confirmed against openai/codex's own
+// config schema (codex-rs/config/src/hook_config.rs) and against the nested
+// shape already used by the working third-party hooks.json on this machine.
+//
 // No `matcher` field is set: Codex supports one, but what tool name a Codex
 // skill invocation actually presents is undocumented and unverified on this
 // machine, so a guessed pattern is omitted rather than risk silently dropping
@@ -281,7 +289,7 @@ const (
 func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
 	cmd := fmt.Sprintf("SKAEL_AGENT=codex %s", scriptPath)
 
-	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\ncommand = %q\n%s\n",
+	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = %q\n%s\n",
 		codexBlockStart, cmd, codexBlockEnd)
 
 	existing, err := os.ReadFile(configPath)
@@ -291,7 +299,7 @@ func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
 
 	content := string(existing)
 
-	if strings.Contains(content, codexBlockStart) {
+	if hasManagedBlock(content, codexBlockStart) {
 		// Replace the existing managed block.
 		content = replaceBlock(content, codexBlockStart, codexBlockEnd, block)
 	} else {
@@ -313,6 +321,23 @@ func uninstallCodexHook(configPath string) error {
 
 	content := replaceBlock(string(data), codexBlockStart, codexBlockEnd, "")
 	return atomicWriteFile(configPath, []byte(content), 0o644)
+}
+
+// hasManagedBlock reports whether content contains a line that, once trimmed,
+// is exactly equal to marker. A plain strings.Contains is not safe here:
+// codexBlockStart ("# managed_by = skael") is a literal substring of
+// codexAutoSyncBlockStart ("# managed_by = skael-autosync"), so a substring
+// check against codexBlockStart falsely matches a config that only has an
+// autosync block, silently skipping the install of the regular hook. This
+// mirrors the exact-line comparison replaceBlock already uses when scanning.
+func hasManagedBlock(content, marker string) bool {
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == marker {
+			return true
+		}
+	}
+	return false
 }
 
 // replaceBlock replaces a marker-delimited block (startMarker … endMarker) with replacement.
@@ -340,9 +365,11 @@ func replaceBlock(content, startMarker, endMarker, replacement string) string {
 }
 
 // InstallCodexAutoSync appends (or replaces) a skael-autosync managed PreToolUse TOML block.
-// See installCodexHook for why the key is PascalCase and why no matcher is set.
+// See installCodexHook for why the key is PascalCase, why the handler command
+// lives in a nested [[hooks.PreToolUse.hooks]] table rather than a flat field,
+// and why no matcher is set.
 func InstallCodexAutoSync(configPath, scriptPath string) error {
-	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\ncommand = %q\n%s\n",
+	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = %q\n%s\n",
 		codexAutoSyncBlockStart, scriptPath, codexAutoSyncBlockEnd)
 
 	existing, err := os.ReadFile(configPath)
@@ -351,7 +378,7 @@ func InstallCodexAutoSync(configPath, scriptPath string) error {
 	}
 
 	content := string(existing)
-	if strings.Contains(content, codexAutoSyncBlockStart) {
+	if hasManagedBlock(content, codexAutoSyncBlockStart) {
 		content = replaceBlock(content, codexAutoSyncBlockStart, codexAutoSyncBlockEnd, block)
 	} else {
 		content += block
