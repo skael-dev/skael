@@ -8,6 +8,10 @@ import (
 const cursorStopScript = `#!/usr/bin/env bash
 # skael-cursor-stop.sh — managed by skael CLI
 # Fires at session end. Parses transcript for skill activations.
+# This derives activations by scanning a transcript after the fact rather
+# than reporting each tool invocation as it happens, so its counts are not
+# comparable with an agent that reports invocations directly — hence
+# event_source:transcript_scan below.
 set -euo pipefail
 
 CONFIG_FILE="${HOME}/.skael/config.json"
@@ -55,7 +59,8 @@ for SKILL in $SKILL_NAMES; do
     --arg tt "auto" \
     --arg ph "$PROJECT_HASH" \
     --arg dh "$DEV_HASH" \
-    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh}')
+    --arg es "transcript_scan" \
+    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh,event_source:$es}')
   curl -sf -X POST \
     -H "Content-Type: application/json" \
     -H "X-API-Key: $API_KEY" \

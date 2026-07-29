@@ -334,3 +334,51 @@ func TestHookScript_FallbackGatesOnToolKeyToo(t *testing.T) {
 	assert.Equal(t, 0, code)
 	assert.Empty(t, bodies, "the jq-less fallback must reject apply_patch via the \"tool\" key, not just \"tool_name\"")
 }
+
+func TestHookScript_ReportsToolInvocationSource(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+
+	env := newHookEnv(t)
+	_, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`,
+		"SKAEL_AGENT=claude-code")
+
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "tool_invocation", bodies[0]["event_source"])
+}
+
+func TestCursorStopScript_ReportsTranscriptScanSource(t *testing.T) {
+	requireJQ(t)
+
+	scriptPath, err := hooks.WriteCursorStopScript(t.TempDir())
+	require.NoError(t, err)
+
+	transcript := filepath.Join(t.TempDir(), "transcript.json")
+	require.NoError(t, os.WriteFile(transcript,
+		[]byte(`{"messages":["read skills/brainstorming/SKILL.md for guidance"]}`), 0o644))
+
+	env := newHookEnv(t)
+	payload := `{"transcript_path":` + strconv.Quote(transcript) + `,"cwd":"/tmp/project"}`
+	code, bodies := env.run(t, scriptPath, payload)
+
+	require.Equal(t, 0, code)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "brainstorming", bodies[0]["skill_name"])
+	assert.Equal(t, "cursor", bodies[0]["agent"])
+	assert.Equal(t, "transcript_scan", bodies[0]["event_source"])
+}
+
+func TestOpenCodePlugin_ReportsToolInvocationSource(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "plugins", "skael-tracking.ts")
+
+	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.test", "key", "/unused"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "tool_invocation",
+		"the OpenCode plugin must label its events as tool invocations")
+}

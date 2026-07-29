@@ -104,11 +104,12 @@ if command -v jq &>/dev/null; then
     --arg tt "auto" \
     --arg ph "$PROJECT_HASH" \
     --arg dh "$DEV_HASH" \
-    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh}')"
+    --arg es "tool_invocation" \
+    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh,event_source:$es}')"
 else
   # Escape double quotes so the JSON is not malformed.
   SKILL_NAME_ESCAPED="$(printf '%s' "$SKILL_NAME" | sed 's/"/\\"/g')"
-  EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s"}' \
+  EVENT_JSON="$(printf '{"skill_name":"%s","agent":"%s","trigger_type":"auto","project_hash":"%s","developer_hash":"%s","event_source":"tool_invocation"}' \
     "$SKILL_NAME_ESCAPED" \
     "$AGENT" \
     "$PROJECT_HASH" \

@@ -45,6 +45,7 @@ export default (async () => {
         body: JSON.stringify({
           skill_name: input.tool.replace(/^skills_/, ''),
           agent: "opencode",
+          event_source: "tool_invocation",
           trigger_type: "auto",
           project_hash: projectHash,
           developer_hash: devHash,
