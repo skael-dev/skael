@@ -21,7 +21,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// POST /api/events — ingest a skill activation event
 	// -----------------------------------------------------------------
 	type ingestBody struct {
-		SkillName     string `json:"skill_name" minLength:"1" maxLength:"255"`
+		SkillName     string `json:"skill_name" minLength:"1" maxLength:"128"`
 		Agent         string `json:"agent" minLength:"1" maxLength:"128"`
 		TriggerType   string `json:"trigger_type" maxLength:"64"`
 		ProjectHash   string `json:"project_hash" maxLength:"64"`
@@ -47,7 +47,15 @@ func RegisterRoutes(api huma.API, store *Store) {
 		}
 		source := input.Body.EventSource
 		if source == "" {
-			source = "tool_invocation"
+			// Cursor's only reporter is the transcript-scanning stop hook (see
+			// migrate/007_event_source.sql), so an old hook script that predates
+			// this field still gets labelled correctly rather than merging into
+			// tool_invocation until the user re-runs `skael hook install`.
+			if input.Body.Agent == "cursor" {
+				source = "transcript_scan"
+			} else {
+				source = "tool_invocation"
+			}
 		}
 		if source != "tool_invocation" && source != "transcript_scan" {
 			return nil, huma.Error422UnprocessableEntity(

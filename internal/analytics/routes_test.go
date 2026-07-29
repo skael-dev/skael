@@ -236,3 +236,82 @@ func TestIngestEvent_AcceptsTranscriptScanSource(t *testing.T) {
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
 }
+
+// TestIngestEvent_CursorWithNoSourceDefaultsToTranscriptScan verifies that a
+// Cursor event arriving with no event_source (an old hook script that
+// predates the field, or one not yet reinstalled) is stored as
+// transcript_scan — matching migrate/007_event_source.sql's own backfill
+// rule — rather than merging into tool_invocation.
+func TestIngestEvent_CursorWithNoSourceDefaultsToTranscriptScan(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, store := setupAnalyticsAPI(t)
+	ctx := context.Background()
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "cursor-default-demo",
+		"agent":          "cursor",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	summary, err := store.GetActivations(ctx, "cursor-default-demo", 30)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.BySource["transcript_scan"])
+	require.Equal(t, 0, summary.BySource["tool_invocation"])
+}
+
+// TestIngestEvent_NonCursorWithNoSourceDefaultsToToolInvocation verifies that
+// an event from any agent other than Cursor with no event_source still
+// defaults to tool_invocation, unchanged from prior behavior.
+func TestIngestEvent_NonCursorWithNoSourceDefaultsToToolInvocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, store := setupAnalyticsAPI(t)
+	ctx := context.Background()
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "non-cursor-default-demo",
+		"agent":          "claude-code",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	summary, err := store.GetActivations(ctx, "non-cursor-default-demo", 30)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.BySource["tool_invocation"])
+	require.Equal(t, 0, summary.BySource["transcript_scan"])
+}
+
+// TestIngestEvent_ExplicitEventSourceOverridesAgentDefault verifies that an
+// explicit event_source always wins over the agent-based default, even for
+// Cursor: a Cursor payload that explicitly sends tool_invocation must not be
+// silently reassigned to transcript_scan.
+func TestIngestEvent_ExplicitEventSourceOverridesAgentDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, store := setupAnalyticsAPI(t)
+	ctx := context.Background()
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "cursor-explicit-demo",
+		"agent":          "cursor",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+		"event_source":   "tool_invocation",
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	summary, err := store.GetActivations(ctx, "cursor-explicit-demo", 30)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.BySource["tool_invocation"])
+	require.Equal(t, 0, summary.BySource["transcript_scan"])
+}
