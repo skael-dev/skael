@@ -29,7 +29,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      # v6 pulls a golangci-lint built with Go 1.24, which refuses to run
+      # against a module targeting a newer Go. v9 tracks golangci-lint v2.
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
 
@@ -40,12 +42,27 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
+
+      # The generated SDK under web/src/api/ is not tracked, so it has to be
+      # produced from the server's OpenAPI spec before anything imports it.
+      # Same sequence the build and typecheck jobs run.
+      - name: Install dependencies and generate SDK
+        run: |
+          npm ci
+          go build -o ../bin/skael-server ../cmd/server/
+          ../bin/skael-server --openapi > openapi.json
+          npx @hey-api/openapi-ts
+
       - run: npx vitest run
 
   build:
