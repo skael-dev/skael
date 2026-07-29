@@ -38,6 +38,8 @@ Platform is at `http://localhost:8080`.
 
 > **Storage:** archives default to local disk (`STORAGE_PATH`). For Kubernetes/ephemeral hosts or multiple replicas, set `STORAGE_PATH=s3://bucket/prefix` to use S3-compatible object storage (AWS S3, MinIO, R2, Spaces) — see [Self-hosting](https://skael.dev/docs/self-hosting).
 
+> **Behind a reverse proxy:** set `TRUSTED_PROXIES` to your proxy's address or CIDR (not your clients'). Forwarding headers are only honoured from proxies you declare, so without it every request looks like it came from the proxy and rate limits apply to your whole team at once. A directly-exposed instance needs nothing — the safe default is to trust no forwarding headers at all.
+
 ### Install the CLI
 
 ```bash
@@ -79,6 +81,8 @@ Skills are installed explicitly — `skael add` picks what you want, `skael sync
 Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings block publishing; an owner or admin can publish anyway with `--override`, which is recorded server-side. Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
 
 Every agent that uses a skill reports activation events back to the platform. `skael doctor` shows you which agents have tracking installed.
+
+Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation; the Cursor hook scans a session transcript afterwards and matches skill files that were referenced. The first misses skills that were read but never invoked, the second may count skills that were only read — so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
 
 ## Development
 
