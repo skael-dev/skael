@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -381,8 +382,8 @@ func TestRetryOnConnectionError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when connecting to closed server")
 	}
-	if !strings.Contains(err.Error(), "after 3 attempts") {
-		t.Errorf("expected 'after 3 attempts' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "after 4 attempts") {
+		t.Errorf("expected 'after 4 attempts' in error, got: %v", err)
 	}
 }
 
@@ -461,5 +462,68 @@ func TestClient_GetManifest(t *testing.T) {
 	}
 	if entries[1].Version != 5 {
 		t.Errorf("expected second entry version 5, got %d", entries[1].Version)
+	}
+}
+
+// TestDownloadVersion_RetriesOn429 verifies that a 429 response is retried
+// after honouring the server's Retry-After header, rather than surfaced as a
+// hard failure.
+func TestDownloadVersion_RetriesOn429(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte("archive"))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "sk-test")
+
+	start := time.Now()
+	data, err := c.DownloadVersion("demo", 1)
+	if err != nil {
+		t.Fatalf("429 must be retried, not surfaced as a hard failure: %v", err)
+	}
+	if string(data) != "archive" {
+		t.Errorf("expected %q, got %q", "archive", data)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("expected Retry-After: 1 to be honoured, only waited %v", elapsed)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Errorf("expected 2 calls, got %d", calls)
+	}
+}
+
+// TestDownloadVersion_GivesUpAfterPersistent429 verifies that doWithRetry
+// eventually gives up and surfaces an error when the server never stops
+// rate limiting.
+func TestDownloadVersion_GivesUpAfterPersistent429(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "sk-test")
+
+	_, err := c.DownloadVersion("demo", 1)
+	if err == nil {
+		t.Fatal("expected error after persistent 429s")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("expected error to mention 429, got: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -73,14 +74,30 @@ func New(endpoint, apiKey string) *Client {
 	}
 }
 
-// doWithRetry executes req up to 3 times, backing off 1 s then 2 s between
-// attempts. It retries on connection errors and on 502/503/504 responses.
-// The request body is rewound before each retry attempt.
+const (
+	// maxAttempts is the total number of tries, not retries. Four covers a
+	// first sync of a large registry against a server that rate limits.
+	maxAttempts = 4
+	// maxRetryAfter caps how long a server can park the client. Beyond this,
+	// failing fast is more useful than a silent multi-minute stall.
+	maxRetryAfter = 60 * time.Second
+)
+
+// doWithRetry executes req up to maxAttempts times. It retries on connection
+// errors, on 502/503/504, and on 429 — where it waits for the server's
+// Retry-After if one is present and falls back to exponential backoff if not.
+// The request body is rewound before each retry.
 func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	var wait time.Duration
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+			if wait <= 0 {
+				wait = time.Duration(1<<uint(attempt-1)) * time.Second
+			}
+			time.Sleep(wait)
+			wait = 0
 
 			// The previous attempt consumed the body. Without rewinding it the
 			// retry would send an empty request and the server would reject it.
@@ -95,19 +112,57 @@ func (c *Client) doWithRetry(req *http.Request) (*http.Response, error) {
 				req.Body = body
 			}
 		}
+
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests:
+			wait = parseRetryAfter(resp.Header.Get("Retry-After"))
+			resp.Body.Close()
+			lastErr = fmt.Errorf("server returned 429 (rate limited)")
+			continue
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 			resp.Body.Close()
 			lastErr = fmt.Errorf("server returned %d", resp.StatusCode)
 			continue
 		}
+
 		return resp, nil
 	}
-	return nil, fmt.Errorf("after 3 attempts: %w", lastErr)
+
+	return nil, fmt.Errorf("after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// parseRetryAfter reads a Retry-After header in either delta-seconds or
+// HTTP-date form and clamps it to maxRetryAfter. It returns 0 when the header
+// is missing, unparseable, or already in the past, which leaves the caller on
+// plain exponential backoff.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return min(time.Duration(secs)*time.Second, maxRetryAfter)
+	}
+
+	if t, err := http.ParseTime(v); err == nil {
+		d := time.Until(t)
+		if d <= 0 {
+			return 0
+		}
+		return min(d, maxRetryAfter)
+	}
+
+	return 0
 }
 
 // do performs an HTTP request against the API, attaching the X-API-Key header.
