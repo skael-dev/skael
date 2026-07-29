@@ -208,14 +208,25 @@ func TestGetSkillsAnalytics_ViaHTTP(t *testing.T) {
 	require.Empty(t, body.Skills)
 }
 
-// insertTestSkillTagged creates a skill with the given frontmatter tags.
+// insertTestSkillTagged creates a skill carrying the given tags, in both the
+// places production puts them: the frontmatter blob, and the skills.tags
+// column that the analytics filters actually query.
+//
+// Creating a skill does not populate skills.tags — that column is written only
+// by UpdateSpecFields, which publishing and importing call once a version
+// exists. A fixture that writes frontmatter alone leaves the column empty and
+// no tag filter can match it.
 func insertTestSkillTagged(t *testing.T, ctx context.Context, skillStore *skill.Store, name string, tags []string) *skill.Skill {
 	t.Helper()
+	if tags == nil {
+		tags = []string{}
+	}
 	tagsJSON, err := json.Marshal(tags)
 	require.NoError(t, err)
 	fm := json.RawMessage(`{"tags":` + string(tagsJSON) + `}`)
 	sk, err := skillStore.Create(ctx, name, name, name+" description", "skill content", fm)
 	require.NoError(t, err)
+	require.NoError(t, skillStore.UpdateSpecFields(ctx, name, "", "", "", "", name, tags))
 	return sk
 }
 
