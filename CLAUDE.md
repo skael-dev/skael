@@ -65,6 +65,21 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - **Auto-sync hooks:** A debounced bash script (`~/.skael/hooks/skael-autosync.sh`) checks `state.json`'s `last_sync` timestamp — if <30 minutes old, it's a no-op. Installed as `UserPromptSubmit` (Claude Code), `sessionStart` (Cursor), `PreToolUse` (Codex — PascalCase; the event key in `config.toml` is `[[hooks.PreToolUse]]`, not `pre_tool_use`). Hook entries use `"_managed_by": "skael-autosync"` to distinguish from activation tracking hooks (`"_managed_by": "skael"`).
 - **Activation measurement:** hooks report explicit skill invocations only. A skill that is read but not invoked carries no attribution. `event_source` distinguishes an agent reporting a tool call (`tool_invocation`) from a hook scanning a transcript afterwards (`transcript_scan`) — the two are not comparable (transcript scans can catch skills that were only read, and miss nothing an invocation would catch; tool invocations miss skills that were read but never invoked) — never sum across sources without labelling them.
 
+## Gotchas
+
+Each of these has already caused a real bug or a wasted debugging session.
+
+- **Run the server, not just the tests.** Two shipped bugs were invisible to a green suite: the server could not boot on default config (see the chi note below), and `EVENT_RETENTION_DAYS` never purged anything. Both were obvious within seconds of starting the binary. Nothing except `cmd/server` calls `server.Build()`, so a startup defect passes every package test.
+- **chi: every `router.Use(...)` must precede every route registration.** Registering a route and then calling `Use` panics at startup with "all middlewares must be defined before routes on a mux". This is why `/metrics` is mounted after the middleware stack is installed rather than inline.
+- **The generated SDK is untracked.** `web/openapi.json` and `web/src/api/` are gitignored — run `just generate` before `npx tsc --noEmit` or `npx vitest run`, and never `git add -f` them. CI regenerates them in every job that needs them.
+- **`tests/e2e/` is behind `//go:build integration`.** `go build ./...` and `go vet ./...` do not compile it, so a changed function signature can break it invisibly. Run `go vet -tags=integration ./...` after any signature change.
+- **A Huma request-body field without `,omitempty` is required.** Adding one to an existing endpoint returns 422 to every already-deployed client. Validate optional enums by hand in the handler instead of with an `enum` tag, so an omitted value can default.
+- **Postgres intervals take an integer:** `make_interval(days => $1)`. Building one by string concatenation (`($1 || ' days')::interval`) makes Postgres infer a text parameter that pgx cannot encode an int into, and the query fails at runtime only.
+- **`skills.tags`, `author`, `license`, `compatibility` and `spec_compliance` are written *only* by `UpdateSpecFields`.** Creating a skill does not populate them. Any new path that creates a skill must call it, or that skill is invisible to tag filtering and the tag list endpoint.
+- **Always test with `-count=1`.** Go caches passing results, and a cached pass has already produced one false verification here.
+- **Test package conventions differ:** `cli/client/client_test.go` is `package client` (internal, so it can reach unexported helpers); most others are `package X_test`. Check before adding a file.
+- **The hook script tests execute real bash** (`cli/hooks/script_exec_test.go`), with a fake `curl` on `PATH`, and wait on the script's process group rather than a timeout — the scripts background their POST and `disown` it. The file is `//go:build unix`.
+
 ## Server env vars
 
 | Variable | Required | Default | Description |
