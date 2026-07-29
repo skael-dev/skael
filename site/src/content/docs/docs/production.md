@@ -91,7 +91,7 @@ Leaving it unset behind a proxy is safe but blunt: every request appears to come
 
 ## Environment
 
-A production `.env` differs from the default in three places:
+A production `.env` differs from the default in five places: `DATABASE_URL` (encrypted `sslmode`), `LISTEN_ADDR` (bound to loopback), `COOKIE_SECURE`, `TRUSTED_PROXIES`, and `DISABLE_SIGNUP`.
 
 ```ini
 # Required — use your actual credentials; sslmode=require encrypts the

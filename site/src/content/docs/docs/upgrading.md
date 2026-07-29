@@ -26,6 +26,24 @@ Subsequent startups when already at the current version:
 
 Before roles existed, every account but the first was created with an `admin`-equivalent role by default. The migration that introduces `owner`/`admin`/`member` roles leaves the first account (`owner`) untouched and downgrades every other existing account to `member`. On a multi-user instance this is a live change: anyone who previously relied on being able to `skael publish --override` a blocked skill loses that ability until the owner re-promotes them via `PUT /api/admin/users/{id}/role` or the dashboard. See [Roles](/docs/production#roles).
 
+### Re-install hook scripts after upgrading the CLI
+
+Activation-tracking fixes, `event_source` labeling (see below), and the Codex hook fixes only take effect once `~/.skael/hooks/` and the agent's own hook config are rewritten with the current CLI version. **Re-run `skael hook install` (or `skael setup`) on every machine after upgrading the CLI** — the old scripts keep running as-is until you do.
+
+This matters most for Codex users: earlier CLI versions wrote a Codex hook block under the wrong event key, so it has never actually fired. It will keep silently not firing until `skael hook install` is re-run with the fixed version.
+
+It also affects Cursor's `event_source` labeling: Cursor's stop-hook script only started tagging its events `transcript_scan` once the fix shipped. Until the script on a given machine is regenerated, that machine's Cursor events keep posting without a label (which the server now correctly defaults to `transcript_scan` for the `cursor` agent — see the note on migrations below — but a re-installed script sending the label explicitly is still the more robust fix).
+
+### Client IP resolution changed
+
+If skael runs behind a reverse proxy, `TRUSTED_PROXIES` is effectively required. Left unset, every request appears to come from the proxy's own address: non-auth route classes (events, reads, writes) are largely unaffected because they're charged to a hashed API key where one is present, but the login/signup/password-reset class is keyed on IP alone — so with `TRUSTED_PROXIES` unset, your entire organization shares a single login rate-limit budget behind one ingress address. See [Production: telling skael about the proxy](/docs/production#telling-skael-about-the-proxy) for how to set it.
+
+Separately, the request log's `ip` field changed format: it used to log the raw `RemoteAddr` (`host:port`); it now logs a bare host with the port stripped (and, behind a trusted proxy, the resolved client address instead of the proxy's). Anything parsing skael's request logs for IPs needs to account for the missing port.
+
+### Migrations 006 and 007 rewrite `skill_events`
+
+Both migrations run automatically at startup, inside a single transaction, and take an `ACCESS EXCLUSIVE` lock on `skill_events` for its duration: each adds a column and backfills it with an `UPDATE`, and 007 additionally validates a new `CHECK` constraint and both migrations build a new index. On a small instance this is milliseconds. On an instance with months of activation history, the lock is held roughly in proportion to the table's size — and while it's held, an old server process still serving traffic will block on any query that touches `skill_events` (activation summaries, event ingestion). Plan the upgrade window accordingly on a busy instance; see [Backup & restore](/docs/backup-restore) if you want to rehearse the timing against a copy of production data first.
+
 ## Procedure
 
 ### 1. Back up first
