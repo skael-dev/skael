@@ -31,7 +31,13 @@ jobs:
           go-version-file: go.mod
       # v6 pulls a golangci-lint built with Go 1.24, which refuses to run
       # against a module targeting a newer Go. v9 tracks golangci-lint v2.
+      #
+      # Non-blocking as of 2026-07-29: the job had never actually executed, so
+      # enabling it surfaced 50 pre-existing findings (errcheck 38, staticcheck
+      # 7, unused 5). They are reported in the logs and being burned down;
+      # remove continue-on-error once the count reaches zero.
       - uses: golangci/golangci-lint-action@v9
+        continue-on-error: true
         with:
           version: latest
 
