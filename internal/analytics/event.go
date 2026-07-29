@@ -16,6 +16,12 @@ type Event struct {
 	TriggerType   string `json:"trigger_type"`
 	ProjectHash   string `json:"project_hash"`
 	DeveloperHash string `json:"developer_hash"`
+
+	// EventSource records how the activation was observed. "tool_invocation" is
+	// an agent reporting an explicit skill call; "transcript_scan" is a hook
+	// deriving activations by reading a session transcript afterwards. The two
+	// are not the same measurement and must never be summed unlabelled.
+	EventSource string `json:"event_source"`
 }
 
 // ActivationSummary summarises activations for a specific skill over a time window.
@@ -24,6 +30,7 @@ type ActivationSummary struct {
 	UniqueDevs    int            `json:"unique_devs"`
 	LastTriggered *time.Time     `json:"last_triggered"`
 	ByAgent       map[string]int `json:"by_agent"`
+	BySource      map[string]int `json:"by_source"`
 }
 
 // Store handles Postgres persistence for skill_events.
@@ -52,14 +59,19 @@ func (s *Store) Insert(ctx context.Context, e Event) error {
 	// The registration check runs inside the INSERT so ingest stays one round
 	// trip. Alias resolution matches the read path.
 	const q = `
-		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash, registered)
-		VALUES ($1, $2, $3, $4, $5, EXISTS (
+		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash, event_source, registered)
+		VALUES ($1, $2, $3, $4, $5, $6, EXISTS (
 			SELECT 1 FROM skills s
 			WHERE s.name = COALESCE((SELECT a.canonical FROM skill_aliases a WHERE a.alias = $1), $1)
 		))
 	`
+	source := e.EventSource
+	if source == "" {
+		// Events from hook scripts predating the column are tool invocations.
+		source = "tool_invocation"
+	}
 	if _, err := s.pool.Exec(ctx, q,
-		e.SkillName, e.Agent, e.TriggerType, e.ProjectHash, e.DeveloperHash,
+		e.SkillName, e.Agent, e.TriggerType, e.ProjectHash, e.DeveloperHash, source,
 	); err != nil {
 		return fmt.Errorf("analytics.Store.Insert: %w", err)
 	}
@@ -382,11 +394,41 @@ func (s *Store) GetActivations(ctx context.Context, skillName string, days int) 
 		return nil, fmt.Errorf("analytics.Store.GetActivations agents rows: %w", err)
 	}
 
+	// Sources are reported separately, never merged: see the comment on
+	// Event.EventSource.
+	const sourceQ = `
+		SELECT se.event_source, COUNT(*)
+		FROM skill_events se
+		LEFT JOIN skill_aliases a ON a.alias = se.skill_name
+		WHERE COALESCE(a.canonical, se.skill_name) = $1
+		  AND se.created_at > now() - make_interval(days => $2)
+		GROUP BY se.event_source
+	`
+	sourceRows, err := s.pool.Query(ctx, sourceQ, skillName, days)
+	if err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetActivations sources: %w", err)
+	}
+	defer sourceRows.Close()
+
+	bySource := make(map[string]int)
+	for sourceRows.Next() {
+		var source string
+		var count int
+		if err := sourceRows.Scan(&source, &count); err != nil {
+			return nil, fmt.Errorf("analytics.Store.GetActivations sources scan: %w", err)
+		}
+		bySource[source] = count
+	}
+	if err := sourceRows.Err(); err != nil {
+		return nil, fmt.Errorf("analytics.Store.GetActivations sources rows: %w", err)
+	}
+
 	return &ActivationSummary{
 		TotalCount:    totalCount,
 		UniqueDevs:    uniqueDevs,
 		LastTriggered: lastTriggered,
 		ByAgent:       byAgent,
+		BySource:      bySource,
 	}, nil
 }
 

@@ -26,6 +26,10 @@ func RegisterRoutes(api huma.API, store *Store) {
 		TriggerType   string `json:"trigger_type" maxLength:"64"`
 		ProjectHash   string `json:"project_hash" maxLength:"64"`
 		DeveloperHash string `json:"developer_hash" maxLength:"64"`
+		// omitempty: hook scripts predating this field send no event_source at
+		// all. Without it, Huma's schema marks the field required and rejects
+		// those payloads outright — before the whitelist check below even runs.
+		EventSource string `json:"event_source,omitempty" maxLength:"32"`
 	}
 	type ingestInput struct {
 		Body ingestBody
@@ -41,12 +45,21 @@ func RegisterRoutes(api huma.API, store *Store) {
 			return nil, huma.Error422UnprocessableEntity(
 				fmt.Sprintf("invalid skill_name %q", input.Body.SkillName))
 		}
+		source := input.Body.EventSource
+		if source == "" {
+			source = "tool_invocation"
+		}
+		if source != "tool_invocation" && source != "transcript_scan" {
+			return nil, huma.Error422UnprocessableEntity(
+				fmt.Sprintf("invalid event_source %q", input.Body.EventSource))
+		}
 		if err := store.Insert(ctx, Event{
 			SkillName:     input.Body.SkillName,
 			Agent:         input.Body.Agent,
 			TriggerType:   input.Body.TriggerType,
 			ProjectHash:   input.Body.ProjectHash,
 			DeveloperHash: input.Body.DeveloperHash,
+			EventSource:   source,
 		}); err != nil {
 			return nil, fmt.Errorf("ingest event: %w", err)
 		}

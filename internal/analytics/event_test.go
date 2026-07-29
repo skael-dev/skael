@@ -174,3 +174,52 @@ func TestStore_GetOverview_SeparatesUnregisteredActivations(t *testing.T) {
 	assert.Equal(t, 1, overview.TotalActivations, "unknown names must not count as activations")
 	assert.Equal(t, 2, overview.UnregisteredActivations, "they belong in their own bucket")
 }
+
+func TestStore_GetActivations_BreaksDownBySource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	store := analytics.NewStore(pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO skills (name, description, content) VALUES ('demo', 'd', 'c')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "demo", Agent: "claude-code", EventSource: "tool_invocation",
+	}))
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "demo", Agent: "cursor", EventSource: "transcript_scan",
+	}))
+	require.NoError(t, store.Insert(ctx, analytics.Event{
+		SkillName: "demo", Agent: "cursor", EventSource: "transcript_scan",
+	}))
+
+	summary, err := store.GetActivations(ctx, "demo", 30)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, summary.BySource["tool_invocation"])
+	assert.Equal(t, 2, summary.BySource["transcript_scan"])
+}
+
+func TestStore_Insert_DefaultsEventSourceToToolInvocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	store := analytics.NewStore(pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO skills (name, description, content) VALUES ('demo', 'd', 'c')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "demo", Agent: "claude-code"}))
+
+	summary, err := store.GetActivations(ctx, "demo", 30)
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.BySource["tool_invocation"],
+		"an event from an older hook script must default to tool_invocation")
+}

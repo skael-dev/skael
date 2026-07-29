@@ -202,3 +202,37 @@ func TestIngestEvent_AcceptsNamespacedSkillName(t *testing.T) {
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
 }
+
+func TestIngestEvent_RejectsUnknownEventSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, _ := setupAnalyticsAPI(t)
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "demo",
+		"agent":          "claude-code",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+		"event_source":   "vibes",
+	})
+	require.Equal(t, http.StatusUnprocessableEntity, rr.Code, "body: %s", rr.Body.String())
+}
+
+func TestIngestEvent_AcceptsTranscriptScanSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	handler, _ := setupAnalyticsAPI(t)
+
+	rr := doJSONAnalytics(t, handler, http.MethodPost, "/api/events", map[string]string{
+		"skill_name":     "demo",
+		"agent":          "cursor",
+		"trigger_type":   "auto",
+		"project_hash":   "proj1",
+		"developer_hash": "dev1",
+		"event_source":   "transcript_scan",
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+}
