@@ -443,7 +443,8 @@ func TestDoWithRetry_NonReplayableBody(t *testing.T) {
 	// Create the request with a pipe (which has no Seek capability and no GetBody).
 	pr, pw := io.Pipe()
 	go func() {
-		pw.Write([]byte("test-body"))
+		// The reader may close first; a short write here is expected, not a failure.
+		_, _ = pw.Write([]byte("test-body"))
 		pw.Close()
 	}()
 

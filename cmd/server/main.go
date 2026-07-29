@@ -31,6 +31,14 @@ var (
 func main() {
 	platform.InitLogger()
 
+	// Stamped by the release build via -ldflags -X. Logged so an operator
+	// reading logs can tell which build is actually running.
+	log.Info().
+		Str("version", version).
+		Str("commit", commit).
+		Str("built", date).
+		Msg("skael-server starting")
+
 	for _, arg := range os.Args[1:] {
 		if arg == "--openapi" {
 			printOpenAPISpec()
@@ -79,7 +87,8 @@ func main() {
 func resetPassword(args []string) {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	email := fs.String("email", "", "email of the user to reset")
-	fs.Parse(args)
+	// ExitOnError: Parse exits the process on a bad flag rather than returning.
+	_ = fs.Parse(args)
 
 	if *email == "" {
 		fmt.Fprintln(os.Stderr, "usage: skael-server reset-password --email <email>")

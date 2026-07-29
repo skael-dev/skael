@@ -154,9 +154,11 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, 
 	}
 	sawFetch, sawDecode := false, false
 	for _, s := range stages[:len(stages)-1] {
-		switch stmtCmdName(s) {
-		case "curl", "wget", "fetch":
+		name := stmtCmdName(s)
+		if fetchCommands[name] {
 			sawFetch = true
+		}
+		switch name {
 		case "base64", "openssl", "xxd", "uudecode":
 			sawDecode = true
 		}

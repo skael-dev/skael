@@ -10,7 +10,9 @@ import (
 
 func TestCursor_Detected(t *testing.T) {
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, ".cursor"), 0o755)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	detected := DetectIn(home)
 	assert.Len(t, detected, 1)

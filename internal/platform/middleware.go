@@ -49,4 +49,3 @@ func SecurityHeaders(cookieSecure bool) func(http.Handler) http.Handler {
 		})
 	}
 }
-

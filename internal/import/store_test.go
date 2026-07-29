@@ -67,8 +67,12 @@ func TestStore_UpsertUpdatesExisting(t *testing.T) {
 
 	store := NewStore(pool)
 
-	store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", CommitSHA: "aaa"})
-	store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", CommitSHA: "bbb"})
+	if err := store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", CommitSHA: "aaa"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", CommitSHA: "bbb"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	got, _ := store.GetBySkillID(ctx, sk.ID)
 	if got.CommitSHA != "bbb" {
@@ -90,7 +94,9 @@ func TestStore_GetBySkillName(t *testing.T) {
 	}
 
 	store := NewStore(pool)
-	store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", SourceURL: "https://github.com/test/test", CommitSHA: "abc"})
+	if err := store.Upsert(ctx, ImportSource{SkillID: sk.ID, SourceType: "github", SourceURL: "https://github.com/test/test", CommitSHA: "abc"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	got, err := store.GetBySkillName(ctx, "by-name-test")
 	if err != nil {
@@ -125,8 +131,12 @@ func TestStore_ListAll(t *testing.T) {
 	sk2, _ := skillStore.Create(ctx, "list-b", "", "b", "", json.RawMessage(`{}`))
 
 	store := NewStore(pool)
-	store.Upsert(ctx, ImportSource{SkillID: sk1.ID, SourceType: "github", SourceURL: "https://github.com/a/a"})
-	store.Upsert(ctx, ImportSource{SkillID: sk2.ID, SourceType: "local", SourceURL: ""})
+	if err := store.Upsert(ctx, ImportSource{SkillID: sk1.ID, SourceType: "github", SourceURL: "https://github.com/a/a"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := store.Upsert(ctx, ImportSource{SkillID: sk2.ID, SourceType: "local", SourceURL: ""}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	all, err := store.ListAll(ctx)
 	if err != nil {

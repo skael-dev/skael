@@ -23,8 +23,12 @@ func makeTarball(t *testing.T, files map[string]string) []byte {
 			Size:     int64(len(content)),
 			Typeflag: tar.TypeReg,
 		}
-		tw.WriteHeader(hdr)
-		tw.Write([]byte(content))
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("WriteHeader: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
 	}
 	tw.Close()
 	gw.Close()
@@ -40,7 +44,7 @@ func TestFetch_ExtractsToTempDir(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-gzip")
-		w.Write(tarball)
+		_, _ = w.Write(tarball)
 	}))
 	defer srv.Close()
 
@@ -67,21 +71,33 @@ func TestFetch_SkipsSymlinks(t *testing.T) {
 	tw := tar.NewWriter(gw)
 
 	// Root directory
-	tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/", Typeflag: tar.TypeDir, Mode: 0755})
+	if err := tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/", Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
 	// Symlink entry (like AGENTS.md -> CLAUDE.md in obra/superpowers)
-	tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/AGENTS.md", Typeflag: tar.TypeSymlink, Linkname: "CLAUDE.md"})
+	if err := tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/AGENTS.md", Typeflag: tar.TypeSymlink, Linkname: "CLAUDE.md"}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
 	// Regular files
 	skillContent := []byte("---\nname: systematic-debugging\n---\nDebug skill")
-	tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/skills/systematic-debugging/SKILL.md", Mode: 0644, Size: int64(len(skillContent)), Typeflag: tar.TypeReg})
-	tw.Write(skillContent)
+	if err := tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/skills/systematic-debugging/SKILL.md", Mode: 0644, Size: int64(len(skillContent)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if _, err := tw.Write(skillContent); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
 	refContent := []byte("# Reference")
-	tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/skills/systematic-debugging/reference.md", Mode: 0644, Size: int64(len(refContent)), Typeflag: tar.TypeReg})
-	tw.Write(refContent)
+	if err := tw.WriteHeader(&tar.Header{Name: "obra-superpowers-abc1234/skills/systematic-debugging/reference.md", Mode: 0644, Size: int64(len(refContent)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if _, err := tw.Write(refContent); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
 	tw.Close()
 	gw.Close()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(buf.Bytes())
+		_, _ = w.Write(buf.Bytes())
 	}))
 	defer srv.Close()
 
@@ -127,7 +143,7 @@ func TestFetch_UsesToken(t *testing.T) {
 		tarball := makeTarball(t, map[string]string{
 			"o-r-abc1234/SKILL.md": "hi",
 		})
-		w.Write(tarball)
+		_, _ = w.Write(tarball)
 	}))
 	defer srv.Close()
 

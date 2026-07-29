@@ -112,9 +112,10 @@ func (m selectorModel) View() string {
 		}
 
 		scanBadge := selectorClean.Render("clean")
-		if item.skill.ScanStatus == "warn" {
+		switch item.skill.ScanStatus {
+		case "warn":
 			scanBadge = selectorWarn.Render("warn")
-		} else if item.skill.ScanStatus == "critical" {
+		case "critical":
 			scanBadge = selectorCritical.Render("critical")
 		}
 
@@ -127,11 +128,11 @@ func (m selectorModel) View() string {
 		desc := selectorDesc.Render(truncateDesc(item.skill.Description, 30))
 		files := selectorFiles.Render(fmt.Sprintf("%d files", len(item.skill.Files)))
 
-		b.WriteString(fmt.Sprintf("  %s%s %s %s  %s  %s%s\n", cursor, check, name, desc, files, scanBadge, versionBadge))
+		fmt.Fprintf(&b, "  %s%s %s %s  %s  %s%s\n", cursor, check, name, desc, files, scanBadge, versionBadge)
 	}
 
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  %s selected", selectorDim.Render(fmt.Sprintf("%d", count))))
+	fmt.Fprintf(&b, "  %s selected", selectorDim.Render(fmt.Sprintf("%d", count)))
 	b.WriteString("\n")
 	b.WriteString(selectorHelp.Render("  ↑↓ move · space toggle · a all · enter confirm · esc cancel"))
 	b.WriteString("\n")

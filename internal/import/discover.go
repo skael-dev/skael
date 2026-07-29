@@ -117,7 +117,7 @@ func inspectSkillDir(rootDir, skillDir string) (*DiscoveredSkill, error) {
 	}
 
 	var files []skill.FileEntry
-	filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -131,6 +131,9 @@ func inspectSkillDir(rootDir, skillDir string) (*DiscoveredSkill, error) {
 		})
 		return nil
 	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("inspect skill dir %s: %w", skillDir, walkErr)
+	}
 
 	report, scanErr := scan.ScanDir(skillDir)
 	scanStatus := "clean"

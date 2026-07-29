@@ -16,7 +16,9 @@ func TestAlias_CreateAndList(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(pool)
 
-	store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`))
+	if _, err := store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
 	if err := store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming"); err != nil {
 		t.Fatalf("CreateAlias: %v", err)
@@ -42,8 +44,12 @@ func TestAlias_Resolve(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(pool)
 
-	store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`))
-	store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming")
+	if _, err := store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming"); err != nil {
+		t.Fatalf("CreateAlias: %v", err)
+	}
 
 	canonical, err := store.ResolveAlias(ctx, "superpowers:brainstorming")
 	if err != nil {
@@ -70,9 +76,15 @@ func TestAlias_Delete(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(pool)
 
-	store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`))
-	store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming")
-	store.DeleteAlias(ctx, "superpowers:brainstorming")
+	if _, err := store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming"); err != nil {
+		t.Fatalf("CreateAlias: %v", err)
+	}
+	if err := store.DeleteAlias(ctx, "superpowers:brainstorming"); err != nil {
+		t.Fatalf("DeleteAlias: %v", err)
+	}
 
 	aliases, _ := store.ListAliases(ctx, "brainstorming")
 	if len(aliases) != 0 {
@@ -88,7 +100,9 @@ func TestAlias_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(pool)
 
-	store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`))
+	if _, err := store.Create(ctx, "brainstorming", "", "test", "", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
 	if err := store.CreateAlias(ctx, "superpowers:brainstorming", "brainstorming"); err != nil {
 		t.Fatalf("first: %v", err)

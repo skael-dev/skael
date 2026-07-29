@@ -19,7 +19,6 @@ var (
 	styleWarn    = lipgloss.NewStyle().Foreground(colorYellow)
 	styleDim     = lipgloss.NewStyle().Foreground(colorDim)
 	styleMuted   = lipgloss.NewStyle().Foreground(colorMuted)
-	styleWhite   = lipgloss.NewStyle().Foreground(colorWhite)
 	styleBold    = lipgloss.NewStyle().Bold(true).Foreground(colorWhite)
 	styleCode    = lipgloss.NewStyle().Foreground(colorMuted)
 	styleAccent  = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)

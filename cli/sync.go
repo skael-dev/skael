@@ -294,9 +294,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 		if !syncQuiet {
 			ui.Success("Already up to date")
 			ui.Summary(
-				fmt.Sprintf("0 updated"),
-				fmt.Sprintf("0 failed"),
-				fmt.Sprintf("0 removed"),
+				"0 updated",
+				"0 failed",
+				"0 removed",
 				fmt.Sprintf("%d total", len(cfg.Skills)),
 			)
 		}

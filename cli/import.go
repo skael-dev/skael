@@ -138,7 +138,7 @@ func runLocalImport(c *client.Client, path string) error {
 	if _, statErr := os.Stat(filepath.Join(absPath, "SKILL.md")); statErr == nil {
 		dirs = []string{absPath}
 	} else {
-		filepath.Walk(absPath, func(p string, info os.FileInfo, err error) error {
+		walkErr := filepath.Walk(absPath, func(p string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
 				return nil
 			}
@@ -147,6 +147,10 @@ func runLocalImport(c *client.Client, path string) error {
 			}
 			return nil
 		})
+		if walkErr != nil {
+			ui.Errorf("scanning %s: %s", absPath, walkErr)
+			return nil
+		}
 	}
 
 	if len(dirs) == 0 {
@@ -172,7 +176,7 @@ func runLocalImport(c *client.Client, path string) error {
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
-			enc.Encode(entries)
+			return enc.Encode(entries)
 		}
 		return nil
 	}
@@ -249,7 +253,7 @@ func runLocalImport(c *client.Client, path string) error {
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(out)
+		return enc.Encode(out)
 	}
 
 	return nil
@@ -299,9 +303,10 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		// Show static list for dry-run (no interaction needed).
 		for _, sk := range resolved.Skills {
 			scanBadge := scanCleanStyle.Render("clean")
-			if sk.ScanStatus == "warn" {
+			switch sk.ScanStatus {
+			case "warn":
 				scanBadge = scanWarnStyle.Render("warn")
-			} else if sk.ScanStatus == "critical" {
+			case "critical":
 				scanBadge = scanCriticalStyle.Render("critical")
 			}
 			versionBadge := ""

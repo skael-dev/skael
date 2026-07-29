@@ -20,16 +20,28 @@ func TestGetUnregisteredSkills(t *testing.T) {
 	skillStore := skill.NewStore(pool)
 
 	// Create a registered skill.
-	skillStore.Create(ctx, "registered-skill", "", "exists", "", json.RawMessage(`{}`))
+	if _, err := skillStore.Create(ctx, "registered-skill", "", "exists", "", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
 	// Insert events for registered + unregistered + dismissed skills.
-	store.Insert(ctx, Event{SkillName: "registered-skill", Agent: "claude-code", DeveloperHash: "dev1"})
-	store.Insert(ctx, Event{SkillName: "shadow-skill", Agent: "claude-code", DeveloperHash: "dev1"})
-	store.Insert(ctx, Event{SkillName: "shadow-skill", Agent: "opencode", DeveloperHash: "dev2"})
-	store.Insert(ctx, Event{SkillName: "dismissed-one", Agent: "claude-code", DeveloperHash: "dev1"})
+	if err := store.Insert(ctx, Event{SkillName: "registered-skill", Agent: "claude-code", DeveloperHash: "dev1"}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := store.Insert(ctx, Event{SkillName: "shadow-skill", Agent: "claude-code", DeveloperHash: "dev1"}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := store.Insert(ctx, Event{SkillName: "shadow-skill", Agent: "opencode", DeveloperHash: "dev2"}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := store.Insert(ctx, Event{SkillName: "dismissed-one", Agent: "claude-code", DeveloperHash: "dev1"}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
 
 	// Dismiss one.
-	store.DismissSkill(ctx, "dismissed-one")
+	if err := store.DismissSkill(ctx, "dismissed-one"); err != nil {
+		t.Fatalf("DismissSkill: %v", err)
+	}
 
 	results, err := store.GetUnregisteredSkills(ctx, 30)
 	if err != nil {

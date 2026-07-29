@@ -90,8 +90,8 @@ func runShow(cmd *cobra.Command, args []string) error {
 
 	if ui.JSONMode {
 		out := struct {
-			Skill       *client.Skill          `json:"skill"`
-			Versions    []client.Version       `json:"versions,omitempty"`
+			Skill       *client.Skill             `json:"skill"`
+			Versions    []client.Version          `json:"versions,omitempty"`
 			Activations *client.ActivationSummary `json:"activations"`
 		}{
 			Skill:       sk,
@@ -172,4 +172,3 @@ func runShow(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stdout, "")
 	return nil
 }
-
