@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,27 +36,17 @@ printf '%s\0' "$body" >> "$SKAEL_TEST_CAPTURE"
 exit 0
 `
 
-// postWaitCeiling bounds how long we poll the capture file for an expected
-// POST. Landing a body is just a local file write plus process scheduling —
-// milliseconds in practice — so this is set generously (tens of seconds)
-// purely to absorb scheduler noise under a loaded, parallel `go test ./...`.
-// It costs nothing in the common case: every wait loop below returns the
-// instant its condition is satisfied rather than sleeping the full ceiling.
-const postWaitCeiling = 20 * time.Second
+// groupExitCeiling bounds how long waitForGroupExit will wait for a script's
+// process group — the script itself plus any background child it forked,
+// e.g. the disowned curl POST — to fully exit. Reaping a local subprocess
+// that just writes a file is a matter of milliseconds; this ceiling is set
+// generously purely to fail loudly if something is genuinely wedged, not
+// because we expect to ever wait anywhere near it.
+const groupExitCeiling = 20 * time.Second
 
-// pollInterval is how often we re-check the capture file while waiting.
-const pollInterval = 10 * time.Millisecond
-
-// sentinelSkillName is a reserved skill name used only by the sentinel
-// barrier invocation (see (*hookEnv).run). It must not collide with any
-// skill name used elsewhere in this file's test payloads.
-const sentinelSkillName = "skael-test-sentinel-barrier"
-
-// sentinelPayload is a Skill invocation guaranteed to pass every gate in the
-// hook scripts and produce exactly one POST.
-func sentinelPayload() string {
-	return `{"tool_name":"Skill","tool_input":{"skill":"` + sentinelSkillName + `"}}`
-}
+// groupPollInterval is how often waitForGroupExit rechecks whether the
+// process group has emptied out.
+const groupPollInterval = 5 * time.Millisecond
 
 // requireJQ skips a test on machines without jq. The scripts have a grep
 // fallback, but the jq path is the one every supported agent actually takes.
@@ -93,10 +84,12 @@ func newHookEnv(t *testing.T) *hookEnv {
 }
 
 // exec runs bashBin scriptPath with payload on stdin under the given PATH
-// and environment, and returns its exit code. It does not wait for any
-// backgrounded child the script may have forked — callers decide how (or
-// whether) to wait for the capture file.
-func (e *hookEnv) exec(t *testing.T, bashBin, scriptPath, payload, path string, baseEnv []string, extraEnv ...string) int {
+// and environment, in its own new process group, and returns its exit code
+// plus that group's id. Setpgid is set with Pgid left at its zero value, so
+// the started process becomes the leader of a brand new process group whose
+// pgid equals its own pid — meaning the pid we already have from
+// cmd.Process doubles as the pgid, no extra syscall required to look it up.
+func (e *hookEnv) exec(t *testing.T, bashBin, scriptPath, payload, path string, baseEnv []string, extraEnv ...string) (exitCode, pgid int) {
 	t.Helper()
 
 	cmd := exec.Command(bashBin, scriptPath)
@@ -108,42 +101,60 @@ func (e *hookEnv) exec(t *testing.T, bashBin, scriptPath, payload, path string, 
 		"SKAEL_TEST_CAPTURE="+e.capture,
 	)
 	cmd.Env = append(env, extraEnv...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Run(); err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		require.Truef(t, ok, "running %s: %v", scriptPath, err)
-		return exitErr.ExitCode()
+		exitCode = exitErr.ExitCode()
 	}
-	return 0
+	return exitCode, cmd.Process.Pid
 }
 
-// tryReadBodies attempts to parse the capture file's current contents. It is
-// used while polling, where a partial write (the fake curl script's printf
-// landing mid-append) is expected transiently — a parse failure here just
-// means "not ready yet", not a test failure. ok is false if the file can't
-// be read yet or a record fails to parse.
-func (e *hookEnv) tryReadBodies() (bodies []map[string]any, ok bool) {
-	data, err := os.ReadFile(e.capture)
-	if err != nil {
-		return nil, false
-	}
-	for _, record := range strings.Split(string(data), "\x00") {
-		record = strings.TrimSpace(record)
-		if record == "" {
-			continue
+// waitForGroupExit blocks until process group pgid has no remaining
+// members — syscall.Kill(-pgid, 0) returning ESRCH — meaning the script and
+// every descendant it forked, including a backgrounded, disowned curl, have
+// fully exited and been reaped.
+//
+// This is what makes the wait deterministic instead of a race against a
+// timeout: the hook scripts run `curl ... & disown`, and disown only removes
+// the job from the shell's job table — it does not call setpgid, so the
+// curl child (and the subshell wrapping it) stay in the same process group
+// the script itself was started in via Setpgid above. The group can only go
+// empty once that child is actually done, whether it takes microseconds or
+// several seconds.
+//
+// This guarantee rests on one assumption: no descendant of the script calls
+// setsid, or its own setpgid, to leave the group. script.go, cursor_script.go,
+// and opencode_plugin.go do not do this today — if one of them grew a
+// detached child that escaped the group, this wait would stop seeing it, and
+// this comment (and the fix) would need revisiting alongside that change.
+//
+// A wedged descendant would otherwise hang the suite forever, so this is
+// bounded by groupExitCeiling. Hitting that ceiling fails the test loudly
+// rather than falling through to read a capture file that may still be
+// mid-write.
+func waitForGroupExit(t *testing.T, pgid int) {
+	t.Helper()
+
+	deadline := time.Now().Add(groupExitCeiling)
+	for {
+		err := syscall.Kill(-pgid, 0)
+		if err == syscall.ESRCH {
+			return
 		}
-		var body map[string]any
-		if err := json.Unmarshal([]byte(record), &body); err != nil {
-			return nil, false
+		if time.Now().After(deadline) {
+			require.FailNowf(t, "process group did not exit",
+				"pgid %d still had live members after %s; a background child may be wedged", pgid, groupExitCeiling)
 		}
-		bodies = append(bodies, body)
+		time.Sleep(groupPollInterval)
 	}
-	return bodies, true
 }
 
-// readBodies is the authoritative, non-lenient read used once a wait loop
-// has finished: any parse failure at this point is a real test failure, not
-// a transient partial write.
+// readBodies parses the capture file's current contents into JSON bodies.
+// Callers only reach this after waitForGroupExit has confirmed every writer
+// has exited, so there is no partial-write window to tolerate here — a
+// parse failure at this point is a genuine test failure.
 func (e *hookEnv) readBodies(t *testing.T) []map[string]any {
 	t.Helper()
 
@@ -166,94 +177,27 @@ func (e *hookEnv) readBodies(t *testing.T) []map[string]any {
 	return bodies
 }
 
-// waitUntil polls the capture file until satisfied returns true for its
-// current contents, or postWaitCeiling elapses. Either way it finishes with
-// an authoritative (non-lenient) read.
-func (e *hookEnv) waitUntil(t *testing.T, satisfied func([]map[string]any) bool) []map[string]any {
-	t.Helper()
-
-	deadline := time.Now().Add(postWaitCeiling)
-	for {
-		if bodies, ok := e.tryReadBodies(); ok && satisfied(bodies) {
-			return bodies
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(pollInterval)
-	}
-	return e.readBodies(t)
-}
-
-// run executes scriptPath with payload and asserts (by construction) that it
-// produced no POST. Rather than waiting out a fixed timeout — which either
-// wastes time when nothing was ever going to arrive, or is dangerously prone
-// to a false pass when a slow POST lands after a short one expires — it
-// proves the absence with a happens-after barrier:
-//
-// After the payload's script exits, run runs a second, independent
-// invocation of the same script with a payload guaranteed to POST (the
-// "sentinel"), then waits (bounded by postWaitCeiling, but typically
-// resolving in milliseconds) for the sentinel's specific body to land.
-//
-// This is sound because every no-POST branch in the hook scripts under test
-// (script.go, cursor_script.go) exits before the backgrounded curl is ever
-// forked — there is no leftover in-flight background job from the payload
-// run that could still land afterward. So once the sentinel's body is seen
-// and nothing else has appeared, the payload demonstrably posted nothing.
-// If a future change to the scripts introduced a POST-then-maybe-abort path,
-// this assumption would need revisiting, but no such path exists today.
+// run executes scriptPath with payload on stdin and returns its exit code
+// plus every JSON body it POSTed (nil if none). The scripts fire curl in a
+// backgrounded, disowned subshell, so run can't just wait on the foreground
+// process the way exec.Cmd normally would — instead it waits for the
+// script's entire process group to exit (see waitForGroupExit) before
+// reading the capture file. That single mechanism is what both callers rely
+// on: tests asserting one or more POSTs get every body that actually landed,
+// and tests asserting no POST get a capture file that is genuinely settled,
+// not just one that hasn't received anything yet.
 func (e *hookEnv) run(t *testing.T, scriptPath, payload string, extraEnv ...string) (int, []map[string]any) {
 	t.Helper()
 
 	path := e.binDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	baseEnv := os.Environ()
-
-	exitCode := e.exec(t, "bash", scriptPath, payload, path, baseEnv, extraEnv...)
-
-	sentinelExit := e.exec(t, "bash", scriptPath, sentinelPayload(), path, baseEnv, "SKAEL_AGENT=skael-test-sentinel")
-	require.Equal(t, 0, sentinelExit, "sentinel barrier invocation must exit 0")
-
-	hasSentinel := func(bodies []map[string]any) bool {
-		for _, b := range bodies {
-			if b["skill_name"] == sentinelSkillName {
-				return true
-			}
-		}
-		return false
-	}
-	bodies := e.waitUntil(t, hasSentinel)
-	require.Truef(t, hasSentinel(bodies),
-		"sentinel barrier body never landed within %s; cannot prove the payload run posted nothing", postWaitCeiling)
-
-	var payloadBodies []map[string]any
-	for _, b := range bodies {
-		if b["skill_name"] == sentinelSkillName {
-			continue
-		}
-		payloadBodies = append(payloadBodies, b)
-	}
-	return exitCode, payloadBodies
-}
-
-// runExpectingBodies executes scriptPath with payload and waits for at least
-// want POST bodies to land in the capture file, polling rather than sleeping
-// a fixed duration: the common case (milliseconds) isn't taxed, and a slow
-// scheduler under parallel `go test ./...` still succeeds within
-// postWaitCeiling instead of racing a short fixed deadline.
-func (e *hookEnv) runExpectingBodies(t *testing.T, scriptPath, payload string, want int, extraEnv ...string) (int, []map[string]any) {
-	t.Helper()
-
-	path := e.binDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	exitCode := e.exec(t, "bash", scriptPath, payload, path, os.Environ(), extraEnv...)
-
-	bodies := e.waitUntil(t, func(b []map[string]any) bool { return len(b) >= want })
-	return exitCode, bodies
+	exitCode, pgid := e.exec(t, "bash", scriptPath, payload, path, os.Environ(), extraEnv...)
+	waitForGroupExit(t, pgid)
+	return exitCode, e.readBodies(t)
 }
 
 // jqLessFallbackBins lists the external binaries the grep/sed fallback path
-// actually needs, in the order runWithoutJQ resolves them: bash to run the
-// script, cat to read stdin, grep/sed/head/cut for field extraction. The
+// actually needs, in the order buildJQLessBinDir resolves them: bash to run
+// the script, cat to read stdin, grep/sed/head/cut for field extraction. The
 // hashing tool is resolved separately since it's an either/or choice.
 var jqLessFallbackBins = []string{"bash", "cat", "grep", "sed", "head", "cut"}
 
@@ -290,9 +234,9 @@ func buildJQLessBinDir(t *testing.T) string {
 	return binDir
 }
 
-// runWithoutJQ runs scriptPath the same way run does — including the
-// sentinel happens-after barrier proving no POST occurred — but with a PATH
-// built from scratch out of symlinks to only the binaries the jq-less
+// runWithoutJQ runs scriptPath the same way run does — including waiting for
+// the whole process group to exit before reading the capture file — but with
+// a PATH built from scratch out of symlinks to only the binaries the jq-less
 // fallback needs, so the fallback code path actually executes instead of the
 // jq path.
 func (e *hookEnv) runWithoutJQ(t *testing.T, scriptPath, payload string, extraEnv ...string) (int, []map[string]any) {
@@ -301,31 +245,9 @@ func (e *hookEnv) runWithoutJQ(t *testing.T, scriptPath, payload string, extraEn
 	binDir := buildJQLessBinDir(t)
 	bashBin := filepath.Join(binDir, "bash")
 
-	exitCode := e.exec(t, bashBin, scriptPath, payload, binDir, nil, extraEnv...)
-
-	sentinelExit := e.exec(t, bashBin, scriptPath, sentinelPayload(), binDir, nil, "SKAEL_AGENT=skael-test-sentinel")
-	require.Equal(t, 0, sentinelExit, "sentinel barrier invocation must exit 0")
-
-	hasSentinel := func(bodies []map[string]any) bool {
-		for _, b := range bodies {
-			if b["skill_name"] == sentinelSkillName {
-				return true
-			}
-		}
-		return false
-	}
-	bodies := e.waitUntil(t, hasSentinel)
-	require.Truef(t, hasSentinel(bodies),
-		"sentinel barrier body never landed within %s; cannot prove the payload run posted nothing", postWaitCeiling)
-
-	var payloadBodies []map[string]any
-	for _, b := range bodies {
-		if b["skill_name"] == sentinelSkillName {
-			continue
-		}
-		payloadBodies = append(payloadBodies, b)
-	}
-	return exitCode, payloadBodies
+	exitCode, pgid := e.exec(t, bashBin, scriptPath, payload, binDir, nil, extraEnv...)
+	waitForGroupExit(t, pgid)
+	return exitCode, e.readBodies(t)
 }
 
 func TestHookScript_PostsSkillActivation(t *testing.T) {
@@ -335,8 +257,8 @@ func TestHookScript_PostsSkillActivation(t *testing.T) {
 	require.NoError(t, err)
 
 	env := newHookEnv(t)
-	code, bodies := env.runExpectingBodies(t, scriptPath,
-		`{"tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`, 1,
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`,
 		"SKAEL_AGENT=claude-code")
 
 	require.Equal(t, 0, code)
@@ -354,8 +276,8 @@ func TestHookScript_StripsOpenCodeSkillsPrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	env := newHookEnv(t)
-	code, bodies := env.runExpectingBodies(t, scriptPath,
-		`{"tool_name":"skills_code-review","tool_input":{"skill":"skills_code-review"}}`, 1,
+	code, bodies := env.run(t, scriptPath,
+		`{"tool_name":"skills_code-review","tool_input":{"skill":"skills_code-review"}}`,
 		"SKAEL_AGENT=opencode")
 
 	require.Equal(t, 0, code)
@@ -471,8 +393,8 @@ func TestHookScript_ReportsToolInvocationSource(t *testing.T) {
 	require.NoError(t, err)
 
 	env := newHookEnv(t)
-	_, bodies := env.runExpectingBodies(t, scriptPath,
-		`{"tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`, 1,
+	_, bodies := env.run(t, scriptPath,
+		`{"tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`,
 		"SKAEL_AGENT=claude-code")
 
 	require.Len(t, bodies, 1)
@@ -491,7 +413,7 @@ func TestCursorStopScript_ReportsTranscriptScanSource(t *testing.T) {
 
 	env := newHookEnv(t)
 	payload := `{"transcript_path":` + strconv.Quote(transcript) + `,"cwd":"/tmp/project"}`
-	code, bodies := env.runExpectingBodies(t, scriptPath, payload, 1)
+	code, bodies := env.run(t, scriptPath, payload)
 
 	require.Equal(t, 0, code)
 	require.Len(t, bodies, 1)
