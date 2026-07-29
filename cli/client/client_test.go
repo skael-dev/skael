@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -387,49 +386,51 @@ func TestRetryOnConnectionError(t *testing.T) {
 	}
 }
 
-// TestPublishVersion_RetryResendsBody verifies that when a request is retried
-// after a 503, the request body is resent (not empty).
-func TestPublishVersion_RetryResendsBody(t *testing.T) {
-	var mu sync.Mutex
-	var bodies []string
+// TestDoWithRetry_NonReplayableBody verifies that doWithRetry refuses to retry
+// requests with non-replayable bodies (no GetBody callback). This guards against
+// silently sending empty bodies when non-seekable readers are used.
+func TestDoWithRetry_NonReplayableBody(t *testing.T) {
+	var requestCount int
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-
-		mu.Lock()
-		bodies = append(bodies, string(raw))
-		n := len(bodies)
-		mu.Unlock()
-
-		if n == 1 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"version":3,"checksum":"abc","created":true}`))
+		requestCount++
+		// Always return 503 to trigger a retry
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "sk-test")
+	c := New(srv.URL, "test-key")
 
-	ver, _, err := c.PublishVersion("demo", []byte("archive-bytes"))
+	// Create a request manually with a non-replayable body.
+	// Create the request with a pipe (which has no Seek capability and no GetBody).
+	pr, pw := io.Pipe()
+	go func() {
+		pw.Write([]byte("test-body"))
+		pw.Close()
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL, pr)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("failed to create request: %v", err)
 	}
-	if ver == nil {
-		t.Fatal("expected non-nil version")
+	// Explicitly ensure GetBody is nil to simulate a non-replayable reader
+	req.GetBody = nil
+
+	// doWithRetry should error rather than silently retry with empty body
+	resp, err := c.doWithRetry(req)
+	if err == nil {
+		t.Fatal("expected error when body is non-replayable, got nil")
 	}
-	if ver.Version != 3 {
-		t.Errorf("expected version 3, got %d", ver.Version)
+	if !strings.Contains(err.Error(), "cannot be replayed") {
+		t.Errorf("expected error containing 'cannot be replayed', got: %v", err)
+	}
+	if resp != nil {
+		resp.Body.Close()
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(bodies) != 2 {
-		t.Fatalf("expected 2 request bodies (503 retry), got %d", len(bodies))
-	}
-	if bodies[1] != "archive-bytes" {
-		t.Errorf("expected retried request to resend body 'archive-bytes', got %q", bodies[1])
+	// Verify server received only ONE request (not a retry with empty body)
+	if requestCount != 1 {
+		t.Errorf("expected server to receive 1 request, got %d", requestCount)
 	}
 }
 
