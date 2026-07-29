@@ -265,11 +265,23 @@ const (
 	codexAutoSyncBlockEnd   = "# end managed_by = skael-autosync"
 )
 
-// installCodexHook appends (or replaces) a skael-managed [[hooks.pre_tool_use]] TOML block.
+// installCodexHook appends (or replaces) a skael-managed [[hooks.PreToolUse]] TOML block.
+//
+// The event key is PascalCase (PreToolUse), matching Codex's actual hook event
+// names — confirmed against a live third-party hooks.json on this machine and
+// against OpenAI's published Codex configuration docs. An older skael wrote the
+// snake_case key `pre_tool_use`, under which the hook never fired; that stale
+// block is found and replaced (not left alongside the new one) because lookup
+// is keyed on the surrounding marker comments, not on the TOML key inside them.
+//
+// No `matcher` field is set: Codex supports one, but what tool name a Codex
+// skill invocation actually presents is undocumented and unverified on this
+// machine, so a guessed pattern is omitted rather than risk silently dropping
+// every event.
 func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
 	cmd := fmt.Sprintf("SKAEL_AGENT=codex %s", scriptPath)
 
-	block := fmt.Sprintf("\n%s\n[[hooks.pre_tool_use]]\ncommand = %q\n%s\n",
+	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\ncommand = %q\n%s\n",
 		codexBlockStart, cmd, codexBlockEnd)
 
 	existing, err := os.ReadFile(configPath)
@@ -327,9 +339,10 @@ func replaceBlock(content, startMarker, endMarker, replacement string) string {
 	return out.String()
 }
 
-// InstallCodexAutoSync appends (or replaces) a skael-autosync managed pre_tool_use TOML block.
+// InstallCodexAutoSync appends (or replaces) a skael-autosync managed PreToolUse TOML block.
+// See installCodexHook for why the key is PascalCase and why no matcher is set.
 func InstallCodexAutoSync(configPath, scriptPath string) error {
-	block := fmt.Sprintf("\n%s\n[[hooks.pre_tool_use]]\ncommand = %q\n%s\n",
+	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\ncommand = %q\n%s\n",
 		codexAutoSyncBlockStart, scriptPath, codexAutoSyncBlockEnd)
 
 	existing, err := os.ReadFile(configPath)

@@ -160,7 +160,8 @@ func TestInstallCodexHook_NewFile(t *testing.T) {
 	content := string(data)
 	assert.Contains(t, content, "# managed_by = skael", "managed block start marker must be present")
 	assert.Contains(t, content, "# end managed_by = skael", "managed block end marker must be present")
-	assert.Contains(t, content, "[[hooks.pre_tool_use]]", "TOML hook section must be present")
+	assert.Contains(t, content, "[[hooks.PreToolUse]]", "TOML hook section must use the PascalCase event key")
+	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "TOML hook section must not use the stale snake_case event key")
 	assert.Contains(t, content, "SKAEL_AGENT=codex", "agent env var must be set to codex")
 }
 
@@ -198,7 +199,85 @@ func TestUninstallCodexHook(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "# managed_by = skael", "managed block must be removed after uninstall")
+	assert.NotContains(t, string(data), "[[hooks.PreToolUse]]", "hook section must be removed after uninstall")
 	assert.NotContains(t, string(data), "[[hooks.pre_tool_use]]", "hook section must be removed after uninstall")
+}
+
+// TestInstallCodexHook_UpgradesStaleSnakeCaseBlock verifies that a config.toml
+// left behind by an older skael — which wrote the non-firing snake_case
+// [[hooks.pre_tool_use]] key inside the managed markers — ends up with exactly
+// one managed block using the correct PascalCase key after install, not two.
+func TestInstallCodexHook_UpgradesStaleSnakeCaseBlock(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	staleConfig := `model = "gpt-5.5"
+
+# managed_by = skael
+[[hooks.pre_tool_use]]
+command = "SKAEL_AGENT=codex /old/path/skael-hook.sh"
+# end managed_by = skael
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(staleConfig), 0o644))
+
+	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/new/path/skael-hook.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael"), "must have exactly one managed block start marker")
+	assert.Equal(t, 1, strings.Count(content, "# end managed_by = skael"), "must have exactly one managed block end marker")
+	assert.Equal(t, 1, strings.Count(content, "[[hooks.PreToolUse]]"), "must have exactly one PascalCase hook section")
+	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "stale snake_case hook section must not remain")
+	assert.Contains(t, content, "/new/path/skael-hook.sh", "new script path must be written")
+	assert.NotContains(t, content, "/old/path/skael-hook.sh", "old script path must not remain")
+	assert.Contains(t, content, `model = "gpt-5.5"`, "unrelated user config must be preserved")
+
+	require.NoError(t, hooks.UninstallForAgent("codex", configPath))
+
+	data, err = os.ReadFile(configPath)
+	require.NoError(t, err)
+	content = string(data)
+	assert.NotContains(t, content, "managed_by = skael", "no managed markers must remain after uninstall")
+	assert.NotContains(t, content, "[[hooks.PreToolUse]]", "no hook section must remain after uninstall")
+	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "no stale hook section must remain after uninstall")
+	assert.Contains(t, content, `model = "gpt-5.5"`, "unrelated user config must be preserved after uninstall")
+}
+
+// TestInstallCodexAutoSync_UpgradesStaleSnakeCaseBlock verifies the same
+// upgrade behavior for the separate skael-autosync managed block.
+func TestInstallCodexAutoSync_UpgradesStaleSnakeCaseBlock(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	staleConfig := `# managed_by = skael-autosync
+[[hooks.pre_tool_use]]
+command = "/old/path/skael-autosync.sh"
+# end managed_by = skael-autosync
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(staleConfig), 0o644))
+
+	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/new/path/skael-autosync.sh"))
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "must have exactly one autosync managed block")
+	assert.Equal(t, 1, strings.Count(content, "[[hooks.PreToolUse]]"), "must have exactly one PascalCase hook section")
+	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "stale snake_case hook section must not remain")
+	assert.Contains(t, content, "/new/path/skael-autosync.sh")
+	assert.NotContains(t, content, "/old/path/skael-autosync.sh")
+
+	require.NoError(t, hooks.UninstallCodexAutoSync(configPath))
+
+	data, err = os.ReadFile(configPath)
+	require.NoError(t, err)
+	content = string(data)
+	assert.NotContains(t, content, "managed_by = skael-autosync")
+	assert.NotContains(t, content, "[[hooks.PreToolUse]]")
+	assert.NotContains(t, content, "[[hooks.pre_tool_use]]")
 }
 
 // TestHookScript_ReadsConfigFile verifies the hook script reads credentials from config.json.

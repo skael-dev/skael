@@ -17,7 +17,7 @@ Skills are installed explicitly with `skael add`, which tracks them in `~/.skael
 
 ## Auto-sync
 
-A debounced hook script runs `skael sync` automatically in the background. It checks your last sync timestamp and skips if less than 30 minutes old. Installed for Claude Code (`UserPromptSubmit`), Cursor (`sessionStart`), and Codex (`pre_tool_use`). Your agents always have the latest versions of your installed skills without manual intervention.
+A debounced hook script runs `skael sync` automatically in the background. It checks your last sync timestamp and skips if less than 30 minutes old. Installed for Claude Code (`UserPromptSubmit`), Cursor (`sessionStart`), and Codex (`PreToolUse`). Your agents always have the latest versions of your installed skills without manual intervention.
 
 ## Scanning
 
