@@ -37,8 +37,9 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	if created.PasswordHash != hash {
 		t.Error("password hash mismatch")
 	}
-	if created.Role != "admin" {
-		t.Errorf("role = %q, want %q", created.Role, "admin")
+	// Accounts created without an explicit role are unprivileged.
+	if created.Role != auth.RoleMember {
+		t.Errorf("role = %q, want %q", created.Role, auth.RoleMember)
 	}
 	if created.CreatedAt.IsZero() {
 		t.Error("expected non-zero created_at")

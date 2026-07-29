@@ -9,6 +9,7 @@ import {
   mockVersions,
   mockApiKeys,
   mockScanReport,
+  mockTeamUsers,
 } from "./fixtures";
 
 export const handlers = [
@@ -70,6 +71,36 @@ export const handlers = [
 
   http.delete("/api/auth/keys/:id", () => {
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // Team (owner only)
+  http.get("/api/admin/users", () => {
+    return HttpResponse.json({ users: mockTeamUsers });
+  }),
+
+  http.put("/api/admin/users/:id/role", async ({ request, params }) => {
+    const body = (await request.json()) as { role: string };
+    const user = mockTeamUsers.find((u) => u.id === params.id);
+    if (!user) {
+      return HttpResponse.json({ detail: "user not found" }, { status: 404 });
+    }
+    if (user.role === "owner") {
+      return HttpResponse.json(
+        { detail: "the owner's role cannot be changed" },
+        { status: 403 },
+      );
+    }
+    if (body.role !== "admin" && body.role !== "member") {
+      return HttpResponse.json(
+        { detail: 'role must be "admin" or "member"' },
+        { status: 422 },
+      );
+    }
+    return HttpResponse.json({ ...user, role: body.role });
+  }),
+
+  http.post("/api/admin/reset-password", () => {
+    return HttpResponse.json({ temporary_password: "temp-password-123" });
   }),
 
   // Analytics

@@ -588,25 +588,28 @@ type TeamUser = {
 };
 
 function TeamSection() {
+  const queryClient = useQueryClient();
   const [resetTarget, setResetTarget] = useState<TeamUser | null>(null);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pendingRoleUserId, setPendingRoleUserId] = useState<string | null>(null);
 
   const { data: users, isLoading, isError, refetch } = useQuery({
     queryKey: ["admin", "users"],
     queryFn: async () => {
       const res = await fetch("/api/admin/users", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch users");
-      return res.json() as Promise<TeamUser[]>;
+      const data = (await res.json()) as { users?: TeamUser[] };
+      return data.users ?? [];
     },
   });
 
   const resetMutation = useMutation({
-    mutationFn: async (userId: string) => {
+    mutationFn: async (email: string) => {
       const res = await fetch("/api/admin/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId }),
+        body: JSON.stringify({ email }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed to reset password" }));
@@ -619,6 +622,34 @@ function TeamSection() {
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Failed to reset password");
+    },
+  });
+
+  // Only the owner can change roles, and only between admin and member —
+  // there is exactly one owner per instance and it is not transferable here.
+  const roleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
+      const res = await fetch(`/api/admin/users/${userId}/role`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Failed to update role" }));
+        throw new Error(err.detail || err.error || "Failed to update role");
+      }
+      return res.json() as Promise<TeamUser>;
+    },
+    onSuccess: (updated) => {
+      toast.success(`${updated.email} is now ${updated.role}`);
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update role");
+    },
+    onSettled: () => {
+      setPendingRoleUserId(null);
     },
   });
 
@@ -677,9 +708,26 @@ function TeamSection() {
                     <td className="px-3.5 py-3 text-text-primary font-mono text-[12px]">{u.email}</td>
                     <td className="px-3.5 py-3 text-text-secondary">{u.name}</td>
                     <td className="px-3.5 py-3">
-                      <span className="text-[10px] font-mono text-text-tertiary bg-bg-tertiary px-1.5 py-0.5 rounded uppercase tracking-wide">
-                        {u.role}
-                      </span>
+                      {u.role === "owner" ? (
+                        // There is exactly one owner and the role is not transferable.
+                        <span className="text-[10px] font-mono text-text-tertiary bg-bg-tertiary px-1.5 py-0.5 rounded uppercase tracking-wide">
+                          {u.role}
+                        </span>
+                      ) : (
+                        <select
+                          aria-label={`Role for ${u.email}`}
+                          value={u.role}
+                          disabled={pendingRoleUserId === u.id}
+                          onChange={(e) => {
+                            setPendingRoleUserId(u.id);
+                            roleMutation.mutate({ userId: u.id, role: e.target.value });
+                          }}
+                          className="h-7 rounded-[5px] bg-bg-tertiary border border-border px-1.5 text-[11px] font-mono uppercase tracking-wide text-text-secondary outline-none cursor-pointer transition-colors hover:border-border-active focus:border-border-active disabled:opacity-50 disabled:cursor-default"
+                        >
+                          <option value="admin">admin</option>
+                          <option value="member">member</option>
+                        </select>
+                      )}
                     </td>
                     <td className="px-3.5 py-3 text-text-tertiary text-[11px]">{relativeTime(u.created_at)}</td>
                     <td className="px-3.5 py-3 text-right">
@@ -762,7 +810,7 @@ function TeamSection() {
                   size="sm"
                   className="bg-accent text-bg-primary hover:bg-accent/90"
                   disabled={resetMutation.isPending}
-                  onClick={() => resetTarget && resetMutation.mutate(resetTarget.id)}
+                  onClick={() => resetTarget && resetMutation.mutate(resetTarget.email)}
                 >
                   {resetMutation.isPending ? "Resetting..." : "Reset Password"}
                 </Button>

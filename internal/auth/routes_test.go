@@ -108,7 +108,7 @@ func TestAuthRoutes_SignupFirstUser_Owner(t *testing.T) {
 	require.NotEmpty(t, user.ID)
 }
 
-func TestAuthRoutes_SignupSecondUser_Admin(t *testing.T) {
+func TestAuthRoutes_SignupSecondUser_Member(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
@@ -123,22 +123,23 @@ func TestAuthRoutes_SignupSecondUser_Admin(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
 
-	// Second user → admin (use a different client to avoid session overlap).
+	// Every later user → member (use a different client to avoid session
+	// overlap). Privilege is granted deliberately, never by signing up.
 	jar2, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	client2 := &http.Client{Jar: jar2}
 
 	resp = doPost(t, client2, srv.URL+"/api/auth/signup", map[string]string{
-		"email":    "admin@example.com",
-		"name":     "Admin",
+		"email":    "second@example.com",
+		"name":     "Second",
 		"password": "password456",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var user auth.User
 	decodeJSON(t, resp, &user)
-	require.Equal(t, "admin@example.com", user.Email)
-	require.Equal(t, "admin", user.Role)
+	require.Equal(t, "second@example.com", user.Email)
+	require.Equal(t, auth.RoleMember, user.Role)
 }
 
 func TestAuthRoutes_SignupDuplicateEmail(t *testing.T) {

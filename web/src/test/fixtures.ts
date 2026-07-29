@@ -8,12 +8,47 @@ import type {
   ApiKeyInfo,
 } from "@/api/types.gen";
 
+// The signed-in user in tests is the instance owner: owner-only surfaces (the
+// Team section) are otherwise unreachable. New accounts are members; admin is
+// granted by the owner.
 export const mockUser: User = {
   id: "user-001",
   email: "admin@test.com",
   name: "Admin User",
-  role: "admin",
+  role: "owner",
 };
+
+export type MockTeamUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  created_at: string;
+};
+
+export const mockTeamUsers: MockTeamUser[] = [
+  {
+    id: "user-001",
+    email: "admin@test.com",
+    name: "Admin User",
+    role: "owner",
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "user-002",
+    email: "dana@test.com",
+    name: "Dana Dev",
+    role: "member",
+    created_at: "2026-02-01T00:00:00Z",
+  },
+  {
+    id: "user-003",
+    email: "sam@test.com",
+    name: "Sam Ops",
+    role: "admin",
+    created_at: "2026-03-01T00:00:00Z",
+  },
+];
 
 export const mockSkills: Skill[] = [
   {

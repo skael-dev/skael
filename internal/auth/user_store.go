@@ -107,6 +107,18 @@ func (s *UserStore) SetResetRequired(ctx context.Context, id string, required bo
 	return err
 }
 
+// UpdateRole sets a user's role. It reports whether a row was updated so the
+// caller can distinguish "no such user" from a successful change. Callers are
+// responsible for authorising the change and for validating the role value.
+func (s *UserStore) UpdateRole(ctx context.Context, id, role string) (bool, error) {
+	const q = `UPDATE users SET role = $2 WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, id, role)
+	if err != nil {
+		return false, fmt.Errorf("auth.UserStore.UpdateRole: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (s *UserStore) List(ctx context.Context) ([]UserRow, error) {
 	const q = `SELECT id, email, name, password_hash, role, password_reset_required, created_at FROM users ORDER BY created_at`
 	rows, err := s.pool.Query(ctx, q)

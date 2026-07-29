@@ -9,6 +9,7 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 
 	"github.com/skael-dev/skael/internal/platform"
 )
@@ -59,7 +60,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 
 		var row *UserRow
 		if count == 0 {
-			row, err = userStore.CreateWithRole(ctx, input.Body.Email, input.Body.Name, hash, "owner")
+			row, err = userStore.CreateWithRole(ctx, input.Body.Email, input.Body.Name, hash, RoleOwner)
 		} else {
 			row, err = userStore.Create(ctx, input.Body.Email, input.Body.Name, hash)
 		}
@@ -350,7 +351,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		if user == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		if user.Role != "owner" {
+		if !user.IsOwner() {
 			return nil, huma.Error403Forbidden("owner role required")
 		}
 
@@ -410,7 +411,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		if user == nil {
 			return nil, huma.Error401Unauthorized("not authenticated")
 		}
-		if user.Role != "owner" {
+		if !user.IsOwner() {
 			return nil, huma.Error403Forbidden("owner role required")
 		}
 
@@ -431,5 +432,85 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		}
 
 		return &adminUsersOutput{Body: adminUsersBody{Users: users}}, nil
+	})
+
+	// -----------------------------------------------------------------
+	// PUT /api/admin/users/{id}/role — owner changes another user's role
+	// -----------------------------------------------------------------
+	type setRoleBody struct {
+		Role string `json:"role" doc:"New role: admin or member"`
+	}
+	type setRoleInput struct {
+		ID   string `path:"id"`
+		Body setRoleBody
+	}
+	type setRoleResponse struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+		Role  string `json:"role"`
+	}
+	type setRoleOutput struct {
+		Body setRoleResponse
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-set-user-role",
+		Method:      http.MethodPut,
+		Path:        "/api/admin/users/{id}/role",
+		Summary:     "Set a user's role (owner only)",
+	}, func(ctx context.Context, input *setRoleInput) (*setRoleOutput, error) {
+		user := UserFromContext(ctx)
+		if user == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		if !user.IsOwner() {
+			return nil, huma.Error403Forbidden("owner role required")
+		}
+
+		// Nobody can be promoted to owner: an instance has exactly one owner,
+		// so it can never end up with none and lock everyone out.
+		if input.Body.Role != RoleAdmin && input.Body.Role != RoleMember {
+			return nil, huma.Error422UnprocessableEntity(
+				fmt.Sprintf("role must be %q or %q", RoleAdmin, RoleMember))
+		}
+
+		// The owner cannot demote themselves, for the same reason.
+		if input.ID == user.ID {
+			return nil, huma.Error403Forbidden("the owner cannot change their own role")
+		}
+
+		// A malformed id can never match a row; treat it as not found rather
+		// than letting the driver reject the query.
+		if err := uuid.Validate(input.ID); err != nil {
+			return nil, huma.Error404NotFound("user not found")
+		}
+
+		target, err := userStore.GetByID(ctx, input.ID)
+		if err != nil {
+			return nil, fmt.Errorf("set role: lookup: %w", err)
+		}
+		if target == nil {
+			return nil, huma.Error404NotFound("user not found")
+		}
+		// Defence in depth: the id check above already covers the caller, but
+		// an owner is never demotable by this route whichever id is used.
+		if target.Role == RoleOwner {
+			return nil, huma.Error403Forbidden("the owner's role cannot be changed")
+		}
+
+		updated, err := userStore.UpdateRole(ctx, target.ID, input.Body.Role)
+		if err != nil {
+			return nil, fmt.Errorf("set role: update: %w", err)
+		}
+		if !updated {
+			return nil, huma.Error404NotFound("user not found")
+		}
+
+		return &setRoleOutput{Body: setRoleResponse{
+			ID:    target.ID,
+			Email: target.Email,
+			Name:  target.Name,
+			Role:  input.Body.Role,
+		}}, nil
 	})
 }

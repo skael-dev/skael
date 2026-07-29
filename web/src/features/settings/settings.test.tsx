@@ -83,4 +83,154 @@ describe("Settings", () => {
     // getAllByText and assert at least one match exists.
     expect(screen.getAllByText("CI Pipeline").length).toBeGreaterThan(0);
   });
+
+  describe("Team roles", () => {
+    it("lists team members with a role control, except the owner", async () => {
+      renderWithProviders(<Settings />);
+
+      // Owner row shows the role as a static badge — there is one owner and
+      // the role is not transferable.
+      expect(await screen.findByText("Admin User")).toBeInTheDocument();
+      expect(screen.getByText("owner")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Role for admin@test.com")).not.toBeInTheDocument();
+
+      // Everyone else gets a control preselected to their current role.
+      const memberSelect = screen.getByLabelText("Role for dana@test.com") as HTMLSelectElement;
+      expect(memberSelect.value).toBe("member");
+      const adminSelect = screen.getByLabelText("Role for sam@test.com") as HTMLSelectElement;
+      expect(adminSelect.value).toBe("admin");
+    });
+
+    it("promotes a member to admin and reflects it in the list", async () => {
+      const user = userEvent.setup();
+
+      // After a successful change the list is refetched — serve the new role.
+      let promoted = false;
+      server.use(
+        http.get("/api/admin/users", () => {
+          return HttpResponse.json({
+            users: [
+              { id: "user-001", email: "admin@test.com", name: "Admin User", role: "owner", created_at: "2026-01-01T00:00:00Z" },
+              {
+                id: "user-002",
+                email: "dana@test.com",
+                name: "Dana Dev",
+                role: promoted ? "admin" : "member",
+                created_at: "2026-02-01T00:00:00Z",
+              },
+            ],
+          });
+        }),
+        http.put("/api/admin/users/:id/role", async ({ request }) => {
+          const body = (await request.json()) as { role: string };
+          expect(body.role).toBe("admin");
+          promoted = true;
+          return HttpResponse.json({
+            id: "user-002",
+            email: "dana@test.com",
+            name: "Dana Dev",
+            role: "admin",
+            created_at: "2026-02-01T00:00:00Z",
+          });
+        }),
+      );
+
+      renderWithProviders(<Settings />);
+
+      const select = (await screen.findByLabelText("Role for dana@test.com")) as HTMLSelectElement;
+      expect(select.value).toBe("member");
+
+      await user.selectOptions(select, "admin");
+
+      await waitFor(() => {
+        const refreshed = screen.getByLabelText("Role for dana@test.com") as HTMLSelectElement;
+        expect(refreshed.value).toBe("admin");
+      });
+    });
+
+    it("demotes an admin to member", async () => {
+      const user = userEvent.setup();
+
+      let demoted = false;
+      server.use(
+        http.get("/api/admin/users", () => {
+          return HttpResponse.json({
+            users: [
+              {
+                id: "user-003",
+                email: "sam@test.com",
+                name: "Sam Ops",
+                role: demoted ? "member" : "admin",
+                created_at: "2026-03-01T00:00:00Z",
+              },
+            ],
+          });
+        }),
+        http.put("/api/admin/users/:id/role", async ({ request }) => {
+          const body = (await request.json()) as { role: string };
+          expect(body.role).toBe("member");
+          demoted = true;
+          return HttpResponse.json({
+            id: "user-003",
+            email: "sam@test.com",
+            name: "Sam Ops",
+            role: "member",
+            created_at: "2026-03-01T00:00:00Z",
+          });
+        }),
+      );
+
+      renderWithProviders(<Settings />);
+
+      const select = (await screen.findByLabelText("Role for sam@test.com")) as HTMLSelectElement;
+      await user.selectOptions(select, "member");
+
+      await waitFor(() => {
+        const refreshed = screen.getByLabelText("Role for sam@test.com") as HTMLSelectElement;
+        expect(refreshed.value).toBe("member");
+      });
+    });
+
+    it("keeps the previous role visible when the update is refused", async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.put("/api/admin/users/:id/role", () => {
+          return HttpResponse.json({ detail: "owner role required" }, { status: 403 });
+        }),
+      );
+
+      renderWithProviders(<Settings />);
+
+      const select = (await screen.findByLabelText("Role for dana@test.com")) as HTMLSelectElement;
+      await user.selectOptions(select, "admin");
+
+      // The list is not invalidated on failure, so the row still reads member.
+      await waitFor(() => {
+        const refreshed = screen.getByLabelText("Role for dana@test.com") as HTMLSelectElement;
+        expect(refreshed.value).toBe("member");
+      });
+    });
+
+    it("hides the Team section from non-owners", async () => {
+      server.use(
+        http.get("/api/auth/me", () => {
+          return HttpResponse.json({
+            id: "user-002",
+            email: "dana@test.com",
+            name: "Dana Dev",
+            role: "member",
+          });
+        }),
+      );
+
+      renderWithProviders(<Settings />);
+
+      // Wait for a section that always renders, then assert Team is absent.
+      expect(await screen.findByText("Workspace name")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByText("Manage team members and credentials")).not.toBeInTheDocument();
+      });
+      expect(screen.queryByLabelText("Role for dana@test.com")).not.toBeInTheDocument();
+    });
+  });
 });

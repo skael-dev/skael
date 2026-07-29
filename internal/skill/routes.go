@@ -58,16 +58,15 @@ func validRegisterName(name string) bool {
 }
 
 // publishOverrideAllowed reports whether the caller may publish a version whose
-// scan came back blocking. Only an authenticated admin can, and only when they
-// asked for it explicitly. Without this escape hatch a skill that trips a
-// heuristic is unpublishable by any route, which is worse than a recorded,
-// deliberate override.
+// scan came back blocking. Only an authenticated privileged user can, and only
+// when they asked for it explicitly. Without this escape hatch a skill that
+// trips a heuristic is unpublishable by any route, which is worse than a
+// recorded, deliberate override.
 func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 	if !requested {
 		return false
 	}
-	user := auth.UserFromContext(ctx)
-	return user != nil && user.Role == "admin"
+	return auth.UserFromContext(ctx).IsPrivileged()
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -265,7 +264,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	// -----------------------------------------------------------------
 	type publishInput struct {
 		Name     string `path:"name"`
-		Override bool   `query:"override" doc:"Publish despite blocking scan findings. Admin only; recorded server-side."`
+		Override bool   `query:"override" doc:"Publish despite blocking scan findings. Owner or admin only; recorded server-side."`
 		RawBody  []byte `contentType:"application/gzip,application/octet-stream"`
 	}
 	type publishBody struct {
@@ -323,10 +322,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			log.Warn().
 				Str("skill", input.Name).
 				Str("user", user.Email).
+				Str("role", user.Role).
 				Str("scan_status", report.Status).
 				Int("critical", report.Summary.Critical).
 				Int("high", report.Summary.High).
-				Msg("publish override: admin published a skill with blocking scan findings")
+				Msg("publish override: privileged user published a skill with blocking scan findings")
 		}
 
 		// 4. Compute checksum and compare against latest version.
