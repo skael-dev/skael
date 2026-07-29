@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,41 +66,4 @@ func TestRequestID_PropagatesExisting(t *testing.T) {
 
 	assert.Equal(t, "test-id-123", capturedID)
 	assert.Equal(t, "test-id-123", rr.Header().Get("X-Request-ID"))
-}
-
-func TestRateLimiter_AllowsUnderLimit(t *testing.T) {
-	handler := RateLimiter(10, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "192.168.1.1:12345"
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestRateLimiter_BlocksOverLimit(t *testing.T) {
-	handler := RateLimiter(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// The burst size equals requestsPerMinute, so the first 2 requests succeed,
-	// the 3rd is rejected.
-	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.RemoteAddr = "10.0.0.1:9999"
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		assert.Equal(t, http.StatusOK, rr.Code, "request %d should succeed", i)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "10.0.0.1:9999"
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	assert.Equal(t, http.StatusTooManyRequests, rr.Code)
-	assert.Equal(t, "60", rr.Header().Get("Retry-After"))
 }

@@ -34,9 +34,13 @@ type Config struct {
 	DBMaxConnIdleTime   time.Duration
 	DBHealthCheckPeriod time.Duration
 
-	CORSOrigins   string
-	LogLevel      string
-	RateLimitAuth int
+	CORSOrigins string
+	LogLevel    string
+
+	RateLimitAuth   int
+	RateLimitEvents int
+	RateLimitRead   int
+	RateLimitWrite  int
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -66,6 +70,9 @@ func LoadConfig() (*Config, error) {
 		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
 		LogLevel:            envDefault("LOG_LEVEL", "info"),
 		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
+		RateLimitEvents:     envInt("RATE_LIMIT_EVENTS", 600),
+		RateLimitRead:       envInt("RATE_LIMIT_READ", 300),
+		RateLimitWrite:      envInt("RATE_LIMIT_WRITE", 60),
 	}, nil
 }
 

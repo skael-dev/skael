@@ -109,11 +109,12 @@ func (b *Builder) Build() (*Server, error) {
 	router.Use(middleware.RealIP)
 	router.Use(platform.RequestLogger)
 
-	authRateLimit := cfg.RateLimitAuth
-	if authRateLimit <= 0 {
-		authRateLimit = 20
-	}
-	router.Use(platform.RateLimiter(authRateLimit, time.Minute))
+	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{
+		Auth:   cfg.RateLimitAuth,
+		Events: cfg.RateLimitEvents,
+		Read:   cfg.RateLimitRead,
+		Write:  cfg.RateLimitWrite,
+	}))
 
 	metricsEnabled := os.Getenv("METRICS_ENABLED") != "false"
 	if metricsEnabled {
