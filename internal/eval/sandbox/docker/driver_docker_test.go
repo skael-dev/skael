@@ -5,6 +5,7 @@ package docker_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,57 +142,111 @@ func TestRun_TimesOutAndLeavesNoContainer(t *testing.T) {
 	}
 }
 
-// TestRun_DockersOwnFailuresAreErrorsNotResults pins the fix for exit codes
-// 125/126/127 (docker CLI/daemon errors, and "not executable"/"not found" in
-// the image) being folded into RunResult.ExitCode as if the container itself
-// had produced them. Before the fix, a missing image or an unreadable
-// verifier script came back indistinguishable from a verifier that legitimately
-// exited 125-127 — which does not happen in practice, but the failure mode
-// this guards is a driver failure being scored as "the verifier failed",
-// permanently (suite.Check marks the task Void; the runner writes
-// StatusFailed) rather than retried.
-func TestRun_DockersOwnFailuresAreErrorsNotResults(t *testing.T) {
+// TestRun_ParentCancellationIsAnErrorNotAFabricatedResult exercises the
+// branch at run.go's "case ctx.Err() != nil" directly: a parent context
+// cancelled out from under a run — not the run's own Timeout elapsing, which
+// TestRun_TimesOutAndLeavesNoContainer already covers — used to leave
+// "docker start -a"'s exec.ExitError (typically "signal: killed",
+// ExitCode() == -1) to fall through into a fabricated RunResult{ExitCode:
+// -1}, nil: a legitimate-looking measurement for a session that was never
+// actually observed. Cancelling ctx here (rather than letting rs.Timeout
+// fire) is what distinguishes this from the TimedOut path.
+func TestRun_ParentCancellationIsAnErrorNotAFabricatedResult(t *testing.T) {
+	d := driver(t)
+	ref := prepare(t, d)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+
+	var out bytes.Buffer
+	res, err := d.Run(ctx, sandbox.RunSpec{
+		Image: ref, Workspace: t.TempDir(), Network: sandbox.NetNone, Timeout: time.Minute,
+		Argv: []string{"sleep", "30"}, Stdout: &out, Stderr: &out,
+	})
+	if err == nil {
+		t.Fatalf("Run cancelled by its parent context returned no error; res = %+v", res)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if !res.Cancelled {
+		t.Error("RunResult.Cancelled = false for a parent-cancelled run")
+	}
+	if res.TimedOut {
+		t.Error("RunResult.TimedOut = true for a parent cancellation, not the run's own Timeout elapsing")
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want the zero value — a cancelled run has no real measurement to report", res.ExitCode)
+	}
+}
+
+// TestRun_MissingImageIsAnErrorAtCreateNotAFakedExitCode pins the create-side
+// half of the create/start/wait split: "docker create" cannot run the
+// image's own command at all, so its own failure — a missing image, an
+// invalid flag, an unreadable bind-mount source — is unambiguously the
+// docker client's or daemon's own condition, never something that could be
+// confused for a container's exit code.
+func TestRun_MissingImageIsAnErrorAtCreateNotAFakedExitCode(t *testing.T) {
+	d := driver(t)
+	ws := t.TempDir()
+
+	var out bytes.Buffer
+	res, err := d.Run(context.Background(), sandbox.RunSpec{
+		Image:     sandbox.ImageRef{Tag: "whetstone-does-not-exist:none"},
+		Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
+		Argv: []string{"true"}, Stdout: &out, Stderr: &out,
+	})
+	if err == nil {
+		t.Fatalf("Run against a missing image returned no error; res = %+v\n%s", res, out.String())
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("RunResult.ExitCode = %d on a create failure, want the zero value — there is no container to have an exit code", res.ExitCode)
+	}
+}
+
+// TestRun_ANonExecutableCommandIsALegitimateResultNotAHardError is the case
+// the create/start/wait split exists for. Before the split, this looked
+// identical — same exit code, same "docker run" process exit — to a genuine
+// docker CLI/daemon failure, and the conservative fallback that preceded the
+// split treated exit 126 as always meaning the latter: a plausible
+// model-authored oracle or verifier whose last command happens to not be
+// executable would have hard-aborted suite.Check and perpetually retried in
+// the runner, rather than being scored as "the oracle failed" the way a
+// broken reference solution should be. "docker wait" reports this as the
+// container's own exit status — the daemon itself classifies a failed exec
+// as the container exiting 126, not as a create/start command failure — so
+// it now comes back as a result: no error, ExitCode 126.
+func TestRun_ANonExecutableCommandIsALegitimateResultNotAHardError(t *testing.T) {
 	d := driver(t)
 	ref := prepare(t, d)
 	ws := t.TempDir()
 
-	t.Run("missing image", func(t *testing.T) {
-		var out bytes.Buffer
-		res, err := d.Run(context.Background(), sandbox.RunSpec{
-			Image:     sandbox.ImageRef{Tag: "whetstone-does-not-exist:none"},
-			Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
-			Argv: []string{"true"}, Stdout: &out, Stderr: &out,
-		})
-		if err == nil {
-			t.Fatalf("Run against a missing image returned no error; res = %+v\n%s", res, out.String())
-		}
-		if res.ExitCode == 125 || res.ExitCode == 126 || res.ExitCode == 127 {
-			t.Errorf("docker's own exit code %d leaked into RunResult.ExitCode instead of staying in the error", res.ExitCode)
-		}
+	// /etc/hostname exists in the image and is a regular file with no
+	// executable bit — running it directly is exactly the shape of failure
+	// docker reports as exit 126.
+	var out bytes.Buffer
+	res, err := d.Run(context.Background(), sandbox.RunSpec{
+		Image: ref, Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
+		Argv: []string{"/etc/hostname"}, Stdout: &out, Stderr: &out,
 	})
-
-	t.Run("command not executable", func(t *testing.T) {
-		// /etc/hostname exists in the image and is a regular file with no
-		// executable bit — running it directly is exactly the shape of error
-		// docker run reports as exit 126, not something a verifier script
-		// would ever legitimately produce.
-		var out bytes.Buffer
-		res, err := d.Run(context.Background(), sandbox.RunSpec{
-			Image: ref, Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
-			Argv: []string{"/etc/hostname"}, Stdout: &out, Stderr: &out,
-		})
-		if err == nil {
-			t.Fatalf("Run of a non-executable command returned no error; res = %+v\n%s", res, out.String())
-		}
-		if res.ExitCode == 125 || res.ExitCode == 126 || res.ExitCode == 127 {
-			t.Errorf("docker's own exit code %d leaked into RunResult.ExitCode instead of staying in the error", res.ExitCode)
-		}
-	})
+	if err != nil {
+		t.Fatalf("Run of a non-executable command returned an error instead of a result: %v\n%s", err, out.String())
+	}
+	if res.ExitCode != 126 {
+		t.Errorf("ExitCode = %d, want 126 (docker's own convention for a failed exec, reported as the container's exit status)", res.ExitCode)
+	}
 }
 
+// containerCount is scoped to this test binary's own containers via
+// docker.OwnerLabel(), not a "whetstone-run-" name prefix: CI runs the
+// docker-tagged test suite without -p 1, so this package's tests and
+// suite's docker-tagged tests create containers concurrently against the
+// same daemon, and a name-prefix filter would count (and, before Sweep
+// learned to filter the same way, could have removed) the other package's
+// containers too.
 func containerCount(t *testing.T) int {
 	t.Helper()
-	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=whetstone-run-", "-q").Output()
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "label="+docker.OwnerLabel(), "-q").Output()
 	if err != nil {
 		t.Fatalf("docker ps: %v", err)
 	}
