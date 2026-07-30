@@ -57,13 +57,10 @@ var guardrailWord = regexp.MustCompile(`\b(MUST NOT|MUST|NEVER|ALWAYS)\b`)
 // maxBodyLines is the line budget for a skill body.
 const maxBodyLines = 500
 
-// maxBodyApproxTokens is the token budget for a skill body. The design target
-// is roughly 5000 tokens, but ApproxTokens (bytes/4) is a coarse estimate
-// that undercounts short, densely-punctuated instruction lines relative to
-// natural prose; the enforced budget is set below the nominal target so the
-// check remains reachable for genuinely over-long bodies rather than only
-// ones padded with long words.
-const maxBodyApproxTokens = 3000
+// maxBodyApproxTokens is the token budget for a skill body: roughly 5000
+// tokens, measured against ApproxTokens' bytes/4 approximation rather than an
+// exact tokenizer.
+const maxBodyApproxTokens = 5000
 
 // maxMetadataApproxTokens is the token budget for frontmatter.
 const maxMetadataApproxTokens = 100
