@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -276,5 +277,34 @@ func TestMatchPath_LiteralBracketInPathSegment(t *testing.T) {
 	}
 	if matched {
 		t.Error(`MatchPath("out/a.b[1]/x.csv", "out/a.b[1]/x.csv") = true, want false (documented filepath.Match-inherited limitation: "[1]" is a character class, not a literal bracket)`)
+	}
+}
+
+// TestMatchPath_ErrorsAreClassifiedByCause is the caller-classifiability
+// contract: a malformed pattern is a compiler defect a caller must stop on,
+// while a rejected candidate is a recording defect a caller should count as
+// unevaluable and keep scoring past. errors.Is must distinguish the two so a
+// caller doesn't have to parse messages to tell them apart.
+func TestMatchPath_ErrorsAreClassifiedByCause(t *testing.T) {
+	_, patternErr := contract.MatchPath("a/**/b", "x")
+	if patternErr == nil {
+		t.Fatal("want an error for a malformed pattern")
+	}
+	if !errors.Is(patternErr, contract.ErrBadPattern) {
+		t.Errorf("malformed pattern error %v does not wrap ErrBadPattern", patternErr)
+	}
+	if errors.Is(patternErr, contract.ErrBadCandidate) {
+		t.Errorf("malformed pattern error %v wrongly wraps ErrBadCandidate", patternErr)
+	}
+
+	_, candidateErr := contract.MatchPath("out/**", "/etc/passwd")
+	if candidateErr == nil {
+		t.Fatal("want an error for an absolute candidate")
+	}
+	if !errors.Is(candidateErr, contract.ErrBadCandidate) {
+		t.Errorf("rejected candidate error %v does not wrap ErrBadCandidate", candidateErr)
+	}
+	if errors.Is(candidateErr, contract.ErrBadPattern) {
+		t.Errorf("rejected candidate error %v wrongly wraps ErrBadPattern", candidateErr)
 	}
 }
