@@ -92,6 +92,35 @@ func TestParse_TimestampsCarryForward(t *testing.T) {
 	}
 }
 
+func TestParse_NoTimestampAnywhereStaysZeroNotFabricated(t *testing.T) {
+	// A session that dies before its first assistant/user turn — an auth
+	// failure inside the sandbox, an early crash, a stream truncated at the
+	// first line — carries no timestamp anywhere. The parser must not invent
+	// a wall-clock value to paper over that: a fabricated timestamp (e.g.
+	// time.Now()) would make Parse non-deterministic across runs on the same
+	// recorded stream, which breaks the reproducibility scores depend on. The
+	// zero time.Time is the honest, detectable signal that no time
+	// information exists — assert that directly, not merely that Parse
+	// doesn't panic.
+	r := stringReader(
+		`{"type":"system","subtype":"init","session_id":"x"}` + "\n" +
+			`{"type":"rate_limit_event"}` + "\n" +
+			`{"type":"some_future_event","session_id":"x"}` + "\n")
+
+	res, err := claudecode.New().Parse(r)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Events) != 3 {
+		t.Fatalf("want 3 events, got %d: %v", len(res.Events), typesOf(res.Events))
+	}
+	for i, e := range res.Events {
+		if !e.TS.IsZero() {
+			t.Errorf("event %d TS = %v, want the zero time — no timestamp exists anywhere in this stream, so any non-zero value would be fabricated", i, e.TS)
+		}
+	}
+}
+
 func TestParse_SkillInvocationBecomesSkillRead(t *testing.T) {
 	res := parseFixture(t, "skill-invocation.jsonl")
 

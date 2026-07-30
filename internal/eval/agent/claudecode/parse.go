@@ -76,6 +76,19 @@ type toolInput struct {
 // whole session resident does not scale. The only buffering is a small
 // pending queue (below) for the handful of bookkeeping lines that precede the
 // first timestamped line.
+//
+// Timestamp guarantee: no event carries a zero time.Time when the stream
+// contains at least one timestamped line — every event before the first
+// timestamp is backfilled with it, and every event after carries forward the
+// most recently seen one. If the stream contains no timestamp at all (a
+// session that failed before its first assistant/user turn — an auth
+// failure, an early crash, a stream truncated at line one — is a realistic
+// way to produce exactly this), events are returned with the zero time.Time
+// rather than a fabricated one. A fabricated timestamp (e.g. time.Now())
+// would make Parse non-deterministic across runs on the same recorded
+// stream, which this project's reproducibility depends on not happening;
+// the zero value is honest and callers can detect it with TS.IsZero() to
+// mean "no time information", distinct from any real recorded moment.
 func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
@@ -201,7 +214,9 @@ func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 	}
 
 	// If the stream ended without ever carrying a timestamp, there is nothing
-	// to backfill pending with; flush it as-is rather than dropping events.
+	// truthful to backfill pending with. Flush it as-is — the events keep the
+	// zero time.Time (see the timestamp guarantee above) rather than being
+	// dropped or stamped with an invented value.
 	res.Events = append(res.Events, pending...)
 
 	return res, nil
