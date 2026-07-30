@@ -13,7 +13,14 @@ import (
 // directories a generated skill may ship (scripts/, assets/, references/).
 // An action naming one of these is assumed to run it, so it compiles to a
 // shell matcher.
-var bundlePathPattern = regexp.MustCompile(`(scripts|assets|references)/[\w.\-/]+`)
+//
+// The match must end on a path character (a word character or a dash), not on
+// a "." or a "/". An action is ordinary English — "Read references/style-guide.md."
+// — and a greedy class containing "." would otherwise swallow the sentence's
+// final period, which QuoteMeta then escapes into a pattern requiring a literal
+// trailing dot in the observed command. No trajectory can satisfy that, and an
+// inert matcher scores every run as a step failure.
+var bundlePathPattern = regexp.MustCompile(`(scripts|assets|references)/[\w.\-/]*[\w\-]`)
 
 // pathTokenPattern recognizes a bare path-like token — at least one
 // "/"-or-"." separated segment following a leading word — so a write/read
@@ -23,6 +30,15 @@ var pathTokenPattern = regexp.MustCompile(`[\w][\w\-]*(?:[./][\w\-]+)+`)
 // pathScopePattern recognizes a MUST-NOT constraint that scopes writes to (or
 // out of) a named path, e.g. "outside out/", "only in tmp/", "within out/".
 var pathScopePattern = regexp.MustCompile(`(?i)\b(?:outside|only in|within)\s+([\w./\-]+)`)
+
+// networkCommandPattern matches an invocation of a common network tool. Each
+// name must start a command word and end on a word boundary: unanchored, "nc"
+// is a substring of "encode", "sync", "announce", "increment" and "concat", so
+// a bare alternation turns routine commands into violations — and a "no
+// network" constraint is typically authored at critical severity, the heaviest
+// penalty there is. The leading class is the set of characters that can precede
+// a command: whitespace, a shell operator, or an opening quote.
+const networkCommandPattern = "(?:^|[\\s;|&(<>'\"`])(?:curl|wget|nc)\\b"
 
 var writeKeywords = []string{"write", "save", "output to", "create"}
 
@@ -166,7 +182,7 @@ func classifyForbid(text string) (Matcher, bool) {
 
 	lower := strings.ToLower(text)
 	if containsAny(lower, networkKeywords) {
-		return Matcher{Type: trajectory.TypeShell, Pattern: `curl|wget|nc`}, true
+		return Matcher{Type: trajectory.TypeShell, Pattern: networkCommandPattern}, true
 	}
 
 	return Matcher{}, false

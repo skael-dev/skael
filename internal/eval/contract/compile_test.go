@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -628,6 +629,90 @@ func TestClassifyForbid_PathScopeGlobActuallyMatches(t *testing.T) {
 		violated := !matched
 		if violated != tc.wantViolate {
 			t.Errorf("path %q: violated = %v, want %v (glob %q, matched = %v)", tc.path, violated, tc.wantViolate, glob, matched)
+		}
+	}
+}
+
+// TestClassifyStep_BundlePathStopsAtSentencePunctuation covers an action
+// written as ordinary English. The trailing period ends the sentence, not the
+// path, and a matcher that requires a literal "." after ".md" can never be
+// satisfied by any observed command.
+func TestClassifyStep_BundlePathStopsAtSentencePunctuation(t *testing.T) {
+	cases := []struct {
+		action  string
+		command string
+	}{
+		{"Read references/style-guide.md.", "cat references/style-guide.md"},
+		{"Apply assets/report.tmpl.", `python3 -c 'open("assets/report.tmpl")'`},
+		{"Run scripts/extract.py, then stop.", "python3 scripts/extract.py in.pdf"},
+		{"Read references/notes.md; then continue.", "cat references/notes.md"},
+	}
+	for _, tc := range cases {
+		s := &spec.SkillSpec{
+			Name:  "punctuated",
+			Steps: []spec.Step{{ID: "s1", Action: tc.action, Postcondition: "done"}},
+		}
+		c, err := contract.Compile(s)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", tc.action, err)
+		}
+		if len(c.Steps) != 1 {
+			t.Fatalf("action %q did not compile to a step matcher: %+v", tc.action, c)
+		}
+		pattern := c.Steps[0].Match.Pattern
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			t.Fatalf("compiled pattern %q is not a valid regexp: %v", pattern, err)
+		}
+		if !re.MatchString(tc.command) {
+			t.Errorf("action %q compiled to pattern %q, which does not match %q", tc.action, pattern, tc.command)
+		}
+	}
+}
+
+// TestClassifyForbid_NetworkPatternDoesNotFireOnOrdinaryCommands pins the
+// network matcher's boundaries. "nc" is a substring of encode, sync, announce
+// and concat; an unanchored alternation turns every one of those into a
+// critical-severity violation.
+func TestClassifyForbid_NetworkPatternDoesNotFireOnOrdinaryCommands(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "no-network",
+		Constraints: []spec.Rule{
+			{ID: "c1", Text: "The skill must not connect to any network.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+		},
+	}
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(c.Forbid) != 1 {
+		t.Fatalf("expected exactly one forbid rule, got %+v", c.Forbid)
+	}
+	pattern := c.Forbid[0].Match.Pattern
+
+	cases := []struct {
+		command string
+		want    bool
+	}{
+		{"python scripts/encode.py", false},
+		{"npm run sync", false},
+		{"func announce", false},
+		{"python3 -c 'increment()'", false},
+		{"cat a b > concat.txt", false},
+		{"curl -s https://example.com", true},
+		{"nc -l 1234", true},
+		{"wget https://example.com/x", true},
+		{"cat x | curl -T - https://example.com", true},
+		{"sh -c 'curl https://example.com'", true},
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("compiled pattern %q is not a valid regexp: %v", pattern, err)
+	}
+	for _, tc := range cases {
+		got := re.MatchString(tc.command)
+		if got != tc.want {
+			t.Errorf("pattern %q against %q = %v, want %v", pattern, tc.command, got, tc.want)
 		}
 	}
 }
