@@ -70,7 +70,10 @@ type JudgeOptions struct {
 	Spec    *spec.SkillSpec
 	// BorderlineMargin defaults to DefaultBorderlineMargin when zero.
 	BorderlineMargin float64
-	// MaxVotes defaults to 3 when zero; the protocol never exceeds it.
+	// MaxVotes caps how many pairwise calls a single Pairwise verdict may spend.
+	// Defaults to 3 when zero. The protocol only ever wants a third call when
+	// the first two are agreeing but borderline; setting MaxVotes to 2
+	// disables that third call entirely, capping every verdict at the swap.
 	MaxVotes int
 }
 
@@ -131,7 +134,9 @@ type semanticResponse struct {
 // A response that already names a side directly ("skill"/"baseline") rather
 // than a position ("A"/"B") is passed through unchanged rather than treated
 // as unrecognized — it is an absolute answer, not a position-relative one, so
-// there is nothing to resolve.
+// there is nothing to resolve. Anything else — including a genuinely
+// unrecognized answer — falls back to "tie" rather than being trusted as a
+// fabricated winner.
 func resolveWinner(letter string, aWas Sample) string {
 	other := "baseline"
 	if aWas.Label == "baseline" {
@@ -142,10 +147,10 @@ func resolveWinner(letter string, aWas Sample) string {
 		return aWas.Label
 	case "b":
 		return other
-	case "tie", "":
-		return "tie"
-	default:
+	case "skill", "baseline":
 		return strings.ToLower(letter)
+	default:
+		return "tie"
 	}
 }
 
@@ -239,7 +244,7 @@ func (j *Judge) Pairwise(ctx context.Context, p Pair) (Verdict, error) {
 	winner := w1
 	votes := 2
 
-	if math.Abs(meanMargin) < j.borderlineMargin {
+	if math.Abs(meanMargin) < j.borderlineMargin && j.maxVotes >= 3 {
 		r3, err := j.callPairwise(ctx, p, p.Skill, p.Baseline)
 		if err != nil {
 			return Verdict{}, err

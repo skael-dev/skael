@@ -165,6 +165,94 @@ func TestPairwise_RetriesOnceOnAnUnparseableResponse(t *testing.T) {
 	}
 }
 
+func TestPairwise_ResolvesRealLetterAnswersThroughTheSwapAndTheTie(t *testing.T) {
+	// Every other Pairwise test drives the gateway with literal "skill"/
+	// "baseline" labels, which never exercises the "A"/"B" resolution branches
+	// a real model response takes. This one answers the way the rubric prompt
+	// actually asks: "A" or "B", tied to *position*, so it must resolve
+	// differently across the swap. Call 1 has skill=A, baseline=B; call 2 (the
+	// swap) has baseline=A, skill=B. Answering "A" both times means "whatever
+	// is first" both times — i.e. skill, then baseline: a disagreement, and
+	// therefore a tie.
+	// Evidence differs per call since "A" refers to a different transcript
+	// each time; supply the quote that matches whichever candidate is A.
+	g := &scriptedGateway{answer: func(_ int, prompt string) string {
+		quote := "ran scripts/convert.py and validated the output"
+		if strings.Index(prompt, "wrote a table by hand") < strings.Index(prompt, "ran scripts/convert.py") {
+			quote = "wrote a table by hand with no validation"
+		}
+		return verdictJSON("A", 0.6, quote)
+	}}
+
+	v, err := judge(t, g).Pairwise(context.Background(), demoPair())
+	if err != nil {
+		t.Fatalf("Pairwise: %v", err)
+	}
+	if v.Winner != "tie" || !v.Tie || !v.Swapped {
+		t.Errorf("verdict = %+v, want a tie from the swap: \"A\" resolves to skill in call 1 and baseline in call 2", v)
+	}
+
+	// Now answer "B" consistently: call 1 (skill=A, baseline=B) resolves to
+	// baseline; call 2 (baseline=A, skill=B) resolves to skill. Also a
+	// disagreement — the letter, not the label, is what must be tracked.
+	g2 := &scriptedGateway{answer: func(_ int, prompt string) string {
+		quote := "wrote a table by hand with no validation"
+		if strings.Index(prompt, "wrote a table by hand") < strings.Index(prompt, "ran scripts/convert.py") {
+			quote = "ran scripts/convert.py and validated the output"
+		}
+		return verdictJSON("B", 0.6, quote)
+	}}
+	v2, err := judge(t, g2).Pairwise(context.Background(), demoPair())
+	if err != nil {
+		t.Fatalf("Pairwise: %v", err)
+	}
+	if v2.Winner != "tie" || !v2.Tie || !v2.Swapped {
+		t.Errorf("verdict = %+v, want a tie: \"B\" also resolves to a different side each call", v2)
+	}
+
+	// Finally, "A" in call 1 (-> skill) and "B" in call 2 (-> skill) agree:
+	// both calls genuinely pick skill once the letters are resolved against
+	// their own ordering, so this must be a clean win, not a tie.
+	g3 := &scriptedGateway{answer: func(n int, _ string) string {
+		if n == 1 {
+			return verdictJSON("A", 0.6, "ran scripts/convert.py and validated the output")
+		}
+		return verdictJSON("B", 0.6, "ran scripts/convert.py and validated the output")
+	}}
+	v3, err := judge(t, g3).Pairwise(context.Background(), demoPair())
+	if err != nil {
+		t.Fatalf("Pairwise: %v", err)
+	}
+	if v3.Winner != "skill" || v3.Tie {
+		t.Errorf("verdict = %+v, want a skill win: A->skill and B->skill agree once resolved", v3)
+	}
+}
+
+func TestJudgeOptions_MaxVotesCapsTheThirdVote(t *testing.T) {
+	g := &scriptedGateway{answer: func(int, string) string {
+		// A borderline margin that would normally buy a third call.
+		return verdictJSON("skill", 0.05, "ran scripts/convert.py and validated the output")
+	}}
+	j, err := score.NewJudge(score.JudgeOptions{
+		Gateway:  g,
+		Spec:     &spec.SkillSpec{Name: "demo", Purpose: "convert csv to markdown"},
+		MaxVotes: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewJudge: %v", err)
+	}
+	v, err := j.Pairwise(context.Background(), demoPair())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.calls.Load() != 2 {
+		t.Errorf("%d calls, want 2: MaxVotes:2 must disable the borderline third call", g.calls.Load())
+	}
+	if v.Votes != 2 {
+		t.Errorf("Votes = %d, want 2", v.Votes)
+	}
+}
+
 func TestSemantic_ScoresARuleAndCitesIt(t *testing.T) {
 	g := &scriptedGateway{answer: func(int, string) string {
 		return `{"satisfied":true,"confidence":1,"evidence":["wrote a table by hand with no validation"]}`
@@ -180,6 +268,36 @@ func TestSemantic_ScoresARuleAndCitesIt(t *testing.T) {
 	}
 	if len(quotes) == 0 {
 		t.Error("a semantic verdict with no quote is unreviewable")
+	}
+}
+
+func TestSemantic_ScoresZeroWhenSatisfiedButUncited(t *testing.T) {
+	g := &scriptedGateway{answer: func(int, string) string {
+		// "satisfied" with no evidence at all.
+		return `{"satisfied":true,"confidence":1,"evidence":[]}`
+	}}
+	got, _, err := judge(t, g).Semantic(context.Background(),
+		contract.SemanticRule{ID: "r1", Text: "the report's tone stays formal"},
+		score.Sample{Label: "skill", Transcript: "wrote a table by hand with no validation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Errorf("score = %v, want 0: an unsupported \"yes\" is not evidence of adherence", got)
+	}
+
+	g2 := &scriptedGateway{answer: func(int, string) string {
+		// "satisfied" with a quote that is not in the transcript.
+		return `{"satisfied":true,"confidence":1,"evidence":["a sentence that never appears anywhere"]}`
+	}}
+	got2, _, err := judge(t, g2).Semantic(context.Background(),
+		contract.SemanticRule{ID: "r1", Text: "the report's tone stays formal"},
+		score.Sample{Label: "skill", Transcript: "wrote a table by hand with no validation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != 0 {
+		t.Errorf("score = %v, want 0: a fabricated quote cannot support a satisfied verdict", got2)
 	}
 }
 
