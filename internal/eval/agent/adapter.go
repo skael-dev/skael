@@ -17,6 +17,11 @@ import (
 // sandbox rather than with the parsers.
 var ErrInvokeNotImplemented = errors.New("agent: Invoke not implemented")
 
+// ErrInstallNotImplemented is returned by adapters whose skill installation
+// path is not built yet. Installing a skill requires knowledge of the agent's
+// filesystem layout, which is why it is distinct from ErrInvokeNotImplemented.
+var ErrInstallNotImplemented = errors.New("agent: InstallSkill not implemented")
+
 // RawStream is an agent's native output, verbatim.
 type RawStream = io.Reader
 

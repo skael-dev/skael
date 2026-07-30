@@ -38,7 +38,7 @@ func (a *Adapter) Caps() agent.Caps {
 }
 
 // InstallSkill is not implemented without a verified layout.
-func (a *Adapter) InstallSkill(string, string) error { return agent.ErrInvokeNotImplemented }
+func (a *Adapter) InstallSkill(string, string) error { return agent.ErrInstallNotImplemented }
 
 // Invoke is not implemented.
 func (a *Adapter) Invoke(context.Context, agent.InvokeSpec) (agent.RawStream, error) {

@@ -45,7 +45,7 @@ func TestRegistry_UnimplementedAdaptersFailClosed(t *testing.T) {
 	// An unimplemented adapter must return a sentinel, never an empty result.
 	// A stub Parse returning (&Result{}, nil) reads downstream as a session in
 	// which the agent did nothing — a zero score for a working skill.
-	for _, name := range []string{"codex", "opencode"} {
+	for _, name := range []string{"codex", "opencode", "cursor"} {
 		a, ok := agent.Get(name)
 		if !ok {
 			t.Fatalf("adapter %q not registered", name)
@@ -56,11 +56,31 @@ func TestRegistry_UnimplementedAdaptersFailClosed(t *testing.T) {
 		if _, err := a.Invoke(context.TODO(), agent.InvokeSpec{}); err != agent.ErrInvokeNotImplemented {
 			t.Errorf("%s: Invoke err = %v, want ErrInvokeNotImplemented", name, err)
 		}
+		if err := a.InstallSkill("", ""); err != agent.ErrInstallNotImplemented {
+			t.Errorf("%s: InstallSkill err = %v, want ErrInstallNotImplemented", name, err)
+		}
 	}
 }
 
 func TestRegistry_GetUnknownIsNotFound(t *testing.T) {
 	if _, ok := agent.Get("nope"); ok {
 		t.Error("Get returned ok for an unregistered adapter")
+	}
+}
+
+func TestRegistry_UnparsableAdaptersCannotClaimSkillInvocation(t *testing.T) {
+	// An adapter that cannot parse a stream cannot possibly detect a skill invocation
+	// in that stream. Claiming SupportsSkillInvocation: true for an adapter
+	// returning ErrParseNotImplemented would silently zero the trigger-measurement
+	// metric, which is the highest-weighted scoring pillar.
+	for _, name := range []string{"codex", "opencode", "cursor"} {
+		a, ok := agent.Get(name)
+		if !ok {
+			t.Fatalf("adapter %q not registered", name)
+		}
+		_, err := a.Parse(nil)
+		if err == agent.ErrParseNotImplemented && a.Caps().SupportsSkillInvocation {
+			t.Errorf("%s: cannot parse (ErrParseNotImplemented) but claims SupportsSkillInvocation=true", a.Name())
+		}
 	}
 }
