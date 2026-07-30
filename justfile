@@ -22,7 +22,7 @@ build-cli:
 
 # Build the whetstone eval CLI
 build-whetstone:
-    go build -o bin/whetstone ./cmd/whetstone
+    CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone
 
 # --- Web / Frontend ---
 
