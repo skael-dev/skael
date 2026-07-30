@@ -22,33 +22,45 @@ const (
 // and a workspace that carries it is not measuring the skill, it is handing
 // the agent the answer. The verifier is mounted separately, after the
 // session ends, so the agent cannot read it either.
-func stageRunWorkspace(taskDir string) (string, error) {
+func stageRunWorkspace(taskDir string) (_ string, err error) {
+	// ws is deliberately a plain local, not the named return: an error return
+	// below sets the named result to "", and a defer reading that instead of
+	// this variable would call os.RemoveAll("") — a no-op — rather than
+	// cleaning up the directory MkdirTemp actually created.
 	ws, err := os.MkdirTemp("", "skael-run-*")
 	if err != nil {
 		return "", fmt.Errorf("runner: creating workspace: %w", err)
 	}
+	// Every return below this point leaves a workspace on disk unless it is
+	// explicitly cleaned up; a caller only gets ws back on the final success
+	// path, so any error return here must remove what MkdirTemp created.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(ws)
+		}
+	}()
 
 	promptPath := filepath.Join(taskDir, "task.md")
-	b, err := os.ReadFile(promptPath)
+	b, rErr := os.ReadFile(promptPath)
 	switch {
-	case err == nil:
+	case rErr == nil:
 		if err := os.WriteFile(filepath.Join(ws, "task.md"), b, wsFileMode); err != nil {
 			return "", fmt.Errorf("runner: staging task.md: %w", err)
 		}
-	case os.IsNotExist(err):
+	case os.IsNotExist(rErr):
 		// No task.md is a caller error surfaced elsewhere (a missing task),
 		// not a reason to fail staging itself.
 	default:
-		return "", fmt.Errorf("runner: reading task.md: %w", err)
+		return "", fmt.Errorf("runner: reading task.md: %w", rErr)
 	}
 
 	envDir := filepath.Join(taskDir, "environment")
-	if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+	if info, sErr := os.Stat(envDir); sErr == nil && info.IsDir() {
 		if err := copyTree(envDir, filepath.Join(ws, "environment")); err != nil {
 			return "", fmt.Errorf("runner: staging environment: %w", err)
 		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("runner: staging environment: %w", err)
+	} else if sErr != nil && !os.IsNotExist(sErr) {
+		return "", fmt.Errorf("runner: staging environment: %w", sErr)
 	}
 
 	return ws, nil
