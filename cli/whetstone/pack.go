@@ -11,18 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/ui"
 )
-
-// evalDirName is the sidecar directory pack removes. It matches
-// store.EvalDir's last element: everything eval-only lives under it precisely
-// so that stripping it is one rule rather than a list of filenames that drifts.
-const evalDirName = "eval"
-
-// specFileName is the authored spec. It sits beside the bundle rather than
-// inside the sidecar, so it needs its own exclusion: an installer has no use
-// for it and it describes the skill's internals.
-const specFileName = "spec.yaml"
 
 // archiveMode is the permission the finished archive carries.
 const archiveMode = os.FileMode(0o644)
@@ -137,8 +128,8 @@ func RunPack(bundleDir, outPath string) error {
 	return nil
 }
 
-// writeBundleEntries walks bundleDir and writes every regular file that is not
-// part of the eval sidecar, and not one of the absolute paths in skip, into tw.
+// writeBundleEntries walks bundleDir and writes every regular file that ships
+// (see lint.Excluded), and is not one of the absolute paths in skip, into tw.
 func writeBundleEntries(tw *tar.Writer, bundleDir string, skip map[string]bool) error {
 	return filepath.Walk(bundleDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -154,8 +145,11 @@ func writeBundleEntries(tw *tar.Writer, bundleDir string, skip map[string]bool) 
 			return nil
 		}
 
+		// What does not ship is lint.Excluded's definition, not a second one
+		// here: pack is gated on lint, so a bundle whose eval sidecar pack
+		// strips but lint judges as shipped content can never be packed at all.
 		if info.IsDir() {
-			if rel == evalDirName {
+			if lint.Excluded(rel) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -165,7 +159,7 @@ func writeBundleEntries(tw *tar.Writer, bundleDir string, skip map[string]bool) 
 			// lint already reports a symlinked bundle entry as an error.
 			return nil
 		}
-		if rel == specFileName || skip[path] {
+		if lint.Excluded(rel) || skip[path] {
 			return nil
 		}
 

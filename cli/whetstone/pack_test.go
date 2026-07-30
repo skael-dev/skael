@@ -24,7 +24,11 @@ func TestRunPack_StripsTheEvalSidecar(t *testing.T) {
 	}
 
 	for _, name := range namesIn(t, out) {
-		if strings.HasPrefix(name, "eval/") || strings.Contains(name, "/eval/") {
+		// The sidecar is the one at the bundle root — lint.Excluded's rule,
+		// which pack consumes rather than restates. A nested "eval/" directory
+		// is ordinary content and is kept; see
+		// TestRunPack_KeepsANestedEvalDirectory.
+		if strings.HasPrefix(name, "eval/") {
 			t.Errorf("packed archive contains the eval sidecar: %s", name)
 		}
 		if strings.HasSuffix(name, "spec.yaml") {
@@ -163,5 +167,91 @@ func namesIn(t *testing.T, archive string) []string {
 			return out
 		}
 		out = append(out, h.Name)
+	}
+}
+
+// sidecarSolveSh is the shape of a model-authored oracle script: it provisions
+// the sandbox the task runs in, which the security scanner reads — correctly,
+// for shipped content — as remote content piped to a shell.
+const sidecarSolveSh = `#!/usr/bin/env bash
+set -euo pipefail
+curl -fsSL https://example.com/install.sh | bash
+python3 scripts/extract.py in/report.pdf
+`
+
+// TestRunPack_SidecarAndArchivesDoNotFailLint covers the boundary between lint
+// and pack. lint walks the whole directory; pack knows the eval sidecar, the
+// spec and a packed archive do not ship. When only pack knew that, two things
+// broke: the sidecar's oracle scripts were scanned as if they were shipped
+// skill content and failed the lint pack is gated on, and `pack .` left its own
+// archive in the bundle so the second run read gzip bytes and failed on
+// invalid UTF-8.
+func TestRunPack_SidecarAndArchivesDoNotFailLint(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	mustWrite(t, filepath.Join(dir, "scripts", "extract.py"), "print('x')\n")
+	mustWrite(t, filepath.Join(dir, "spec.yaml"), "name: pdf-extract\n")
+	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
+	mustWrite(t, filepath.Join(dir, "eval", "suite", "tasks", "t1", "oracle", "solve.sh"), sidecarSolveSh)
+	// A previously packed archive, exactly where `pack .` puts one.
+	mustWrite(t, filepath.Join(dir, "pdf-extract.tar.gz"), "\x1f\x8b\x08\x00\x00\x00\x00\x00\xff\xfe")
+
+	code, err := whetstone.RunLint(dir, false)
+	if err != nil {
+		t.Fatalf("RunLint: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("lint exit code = %d, want 0 (the sidecar and a packed archive are not shipped content)", code)
+	}
+
+	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
+	if err := whetstone.RunPack(dir, out); err != nil {
+		t.Fatalf("RunPack: %v", err)
+	}
+	for _, name := range namesIn(t, out) {
+		if strings.HasPrefix(name, "eval/") || name == "spec.yaml" || strings.HasSuffix(name, ".tar.gz") {
+			t.Errorf("packed archive contains scaffolding: %s", name)
+		}
+	}
+}
+
+// TestRunPack_PackingInPlaceTwiceSucceeds is the same defect from the command
+// line's angle: `pack .` is the most natural invocation there is, and it used
+// to work exactly once per directory.
+func TestRunPack_PackingInPlaceTwiceSucceeds(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	t.Chdir(dir)
+
+	for i := 1; i <= 2; i++ {
+		if err := whetstone.RunPack(".", "pdf-extract.tar.gz"); err != nil {
+			t.Fatalf("RunPack run %d: %v", i, err)
+		}
+	}
+}
+
+// TestRunPack_KeepsANestedEvalDirectory pins the exclusion rule's anchor. Only
+// the sidecar at the bundle root is scaffolding; "references/eval/" is
+// ordinary shipped content, is scanned like any other file, and must survive
+// packing.
+func TestRunPack_KeepsANestedEvalDirectory(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	mustWrite(t, filepath.Join(dir, "references", "eval", "rubric.md"), "# rubric\n")
+	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
+
+	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
+	if err := whetstone.RunPack(dir, out); err != nil {
+		t.Fatalf("RunPack: %v", err)
+	}
+
+	var found bool
+	for _, name := range namesIn(t, out) {
+		if name == "references/eval/rubric.md" {
+			found = true
+		}
+		if strings.HasPrefix(name, "eval/") {
+			t.Errorf("packed archive contains the root sidecar: %s", name)
+		}
+	}
+	if !found {
+		t.Errorf("packed archive dropped references/eval/rubric.md (has %v)", namesIn(t, out))
 	}
 }

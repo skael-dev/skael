@@ -155,6 +155,9 @@ func checkSymlinks(bundleDir string) ([]Finding, error) {
 		if err != nil {
 			return err
 		}
+		if skip, ret := excludedWalkEntry(bundleDir, path, info); skip {
+			return ret
+		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			return nil
 		}
@@ -190,6 +193,9 @@ func checkUTF8(bundleDir string) ([]Finding, error) {
 	err := filepath.Walk(bundleDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if skip, ret := excludedWalkEntry(bundleDir, path, info); skip {
+			return ret
 		}
 		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil

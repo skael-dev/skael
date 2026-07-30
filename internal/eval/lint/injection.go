@@ -26,6 +26,14 @@ func Injection(bundleDir string) ([]Finding, error) {
 		if relErr != nil {
 			rel = f.File
 		}
+		// The scanner walks the whole directory, so it also reads the eval
+		// sidecar. Nothing under the sidecar is ever packed, and its oracle
+		// and verifier scripts are written to drive a task — an oracle that
+		// provisions its own sandbox is indistinguishable, to a scanner
+		// looking at shipped skill content, from an attack.
+		if slashRel := filepath.ToSlash(rel); Excluded(slashRel) {
+			continue
+		}
 		out = append(out, Finding{
 			Rule:     "scan/" + f.Rule,
 			Severity: severityFor(f.Severity),
