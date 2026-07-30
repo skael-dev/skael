@@ -32,6 +32,12 @@ var ErrEventsNotWritten = errors.New("runner: events.jsonl was not written")
 // trajectory rather than failing.
 const eventScanBuffer = 1 << 20 // 1 MiB
 
+// gradingFileName is grading.json's name relative to a run's artifact
+// directory, shared between WriteArtifacts (which writes it) and
+// loadArtifactMeta (which reloads Meta from it on resume) so the two cannot
+// drift apart.
+const gradingFileName = "grading.json"
+
 // Artifacts locates the files WriteArtifacts produced for one run.
 type Artifacts struct {
 	Dir            string
@@ -83,7 +89,7 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 		Dir:            dir,
 		TranscriptPath: filepath.Join(dir, "transcript.raw"),
 		EventsPath:     filepath.Join(dir, "events.jsonl"),
-		GradingPath:    filepath.Join(dir, "grading.json"),
+		GradingPath:    filepath.Join(dir, gradingFileName),
 		OutputsDir:     filepath.Join(dir, "outputs"),
 	}
 
@@ -230,6 +236,23 @@ func LoadEvents(path string) ([]trajectory.Event, error) {
 		return nil, fmt.Errorf("runner: scanning events: %w", err)
 	}
 	return events, nil
+}
+
+// loadArtifactMeta reloads the full agent.Meta a run recorded, from
+// <artifactDir>/grading.json — the only place all ten Meta fields survive.
+// The five columns the store persists directly (tokens, duration, agent
+// version, rate-limited) are not enough to rebuild it: Model, NumTurns,
+// VisibleSkills, PermissionDenials, and IsError have nowhere else to come
+// from on resume.
+func loadArtifactMeta(artifactDir string) (agent.Meta, error) {
+	if artifactDir == "" {
+		return agent.Meta{}, errors.New("no artifact directory recorded")
+	}
+	g, err := LoadGrading(filepath.Join(artifactDir, gradingFileName))
+	if err != nil {
+		return agent.Meta{}, err
+	}
+	return g.Meta, nil
 }
 
 // LoadGrading reads a grading.json written by WriteArtifacts.

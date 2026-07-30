@@ -370,25 +370,41 @@ func probeKey(p Probe) store.RunKey {
 // resume. Events are not persisted to the store (they are recorded as
 // artifacts), so a resumed Outcome carries none — every caller that needs
 // them reads the eval's stored artifacts directly.
+//
+// Meta is reloaded from the run's grading.json artifact, which is where all
+// ten of its fields survive; the store's own columns cover only five. When
+// the artifact is missing or unreadable (an older eval, or a lost artifact
+// directory), Meta falls back to those five columns and MetaPartial records
+// that the rest — Model, NumTurns, VisibleSkills, PermissionDenials,
+// IsError — are not really zero, just unavailable here.
 func outcomeFromRecord(rec store.RunRecord) Outcome {
 	var err error
 	if rec.Outcome.Error != "" {
 		err = errors.New(rec.Outcome.Error)
 	}
-	return Outcome{
+	out := Outcome{
 		Key:          rec.Key,
 		VerifierExit: rec.Outcome.VerifierExit,
-		Meta: agent.Meta{
-			InputTokens:  rec.Outcome.InputTokens,
-			OutputTokens: rec.Outcome.OutputTokens,
-			DurationMS:   rec.Outcome.DurationMS,
-			AgentVersion: rec.Outcome.AgentVersion,
-			RateLimited:  rec.Outcome.RateLimited,
-		},
-		ArtifactDir: rec.Outcome.ArtifactDir,
-		Status:      rec.Outcome.Status,
-		Err:         err,
+		ArtifactDir:  rec.Outcome.ArtifactDir,
+		Status:       rec.Outcome.Status,
+		Err:          err,
 	}
+
+	if meta, mErr := loadArtifactMeta(rec.Outcome.ArtifactDir); mErr == nil {
+		out.Meta = meta
+		return out
+	}
+
+	out.Meta = agent.Meta{
+		InputTokens:  rec.Outcome.InputTokens,
+		OutputTokens: rec.Outcome.OutputTokens,
+		DurationMS:   rec.Outcome.DurationMS,
+		AgentVersion: rec.Outcome.AgentVersion,
+		RateLimited:  rec.Outcome.RateLimited,
+	}
+	out.MetaPartial = true
+	out.MetaPartialReason = fmt.Sprintf("resumed run: recovering full meta from %q failed; only store columns are available", rec.Outcome.ArtifactDir)
+	return out
 }
 
 // resumeProbeOutcome rebuilds a ProbeOutcome from a previously finished probe
@@ -398,17 +414,29 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 // later task, so today that file never exists yet; Unknown is the honest
 // answer until it does, and an unknown probe is excluded from trigger
 // denominators rather than counted as a miss.
+//
+// Meta is reloaded the same way outcomeFromRecord reloads it: from
+// grading.json when available, falling back to the store's five columns —
+// and marking MetaPartial — when it is not. This is independent of Unknown:
+// a probe whose events recovered fine can still have a partial Meta, and the
+// two must not be conflated into one all-or-nothing signal.
 func resumeProbeOutcome(adapters func(string) (agent.Adapter, bool), p Probe, rec store.RunRecord) ProbeOutcome {
 	po := ProbeOutcome{Probe: p}
 	if a, ok := adapters(p.Member.Agent); ok {
 		po.Caps = a.Caps()
 	}
-	po.Meta = agent.Meta{
-		InputTokens:  rec.Outcome.InputTokens,
-		OutputTokens: rec.Outcome.OutputTokens,
-		DurationMS:   rec.Outcome.DurationMS,
-		AgentVersion: rec.Outcome.AgentVersion,
-		RateLimited:  rec.Outcome.RateLimited,
+	if meta, mErr := loadArtifactMeta(rec.Outcome.ArtifactDir); mErr == nil {
+		po.Meta = meta
+	} else {
+		po.Meta = agent.Meta{
+			InputTokens:  rec.Outcome.InputTokens,
+			OutputTokens: rec.Outcome.OutputTokens,
+			DurationMS:   rec.Outcome.DurationMS,
+			AgentVersion: rec.Outcome.AgentVersion,
+			RateLimited:  rec.Outcome.RateLimited,
+		}
+		po.MetaPartial = true
+		po.MetaPartialReason = fmt.Sprintf("resumed probe: recovering full meta from %q failed; only store columns are available", rec.Outcome.ArtifactDir)
 	}
 	if rec.Outcome.Error != "" {
 		po.Err = errors.New(rec.Outcome.Error)

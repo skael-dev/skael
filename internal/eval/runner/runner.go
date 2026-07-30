@@ -46,6 +46,15 @@ type Outcome struct {
 	ArtifactDir  string
 	Status       string
 	Err          error
+	// MetaPartial is true when Meta was rebuilt from the store's own columns
+	// rather than from the run's grading.json artifact — on resume, when the
+	// artifact is missing or unreadable. A partial Meta carries only what
+	// those columns hold (tokens, duration, agent version, rate-limited);
+	// Model, NumTurns, VisibleSkills, PermissionDenials, and IsError are
+	// silently zero, so a caller that feeds Meta into anything reading those
+	// fields (VisibleSkills feeds trigger precision) must check this first.
+	MetaPartial       bool
+	MetaPartialReason string
 }
 
 // ProbeOutcome is what one trigger probe observed. It deliberately carries no
@@ -66,6 +75,10 @@ type ProbeOutcome struct {
 	Unknown bool
 	Reason  string
 	Err     error
+	// MetaPartial mirrors Outcome.MetaPartial: true when Meta came from the
+	// store's own columns on resume rather than the probe's grading.json.
+	MetaPartial       bool
+	MetaPartialReason string
 }
 
 // Health is one panel member's health-probe result.

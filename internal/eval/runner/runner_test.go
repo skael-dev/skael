@@ -753,6 +753,87 @@ func outcomeFor(t *testing.T, res *runner.ExecuteResult, k store.RunKey) runner.
 	return runner.Outcome{}
 }
 
+func TestExecute_ResumeReloadsFullMetaFromGradingJSON(t *testing.T) {
+	h := newHarness(t)
+	h.adapter.meta = agent.Meta{
+		AgentVersion: "2.1.220", InputTokens: 10, OutputTokens: 20,
+		NumTurns: 5, VisibleSkills: []string{"demo"}, PermissionDenials: []string{"write /etc"},
+	}
+	k := h.targetRunKey()
+
+	first, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := outcomeFor(t, first, k)
+	if fresh.MetaPartial {
+		t.Fatalf("a fresh run's Meta reported partial: %s", fresh.MetaPartialReason)
+	}
+
+	second, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := outcomeFor(t, second, k)
+	// NumTurns, VisibleSkills, and PermissionDenials are not among the
+	// store's own columns — they only survive resume if Meta is reloaded
+	// from grading.json rather than rebuilt from the database row.
+	if resumed.MetaPartial {
+		t.Errorf("resumed Meta reported partial even though grading.json is present: %s", resumed.MetaPartialReason)
+	}
+	if resumed.Meta.NumTurns != 5 {
+		t.Errorf("resumed Meta.NumTurns = %d, want 5 (lost on resume)", resumed.Meta.NumTurns)
+	}
+	if len(resumed.Meta.VisibleSkills) != 1 || resumed.Meta.VisibleSkills[0] != "demo" {
+		t.Errorf("resumed Meta.VisibleSkills = %v, want [demo] (lost on resume)", resumed.Meta.VisibleSkills)
+	}
+	if len(resumed.Meta.PermissionDenials) != 1 {
+		t.Errorf("resumed Meta.PermissionDenials = %v, lost on resume", resumed.Meta.PermissionDenials)
+	}
+}
+
+func TestExecute_ResumeFallsBackToPartialMetaWhenGradingJSONIsUnavailable(t *testing.T) {
+	h := newHarness(t)
+	h.adapter.meta = agent.Meta{AgentVersion: "2.1.220", InputTokens: 10, NumTurns: 5}
+	k := h.targetRunKey()
+
+	first, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := outcomeFor(t, first, k)
+
+	// Simulate a lost or pre-artifact-writing eval: grading.json is gone, but
+	// the row (and its five store columns) still is.
+	if err := os.Remove(filepath.Join(fresh.ArtifactDir, "grading.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := outcomeFor(t, second, k)
+	// The honest answer when the full record cannot be recovered is a marked
+	// partial Meta, not a silent zero that looks like the CLI reported none
+	// of these fields.
+	if !resumed.MetaPartial {
+		t.Fatal("Meta rebuilt from store columns alone was not marked partial")
+	}
+	if resumed.MetaPartialReason == "" {
+		t.Error("MetaPartial is true but MetaPartialReason is empty")
+	}
+	// What the five columns do cover must still come through.
+	if resumed.Meta.AgentVersion != "2.1.220" || resumed.Meta.InputTokens != 10 {
+		t.Errorf("partial Meta lost fields the store columns do cover: %+v", resumed.Meta)
+	}
+	// NumTurns is not one of the five columns; a partial Meta legitimately
+	// zeroes it, which is exactly what MetaPartial exists to flag.
+	if resumed.Meta.NumTurns != 0 {
+		t.Errorf("partial Meta.NumTurns = %d, want 0 (not among the store's columns)", resumed.Meta.NumTurns)
+	}
+}
+
 func TestExecute_EventsWriteFailureRecordsTheRunAsNotPerformed(t *testing.T) {
 	h := newHarness(t)
 	k := h.targetRunKey()
