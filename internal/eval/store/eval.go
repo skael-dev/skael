@@ -109,6 +109,10 @@ type ScoreRow struct {
 	Adherence     float64
 	Drift         float64
 	Grade         string
+	// Healthy is false when this member's adapter failed its probe, mirroring
+	// score.PanelEntry.Healthy. Every other field on such a row is a zero
+	// value that must not be read as a real measurement.
+	Healthy bool
 }
 
 // ReportMeta is the small set of report fields the store indexes directly,
@@ -116,7 +120,11 @@ type ScoreRow struct {
 type ReportMeta struct {
 	Headline      float64
 	PanelComplete bool
-	RobustnessGap float64
+	// RobustnessGap is nil when it was not computed for this report (the
+	// strong/floor comparison was not well defined), mirroring
+	// report.Report.RobustnessGap. A bare float64 here would collapse "not
+	// computed" and "computed at zero" to the same stored value.
+	RobustnessGap *float64
 }
 
 // SuiteCheckRow records whether one task in a suite was found void (its
@@ -352,14 +360,14 @@ func (s *Store) SaveJudgment(evalID int64, j Judgment) error {
 // key, and a unique-constraint failure there would abort the run.
 func (s *Store) SaveScore(evalID int64, sc ScoreRow) error {
 	_, err := s.db.Exec(
-		`INSERT INTO scores (eval_id, agent, model, trigger_f1, reliability, uplift, efficiency, effectiveness, adherence, drift, grade)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO scores (eval_id, agent, model, trigger_f1, reliability, uplift, efficiency, effectiveness, adherence, drift, grade, healthy)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(eval_id, agent, model) DO UPDATE SET
 		   trigger_f1 = excluded.trigger_f1, reliability = excluded.reliability, uplift = excluded.uplift,
 		   efficiency = excluded.efficiency, effectiveness = excluded.effectiveness, adherence = excluded.adherence,
-		   drift = excluded.drift, grade = excluded.grade`,
+		   drift = excluded.drift, grade = excluded.grade, healthy = excluded.healthy`,
 		evalID, sc.Agent, sc.Model, sc.TriggerF1, sc.Reliability, sc.Uplift, sc.Efficiency, sc.Effectiveness,
-		sc.Adherence, sc.Drift, sc.Grade)
+		sc.Adherence, sc.Drift, sc.Grade, boolToInt(sc.Healthy))
 	if err != nil {
 		return fmt.Errorf("store.SaveScore: %w", err)
 	}
@@ -377,11 +385,22 @@ func (s *Store) SaveReport(evalID int64, doc []byte, m ReportMeta) error {
 		 ON CONFLICT(eval_id) DO UPDATE SET
 		   doc = excluded.doc, headline = excluded.headline, panel_complete = excluded.panel_complete,
 		   robustness_gap = excluded.robustness_gap`,
-		evalID, string(doc), m.Headline, boolToInt(m.PanelComplete), m.RobustnessGap)
+		evalID, string(doc), m.Headline, boolToInt(m.PanelComplete), sqlNullFloat(m.RobustnessGap))
 	if err != nil {
 		return fmt.Errorf("store.SaveReport: %w", err)
 	}
 	return nil
+}
+
+// sqlNullFloat converts a *float64 into the sql.NullFloat64 the database/sql
+// driver needs to bind a nullable column: a nil pointer becomes SQL NULL
+// rather than a bound 0, which would collapse "not computed" into "computed
+// at zero" the same way the old NOT NULL DEFAULT 0 column did.
+func sqlNullFloat(v *float64) sql.NullFloat64 {
+	if v == nil {
+		return sql.NullFloat64{}
+	}
+	return sql.NullFloat64{Float64: *v, Valid: true}
 }
 
 // Report returns the stored report document for one eval.

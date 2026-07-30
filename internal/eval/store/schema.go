@@ -120,6 +120,23 @@ var migrations = []string{
 		checked_at TEXT NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (skill_name, suite_ref, task_id)
 	);`,
+
+	// Migration 9: reports.robustness_gap becomes nullable, so a gap that was
+	// never computed (an ambiguous strong/floor class) no longer collapses to
+	// the same 0 a genuinely-zero gap would store — report.ReportMeta already
+	// carries this distinction as a *float64, but the NOT NULL DEFAULT 0
+	// column threw it away at the store seam. SQLite has no ALTER COLUMN, so
+	// the column is dropped and re-added nullable; existing rows' gaps are
+	// necessarily lost (they were already unrecoverably 0-or-real at that
+	// point), which is acceptable for an indexed convenience column backed by
+	// the opaque report doc.
+	//
+	// scores gains a health flag: ScoreRow previously had no way to record
+	// that a row belongs to an unhealthy or otherwise excluded member, the
+	// same gap RobustnessGap's ByClass fix closed above it.
+	`ALTER TABLE reports DROP COLUMN robustness_gap;
+	ALTER TABLE reports ADD COLUMN robustness_gap REAL;
+	ALTER TABLE scores ADD COLUMN healthy INTEGER NOT NULL DEFAULT 1;`,
 }
 
 func migrate(db *sql.DB) error {

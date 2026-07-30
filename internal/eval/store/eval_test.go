@@ -207,6 +207,51 @@ func TestMigration3_PreservesAnExistingWorkspace(t *testing.T) {
 	}
 }
 
+func TestMigration9_PreservesAnExistingWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := newEval(t, s)
+	if err := s.SaveReport(id, []byte(`{"headline":40}`), store.ReportMeta{Headline: 40, PanelComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopening applies migration 9 (nullable robustness_gap, scores.healthy).
+	// A workspace authored before this phase must keep its evals, runs, and
+	// reports across the ALTER TABLE.
+	s2, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = s2.Close() }()
+
+	doc, gotID, err := s2.LatestReport("demo")
+	if err != nil {
+		t.Fatalf("report lost across migration: %v", err)
+	}
+	if gotID != id || string(doc) != `{"headline":40}` {
+		t.Errorf("report content changed across migration: id=%d doc=%s", gotID, doc)
+	}
+
+	// A gap saved as nil before the migration re-added the column nullable
+	// must still round-trip as absent, not silently become 0.
+	gap := 12.5
+	if err := s2.SaveReport(id, []byte(`{"headline":40,"robustness_gap":12.5}`), store.ReportMeta{Headline: 40, PanelComplete: true, RobustnessGap: &gap}); err != nil {
+		t.Errorf("SaveReport with a robustness gap failed post-migration: %v", err)
+	}
+	if err := s2.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: false}); err != nil {
+		t.Errorf("SaveScore with the new healthy column failed post-migration: %v", err)
+	}
+}
+
 func TestReport_RoundTripsAndLatestFollowsTheNewestEval(t *testing.T) {
 	s := openStore(t)
 	first := newEval(t, s)
