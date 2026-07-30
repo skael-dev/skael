@@ -100,6 +100,21 @@ func TestCorpus_SpecsAreValidAndCompile(t *testing.T) {
 			if len(c.Steps) == 0 && len(c.Forbid) == 0 {
 				t.Errorf("contract has no deterministic matchers: %+v", c)
 			}
+
+			// checkpointed-workflow specifically must yield BOTH kinds: it
+			// exists to pin that a MUST-NOT constraint compiles to a forbid
+			// rule, not just that the spec's steps produce step matchers. The
+			// generic disjunction above would still pass if classifyForbid
+			// silently stopped firing and the constraint was demoted to a
+			// SemanticRule instead.
+			if name == "checkpointed-workflow" {
+				if len(c.Steps) == 0 {
+					t.Errorf("no step matchers: %+v", c)
+				}
+				if len(c.Forbid) == 0 {
+					t.Errorf("MUST-NOT constraint did not compile to a forbid rule: %+v", c)
+				}
+			}
 		})
 	}
 }
