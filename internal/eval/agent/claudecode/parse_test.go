@@ -173,6 +173,29 @@ func TestParse_MalformedLinesAreSkippedNotFatal(t *testing.T) {
 	}
 }
 
+func TestParse_UnrecognisedTopLevelTypeBecomesOpaque(t *testing.T) {
+	// A stream-json type this parser has never seen (a future CLI addition)
+	// must still surface as a recorded opaque event, not be silently dropped —
+	// dropping it would shrink Meta.NumTurns-adjacent bookkeeping and the event
+	// count in ways nothing downstream could detect.
+	r := stringReader(`{"type":"some_future_event","session_id":"x","timestamp":"2026-07-29T19:55:21.430Z"}` + "\n")
+
+	res, err := claudecode.New().Parse(r)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Events) != 1 {
+		t.Fatalf("want 1 event, got %d: %v", len(res.Events), typesOf(res.Events))
+	}
+	e := res.Events[0]
+	if e.Type != trajectory.TypeOpaque {
+		t.Errorf("Type = %q, want %q", e.Type, trajectory.TypeOpaque)
+	}
+	if e.Name != "some_future_event" {
+		t.Errorf("Name = %q, want the unrecognised type recorded", e.Name)
+	}
+}
+
 func TestCaps(t *testing.T) {
 	c := claudecode.New().Caps()
 	if c.SkillDir != ".claude/skills" {

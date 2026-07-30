@@ -62,7 +62,6 @@ type toolInput struct {
 	FilePath string `json:"file_path"`
 	Command  string `json:"command"`
 	Skill    string `json:"skill"`
-	Args     string `json:"args"`
 }
 
 // Parse converts a Claude Code stream-json stream into normalized events.
@@ -70,67 +69,69 @@ type toolInput struct {
 // A malformed line is skipped rather than fatal: a truncated or interleaved
 // line must not discard an otherwise complete session, which would turn a
 // cosmetic stream defect into a zero score.
+//
+// The stream is read one line at a time and never buffered in full: tool
+// results embed file contents, a session can run to many megabytes, and a
+// later phase runs on the order of 60 sessions per evaluation, so holding a
+// whole session resident does not scale. The only buffering is a small
+// pending queue (below) for the handful of bookkeeping lines that precede the
+// first timestamped line.
 func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
-
-	var lines [][]byte
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		lines = append(lines, append([]byte(nil), line...))
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("claudecode.Parse: %w", err)
-	}
 
 	res := &agent.Result{}
 	var last time.Time
 	var seq int
 
-	// Seed `last` with the first timestamp anywhere in the stream. Bookkeeping
-	// lines (hook_started, system/init, thinking_tokens) are emitted before the
-	// first assistant turn and carry no timestamp of their own; without this
-	// seed they would keep the zero time forever, since carry-forward only
-	// propagates a timestamp already seen.
-	for _, line := range lines {
-		var sl streamLine
-		if err := json.Unmarshal(line, &sl); err != nil {
-			continue
-		}
-		if sl.Timestamp == "" {
-			continue
-		}
-		if ts, err := time.Parse(time.RFC3339, sl.Timestamp); err == nil {
-			last = ts
-			break
-		}
-	}
+	// pending holds events built before any timestamp has been seen at all
+	// (the bookkeeping lines — hook_started, system/init, thinking_tokens —
+	// that precede the first assistant turn and carry no timestamp of their
+	// own). They are backfilled with the first real timestamp the moment it
+	// arrives and flushed then; from that point on nothing is buffered.
+	var pending []trajectory.Event
 
-	// add is the single place an event's timestamp is assigned: every event
-	// carries whatever `last` currently is, either its own line's timestamp
-	// (just updated below) or the most recently seen one carried forward.
+	// add is the single place an event's timestamp is assigned. While no
+	// timestamp has been seen yet (last is zero), the event is queued in
+	// pending rather than committed with a zero TS.
 	add := func(e trajectory.Event) {
 		seq++
 		e.Seq = seq
+		if last.IsZero() {
+			pending = append(pending, e)
+			return
+		}
 		if e.TS.IsZero() {
 			e.TS = last
 		}
 		res.Events = append(res.Events, e)
 	}
 
-	for _, line := range lines {
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
 		var sl streamLine
 		if err := json.Unmarshal(line, &sl); err != nil {
 			continue // malformed line; keep going
 		}
 
+		hadNoTimestampYet := last.IsZero()
 		if sl.Timestamp != "" {
 			if ts, err := time.Parse(time.RFC3339, sl.Timestamp); err == nil {
 				last = ts
 			}
+		}
+		if hadNoTimestampYet && !last.IsZero() {
+			// The first real timestamp just arrived: backfill and flush
+			// whatever was queued while there was nothing to carry forward.
+			for i := range pending {
+				pending[i].TS = last
+			}
+			res.Events = append(res.Events, pending...)
+			pending = nil
 		}
 
 		switch sl.Type {
@@ -195,6 +196,13 @@ func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: sl.Type})
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("claudecode.Parse: %w", err)
+	}
+
+	// If the stream ended without ever carrying a timestamp, there is nothing
+	// to backfill pending with; flush it as-is rather than dropping events.
+	res.Events = append(res.Events, pending...)
 
 	return res, nil
 }
@@ -242,22 +250,24 @@ func pathsOf(p string) []string {
 // exitCodeOf pulls an exit code out of a tool_use_result, which is an object on
 // success, a bare JSON string when the tool errored, or null. Only the object
 // form can carry a code.
+//
+// Only an explicit exit_code field is trusted. A generic "success" boolean is
+// not a shell exit status — it is how a non-shell tool (e.g. a Skill launch
+// confirmation, {"success":true,"commandName":"find-skills"}) reports plain
+// completion, and inferring ExitCode = 0 from it would hand a later phase a
+// shell-style code for a tool call that never had one.
 func exitCodeOf(raw json.RawMessage) (int, bool) {
 	if len(raw) == 0 {
 		return 0, false
 	}
 	var obj struct {
-		ExitCode *int  `json:"exit_code"`
-		Success  *bool `json:"success"`
+		ExitCode *int `json:"exit_code"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return 0, false // string or null form
 	}
-	switch {
-	case obj.ExitCode != nil:
-		return *obj.ExitCode, true
-	case obj.Success != nil && *obj.Success:
-		return 0, true
+	if obj.ExitCode == nil {
+		return 0, false
 	}
-	return 0, false
+	return *obj.ExitCode, true
 }
