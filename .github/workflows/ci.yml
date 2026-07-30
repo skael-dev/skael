@@ -90,6 +90,7 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o bin/skael ./cmd/skael/
           CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server/
+          CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone/
 
   typecheck:
     runs-on: ubuntu-latest

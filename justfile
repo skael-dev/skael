@@ -10,6 +10,7 @@ default:
 build: generate web-build
     CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
+    CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone
 
 # Build server only
 build-server:
@@ -18,6 +19,10 @@ build-server:
 # Build CLI only
 build-cli:
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
+
+# Build the whetstone eval CLI
+build-whetstone:
+    go build -o bin/whetstone ./cmd/whetstone
 
 # --- Web / Frontend ---
 
@@ -107,6 +112,10 @@ test-web:
 test-fast:
     go test -short ./... -count=1 && cd web && npx vitest run
 
+# Test the eval engine only
+test-eval:
+    go test ./internal/eval/... ./cli/whetstone/... -count=1
+
 # --- Lint / Check ---
 
 # Run go vet
@@ -163,3 +172,7 @@ migrate-create name:
 # Run security scan on a skill directory
 scan dir:
     go run ./cmd/skael scan {{dir}}
+
+# Lint a skill bundle with the eval engine's linter
+lint-skill path:
+    go run ./cmd/whetstone lint {{path}}
