@@ -45,7 +45,10 @@ type streamLine struct {
 // throttle. Treating every rate_limit_event as a hit (as an earlier version
 // of this parser did) makes a normal session indistinguishable from one that
 // is actually being rate limited, and the runner backs off and eventually
-// fails it after exhausting its retries for a limit that was never hit.
+// fails it after exhausting its retries for a limit that was never hit. See
+// tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag for the same defect
+// caught against a real recorded transcript, and TestParse_RateLimitEventOnlyFlagsAnActualLimit
+// in parse_test.go for the regression test.
 type rateLimitInfo struct {
 	Status string `json:"status"`
 }

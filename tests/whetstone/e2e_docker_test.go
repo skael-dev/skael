@@ -512,7 +512,12 @@ func stubClaudeBaseTag(t *testing.T) string {
 		// and the runner burns its three retries and fails every single
 		// session. Stripping it here is a property of the stub, not a fix to
 		// the runner: a live re-invocation would not carry the same stale
-		// blip forward the way a fixed transcript does.
+		// blip forward the way a fixed transcript does. This is independent
+		// of, but adjacent to, the parser-level fix in
+		// internal/eval/agent/claudecode/parse.go's rateLimitInfo, which this
+		// suite's own debugging surfaced: that fix is what stops an
+		// "allowed"-status rate_limit_event (this fixture's own line included)
+		// from being misread as a hit in the first place.
 		var filtered []byte
 		for _, line := range bytes.Split(fixtureData, []byte("\n")) {
 			if bytes.Contains(line, []byte(`"type":"rate_limit_event"`)) {

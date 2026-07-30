@@ -120,6 +120,51 @@ func TestParse_NoTimestampAnywhereStaysZeroNotFabricated(t *testing.T) {
 	}
 }
 
+// TestParse_RateLimitEventOnlyFlagsAnActualLimit pins the fix for a real
+// defect: a Claude Code session emits rate_limit_event lines routinely as
+// telemetry, most carrying status "allowed", and an earlier version of the
+// parser set Meta.RateLimited on the event's mere presence. That made an
+// ordinary session indistinguishable from one actually being throttled, so
+// the runner burned its retries and failed sessions that were never rate
+// limited — see internal/eval/agent/claudecode/parse.go's rateLimitInfo
+// comment, and tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag, which
+// hit this same defect against a real recorded transcript and had to strip
+// the line to work around it before this fix landed.
+func TestParse_RateLimitEventOnlyFlagsAnActualLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{
+			name: "status allowed is not a hit",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`,
+			want: false,
+		},
+		{
+			name: "a non-allowed status is a hit",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}`,
+			want: true,
+		},
+		{
+			name: "no payload at all stays the conservative default",
+			line: `{"type":"rate_limit_event"}`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := claudecode.New().Parse(stringReader(tc.line + "\n"))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if res.Meta.RateLimited != tc.want {
+				t.Errorf("RateLimited = %v, want %v", res.Meta.RateLimited, tc.want)
+			}
+		})
+	}
+}
+
 func TestParse_SkillInvocationBecomesSkillRead(t *testing.T) {
 	res := parseFixture(t, "skill-invocation.jsonl")
 
