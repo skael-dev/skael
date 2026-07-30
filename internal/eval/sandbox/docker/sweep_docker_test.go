@@ -4,6 +4,8 @@ package docker_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -11,6 +13,12 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
 )
+
+// pidLabelKey mirrors the unexported label key sweep.go reads
+// ("whetstone.owner.pid"); duplicated here because these tests need to set
+// it directly rather than through the driver's own labeling path (which
+// always stamps the test process's own pid, not an arbitrary one).
+const pidLabelKey = "whetstone.owner.pid"
 
 // withZeroSweepMinAge temporarily disables Sweep's age protection so a test
 // can create a resource and sweep it in the same breath, without waiting out
@@ -153,5 +161,86 @@ func TestSweep_LeavesRecentlyCreatedLabeledResourcesAlone(t *testing.T) {
 	}
 	if len(strings.Fields(string(networks))) != 1 {
 		t.Error("Sweep removed a labeled network younger than SweepMinAge")
+	}
+}
+
+// deadPID is a pid value chosen to be confidently not running on this host,
+// without the raciness of spawning and killing a real process (which could
+// be reused by the kernel before the assertion runs). It is picked to
+// exceed any pid a real OS process table will ever hand out: Linux's
+// pid_max tops out at 4,194,304 even at its most permissive
+// (/proc/sys/kernel/pid_max), and macOS's is far lower still, so a value an
+// order of magnitude above the Linux ceiling is safe on both without
+// depending on ephemeral process lifecycle.
+const deadPID = 999999999
+
+// TestSweep_RemovesAContainerWhosePidIsConfirmedDead pins the orphan-cleanup
+// direction of the pid guard: a whetstone-labeled container whose recorded
+// pid does not belong to any running process, and which is past
+// SweepMinAge, is removed. This is the "cleanup still works" half of the
+// pid check added alongside the age check.
+func TestSweep_RemovesAContainerWhosePidIsConfirmedDead(t *testing.T) {
+	withZeroSweepMinAge(t)
+	d := driver(t)
+	ref := prepare(t, d)
+
+	name := "whetstone-run-sweep-deadpid-test"
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+
+	pidLabel := fmt.Sprintf("%s=%d", pidLabelKey, deadPID)
+	if out, err := exec.Command("docker", "run", "-d", "--name", name,
+		"--label", docker.OwnerLabel(), "--label", pidLabel,
+		ref.Tag, "sleep", "300").CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	d.Sweep(ctx)
+
+	out, err := exec.Command("docker", "ps", "-aq", "--filter", "name="+name).Output()
+	if err != nil {
+		t.Fatalf("docker ps: %v", err)
+	}
+	if n := len(strings.Fields(string(out))); n != 0 {
+		t.Errorf("Sweep left %d containers with a confirmed-dead owner pid behind", n)
+	}
+}
+
+// TestSweep_LeavesAContainerWithALivePidAlone is the direction that matters
+// most: a whetstone-labeled container whose recorded pid names a genuinely
+// running process (the test binary's own pid, guaranteed alive for the
+// duration of this test) must survive a sweep even with the age guard
+// zeroed out — this is what protects a running evaluation's containers from
+// a concurrent Sweep call, independent of how long they've existed.
+//
+// This test is the one a mutation that deletes the pidAlive() call from
+// orphaned would break: without it, only the (here-zeroed) age check gates
+// removal, and this container would be removed.
+func TestSweep_LeavesAContainerWithALivePidAlone(t *testing.T) {
+	withZeroSweepMinAge(t)
+	d := driver(t)
+	ref := prepare(t, d)
+
+	name := "whetstone-run-sweep-livepid-test"
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+
+	pidLabel := fmt.Sprintf("%s=%d", pidLabelKey, os.Getpid())
+	if out, err := exec.Command("docker", "run", "-d", "--name", name,
+		"--label", docker.OwnerLabel(), "--label", pidLabel,
+		ref.Tag, "sleep", "300").CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	d.Sweep(ctx)
+
+	out, err := exec.Command("docker", "ps", "-aq", "--filter", "name="+name).Output()
+	if err != nil {
+		t.Fatalf("docker ps: %v", err)
+	}
+	if len(strings.Fields(string(out))) != 1 {
+		t.Error("Sweep removed a container whose owner pid is still alive")
 	}
 }
