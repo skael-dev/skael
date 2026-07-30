@@ -67,6 +67,12 @@ func TestBuildPlan_FullTierMatchesTheDocumentedBudget(t *testing.T) {
 	if p.N != 2 || p.K != 2 {
 		t.Errorf("N=%d K=%d, want 2 and 2 for a Full tier", p.N, p.K)
 	}
+	// BaselineK must fit BaselineRuns (1 for Full), not K: K=2 exceeds the
+	// single baseline attempt a Full tier plans, and score.PassAtK refuses
+	// k > n.
+	if p.BaselineK != 1 {
+		t.Errorf("BaselineK=%d, want 1 for a Full tier (BaselineRuns=1)", p.BaselineK)
+	}
 	// Probes are measured on the primary member only: they answer "does it
 	// fire", which is a property of the skill's description, not of the model
 	// panel.

@@ -60,14 +60,21 @@ type tierBudget struct {
 	BaselineRuns int
 	Probes       int // positive + negative, on the primary member
 	N, K         int
-	DevOnly      bool
-	PrimaryOnly  bool
+	// BaselineK is the passes-required estimator width for the baseline
+	// condition, separate from K: K is sized to Runs (the skill condition's
+	// attempt count), and BaselineRuns is deliberately smaller (a baseline
+	// session spends budget without measuring the skill at all). Reusing K
+	// against BaselineRuns asks score.PassAtK for k > n on every tier that
+	// has a baseline at all, which score.Reliability refuses.
+	BaselineK   int
+	DevOnly     bool
+	PrimaryOnly bool
 }
 
 var budgets = map[Tier]tierBudget{
-	TierSmoke: {Tasks: 5, Runs: 1, BaselineRuns: 0, Probes: 0, N: 1, K: 1, DevOnly: true, PrimaryOnly: true},
-	TierFull:  {Tasks: 10, Runs: 2, BaselineRuns: 1, Probes: 16, N: 2, K: 2},
-	TierDeep:  {Tasks: 16, Runs: 4, BaselineRuns: 2, Probes: 24, N: 4, K: 3},
+	TierSmoke: {Tasks: 5, Runs: 1, BaselineRuns: 0, Probes: 0, N: 1, K: 1, BaselineK: 0, DevOnly: true, PrimaryOnly: true},
+	TierFull:  {Tasks: 10, Runs: 2, BaselineRuns: 1, Probes: 16, N: 2, K: 2, BaselineK: 1},
+	TierDeep:  {Tasks: 16, Runs: 4, BaselineRuns: 2, Probes: 24, N: 4, K: 3, BaselineK: 2},
 }
 
 // DefaultPanel is the shipped panel: one strong member and one floor member of
@@ -144,8 +151,11 @@ type Plan struct {
 	Probes []Probe
 	// N is runs per task per member; K is the passes required by the
 	// Reliability estimator.
-	N, K  int
-	Tasks []suite.TaskPkg
+	N, K int
+	// BaselineK is the passes-required estimator width for the baseline
+	// condition — see tierBudget.BaselineK.
+	BaselineK int
+	Tasks     []suite.TaskPkg
 }
 
 // BuildPlan enumerates the sessions for a tier.
@@ -221,7 +231,7 @@ func BuildPlan(t Tier, p Panel, s *suite.Suite, void map[string]bool) (*Plan, er
 		members = p[:1]
 	}
 
-	plan := &Plan{Tier: t, Panel: p, N: b.N, K: b.K, Tasks: eligible}
+	plan := &Plan{Tier: t, Panel: p, N: b.N, K: b.K, BaselineK: b.BaselineK, Tasks: eligible}
 	for _, task := range eligible {
 		for _, m := range members {
 			for attempt := 1; attempt <= b.Runs; attempt++ {
