@@ -172,6 +172,44 @@ func TestPanel_NoHealthyMemberIsAnErrorNotAZero(t *testing.T) {
 	}
 }
 
+func TestByClass_ExactlyOneMatchIsReturned(t *testing.T) {
+	m := score.Matrix{Entries: []score.PanelEntry{
+		{Member: score.Member{Model: "opus", Class: spec.TierStrong}, Effectiveness: 82, Healthy: true},
+		{Member: score.Member{Model: "haiku", Class: spec.TierFloor}, Effectiveness: 54, Healthy: true},
+	}}
+	got, ok := m.ByClass(spec.TierStrong)
+	if !ok {
+		t.Fatal("ByClass = false, want true for exactly one match")
+	}
+	if got.Member.Model != "opus" {
+		t.Errorf("ByClass returned %+v, want the opus member", got)
+	}
+}
+
+func TestByClass_NoMatchIsNotFound(t *testing.T) {
+	m := score.Matrix{Entries: []score.PanelEntry{
+		{Member: score.Member{Model: "opus", Class: spec.TierStrong}, Effectiveness: 82, Healthy: true},
+	}}
+	if _, ok := m.ByClass(spec.TierFloor); ok {
+		t.Error("ByClass = true, want false with no matching member")
+	}
+}
+
+func TestByClass_MultipleMatchesAreNotFound(t *testing.T) {
+	// "The strong member" is not defined when there are two of them: a
+	// robustness gap computed from whichever happened to be first would be a
+	// number with no defined meaning, indistinguishable from a real one. This
+	// must fail closed, the same way Headline errors rather than returning
+	// zero when no member is healthy.
+	m := score.Matrix{Entries: []score.PanelEntry{
+		{Member: score.Member{Agent: "claude-code", Model: "opus", Class: spec.TierStrong}, Effectiveness: 82, Healthy: true},
+		{Member: score.Member{Agent: "codex", Model: "opus", Class: spec.TierStrong}, Effectiveness: 90, Healthy: true},
+	}}
+	if _, ok := m.ByClass(spec.TierStrong); ok {
+		t.Error("ByClass = true, want false with two matching members of the same class")
+	}
+}
+
 func TestBootstrap_IsDeterministicForASeedAndBracketsTheMean(t *testing.T) {
 	samples := []float64{70, 72, 68, 75, 71, 69, 73, 74}
 	lo1, hi1, err := score.Bootstrap(samples, 1000, 7)

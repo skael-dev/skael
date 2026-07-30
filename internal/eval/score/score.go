@@ -212,22 +212,32 @@ func (m Matrix) Mean() (float64, error) {
 	return sum / float64(n), nil
 }
 
-// ByClass returns the first entry in Entries whose Member.Class matches c, and
-// whether one was found.
+// ByClass returns the single entry in Entries whose Member.Class matches c,
+// and whether exactly one was found.
 //
 // ParsePanel can produce several members of one class on a multi-agent,
 // multi-model panel — it only rejects a panel with zero of a class, not more
-// than one. ByClass does not average or otherwise combine multiple matches: it
-// returns the first one encountered in Entries order, which is the order the
-// panel was planned and run in. A caller that needs the robustness gap (or
-// any other class-keyed comparison) across a panel with duplicate classes must
-// not treat this as "the" strong or floor member — it should iterate
-// m.Entries directly instead of relying on ByClass to disambiguate for it.
+// than one. ByClass reports ok == false for both zero matches and more than
+// one: with several members of one capability tier, "the strong member" and
+// "the floor member" are not defined, so a robustness gap computed by
+// comparing them is not defined either. Returning whichever member happened
+// to be first in Entries would produce a number indistinguishable from a real
+// one — an absent measurement must be reported as absent, the same principle
+// Headline applies when no member is healthy, not silently guessed at. A
+// caller that wants a specific member out of a duplicated class should
+// iterate m.Entries directly and say which member it means, rather than
+// asking ByClass to disambiguate for it.
 func (m Matrix) ByClass(c spec.ModelTier) (PanelEntry, bool) {
+	var found PanelEntry
+	count := 0
 	for _, e := range m.Entries {
 		if e.Member.Class == c {
-			return e, true
+			found = e
+			count++
 		}
 	}
-	return PanelEntry{}, false
+	if count != 1 {
+		return PanelEntry{}, false
+	}
+	return found, true
 }
