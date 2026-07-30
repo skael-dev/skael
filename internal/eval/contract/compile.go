@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -35,14 +36,27 @@ var networkKeywords = []string{"no network", "must not connect"}
 // trajectory.Event. A step or constraint that has no deterministic check is
 // demoted to a SemanticRule rather than emitted as a matcher: a matcher
 // nothing can ever satisfy would score every run as a step failure.
+//
+// A MUST-NOT constraint may become a ForbidMatch; a MUST constraint may
+// become a StepMatch when its text names an observable action, reusing the
+// same classification as a step (a positive obligation is otherwise just as
+// deterministically checkable as a step's action) — both share the ID space
+// of an emitted matcher. Every ID Compile emits (across Steps, Forbid, and
+// Semantic together) must therefore be unique in the whole compiled
+// Contract: a spec whose constraint ID collides with a step ID (or with
+// another constraint's ID) is a compile error rather than a silent merge or
+// overwrite, since a later report keyed by ID could otherwise attribute a
+// violation to the wrong rule.
 func Compile(s *spec.SkillSpec) (*Contract, error) {
 	c := &Contract{Version: Version}
+	usedIDs := make(map[string]bool)
 
 	lastStepID := ""
 	for _, step := range s.Steps {
 		if step.Validation {
 			c.Checkpoints = append(c.Checkpoints, step.ID)
 		}
+		usedIDs[step.ID] = true
 
 		match, ok := classifyStep(step.Action)
 		if !ok {
@@ -66,24 +80,45 @@ func Compile(s *spec.SkillSpec) (*Contract, error) {
 	}
 
 	for _, rule := range s.Constraints {
-		if rule.Kind != spec.RuleMustNot {
-			// A MUST constraint has no single event whose presence proves it
-			// was honored, so it is always judge-scored rather than matched.
-			c.Semantic = append(c.Semantic, SemanticRule{ID: rule.ID, Text: rule.Text})
+		if usedIDs[rule.ID] {
+			return nil, fmt.Errorf("contract.Compile: constraint id %q collides with an id already compiled into the contract", rule.ID)
+		}
+		usedIDs[rule.ID] = true
+
+		if rule.Kind == spec.RuleMustNot {
+			match, ok := classifyForbid(rule.Text)
+			if !ok {
+				c.Semantic = append(c.Semantic, SemanticRule{ID: rule.ID, Text: rule.Text})
+				continue
+			}
+
+			c.Forbid = append(c.Forbid, ForbidMatch{
+				ID:       rule.ID,
+				Desc:     rule.Text,
+				Match:    match,
+				Severity: rule.Severity,
+			})
 			continue
 		}
 
-		match, ok := classifyForbid(rule.Text)
+		// RuleMust: reuse the step classification. An observable positive
+		// obligation (names a bundle path, or a write/read plus a path-like
+		// token) becomes a required matcher with no ordering claim — it must
+		// be observed somewhere in the trajectory, not after any particular
+		// step. Anything else has no deterministic check, exactly like an
+		// unmatchable step, so it is judge-scored instead.
+		match, ok := classifyStep(rule.Text)
 		if !ok {
 			c.Semantic = append(c.Semantic, SemanticRule{ID: rule.ID, Text: rule.Text})
 			continue
 		}
 
-		c.Forbid = append(c.Forbid, ForbidMatch{
+		c.Steps = append(c.Steps, StepMatch{
 			ID:       rule.ID,
 			Desc:     rule.Text,
 			Match:    match,
-			Severity: rule.Severity,
+			Order:    Order{Mode: "any"},
+			Required: true,
 		})
 	}
 

@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -373,5 +374,253 @@ func TestContract_IDsArePreservedAndUnique(t *testing.T) {
 		if occurrences[id] != 1 {
 			t.Errorf("source id %q appears %d times across Steps/Forbid/Semantic, want exactly 1", id, occurrences[id])
 		}
+	}
+}
+
+// TestCompile_ObservableMustBecomesRequiredStepMatch closes the asymmetry an
+// earlier pass of this compiler had: a MUST-NOT naming an observable action
+// got a deterministic ForbidMatch, but every MUST — even one naming a
+// plainly observable action like running a script — was demoted to a
+// judge-scored SemanticRule. An observable MUST must instead become a
+// required StepMatch with no ordering claim (Order.Mode: "any"): a positive
+// obligation has to be observed somewhere in the trajectory, not tied to a
+// particular point in the step sequence.
+func TestCompile_ObservableMustBecomesRequiredStepMatch(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "must-example",
+		Steps: []spec.Step{
+			{ID: "s1", Action: "Run scripts/extract.py on the input.", Postcondition: "out/tables.csv exists."},
+		},
+		Constraints: []spec.Rule{
+			{ID: "c-validate", Text: "Always run scripts/validate.py before finishing.", Kind: spec.RuleMust, Severity: spec.SeverityMajor},
+		},
+	}
+
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	var got *contract.StepMatch
+	for i := range c.Steps {
+		if c.Steps[i].ID == "c-validate" {
+			got = &c.Steps[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("observable MUST c-validate was not compiled to a step matcher: %+v", c.Steps)
+	}
+	if got.Match.Type != trajectory.TypeShell {
+		t.Errorf("c-validate match type = %q, want shell", got.Match.Type)
+	}
+	if got.Match.Pattern == "" {
+		t.Error("c-validate has no pattern; a shell matcher with no pattern matches every command")
+	}
+	if !strings.Contains(got.Match.Pattern, `\.`) {
+		t.Errorf("c-validate pattern %q does not escape the dot in the script name", got.Match.Pattern)
+	}
+	if !got.Required {
+		t.Error("c-validate should be required")
+	}
+	if got.Order.Mode != "any" {
+		t.Errorf("c-validate Order.Mode = %q, want %q (a MUST is not tied to step sequence)", got.Order.Mode, "any")
+	}
+	if len(got.Order.After) != 0 {
+		t.Errorf("c-validate Order.After = %v, want empty", got.Order.After)
+	}
+
+	for _, f := range c.Forbid {
+		if f.ID == "c-validate" {
+			t.Errorf("observable MUST compiled to a forbid rule instead of a step matcher: %+v", f)
+		}
+	}
+	for _, sem := range c.Semantic {
+		if sem.ID == "c-validate" {
+			t.Errorf("observable MUST was demoted to semantic: %+v", sem)
+		}
+	}
+}
+
+// TestCompile_UnobservableMustStaysSemantic guards the other side of the same
+// fix: a MUST with no observable event (a tone requirement) must still be
+// demoted to SemanticRule, exactly as before — reusing classifyStep for MUST
+// constraints must not accidentally invent a matcher for something that was
+// correctly unmatchable.
+func TestCompile_UnobservableMustStaysSemantic(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "must-example-unobservable",
+		Constraints: []spec.Rule{
+			{ID: "c-tone", Text: "Keep the report tone formal.", Kind: spec.RuleMust, Severity: spec.SeverityMinor},
+		},
+	}
+
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	for _, sm := range c.Steps {
+		if sm.ID == "c-tone" {
+			t.Errorf("unobservable MUST compiled to a step matcher: %+v", sm)
+		}
+	}
+	var found bool
+	for _, sem := range c.Semantic {
+		if sem.ID == "c-tone" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("unobservable MUST c-tone was not demoted to semantic: %+v", c.Semantic)
+	}
+}
+
+// TestCompile_MustNotStillBecomesForbid re-confirms, after adding the MUST
+// path, that MUST-NOT is unaffected: it must still compile to a ForbidMatch,
+// never a StepMatch.
+func TestCompile_MustNotStillBecomesForbid(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "must-not-example",
+		Constraints: []spec.Rule{
+			{ID: "c-scope", Text: "Never write outside out/.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+		},
+	}
+
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if len(c.Forbid) != 1 || c.Forbid[0].ID != "c-scope" {
+		t.Fatalf("MUST-NOT did not compile to a forbid rule: %+v", c.Forbid)
+	}
+	for _, sm := range c.Steps {
+		if sm.ID == "c-scope" {
+			t.Errorf("MUST-NOT compiled to a step matcher instead of a forbid rule: %+v", sm)
+		}
+	}
+}
+
+// TestCompile_ConstraintIDCollidingWithStepIDIsAnError is the cross-kind
+// collision guard: once a MUST constraint can also land in c.Steps, a
+// constraint ID that collides with a step ID must not be silently merged or
+// silently overwritten — either of which would let a later report attribute
+// a violation to the wrong rule. Compile must fail loudly instead.
+func TestCompile_ConstraintIDCollidingWithStepIDIsAnError(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "colliding-ids",
+		Steps: []spec.Step{
+			{ID: "shared", Action: "Run scripts/extract.py on the input.", Postcondition: "out/tables.csv exists."},
+		},
+		Constraints: []spec.Rule{
+			{ID: "shared", Text: "Always run scripts/validate.py before finishing.", Kind: spec.RuleMust, Severity: spec.SeverityMajor},
+		},
+	}
+
+	c, err := contract.Compile(s)
+	if err == nil {
+		t.Fatalf("Compile: want an error for a constraint id colliding with a step id, got contract %+v", c)
+	}
+	if !strings.Contains(err.Error(), "shared") {
+		t.Errorf("Compile error %q does not name the colliding id", err.Error())
+	}
+}
+
+// TestCompile_ConstraintIDCollidingWithConstraintIDIsAnError extends the
+// collision guard to two constraints sharing an ID (not just a step and a
+// constraint) — the same silent-merge risk applies within Constraints alone.
+func TestCompile_ConstraintIDCollidingWithConstraintIDIsAnError(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "colliding-constraint-ids",
+		Constraints: []spec.Rule{
+			{ID: "dup", Text: "Never write outside out/.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+			{ID: "dup", Text: "Must not connect to the network.", Kind: spec.RuleMustNot, Severity: spec.SeverityMajor},
+		},
+	}
+
+	c, err := contract.Compile(s)
+	if err == nil {
+		t.Fatalf("Compile: want an error for two constraints sharing id %q, got contract %+v", "dup", c)
+	}
+}
+
+// TestClassifyForbid_PathScopeTrimsTrailingPunctuation pins the path-scope
+// trim as its own behavior, not just an implementation detail: "outside X"
+// must yield PathNotGlob "X/**" regardless of whether the sentence attaches
+// a trailing period, a trailing slash, both, or neither directly to X. This
+// is inference beyond the brief's literal text (only one case, "out/.", was
+// given), so it needs its own coverage or a future edit could "simplify" the
+// trim and silently produce an inert glob like "out//**" or "out/./**".
+func TestClassifyForbid_PathScopeTrimsTrailingPunctuation(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"trailing dot", "Never write outside out.", "out/**"},
+		{"trailing slash", "Never write outside out/ ever.", "out/**"},
+		{"trailing dot and slash", "Never write outside out/.", "out/**"},
+		{"neither", "Never write outside out and nowhere else.", "out/**"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &spec.SkillSpec{
+				Name: "path-scope-trim",
+				Constraints: []spec.Rule{
+					{ID: "c1", Text: tc.text, Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+				},
+			}
+			c, err := contract.Compile(s)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if len(c.Forbid) != 1 {
+				t.Fatalf("expected exactly one forbid rule, got %+v (semantic: %+v)", c.Forbid, c.Semantic)
+			}
+			if got := c.Forbid[0].Match.PathNotGlob; got != tc.want {
+				t.Errorf("PathNotGlob = %q, want %q (from text %q)", got, tc.want, tc.text)
+			}
+		})
+	}
+}
+
+// TestClassifyForbid_PathScopeGlobActuallyMatches goes one step further than
+// asserting the glob's string form: it proves the compiled PathNotGlob
+// behaves correctly as a glob via path/filepath.Match — a write inside the
+// declared scope must match (no violation), and a write outside it must not
+// (a violation) — rather than only checking the pattern text looks right.
+func TestClassifyForbid_PathScopeGlobActuallyMatches(t *testing.T) {
+	s := &spec.SkillSpec{
+		Name: "path-scope-glob-match",
+		Constraints: []spec.Rule{
+			{ID: "c1", Text: "Never write outside out/.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+		},
+	}
+	c, err := contract.Compile(s)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(c.Forbid) != 1 {
+		t.Fatalf("expected exactly one forbid rule, got %+v", c.Forbid)
+	}
+	glob := c.Forbid[0].Match.PathNotGlob
+
+	insideScope := "out/tables.csv"
+	matched, err := filepath.Match(glob, insideScope)
+	if err != nil {
+		t.Fatalf("filepath.Match(%q, %q): %v", glob, insideScope, err)
+	}
+	if !matched {
+		t.Errorf("glob %q does not match in-scope path %q; the forbid rule would wrongly flag every write, even compliant ones", glob, insideScope)
+	}
+
+	outsideScope := "elsewhere/secrets.txt"
+	matched, err = filepath.Match(glob, outsideScope)
+	if err != nil {
+		t.Fatalf("filepath.Match(%q, %q): %v", glob, outsideScope, err)
+	}
+	if matched {
+		t.Errorf("glob %q matches out-of-scope path %q; the forbid rule would never fire", glob, outsideScope)
 	}
 }
