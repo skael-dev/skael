@@ -71,6 +71,26 @@ func TestCompleteJSON_PropagatesGatewayError(t *testing.T) {
 	}
 }
 
+// TestFakeGateway_CompleteReportsModelAndCached exercises Gateway.Complete
+// directly, rather than through CompleteJSON, which discards Res down to
+// .Text. Later tasks — the real gateways and the caching layer — are written
+// against Res.Model and Res.Cached, so a fake or a real implementation that
+// forgets to populate them needs a test to catch it now, not there.
+func TestFakeGateway_CompleteReportsModelAndCached(t *testing.T) {
+	g := fake.New(`{"name":"x"}`)
+
+	res, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if res.Model != "fake" {
+		t.Errorf("Model = %q, want %q", res.Model, "fake")
+	}
+	if res.Cached {
+		t.Error("Cached = true, want false: the fake never serves a cached response")
+	}
+}
+
 func TestCacheKey_IsContentAddressedAndDiscriminating(t *testing.T) {
 	base := llm.Req{Role: "generate", Prompt: "body pass", ModelClass: llm.ClassStrong}
 

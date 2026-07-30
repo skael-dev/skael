@@ -61,3 +61,23 @@ func TestExtractJSON_UnbalancedIsAnError(t *testing.T) {
 		t.Error("ExtractJSON accepted a truncated object")
 	}
 }
+
+func TestExtractJSON_LongTruncatedResponseKeepsHeadAndTail(t *testing.T) {
+	// An unterminated JSON string long enough that a head-only quote would
+	// never reach the tail. The tail is exactly the informative part for a
+	// truncated response: it shows where generation stopped.
+	raw := `{"a":"` + strings.Repeat("A", 600) + strings.Repeat("Z", 300)
+
+	_, err := llm.ExtractJSON(raw)
+	if err == nil {
+		t.Fatal("ExtractJSON accepted an unterminated JSON string")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, strings.Repeat("A", 20)) {
+		t.Errorf("error dropped the beginning of a long response: %v", err)
+	}
+	if !strings.Contains(msg, strings.Repeat("Z", 20)) {
+		t.Errorf("error dropped the end (the truncation point) of a long response: %v", err)
+	}
+}

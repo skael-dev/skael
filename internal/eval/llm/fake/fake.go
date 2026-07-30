@@ -1,6 +1,6 @@
-// Package fake provides an in-memory Gateway for tests. Every test in this
-// phase runs with no subscription and no network, so the fake is how generator,
-// interview, and suite behaviour is exercised in CI.
+// Package fake provides an in-memory Gateway for tests: these tests run with
+// no LLM subscription, no API key, and no network, so the fake is how
+// generation and suite behaviour get exercised.
 package fake
 
 import (

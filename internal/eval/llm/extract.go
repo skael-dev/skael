@@ -6,8 +6,11 @@ import (
 	"strings"
 )
 
-// maxQuoted bounds how much raw text an extraction error repeats.
+// maxQuoted bounds how much raw text an extraction error repeats, split
+// between the head and the tail (see quote).
 const maxQuoted = 400
+const quoteHead = 200
+const quoteTail = 200
 
 // ExtractJSON pulls a JSON value out of a model response. Models wrap JSON in
 // code fences and prose regardless of instructions, so extraction is tolerant
@@ -83,10 +86,17 @@ func matchBalanced(s string) (int, bool) {
 	return 0, false
 }
 
+// quote bounds how much raw text an extraction error repeats. It keeps both
+// the beginning and the end of long text, joined by an elision marker: a
+// refusal or a rate-limit notice is short and front-loaded, so the head is
+// enough, but a genuinely truncated response is only diagnosable from where
+// generation stopped — its tail — which a head-only quote would discard
+// entirely. The result stays bounded regardless of input length, since these
+// strings end up in logs.
 func quote(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > maxQuoted {
-		s = s[:maxQuoted] + "…"
+		s = s[:quoteHead] + " …[truncated]… " + s[len(s)-quoteTail:]
 	}
 	return fmt.Sprintf("%q", s)
 }
