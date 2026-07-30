@@ -2,6 +2,7 @@ package whetstone_test
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/skael-dev/skael/cli/whetstone"
+	"github.com/skael-dev/skael/internal/skill"
 )
 
 func TestRunPack_StripsTheEvalSidecar(t *testing.T) {
@@ -253,5 +255,52 @@ func TestRunPack_KeepsANestedEvalDirectory(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("packed archive dropped references/eval/rubric.md (has %v)", namesIn(t, out))
+	}
+}
+
+// TestRunPack_OutputInstallsThroughTheRegistrysUnpack closes the loop pack
+// exists for: an archive that the registry cannot install is not an archive.
+// Nothing else asserts that pack's tar layout satisfies skill.Unpack's rules
+// (no symlinks, no absolute or escaping names, size caps).
+func TestRunPack_OutputInstallsThroughTheRegistrysUnpack(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	mustWrite(t, filepath.Join(dir, "scripts", "extract.py"), "print('x')\n")
+	mustWrite(t, filepath.Join(dir, "references", "format.md"), "# format\n")
+	mustWrite(t, filepath.Join(dir, "spec.yaml"), "name: pdf-extract\n")
+	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
+
+	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
+	if err := whetstone.RunPack(dir, out); err != nil {
+		t.Fatalf("RunPack: %v", err)
+	}
+
+	archive, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := skill.Unpack(bytes.NewReader(archive), dest); err != nil {
+		t.Fatalf("skill.Unpack rejected a packed bundle: %v", err)
+	}
+
+	want := map[string]string{
+		"SKILL.md":             cleanSkillMD,
+		"scripts/extract.py":   "print('x')\n",
+		"references/format.md": "# format\n",
+	}
+	for name, content := range want {
+		got, err := os.ReadFile(filepath.Join(dest, filepath.FromSlash(name)))
+		if err != nil {
+			t.Errorf("unpacked bundle is missing %s: %v", name, err)
+			continue
+		}
+		if string(got) != content {
+			t.Errorf("unpacked %s = %q, want %q", name, got, content)
+		}
+	}
+	for _, name := range []string{"spec.yaml", "eval/contract.yaml"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(name))); err == nil {
+			t.Errorf("unpacked bundle contains scaffolding: %s", name)
+		}
 	}
 }
