@@ -34,6 +34,20 @@ type streamLine struct {
 	NumTurns         int      `json:"num_turns"`
 	IsError          bool     `json:"is_error"`
 	PermissionDenied []denial `json:"permission_denials"`
+
+	// rate_limit_event
+	RateLimitInfo *rateLimitInfo `json:"rate_limit_info"`
+}
+
+// rateLimitInfo is the payload of a rate_limit_event line. A session emits
+// one of these routinely as telemetry — "status":"allowed" means the account
+// is nowhere near its limit — so only a non-"allowed" status is an actual
+// throttle. Treating every rate_limit_event as a hit (as an earlier version
+// of this parser did) makes a normal session indistinguishable from one that
+// is actually being rate limited, and the runner backs off and eventually
+// fails it after exhausting its retries for a limit that was never hit.
+type rateLimitInfo struct {
+	Status string `json:"status"`
 }
 
 type apiMessage struct {
@@ -157,7 +171,9 @@ func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "system/" + sl.Subtype})
 
 		case "rate_limit_event":
-			res.Meta.RateLimited = true
+			if sl.RateLimitInfo == nil || (sl.RateLimitInfo.Status != "" && sl.RateLimitInfo.Status != "allowed") {
+				res.Meta.RateLimited = true
+			}
 			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "rate_limit_event"})
 
 		case "result":
