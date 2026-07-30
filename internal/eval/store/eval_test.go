@@ -87,6 +87,41 @@ func TestRunDirIsUniquePerRunKey(t *testing.T) {
 	if a == b {
 		t.Errorf("skill and baseline share an artifact dir: %s", a)
 	}
+
+	// A hyphen inside Agent or Model must not shift the field boundary: the
+	// shipped default panel's agent name is literally "claude-code", so this
+	// is the normal shape, not an exotic one. Without per-component escaping,
+	// {Agent:"claude-code", Model:"opus"} and {Agent:"claude", Model:"code-opus"}
+	// both flatten to the same leaf and one run's transcript silently
+	// overwrites the other's — and these are exactly the two runs (skill vs.
+	// baseline, or two models) most likely to be compared against each other.
+	c, err := s.RunDir("demo", id, store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "skill", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.RunDir("demo", id, store.RunKey{TaskID: "t1", Agent: "claude", Model: "code-opus", Condition: "skill", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == d {
+		t.Errorf("a hyphen in Agent/Model shifted the field boundary: %q vs %q collided at %s", "claude-code/opus", "claude/code-opus", c)
+	}
+
+	// A component containing an underscore must not collide either: the fix
+	// for the hyphen case joins fields with "__", so an underscore in a field
+	// must itself be neutralized or it recreates the same ambiguity one level
+	// down.
+	e, err := s.RunDir("demo", id, store.RunKey{TaskID: "t1", Agent: "claude_code", Model: "opus", Condition: "skill", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.RunDir("demo", id, store.RunKey{TaskID: "t1", Agent: "claude", Model: "code_opus", Condition: "skill", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e == f {
+		t.Errorf("an underscore in Agent/Model shifted the field boundary: %q vs %q collided at %s", "claude_code/opus", "claude/code_opus", e)
+	}
 }
 
 func TestMigration3_PreservesAnExistingWorkspace(t *testing.T) {

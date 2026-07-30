@@ -10,18 +10,20 @@ import (
 	"time"
 )
 
-// Run statuses. A run that executed and whose verifier failed is still a
-// completed measurement (statusOK, possibly with a non-zero VerifierExit) —
-// it must not be retried. Only a run that could not be performed at all
-// (statusError, statusTimeout) is retried, and a claimed-but-unfinished run
-// (statusClaimed) always is, because a process killed mid-run must not
-// silently drop a session from a denominator.
+// Run statuses. ClaimRun treats StatusOK and StatusFailed as done: a run
+// that executed and whose verifier failed is still a completed
+// measurement — a failed measurement is a measurement — and re-running it
+// would waste a session without changing the answer. StatusError and
+// StatusTimeout mean the run could not be performed at all and are retried,
+// and a claimed-but-unfinished run (StatusClaimed) always is, because a
+// process killed mid-run must not silently drop a session from a
+// denominator.
 const (
-	statusClaimed = "claimed"
-	statusOK      = "ok"
-	statusFailed  = "failed"
-	statusError   = "error"
-	statusTimeout = "timeout"
+	StatusClaimed = "claimed"
+	StatusOK      = "ok"
+	StatusFailed  = "failed"
+	StatusError   = "error"
+	StatusTimeout = "timeout"
 )
 
 // evalTimeLayout is how StartedAt/FinishedAt are stored: application-supplied
@@ -253,7 +255,7 @@ func (s *Store) ClaimRun(evalID int64, k RunKey) (int64, bool, error) {
 		evalID, k.TaskID, k.Agent, k.Model, k.Condition, k.Attempt).Scan(&id, &status)
 	switch {
 	case err == nil:
-		return id, status == statusOK || status == statusFailed, nil
+		return id, status == StatusOK || status == StatusFailed, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return 0, false, fmt.Errorf("store.ClaimRun: %w", err)
 	}
@@ -261,7 +263,7 @@ func (s *Store) ClaimRun(evalID int64, k RunKey) (int64, bool, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO runs (eval_id, task_id, agent, model, condition, attempt, status)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		evalID, k.TaskID, k.Agent, k.Model, k.Condition, k.Attempt, statusClaimed)
+		evalID, k.TaskID, k.Agent, k.Model, k.Condition, k.Attempt, StatusClaimed)
 	if err != nil {
 		return 0, false, fmt.Errorf("store.ClaimRun: %w", err)
 	}
@@ -273,7 +275,7 @@ func (s *Store) ClaimRun(evalID int64, k RunKey) (int64, bool, error) {
 }
 
 // FinishRun records a run's outcome. o.Status is expected to be one of
-// statusOK, statusFailed, statusError, or statusTimeout: the first two make a
+// StatusOK, StatusFailed, StatusError, or StatusTimeout: the first two make a
 // later ClaimRun of the same key report done, the latter two make it retry.
 func (s *Store) FinishRun(id int64, o RunOutcome) error {
 	res, err := s.db.Exec(
@@ -463,22 +465,34 @@ func (s *Store) SuiteChecks(skill, suiteRef string) ([]SuiteCheckRow, error) {
 // end up as directory names and all ultimately trace back to CLI input or a
 // model-authored suite (see suite.safeJoin), so none of them are trusted not
 // to contain a path separator or a traversal segment.
+//
+// Every literal underscore is also mapped away (to "-"), so no sanitized
+// component can ever contain "_". That is what makes RunDir's "__" field
+// separator unambiguous: a run-of-the-mill hyphen in a model name
+// ("claude-code", "gpt-4o-mini") is common enough to be the normal case, and
+// without a separator guaranteed absent from every component, two different
+// RunKeys can flatten to the same leaf and silently overwrite each other's
+// transcript.
 func sanitizePathComponent(s string) string {
-	s = strings.ReplaceAll(s, string(filepath.Separator), "_")
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "\x00", "_")
+	s = strings.ReplaceAll(s, string(filepath.Separator), "-")
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, "\x00", "-")
+	s = strings.ReplaceAll(s, "_", "-")
 	switch s {
 	case "", ".", "..":
-		return "_"
+		return "-"
 	default:
 		return s
 	}
 }
 
 // RunDir is the artifact directory for one run, inside the skill's eval
-// sidecar: <evalDir>/runs/<evalID>/<taskID>/<agent>-<model>-<condition>-<attempt>/.
+// sidecar: <evalDir>/runs/<evalID>/<taskID>/<agent>__<model>__<condition>__<attempt>/.
 // skill is validated the same way SkillDir validates it; every RunKey field
-// is sanitised before joining, since each one traces back to untrusted input.
+// is sanitised before joining, since each one traces back to untrusted
+// input — and sanitizePathComponent guarantees none of them can contain the
+// "__" used to join them, so the leaf splits back into its four fields
+// unambiguously.
 func (s *Store) RunDir(skill string, evalID int64, k RunKey) (string, error) {
 	dir, err := s.EvalDir(skill)
 	if err != nil {
@@ -489,7 +503,7 @@ func (s *Store) RunDir(skill string, evalID int64, k RunKey) (string, error) {
 	agent := sanitizePathComponent(k.Agent)
 	model := sanitizePathComponent(k.Model)
 	condition := sanitizePathComponent(k.Condition)
-	leaf := fmt.Sprintf("%s-%s-%s-%d", agent, model, condition, k.Attempt)
+	leaf := fmt.Sprintf("%s__%s__%s__%d", agent, model, condition, k.Attempt)
 
 	return filepath.Join(dir, "runs", strconv.FormatInt(evalID, 10), taskID, leaf), nil
 }
