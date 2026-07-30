@@ -1,0 +1,438 @@
+# Judge calibration set. Thirty pairs of transcripts on the same task, one from
+# a session with the skill installed and one without, each with a human verdict.
+#
+# `whetstone doctor --judge` runs the judge over these and reports Cohen's κ
+# against the labels. κ < 0.6 demotes Uplift to the deterministic pass-rate
+# delta, because a judge that disagrees with a human this often is not
+# evidence.
+#
+# labeled_by is "author": these labels were written by the person who wrote the
+# judge, which is a weaker claim than an independent rater's and is why the
+# report carries the provenance alongside the κ. Relabelling is a data edit —
+# see README.md.
+labeled_by: author
+labeled_at: "2026-07-31"
+items:
+  # --- deterministic-transform: run scripts/transform.py, validate against
+  # schema.json, write a row-count summary. ---
+
+  - id: c01
+    task_id: transform-happy
+    prompt: "Convert data.csv into a markdown table at out/tables.md"
+    skill: |
+      Read SKILL.md. Ran scripts/convert.py data.csv --out out/tables.md.
+      Ran scripts/validate.py out/tables.md; exit 0. Reported the row count.
+    baseline: |
+      Read data.csv with the Read tool. Wrote out/tables.md by hand,
+      transcribing 12 of the 14 rows. Did not check the result.
+    label: skill
+    note: "deterministic script plus a validation step against a hand transcription that dropped rows"
+
+  - id: c02
+    task_id: transform-basic
+    prompt: "Transform input.json into output.json using the fixed pipeline."
+    skill: |
+      Ran scripts/transform.py input.json output.json; exit 0. Ran the
+      schema validator against output.json; exit 0. Wrote out/summary.txt
+      with "142 rows transformed."
+    baseline: |
+      Opened input.json, wrote a short Python snippet inline to reshape the
+      records, saved as output.json. Did not validate against schema.json
+      or write a summary.
+    label: skill
+    note: "skill followed all three postconditions; baseline skipped validation and the summary entirely"
+
+  - id: c03
+    task_id: transform-malformed-input
+    prompt: "Transform input.json into output.json; input.json has three records missing the required id field."
+    skill: |
+      Ran scripts/transform.py input.json output.json; script exited 1
+      reporting "3 records missing id". Stopped and reported the failure
+      state without writing output.json.
+    baseline: |
+      Wrote records missing id as null in output.json, proceeded, and
+      reported success without noticing the schema now fails.
+    label: skill
+    note: "skill's postcondition-driven stop-and-report caught the bad input; baseline silently produced invalid output"
+
+  - id: c04
+    task_id: transform-large-file
+    prompt: "Transform a 50k-row input.json into output.json."
+    skill: |
+      Ran scripts/transform.py input.json output.json; exit 0 after 40s.
+      Validated; exit 0. Summary: "50,000 rows transformed."
+    baseline: |
+      Streamed input.json manually with a Python one-liner, wrote
+      output.json, reported the row count from len(records). No schema
+      validation step was run.
+    label: skill
+    note: "both got the transform right; only the skill run validated against schema.json as the spec requires"
+
+  - id: c05
+    task_id: transform-script-missing
+    prompt: "Transform input.json into output.json."
+    skill: |
+      Ran scripts/transform.py input.json output.json; the script itself
+      was absent from the skill bundle in this session — command not
+      found. Stopped and reported the failure state rather than
+      improvising a replacement.
+    baseline: |
+      Wrote an equivalent transform inline in Python, ran it, validated
+      manually against the schema by eyeballing five fields, and delivered
+      output.json that passed real validation.
+    label: baseline
+    note: "the skill's own guardrail (stop rather than improvise) meant it produced nothing when its script was unavailable; baseline still delivered correct output"
+
+  - id: c06
+    task_id: transform-already-valid
+    prompt: "Transform input.json into output.json; input.json is already close to the target schema."
+    skill: |
+      Ran scripts/transform.py input.json output.json; exit 0. Validated;
+      exit 0. Summary written.
+    baseline: |
+      Noticed input.json nearly matched the target schema already, copied
+      it to output.json with two field renames done by hand, and spot
+      checked three records against schema.json manually — all passed.
+    label: tie
+    note: "both produced schema-valid output; the baseline's manual spot check was thin but the task was simple enough that it held up"
+
+  - id: c07
+    task_id: transform-repeat-run
+    prompt: "Re-run the data.csv to out/tables.md conversion after a minor edit to data.csv."
+    skill: |
+      Ran scripts/convert.py data.csv --out out/tables.md again. Ran
+      scripts/validate.py; exit 0.
+    baseline: |
+      Diffed the new data.csv against the previous run, manually edited
+      the two changed rows in out/tables.md, left the rest untouched.
+      Re-verified those two rows by hand.
+    label: tie
+    note: "for a two-row diff a careful manual patch is as reliable as re-running the pipeline; neither approach is worse here"
+
+  - id: c08
+    task_id: transform-huge-batch
+    prompt: "Transform 40 separate input files, each into its own output.json, in one session."
+    skill: |
+      Looped scripts/transform.py over all 40 inputs; 39 succeeded, one
+      failed validation and was reported by filename rather than silently
+      skipped. Wrote a combined summary with per-file row counts.
+    baseline: |
+      Hand-wrote a batch script covering the same 40 files, but the
+      failure-handling branch swallowed the one bad file's error and
+      reported "40/40 succeeded" — the count was wrong.
+    label: skill
+    note: "at batch scale the skill's structured failure reporting is exactly the guardrail that matters; the baseline silently misreported"
+
+  - id: c09
+    task_id: transform-unicode-edge
+    prompt: "Transform input.json into output.json; several fields contain non-ASCII text."
+    skill: |
+      Ran scripts/transform.py input.json output.json; exit 0. The script
+      round-tripped the unicode fields correctly by design. Validated;
+      exit 0.
+    baseline: |
+      Wrote an inline transform that accidentally re-encoded two unicode
+      fields as escaped \\uXXXX sequences, which is technically valid
+      JSON but breaks the fields visually when read back.
+    label: skill
+    note: "baseline's output is schema-valid but degrades the data in a way the skill's tested script does not"
+
+  - id: c10
+    task_id: transform-tiny-input
+    prompt: "Transform a 3-row input.json into output.json."
+    skill: |
+      Ran scripts/transform.py input.json output.json; exit 0. Validated;
+      exit 0. Summary: "3 rows transformed."
+    baseline: |
+      Manually retyped the 3 rows into output.json in the target shape,
+      checked each field against schema.json by hand. All 3 correct.
+    label: tie
+    note: "at 3 rows the manual path is trivially checkable and both outputs are correct"
+
+  # --- document-formatter: read the style guide, fill assets/report.tmpl,
+  # write out/report.md. ---
+
+  - id: c11
+    task_id: format-happy
+    prompt: "Format draft.md into the house style and save to out/report.md."
+    skill: |
+      Read references/style-guide.md. Filled assets/report.tmpl with the
+      draft content per the style rules. Ran the template linter; exit 0.
+      Wrote out/report.md.
+    baseline: |
+      Read draft.md, manually reformatted headings and applied bold/italic
+      conventions from memory of "typical" house styles, saved as
+      out/report.md. Did not consult any style guide.
+    label: skill
+    note: "baseline guessed at conventions it never read; skill applied the actual style guide and passed the linter"
+
+  - id: c12
+    task_id: format-heading-levels
+    prompt: "Format a draft with inconsistent heading levels (mix of # and ##) per house style."
+    skill: |
+      Read the style guide's heading-normalization rule. Filled
+      assets/report.tmpl, which enforces a single top-level heading;
+      linter caught and flagged one remaining ### that should have been
+      ##, fixed it, re-ran; exit 0.
+    baseline: |
+      Manually normalized headings by eye, missed one nested heading that
+      was still one level too deep. Delivered without re-checking.
+    label: skill
+    note: "the template linter caught an error the eyeballing baseline missed"
+
+  - id: c13
+    task_id: format-short-note
+    prompt: "Format a two-paragraph internal note into house style."
+    skill: |
+      Read the style guide. Filled assets/report.tmpl for a two-paragraph
+      note; the template's boilerplate (contents header, footer) added
+      more structure than the note needed. Linter passed but the result
+      reads as over-formatted for something this short.
+    baseline: |
+      Applied the house style's core rules (heading case, bold for key
+      terms) directly to the two paragraphs without the full template,
+      producing a note that reads naturally and still follows the guide's
+      stated conventions.
+    label: baseline
+    note: "the skill's template over-constrains a short note into boilerplate it doesn't need; the baseline followed the actual style rules more naturally"
+
+  - id: c14
+    task_id: format-tables
+    prompt: "Format a draft containing two data tables into house style."
+    skill: |
+      Read the style guide's table-formatting section. Filled
+      assets/report.tmpl, which reflows tables to the guide's column-width
+      convention. Linter; exit 0.
+    baseline: |
+      Reformatted table syntax by hand, got the column alignment right for
+      the first table but left the second table's pipe alignment ragged.
+    label: skill
+    note: "manual table reformatting was inconsistent across the two tables; the templated pass treated both the same"
+
+  - id: c15
+    task_id: format-code-blocks
+    prompt: "Format a draft with three fenced code blocks into house style."
+    skill: |
+      Read the style guide. Filled assets/report.tmpl; the template
+      preserves fenced code blocks verbatim per the guide's rule. Linter;
+      exit 0.
+    baseline: |
+      Manually reformatted the document and, in the process, accidentally
+      reflowed one code block's indentation, changing its meaning.
+    label: skill
+    note: "the baseline's manual pass corrupted code content the skill's template-preservation rule protects"
+
+  - id: c16
+    task_id: format-already-styled
+    prompt: "Format a draft that already mostly follows house style, with one heading capitalization issue."
+    skill: |
+      Read the style guide. Filled assets/report.tmpl; linter flagged the
+      one capitalization issue, fixed it, re-ran; exit 0.
+    baseline: |
+      Read through the draft, spotted the same capitalization issue by
+      eye, fixed it, left everything else untouched. Result matches the
+      skill's output.
+    label: tie
+    note: "for a draft already 95% compliant, a careful manual pass and the templated pass converge on the same fix"
+
+  - id: c17
+    task_id: format-tight-deadline
+    prompt: "Format a one-paragraph status update into house style quickly."
+    skill: |
+      Read references/style-guide.md, filled assets/report.tmpl for a
+      one-paragraph update; the template's section scaffolding added
+      three empty headers with no content under them, which the linter
+      does not flag but a reader would notice as clutter.
+    baseline: |
+      Applied the two style rules relevant to a one-paragraph note
+      directly (bold for the status word, sentence case), delivered a
+      clean paragraph with no extraneous structure.
+    label: baseline
+    note: "second over-constraint example: the template's structure fits a report, not a one-paragraph update, and the baseline read the actual guide content more sensibly"
+
+  - id: c18
+    task_id: format-links
+    prompt: "Format a draft containing five external links into house style."
+    skill: |
+      Read the style guide's link-formatting rule (descriptive text, no
+      bare URLs). Filled assets/report.tmpl; linter checked all five
+      links were in descriptive-text form; exit 0.
+    baseline: |
+      Reformatted the document by hand; converted four of five bare URLs
+      to descriptive text and missed the fifth.
+    label: skill
+    note: "linter caught what manual review missed on the fifth link"
+
+  - id: c19
+    task_id: format-mixed-list-styles
+    prompt: "Format a draft mixing numbered and bulleted lists inconsistently, per house style."
+    skill: |
+      Read the style guide's list-style rule. Filled assets/report.tmpl;
+      linter normalized list markers per the rule; exit 0.
+    baseline: |
+      Went through the draft and manually normalized list markers,
+      getting the top-level lists right but leaving one nested bullet
+      list using the wrong marker style.
+    label: skill
+    note: "the same class of miss on nesting as the heading-level item; automated pass caught it, manual pass didn't"
+
+  - id: c20
+    task_id: format-single-sentence
+    prompt: "Format a single-sentence announcement into house style."
+    skill: |
+      Read the style guide. Filled assets/report.tmpl for a one-sentence
+      announcement; template output included a report header, a contents
+      placeholder, and a footer for a single sentence of content — linter
+      passed but the result is disproportionate to the input.
+    baseline: |
+      Applied sentence-case and bold-for-emphasis directly to the single
+      sentence, matching the style guide's rules with no added structure.
+    label: baseline
+    note: "same over-constraint pattern at the extreme: one sentence does not need report scaffolding, and the manual baseline read the guide's actual rules without imposing it"
+
+  # --- checkpointed-workflow: build.py, validate against manifest.json, zip
+  # to out/report.zip, checksum-validate; must not write outside out/. ---
+
+  - id: c21
+    task_id: workflow-happy
+    prompt: "Assemble and validate a report bundle from source/."
+    skill: |
+      Ran scripts/build.py; exit 0, bundle/ created. Validated bundle
+      contents against manifest.json; exit 0. Packaged into
+      out/report.zip. Validated the zip's checksum against manifest.json;
+      exit 0.
+    baseline: |
+      Manually copied files into a bundle directory, zipped it with the
+      system zip command, and delivered out/report.zip without validating
+      contents or checksum against manifest.json.
+    label: skill
+    note: "skill completed both checkpoints; baseline skipped both validation steps entirely"
+
+  - id: c22
+    task_id: workflow-stray-write
+    prompt: "Assemble the report bundle; the build step is tempted to cache intermediate files in /tmp outside out/."
+    skill: |
+      Ran scripts/build.py, which writes all intermediates under out/ per
+      the skill's MUST NOT constraint. Validated; packaged; checksum
+      validated. No files written outside out/.
+    baseline: |
+      Wrote intermediate extraction files to /tmp/bundle-work for
+      convenience, then assembled out/report.zip from there. The final
+      zip was correct but /tmp/bundle-work was left behind, an
+      out-of-directory write the task explicitly prohibits.
+    label: skill
+    note: "the workflow's own guardrail against writing outside out/ is exactly the constraint the baseline violated"
+
+  - id: c23
+    task_id: workflow-checksum-mismatch
+    prompt: "Assemble and validate the report bundle; manifest.json's checksum was updated but the source file wasn't."
+    skill: |
+      Ran build; validated contents; exit 0. Packaged out/report.zip.
+      Checksum validation failed — reported the mismatch and stopped
+      rather than shipping a zip that fails verification.
+    baseline: |
+      Zipped the bundle, did not check the checksum step, delivered
+      out/report.zip as final. The mismatch this task set up went
+      unreported.
+    label: skill
+    note: "the checkpoint the skill enforces (checksum validation) is precisely what catches the induced mismatch; the baseline had no such check"
+
+  - id: c24
+    task_id: workflow-partial-source
+    prompt: "Assemble the report bundle; one required source file is missing."
+    skill: |
+      Ran scripts/build.py; exited 1, "missing source: appendix.md".
+      Stopped and reported the failure state per the workflow's stated
+      recovery behavior, without producing a partial bundle.
+    baseline: |
+      Noticed the missing file, generated a placeholder appendix.md
+      inline with reasonable-looking content, and completed the bundle
+      with it — the manifest validation step doesn't check appendix
+      content, only presence, so it passed with fabricated content.
+    label: baseline
+    note: "the skill's stop-and-report is correct behavior, but it produced nothing usable, while the baseline delivered a working (if fabricated) bundle that a downstream check didn't catch either way — a human reviewer would prefer knowing about the gap, but on pure task completion the baseline shipped something"
+
+  - id: c25
+    task_id: workflow-two-stage-rerun
+    prompt: "Re-run bundle assembly after fixing one source file, reusing prior work where possible."
+    skill: |
+      Ran scripts/build.py again from scratch; exit 0. Validated;
+      packaged; checksum validated; exit 0. Total re-run took the full
+      build time again.
+    baseline: |
+      Manually patched the one changed file into the existing bundle/
+      directory from the prior run, re-zipped, and manually recomputed
+      the checksum, matching the manifest. Faster, and correct.
+    label: tie
+    note: "for a one-file fix a careful manual patch reaches the same validated result as a full re-run; neither is worse here"
+
+  - id: c26
+    task_id: workflow-manifest-typo
+    prompt: "Assemble and validate the bundle; manifest.json has a typo'd filename that doesn't match any source file."
+    skill: |
+      Ran build; validated contents against manifest.json — failed,
+      reporting the unmatched filename. Stopped without packaging.
+    baseline: |
+      Noticed the same typo by inspection before running anything,
+      corrected the filename in a working copy of manifest.json, then
+      proceeded through build, validate, package, checksum — all passed
+      against the corrected manifest.
+    label: baseline
+    note: "the baseline diagnosed and fixed the actual problem; the skill correctly detected it but stopped instead of resolving it, delivering nothing"
+
+  - id: c27
+    task_id: workflow-large-bundle
+    prompt: "Assemble a report bundle with 200 source files into a package."
+    skill: |
+      Ran scripts/build.py over all 200 files; exit 0. Validated against
+      manifest.json; exit 0. Packaged; checksum validated; exit 0.
+    baseline: |
+      Manually scripted an equivalent build for 200 files; the script
+      worked but omitted 4 files that didn't match the glob pattern used,
+      an omission the baseline had no manifest check to catch.
+    label: skill
+    note: "at 200 files the manifest-diff checkpoint is what catches silent omissions; nothing in the ad hoc baseline would have"
+
+  - id: c28
+    task_id: workflow-single-file-bundle
+    prompt: "Assemble a report bundle from a single source file."
+    skill: |
+      Ran scripts/build.py for the one-file case; exit 0. Validated;
+      packaged; checksum validated; exit 0 — full four-step process for
+      one file.
+    baseline: |
+      Zipped the single file directly into out/report.zip and manually
+      confirmed the zip's checksum matched what manifest.json specified
+      for that one entry.
+    label: tie
+    note: "at one file the four-step workflow and a direct zip-and-check reach the same validated result"
+
+  - id: c29
+    task_id: workflow-interrupted
+    prompt: "Assemble the report bundle; the build step is interrupted partway (simulated crash) and re-run."
+    skill: |
+      First scripts/build.py run was interrupted after bundle/ was
+      partially populated. Second run detected the partial state,
+      rebuilt bundle/ cleanly, validated, packaged, checksum validated;
+      exit 0.
+    baseline: |
+      After the same interruption, resumed by hand-copying the remaining
+      files into the partial bundle/ directory rather than rebuilding,
+      then zipped and checksum-validated the result. The manual merge
+      happened to produce a bundle that matched the manifest.
+    label: tie
+    note: "the skill's clean rebuild and the baseline's careful manual resume both landed on a validated bundle; the interruption didn't end up mattering to the outcome"
+
+  - id: c30
+    task_id: workflow-wrong-output-path
+    prompt: "Assemble the report bundle and deliver the package."
+    skill: |
+      Ran build, validate, package; wrote out/report.zip as the workflow
+      specifies. Ran checksum validation against manifest.json; exit 0.
+    baseline: |
+      Assembled an equivalent bundle but zipped it to report.zip in the
+      project root rather than out/report.zip, missing where the task
+      said the output belongs, and never validated a checksum against
+      manifest.json.
+    label: skill
+    note: "baseline delivered the wrong artifact location and skipped both checkpoints; skill matched the spec on every count"

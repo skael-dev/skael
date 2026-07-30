@@ -1,6 +1,7 @@
 package whetstone_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/skael-dev/skael/cli/whetstone"
@@ -16,7 +17,7 @@ func TestRunDoctor_ReportsAGatewayWithNothingInstalled(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
-	rep, err := whetstone.RunDoctor()
+	rep, err := whetstone.RunDoctor(context.Background(), false)
 	if err != nil {
 		t.Fatalf("RunDoctor returned an error for a missing CLI: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
 
-	rep, err := whetstone.RunDoctor()
+	rep, err := whetstone.RunDoctor(context.Background(), false)
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 		}
 	}
 
-	rep, err := whetstone.RunDoctor()
+	rep, err := whetstone.RunDoctor(context.Background(), false)
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
