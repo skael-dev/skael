@@ -1,0 +1,26 @@
+# The slim base image, used by the docker-tagged test job. It carries the
+# interpreters, the proxy, and the agent CLI — everything the sandbox's own
+# behaviour is asserted against — and none of the document toolchain, which is
+# what the full image spends its build minutes on.
+#
+# The two images are not interchangeable for scoring. This one exists so the
+# sandbox half of the suite gates CI; a score produced against it would not be
+# comparable to one produced against the full base, which is why the tag differs.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    NODE_MAJOR=22
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates python3 python3-pip jq ripgrep git tinyproxy curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code@2.1.220 \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 runner && mkdir -p /workspace && chown runner:runner /workspace
+WORKDIR /workspace
+USER runner
