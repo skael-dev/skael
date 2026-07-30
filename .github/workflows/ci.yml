@@ -22,6 +22,24 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -timeout 300s
 
+  sandbox:
+    runs-on: ubuntu-latest
+    # The sandbox half of the eval engine is not allowed to be an ungated
+    # appendix: a green suite that silently excludes every Docker-dependent
+    # behaviour means less than it appears to. The runner already has a daemon;
+    # the slim base image is what keeps this job to a few minutes.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet docker-tagged code
+        run: go vet -tags docker ./...
+      - name: Sandbox tests
+        env:
+          WHETSTONE_BASE_TAG: whetstone-base-ci:1
+        run: go test -tags docker ./internal/eval/... ./cli/whetstone/ -count=1 -timeout 2400s
+
   lint:
     runs-on: ubuntu-latest
     steps:
