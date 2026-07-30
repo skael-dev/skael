@@ -3,7 +3,6 @@ package score
 import (
 	"errors"
 	"path"
-	"strings"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
@@ -129,11 +128,7 @@ func eventNamesSkill(e trajectory.Event, skill string) bool {
 		return true
 	}
 	for _, p := range e.Paths {
-		dir := path.Base(path.Dir(p))
-		if dir == skill {
-			return true
-		}
-		if strings.Contains(p, "/"+skill+"/") {
+		if path.Base(path.Dir(p)) == skill {
 			return true
 		}
 	}

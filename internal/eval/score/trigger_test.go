@@ -143,3 +143,18 @@ func TestDetectFiring_IgnoresADistractorsSkillRead(t *testing.T) {
 		t.Error("a distractor's skill read counted as the skill firing")
 	}
 }
+
+func TestDetectFiring_IgnoresTheSkillNameAsANonTerminalPathSegment(t *testing.T) {
+	caps := agent.Caps{SupportsSkillInvocation: false}
+	events := []trajectory.Event{
+		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "other-skill", Paths: []string{".claude/skills/other-skill/demo/subdir/notes.md"}},
+	}
+	// A distractor whose own directory happens to contain a subfolder named
+	// after the skill under test is a plausible fixture-naming collision, not
+	// a firing of that skill. Only the immediate parent directory of the path
+	// counts, so "demo" appearing as a non-terminal segment here must not
+	// match.
+	if fired, _ := score.DetectFiring("demo", caps, events); fired {
+		t.Error("the skill name as a non-terminal path segment counted as the skill firing")
+	}
+}
