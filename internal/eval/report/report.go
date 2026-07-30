@@ -39,6 +39,13 @@ type MemberReport struct {
 	// member contributes nothing to the headline rather than a zero.
 	Healthy bool   `json:"healthy"`
 	Detail  string `json:"detail,omitempty"`
+	// MetaPartial is true when this member's session metadata was rebuilt from
+	// the store's own columns rather than recovered in full (a resumed run
+	// whose recorded artifact could not be re-read) — runner.Outcome carries
+	// the same flag under the same name. A reader must be able to tell that a
+	// figure derived from this member rests on partial metadata.
+	MetaPartial       bool   `json:"meta_partial,omitempty"`
+	MetaPartialReason string `json:"meta_partial_reason,omitempty"`
 }
 
 // ConditionReport is the pass rate for one task's condition (skill or
@@ -50,12 +57,15 @@ type ConditionReport struct {
 	Runs      int    `json:"runs"`
 }
 
-// RunDrift is one run's drift measurement.
+// RunDrift is one run's drift measurement. It embeds drift.Result rather
+// than duplicating Components/Adherence/Unevaluable as separate fields, so
+// the per-task view rendered here and the per-member view drift.Aggregate
+// consumes are always the same numbers, not two hand-built copies that can
+// silently disagree.
 type RunDrift struct {
-	Model      string            `json:"model"`
-	Attempt    int               `json:"attempt"`
-	Components drift.Components  `json:"components"`
-	Adherence  float64           `json:"adherence"`
+	Model   string `json:"model"`
+	Attempt int    `json:"attempt"`
+	drift.Result
 	Violations []drift.Violation `json:"violations,omitempty"`
 }
 
@@ -131,7 +141,12 @@ type Report struct {
 	Tasks     []TaskReport `json:"tasks"`
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`
 
-	TriggerInferred   bool     `json:"trigger_inferred"`
+	TriggerInferred bool `json:"trigger_inferred"`
+	// TriggerUnknown is the count of trigger probes excluded from the trigger
+	// confusion matrix because their session could not be measured — see
+	// score.Probe.Unknown. Excluded rather than counted as a miss, so an
+	// infrastructure failure does not masquerade as a recall failure.
+	TriggerUnknown    int      `json:"trigger_unknown,omitempty"`
 	Unevaluable       int      `json:"unevaluable"`
 	UnevaluableDetail []string `json:"unevaluable_detail,omitempty"`
 
@@ -193,6 +208,8 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 		return false, fmt.Sprintf("different skills (%s and %s)", r.Skill, o.Skill)
 	case r.SuiteRef != o.SuiteRef:
 		return false, fmt.Sprintf("different suites (%s and %s): the tasks are not the same", suite.ShortRef(r.SuiteRef), suite.ShortRef(o.SuiteRef))
+	case r.EngineVersion != o.EngineVersion:
+		return false, fmt.Sprintf("different engine versions (%s and %s): a scoring-logic change can move the number without the skill changing", r.EngineVersion, o.EngineVersion)
 	case r.Tier != o.Tier:
 		return false, fmt.Sprintf("different tiers (%s and %s): a smoke score and a full score are not the same measurement", r.Tier, o.Tier)
 	case !samePanel(r.ModelPanel, o.ModelPanel):

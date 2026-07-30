@@ -2,6 +2,7 @@ package report_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -304,6 +305,50 @@ func TestCompose_MarksAnUnhealthyMemberRatherThanScoringItZero(t *testing.T) {
 	}
 }
 
+func TestRunDrift_EmbedsDriftResultAndRoundTripsThroughJSON(t *testing.T) {
+	// RunDrift embeds drift.Result instead of hand-copied Components/Adherence
+	// fields, so the per-task view and drift.Aggregate's per-member view can
+	// never silently disagree.
+	rd := report.RunDrift{
+		Model:   "opus",
+		Attempt: 1,
+		Result: drift.Result{
+			Components:  drift.Components{StepCoverage: 1, Order: 1, Violation: 1, Checkpoint: 1, Semantic: 1, Focus: 1},
+			Adherence:   92.5,
+			Unevaluable: 1,
+		},
+	}
+	b, err := json.Marshal(rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"adherence":92.5`) || !strings.Contains(string(b), `"unevaluable":1`) {
+		t.Errorf("embedded drift.Result fields did not flatten into RunDrift's JSON: %s", b)
+	}
+
+	var got report.RunDrift
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Adherence != 92.5 || got.Unevaluable != 1 {
+		t.Errorf("round trip lost embedded drift.Result fields: %+v", got)
+	}
+}
+
+func TestComparable_DifferentEngineVersions(t *testing.T) {
+	a, b := demoReport(), demoReport()
+	b.EngineVersion = "0.10.0"
+	// A scoring-logic change can move the number without the skill changing
+	// underneath it, the same reasoning as every other provenance field here.
+	ok, why := a.Comparable(b)
+	if ok {
+		t.Error("reports with different engine versions reported as comparable")
+	}
+	if !strings.Contains(why, "engine") {
+		t.Errorf("reason = %q, want it to name the engine version", why)
+	}
+}
+
 func TestComparable_DifferentUpliftSources(t *testing.T) {
 	a, b := demoReport(), demoReport()
 	a.UpliftSource = score.UpliftJudge
@@ -396,6 +441,39 @@ func TestCompose_SetsRobustnessGapWhenTheClassesAreUnambiguous(t *testing.T) {
 	}
 	if got.RobustnessGap == nil || *got.RobustnessGap != *r.RobustnessGap {
 		t.Errorf("round trip lost the robustness gap: got %v, want %v", got.RobustnessGap, r.RobustnessGap)
+	}
+}
+
+func TestCompose_PassesThroughTriggerUnknownAndMetaPartial(t *testing.T) {
+	in := demoComposeInput()
+	in.TriggerUnknown = 4
+	in.Members[0].MetaPartial = true
+	in.Members[0].MetaPartialReason = "resumed run: recovering full meta failed"
+
+	r, err := report.Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.TriggerUnknown != 4 {
+		t.Errorf("TriggerUnknown = %d, want 4", r.TriggerUnknown)
+	}
+	if !r.Members[0].MetaPartial || r.Members[0].MetaPartialReason != "resumed run: recovering full meta failed" {
+		t.Errorf("MetaPartial did not survive Compose: %+v", r.Members[0])
+	}
+}
+
+func TestCompose_RejectsAnOutOfRangePillarEvenOnAnUnhealthyMember(t *testing.T) {
+	in := demoComposeInput()
+	// Effectiveness's own validation is skipped for an unhealthy member — this
+	// proves Compose validates independently of health.
+	in.Members[1] = report.MemberInput{
+		Member:  in.Members[1].Member,
+		Healthy: false,
+		Detail:  "adapter timed out",
+		Pillars: score.Pillars{TriggerF1: 1.4, Reliability: 0.5, Uplift: 0.5, Efficiency: 0.5},
+	}
+	if _, err := report.Compose(in); err == nil {
+		t.Error("Compose accepted an out-of-range pillar on an unhealthy member")
 	}
 }
 

@@ -29,6 +29,12 @@ type MemberInput struct {
 	// Drift is this member's per-run drift results, already scored by
 	// drift.Score. Empty when the member is unhealthy.
 	Drift []drift.Result
+	// MetaPartial mirrors runner.Outcome.MetaPartial: true when this member's
+	// session metadata was rebuilt from the store's own columns rather than
+	// recovered in full. Compose passes it straight through onto MemberReport
+	// so a reader can tell a figure rests on partial metadata.
+	MetaPartial       bool
+	MetaPartialReason string
 }
 
 // TaskInput is one task's raw results, before Compose excludes void tasks.
@@ -73,7 +79,12 @@ type ComposeInput struct {
 	JudgeLabeledBy string
 
 	TriggerInferred bool
-	Unevaluable     int
+	// TriggerUnknown is score.F1Result.Unknown passed through: the count of
+	// trigger probes whose session could not be measured (e.g. it errored) and
+	// so were excluded from every quadrant of the trigger confusion matrix
+	// rather than counted as a miss.
+	TriggerUnknown int
+	Unevaluable    int
 	// UnevaluableDetail is passed through to the report as given: Compose
 	// does not aggregate it per-run or de-duplicate it. The caller owns
 	// assembling this list from whatever per-run observations it holds.
@@ -102,6 +113,14 @@ func Compose(in ComposeInput) (*Report, error) {
 		members []MemberReport
 	)
 	for _, mi := range in.Members {
+		// Validated regardless of health: Effectiveness's own validation is
+		// skipped for an unhealthy member (there is nothing to compute), but an
+		// out-of-range or judge-derived pillar value must not reach the report
+		// unchecked just because the member that carried it never got that far.
+		if err := mi.Pillars.Validate(); err != nil {
+			return nil, fmt.Errorf("report.Compose: member %s/%s: %w", mi.Member.Agent, mi.Member.Model, err)
+		}
+
 		entry := score.PanelEntry{
 			Member:  score.Member{Agent: mi.Member.Agent, Model: mi.Member.Model, Class: spec.ModelTier(mi.Member.Class)},
 			Pillars: mi.Pillars,
@@ -109,7 +128,14 @@ func Compose(in ComposeInput) (*Report, error) {
 			Detail:  mi.Detail,
 		}
 
-		mr := MemberReport{Member: mi.Member, Pillars: mi.Pillars, Healthy: mi.Healthy, Detail: mi.Detail}
+		mr := MemberReport{
+			Member:            mi.Member,
+			Pillars:           mi.Pillars,
+			Healthy:           mi.Healthy,
+			Detail:            mi.Detail,
+			MetaPartial:       mi.MetaPartial,
+			MetaPartialReason: mi.MetaPartialReason,
+		}
 
 		if mi.Healthy {
 			eff, err := score.Effectiveness(mi.Pillars, score.DefaultExponents)
@@ -155,8 +181,12 @@ func Compose(in ComposeInput) (*Report, error) {
 	strong, okStrong := matrix.ByClass(spec.TierStrong)
 	floor, okFloor := matrix.ByClass(spec.TierFloor)
 	if okStrong && okFloor {
-		g := drift.RobustnessGap(strong.Drift, floor.Drift)
-		gap = &g
+		// ByClass already refused an unhealthy match; RobustnessGap additionally
+		// refuses an Agg with N==0 (a healthy member that simply has no drift
+		// runs), so a gap is only ever computed from two real measurements.
+		if g, err := drift.RobustnessGap(strong.Drift, floor.Drift); err == nil {
+			gap = &g
+		}
 	}
 
 	upliftSource := score.UpliftJudge
@@ -191,6 +221,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		Tasks:             tasks,
 		VoidTasks:         in.Void,
 		TriggerInferred:   in.TriggerInferred,
+		TriggerUnknown:    in.TriggerUnknown,
 		Unevaluable:       in.Unevaluable,
 		UnevaluableDetail: in.UnevaluableDetail,
 		StartedAt:         in.StartedAt,

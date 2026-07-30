@@ -14,6 +14,14 @@ import (
 // rather than a shared global generator, so that the same samples, iters, and
 // seed always produce the same interval — a confidence interval that changes
 // between two readings of the same data is not one anyone can quote.
+//
+// Bootstrap sorts its own copy of samples before resampling, so callers do
+// not need to guarantee arrival order themselves — a caller that built
+// samples by appending from concurrent goroutines under a mutex, for
+// instance, cannot promise a stable order, and rng.Intn(n) indexes by
+// position, so a different order changes which value each draw picks even
+// for the same seed. Sorting by value is the only stable key available at
+// this layer (samples carries no identity beyond the numbers themselves).
 func Bootstrap(samples []float64, iters int, seed int64) (lo, hi float64, err error) {
 	if len(samples) == 0 {
 		return 0, 0, errors.New("score.Bootstrap: no samples")
@@ -21,6 +29,11 @@ func Bootstrap(samples []float64, iters int, seed int64) (lo, hi float64, err er
 	if iters <= 0 {
 		return 0, 0, errors.New("score.Bootstrap: iters must be positive")
 	}
+
+	sorted := make([]float64, len(samples))
+	copy(sorted, samples)
+	sort.Float64s(sorted)
+	samples = sorted
 
 	rng := rand.New(rand.NewSource(seed))
 	n := len(samples)

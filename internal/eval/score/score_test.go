@@ -134,9 +134,6 @@ func TestPanel_HeadlineIsTheMinimumOverHealthyMembers(t *testing.T) {
 	if got != 54 {
 		t.Errorf("Headline = %v, want 54", got)
 	}
-	if !m.Complete() {
-		t.Error("Complete = false with every member healthy")
-	}
 }
 
 func TestPanel_AnUnhealthyMemberIsExcludedAndMarksThePanelIncomplete(t *testing.T) {
@@ -153,9 +150,6 @@ func TestPanel_AnUnhealthyMemberIsExcludedAndMarksThePanelIncomplete(t *testing.
 	// flakiness presented as a quality verdict.
 	if got != 82 {
 		t.Errorf("Headline = %v, want the healthy member's 82", got)
-	}
-	if m.Complete() {
-		t.Error("Complete = true with an unhealthy member")
 	}
 }
 
@@ -207,6 +201,18 @@ func TestByClass_MultipleMatchesAreNotFound(t *testing.T) {
 	}}
 	if _, ok := m.ByClass(spec.TierStrong); ok {
 		t.Error("ByClass = true, want false with two matching members of the same class")
+	}
+}
+
+func TestByClass_AnUnhealthyMatchIsNotFound(t *testing.T) {
+	// An unhealthy member was never measured. Returning it would let a caller
+	// read its zero Drift as a real (adherence-zero) result rather than an
+	// absent one.
+	m := score.Matrix{Entries: []score.PanelEntry{
+		{Member: score.Member{Model: "haiku", Class: spec.TierFloor}, Healthy: false, Detail: "auth expired"},
+	}}
+	if _, ok := m.ByClass(spec.TierFloor); ok {
+		t.Error("ByClass = true, want false for an unhealthy match")
 	}
 }
 

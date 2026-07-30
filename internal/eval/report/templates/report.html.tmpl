@@ -123,8 +123,8 @@
         <th>Uplift (%)</th>
         <th>Efficiency (%)</th>
         <th>Effectiveness (0&ndash;100)</th>
-        <th>Drift mean (%)</th>
-        <th>Drift worst (%)</th>
+        <th>Drift mean (0&ndash;100)</th>
+        <th>Drift worst (0&ndash;100)</th>
         <th>Drift σ (pp)</th>
         <th>Grade</th>
         <th>Health</th>
@@ -133,7 +133,7 @@
     <tbody>
       {{range .Members}}
       <tr{{if not .Healthy}} class="unhealthy"{{end}}>
-        <td>{{.Member.Agent}} / {{.Member.Model}}</td>
+        <td>{{.Member.Agent}} / {{.Member.Model}}{{if .MetaPartial}} <span class="pill" title="{{.MetaPartialReason}}">partial meta</span>{{end}}</td>
         <td>{{.Member.Class}}</td>
         {{if .Healthy}}
         <td>{{pct .Pillars.TriggerF1}}</td>
@@ -141,9 +141,9 @@
         <td>{{pct .Pillars.Uplift}}</td>
         <td>{{pct .Pillars.Efficiency}}</td>
         <td>{{round1 .Effectiveness}}</td>
-        <td>{{pct .Drift.Mean}}</td>
-        <td>{{pct .Drift.Worst}}</td>
-        <td>{{pct .Drift.Sigma}}</td>
+        <td>{{round1 .Drift.Mean}}</td>
+        <td>{{round1 .Drift.Worst}}</td>
+        <td>{{round1 .Drift.Sigma}}</td>
         <td>{{.DriftGrade}}</td>
         <td>healthy</td>
         {{else}}
@@ -169,13 +169,16 @@
       {{else}}
         <span class="pill">judge &kappa;: not calibrated for this run</span>
       {{end}}
+      {{if .TriggerUnknown}}
+        <span class="pill">{{.TriggerUnknown}} trigger probe(s) unmeasured</span>
+      {{end}}
     </p>
     <p>
       Robustness gap (strong vs. floor):
       {{if .RobustnessGap}}
-        {{deref .RobustnessGap}}
+        {{deref .RobustnessGap}} points
       {{else}}
-        <span class="empty">not computed &mdash; the strong/floor comparison was not well defined for this panel (zero or more than one member in a class)</span>
+        <span class="empty">not computed &mdash; the strong/floor comparison was not well defined for this panel (zero or more than one member in a class, or one member has no drift runs)</span>
       {{end}}
     </p>
   </div>
@@ -226,7 +229,7 @@
     <h4>Drift per run</h4>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage (%)</th><th>Order (%)</th><th>Violation (%)</th><th>Checkpoint (%)</th><th>Semantic (%)</th><th>Focus (%)</th><th>Adherence (0&ndash;100)</th></tr></thead>
+      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage (%)</th><th>Order (%)</th><th>Violation (%)</th><th>Checkpoint (%)</th><th>Semantic (%)</th><th>Focus (%)</th><th>Adherence (0&ndash;100)</th><th>Unevaluable</th></tr></thead>
       <tbody>
         {{range .Drift}}
         <tr>
@@ -239,6 +242,7 @@
           <td>{{pct .Components.Semantic}}</td>
           <td>{{pct .Components.Focus}}</td>
           <td>{{round1 .Adherence}}</td>
+          <td>{{if .Unevaluable}}{{.Unevaluable}}{{else}}0{{end}}</td>
         </tr>
         {{end}}
       </tbody>
@@ -260,7 +264,7 @@
     {{if .Judge}}
     <h4>Judge notes</h4>
     {{range .Judge}}
-    <p><strong>{{.Model}}</strong> winner: {{.Winner}}, margin {{round1 .Margin}}, votes {{.Votes}}</p>
+    <p><strong>{{.Model}}</strong> winner: {{.Winner}}, margin {{gfmt .Margin}}, votes {{.Votes}}</p>
     {{range .Evidence}}
     <div class="quote">{{.}}</div>
     {{end}}

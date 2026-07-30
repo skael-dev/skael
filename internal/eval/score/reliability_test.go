@@ -55,6 +55,24 @@ func TestReliability_AveragesOverTasks(t *testing.T) {
 	}
 }
 
+func TestTaskPasses_VoidIsAllErroredOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		tp   score.TaskPasses
+		want bool
+	}{
+		{"all errored", score.TaskPasses{N: 0, C: 0, Errored: 2}, true},
+		{"some passed some errored", score.TaskPasses{N: 1, C: 1, Errored: 1}, false},
+		{"none errored", score.TaskPasses{N: 2, C: 1}, false},
+		{"zero everything", score.TaskPasses{}, false},
+	}
+	for _, c := range cases {
+		if got := c.tp.Void(); got != c.want {
+			t.Errorf("%s: Void() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestReliability_ZeroTasksIsAnError(t *testing.T) {
 	// A skill with no measured tasks has an unknown reliability. Returning 0
 	// makes it indistinguishable from one that failed every task, and

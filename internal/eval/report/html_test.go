@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/score"
 )
 
 func renderHTML(t *testing.T, r *report.Report) string {
@@ -88,6 +90,42 @@ func TestHTML_StatesTheUpliftSourceAndKappa(t *testing.T) {
 	}
 }
 
+func TestHTML_SurfacesTriggerUnknownAndMetaPartial(t *testing.T) {
+	r := demoReport()
+	r.TriggerUnknown = 2
+	r.Members = []report.MemberReport{{
+		Member:            r.ModelPanel[0],
+		Healthy:           true,
+		MetaPartial:       true,
+		MetaPartialReason: "resumed run: recovering full meta failed",
+	}}
+	got := renderHTML(t, r)
+	for _, want := range []string{"2 trigger probe", "partial meta"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report does not mention %q", want)
+		}
+	}
+}
+
+func TestHTML_SurfacesUnevaluableCountPerDriftRun(t *testing.T) {
+	r := demoReport()
+	r.Tasks = []report.TaskReport{{
+		TaskID: "t1",
+		Drift: []report.RunDrift{{
+			Model:   "opus",
+			Attempt: 1,
+			Result:  drift.Result{Adherence: 80, Unevaluable: 3},
+		}},
+	}}
+	got := renderHTML(t, r)
+	if !strings.Contains(got, "Unevaluable") {
+		t.Error("per-run drift table does not have an Unevaluable column")
+	}
+	if !strings.Contains(got, ">3<") {
+		t.Errorf("report does not show the run's unevaluable count of 3; got:\n%s", got)
+	}
+}
+
 func TestHTML_SurfacesVoidTasksAndUnevaluableChecks(t *testing.T) {
 	r := demoReport()
 	r.VoidTasks = []report.VoidTask{{TaskID: "t07", Reason: "the oracle failed"}}
@@ -98,6 +136,46 @@ func TestHTML_SurfacesVoidTasksAndUnevaluableChecks(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("report hides %q; the reader cannot tell what was not measured", want)
 		}
+	}
+}
+
+func TestHTML_RendersDriftMeanAndWorstAsAdherenceNotAHundredfoldPercentage(t *testing.T) {
+	// Agg.Mean/Worst/Sigma are already on a 0-100 adherence scale (means of
+	// Adherence), not a [0,1] rate. The html_test.go:64 fixture leaves Drift
+	// zero and so cannot catch a template that renders it through pct — this
+	// fixture is deliberately non-zero.
+	r := demoReport()
+	r.Members = []report.MemberReport{{
+		Member:  r.ModelPanel[0],
+		Healthy: true,
+		Drift:   drift.Agg{Mean: 87.5, Worst: 62.3, Sigma: 4.1, N: 2},
+	}}
+	got := renderHTML(t, r)
+	if !strings.Contains(got, "87.5") {
+		t.Errorf("report does not show the drift mean as 87.5; got:\n%s", got)
+	}
+	if !strings.Contains(got, "62.3") {
+		t.Errorf("report does not show the drift worst as 62.3; got:\n%s", got)
+	}
+	if strings.Contains(got, "8750.0%") || strings.Contains(got, "6230.0%") {
+		t.Error("drift mean/worst rendered as a hundredfold percentage (fed through pct instead of round1)")
+	}
+}
+
+func TestHTML_PctRefusesAnOutOfRangeValueRatherThanMisrenderingIt(t *testing.T) {
+	// A raw *Report bypasses Compose's validation, so a caller that builds one
+	// by hand (as this test does) can still hand the template a pillar above
+	// 1. pct must refuse it visibly rather than print a nonsense percentage or
+	// panic and blank the whole report.
+	r := demoReport()
+	r.Members = []report.MemberReport{{
+		Member:  r.ModelPanel[0],
+		Healthy: true,
+		Pillars: score.Pillars{TriggerF1: 87.5, Reliability: 0.9, Uplift: 0.9, Efficiency: 0.9},
+	}}
+	got := renderHTML(t, r)
+	if !strings.Contains(got, "invalid pct input") {
+		t.Errorf("report did not surface pct's refusal of an out-of-range input; got:\n%s", got)
 	}
 }
 

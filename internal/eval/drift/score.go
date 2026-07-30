@@ -61,18 +61,18 @@ type Components struct {
 // a property of an aggregate across runs, not of a single run, so callers set
 // it from Grade(agg.Mean, agg.Worst) after aggregating.
 type Result struct {
-	Components Components
-	Adherence  float64
-	Drift      float64
+	Components Components `json:"components"`
+	Adherence  float64    `json:"adherence"`
+	Drift      float64    `json:"drift"`
 	// Grade is not set by Score. Set it from Grade(agg.Mean, agg.Worst) after
 	// aggregating this run with its siblings.
-	Grade string
+	Grade string `json:"grade,omitempty"`
 	// Unevaluable and UnevaluableDetail mirror Observation's fields of the same
 	// name: checks that could not be performed at all, surfaced here rather
 	// than folded into any of Components — a missed violation must not look
 	// like a clean run.
-	Unevaluable       int
-	UnevaluableDetail []string
+	Unevaluable       int      `json:"unevaluable,omitempty"`
+	UnevaluableDetail []string `json:"unevaluable_detail,omitempty"`
 }
 
 // Score turns an Observation plus a judge-scored semantic rate into Adherence.

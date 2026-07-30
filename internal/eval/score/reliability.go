@@ -6,11 +6,30 @@ import (
 )
 
 // TaskPasses is one task's outcome across its runs: C passes out of N.
+//
+// Errored counts runs that could not be measured at all — a rate-limit
+// exhaustion or an agent-reported internal error, store.StatusError in the
+// runner's terms — and is deliberately excluded from N: an errored run is
+// neither a pass nor a fail, the same reasoning score.Probe.Unknown applies
+// on the trigger path so infrastructure failures don't masquerade as
+// reliability failures. A task whose runs all errored (N==0, Errored>0) has
+// produced no measurement whatsoever; callers should treat it the way
+// report.VoidTask already treats a task excluded from scoring — dropped from
+// the denominator and listed separately — rather than as a task that failed
+// every run.
 type TaskPasses struct {
-	TaskID string
-	N      int
-	C      int
+	TaskID  string
+	N       int
+	C       int
+	Errored int
 }
+
+// Void reports whether t produced no measurement at all: every run errored,
+// so there is nothing to compute a pass rate from. A caller building the
+// []TaskPasses fed to Reliability must exclude such a task from that slice —
+// the same way report.Compose excludes a report.VoidTask from the tasks it
+// scores — rather than let it reach PassAtK, which refuses N==0.
+func (t TaskPasses) Void() bool { return t.N == 0 && t.Errored > 0 }
 
 // PassAtK is the unbiased estimator of the probability that k independently
 // drawn runs all pass, given c passes observed in n runs: C(c,k) / C(n,k).

@@ -18,6 +18,22 @@ type Pillars struct {
 	Efficiency  float64
 }
 
+// Validate reports whether every pillar is a rate in [0,1]. Effectiveness
+// calls it before computing anything; a caller that needs to check
+// judge-derived or otherwise unhealthy-sourced pillars before they reach a
+// report should call it directly rather than duplicating the range check.
+func (p Pillars) Validate() error {
+	for name, v := range map[string]float64{
+		"TriggerF1": p.TriggerF1, "Reliability": p.Reliability,
+		"Uplift": p.Uplift, "Efficiency": p.Efficiency,
+	} {
+		if v < 0 || v > 1 {
+			return fmt.Errorf("score.Pillars.Validate: pillar %s = %v is not a rate in [0,1]", name, v)
+		}
+	}
+	return nil
+}
+
 // Exponents weight the geometric mean. They sum to 1 so that a perfect skill
 // scores exactly 100.
 type Exponents struct {
@@ -47,13 +63,8 @@ var DefaultExponents = Exponents{Trigger: 0.35, Reliability: 0.35, Uplift: 0.20,
 // compensate for a zeroed one. A skill that never fires scores zero however
 // reliable it is when someone invokes it by hand.
 func Effectiveness(p Pillars, e Exponents) (float64, error) {
-	for name, v := range map[string]float64{
-		"TriggerF1": p.TriggerF1, "Reliability": p.Reliability,
-		"Uplift": p.Uplift, "Efficiency": p.Efficiency,
-	} {
-		if v < 0 || v > 1 {
-			return 0, fmt.Errorf("score.Effectiveness: pillar %s = %v is not a rate in [0,1]", name, v)
-		}
+	if err := p.Validate(); err != nil {
+		return 0, fmt.Errorf("score.Effectiveness: %w", err)
 	}
 	if sum := e.Trigger + e.Reliability + e.Uplift + e.Efficiency; math.Abs(sum-1) > 1e-9 {
 		return 0, fmt.Errorf("score.Effectiveness: exponents sum to %v, not 1", sum)
@@ -151,18 +162,6 @@ type PanelEntry struct {
 // one name for both across adjacent packages is how a boundary defect starts.
 type Matrix struct{ Entries []PanelEntry }
 
-// Complete reports whether every planned member produced a result. An
-// incomplete panel is still reportable; it is simply labelled, so nobody reads
-// a two-member gate off a one-member run.
-func (m Matrix) Complete() bool {
-	for _, e := range m.Entries {
-		if !e.Healthy {
-			return false
-		}
-	}
-	return len(m.Entries) > 0
-}
-
 // Headline is the minimum Effectiveness across healthy members.
 //
 // Minimum rather than mean: the claim a published score makes is "this works",
@@ -212,29 +211,32 @@ func (m Matrix) Mean() (float64, error) {
 	return sum / float64(n), nil
 }
 
-// ByClass returns the single entry in Entries whose Member.Class matches c,
-// and whether exactly one was found.
+// ByClass returns the single healthy entry in Entries whose Member.Class
+// matches c, and whether exactly one was found.
 //
 // ParsePanel can produce several members of one class on a multi-agent,
 // multi-model panel — it only rejects a panel with zero of a class, not more
-// than one. ByClass reports ok == false for both zero matches and more than
-// one: with several members of one capability tier, "the strong member" and
-// "the floor member" are not defined, so a robustness gap computed by
-// comparing them is not defined either. Returning whichever member happened
-// to be first in Entries would produce a number indistinguishable from a real
-// one — an absent measurement must be reported as absent, the same principle
-// Headline applies when no member is healthy, not silently guessed at. A
-// caller that wants a specific member out of a duplicated class should
-// iterate m.Entries directly and say which member it means, rather than
-// asking ByClass to disambiguate for it.
+// than one. ByClass reports ok == false for zero matches, more than one, and
+// an unhealthy match: with several members of one capability tier, "the
+// strong member" and "the floor member" are not defined, so a robustness gap
+// computed by comparing them is not defined either; an unhealthy member was
+// never measured at all, so returning it would let a caller read its zero
+// Drift as a real (adherence-zero) result rather than an absent one — the
+// same distinction Headline draws when no member is healthy. Returning
+// whichever member happened to be first in Entries would produce a number
+// indistinguishable from a real one — an absent measurement must be reported
+// as absent, not silently guessed at. A caller that wants a specific member
+// out of a duplicated class should iterate m.Entries directly and say which
+// member it means, rather than asking ByClass to disambiguate for it.
 func (m Matrix) ByClass(c spec.ModelTier) (PanelEntry, bool) {
 	var found PanelEntry
 	count := 0
 	for _, e := range m.Entries {
-		if e.Member.Class == c {
-			found = e
-			count++
+		if e.Member.Class != c || !e.Healthy {
+			continue
 		}
+		found = e
+		count++
 	}
 	if count != 1 {
 		return PanelEntry{}, false
