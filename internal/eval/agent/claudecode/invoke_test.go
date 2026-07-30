@@ -35,10 +35,17 @@ func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
 	// stream-json is what carries individual tool calls, and tier A event
 	// fidelity is what the drift engine reads. Losing it degrades every
 	// contract check to "the agent said something".
-	for _, want := range []string{"-p", "--output-format stream-json", "--verbose", "--model opus"} {
+	for _, want := range []string{"-p", "--output-format stream-json", "--verbose"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("argv missing %q: %v", want, a)
 		}
+	}
+	// Asserted against Caps().ModelFlag, not the literal "--model": a second
+	// hardcoded "--model" in Argv would pass a literal-string check just as
+	// well as the real thing, and is exactly the drift Caps().ModelFlag
+	// exists to prevent.
+	if wantFlag := claudecode.New().Caps().ModelFlag + " opus"; !strings.Contains(joined, wantFlag) {
+		t.Errorf("argv missing %q (from Caps().ModelFlag): %v", wantFlag, a)
 	}
 	if a[0] != "claude" {
 		t.Errorf("argv[0] = %q, want the CLI name; the sandbox resolves it on PATH inside the image", a[0])
