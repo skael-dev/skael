@@ -2,6 +2,7 @@ package spec_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -25,7 +26,9 @@ func fixture() *spec.SkillSpec {
 			{ID: "c1", Text: "Never write outside out/.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
 		},
 		Resources: spec.ResourcePlan{
-			Scripts: []spec.ResourceItem{{Path: "scripts/extract.py", Purpose: "PDF table extraction"}},
+			Scripts:    []spec.ResourceItem{{Path: "scripts/extract.py", Purpose: "PDF table extraction"}},
+			References: []spec.ResourceItem{{Path: "references/pdf-layout.md", Purpose: "layout heuristics"}},
+			Assets:     []spec.ResourceItem{{Path: "assets/sample.pdf", Purpose: "fixture PDF for manual testing"}},
 		},
 		Deps:       spec.DepsDecl{Pip: []string{"pdfplumber"}},
 		TargetTier: spec.TierMid,
@@ -64,6 +67,86 @@ func TestSkillSpec_YAMLRoundTrip(t *testing.T) {
 	}
 	if got.TargetTier != spec.TierMid {
 		t.Errorf("TargetTier = %q, want %q", got.TargetTier, spec.TierMid)
+	}
+	assertResourcesEqual(t, "YAML", got.Resources, want.Resources)
+
+	// A round trip through the same Go struct cannot by itself catch a wrong
+	// yaml tag on ResourceItem: Save and Load both consult the same struct
+	// definition, so they would stay symmetric even if "path" were misspelled.
+	// Checking the literal rendered text is what actually pins the tag name.
+	out := buf.String()
+	for _, want := range []string{
+		"resources:", "scripts:", "references:", "assets:",
+		"path: scripts/extract.py", "path: references/pdf-layout.md", "path: assets/sample.pdf",
+		"purpose: PDF table extraction",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered YAML missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// assertResourcesEqual checks every field of ResourceItem across all three
+// resource kinds, so a wrong tag on ResourceItem cannot lose data silently —
+// it is the only place scripts/references/assets fidelity is checked in full.
+func assertResourcesEqual(t *testing.T, via string, got, want spec.ResourcePlan) {
+	t.Helper()
+	check := func(kind string, got, want []spec.ResourceItem) {
+		if len(got) != len(want) {
+			t.Errorf("%s round trip: resources.%s length = %d, want %d", via, kind, len(got), len(want))
+			return
+		}
+		for i := range want {
+			if got[i].Path != want[i].Path || got[i].Purpose != want[i].Purpose {
+				t.Errorf("%s round trip: resources.%s[%d] = %+v, want %+v", via, kind, i, got[i], want[i])
+			}
+		}
+	}
+	check("scripts", got.Scripts, want.Scripts)
+	check("references", got.References, want.References)
+	check("assets", got.Assets, want.Assets)
+}
+
+func TestSkillSpec_JSONRoundTrip(t *testing.T) {
+	// Interview passes SkillSpec through the gateway as JSON (see interview.go),
+	// so the json tags need their own round-trip coverage — the YAML round trip
+	// above cannot exercise them.
+	want := fixture()
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var got spec.SkillSpec
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if got.Name != want.Name || got.Purpose != want.Purpose || got.Description != want.Description {
+		t.Errorf("scalar fields lost: %+v", got)
+	}
+	if len(got.Steps) != 2 || got.Steps[1].Postcondition != want.Steps[1].Postcondition {
+		t.Errorf("steps lost: %+v", got.Steps)
+	}
+	if got.TargetTier != want.TargetTier {
+		t.Errorf("TargetTier = %q, want %q", got.TargetTier, want.TargetTier)
+	}
+	assertResourcesEqual(t, "JSON", got.Resources, want.Resources)
+
+	// As above: json.Marshal/Unmarshal share the same struct, so a wrong json
+	// tag round-trips fine in memory. Only the literal wire text pins the name
+	// the gateway actually sees — which matters because interview.go's JSON
+	// schema (see specSchema in interview.go) names fields explicitly, e.g.
+	// "path", and the model is shown that schema, not the Go struct.
+	raw := string(b)
+	for _, want := range []string{
+		`"scripts":[{"path":"scripts/extract.py","purpose":"PDF table extraction"}]`,
+		`"references":[{"path":"references/pdf-layout.md","purpose":"layout heuristics"}]`,
+		`"assets":[{"path":"assets/sample.pdf","purpose":"fixture PDF for manual testing"}]`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("marshaled JSON missing %q\n---\n%s", want, raw)
+		}
 	}
 }
 

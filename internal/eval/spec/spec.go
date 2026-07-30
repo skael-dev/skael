@@ -46,39 +46,39 @@ const MaxName = 64
 // adjacent-domain near-misses. Obviously-irrelevant negatives test nothing, so
 // the interview prompt asks for near-misses explicitly.
 type TriggerPhrase struct {
-	Text     string `yaml:"text"`
-	Negative bool   `yaml:"negative,omitempty"`
+	Text     string `yaml:"text" json:"text"`
+	Negative bool   `yaml:"negative,omitempty" json:"negative,omitempty"`
 }
 
 // Step is one action in the skill's workflow. Every step carries a verifiable
 // postcondition; Validation marks the steps that are checkpoints.
 type Step struct {
-	ID            string `yaml:"id"`
-	Action        string `yaml:"action"`
-	Postcondition string `yaml:"postcondition"`
-	Validation    bool   `yaml:"validation,omitempty"`
-	Rationale     string `yaml:"rationale,omitempty"`
+	ID            string `yaml:"id" json:"id"`
+	Action        string `yaml:"action" json:"action"`
+	Postcondition string `yaml:"postcondition" json:"postcondition"`
+	Validation    bool   `yaml:"validation,omitempty" json:"validation,omitempty"`
+	Rationale     string `yaml:"rationale,omitempty" json:"rationale,omitempty"`
 }
 
 // Rule is a MUST or MUST-NOT constraint.
 type Rule struct {
-	ID       string   `yaml:"id"`
-	Text     string   `yaml:"text"`
-	Kind     RuleKind `yaml:"kind"`
-	Severity Severity `yaml:"severity"`
+	ID       string   `yaml:"id" json:"id"`
+	Text     string   `yaml:"text" json:"text"`
+	Kind     RuleKind `yaml:"kind" json:"kind"`
+	Severity Severity `yaml:"severity" json:"severity"`
 }
 
 // ResourceItem is one planned bundle file.
 type ResourceItem struct {
-	Path    string `yaml:"path"`
-	Purpose string `yaml:"purpose,omitempty"`
+	Path    string `yaml:"path" json:"path"`
+	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 }
 
 // ResourcePlan decides what becomes scripts/ vs references/ vs assets/.
 type ResourcePlan struct {
-	Scripts    []ResourceItem `yaml:"scripts,omitempty"`
-	References []ResourceItem `yaml:"references,omitempty"`
-	Assets     []ResourceItem `yaml:"assets,omitempty"`
+	Scripts    []ResourceItem `yaml:"scripts,omitempty" json:"scripts,omitempty"`
+	References []ResourceItem `yaml:"references,omitempty" json:"references,omitempty"`
+	Assets     []ResourceItem `yaml:"assets,omitempty" json:"assets,omitempty"`
 }
 
 // Count returns the total number of planned modules, for the MaxModules cap.
@@ -88,20 +88,20 @@ func (p ResourcePlan) Count() int {
 
 // DepsDecl lists packages baked into the per-skill sandbox image layer.
 type DepsDecl struct {
-	Apt []string `yaml:"apt,omitempty"`
-	Pip []string `yaml:"pip,omitempty"`
-	Npm []string `yaml:"npm,omitempty"`
+	Apt []string `yaml:"apt,omitempty" json:"apt,omitempty"`
+	Pip []string `yaml:"pip,omitempty" json:"pip,omitempty"`
+	Npm []string `yaml:"npm,omitempty" json:"npm,omitempty"`
 }
 
 // SkillSpec is the IR.
 type SkillSpec struct {
-	Name        string          `yaml:"name"`
-	Purpose     string          `yaml:"purpose"`
-	Description string          `yaml:"description"`
-	Triggers    []TriggerPhrase `yaml:"triggers"`
-	Steps       []Step          `yaml:"steps"`
-	Constraints []Rule          `yaml:"constraints,omitempty"`
-	Resources   ResourcePlan    `yaml:"resources,omitempty"`
-	Deps        DepsDecl        `yaml:"deps,omitempty"`
-	TargetTier  ModelTier       `yaml:"target_tier"`
+	Name        string          `yaml:"name" json:"name"`
+	Purpose     string          `yaml:"purpose" json:"purpose"`
+	Description string          `yaml:"description" json:"description"`
+	Triggers    []TriggerPhrase `yaml:"triggers" json:"triggers"`
+	Steps       []Step          `yaml:"steps" json:"steps"`
+	Constraints []Rule          `yaml:"constraints,omitempty" json:"constraints,omitempty"`
+	Resources   ResourcePlan    `yaml:"resources,omitempty" json:"resources,omitempty"`
+	Deps        DepsDecl        `yaml:"deps,omitempty" json:"deps,omitempty"`
+	TargetTier  ModelTier       `yaml:"target_tier" json:"target_tier"`
 }
