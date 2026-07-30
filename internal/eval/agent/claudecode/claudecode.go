@@ -19,6 +19,8 @@ type Adapter struct{}
 // New returns a Claude Code adapter.
 func New() *Adapter { return &Adapter{} }
 
+func init() { agent.Register(New()) }
+
 // Name identifies the adapter in reports and panel matrices.
 func (a *Adapter) Name() string { return "claude-code" }
 
