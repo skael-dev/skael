@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Runs execute as a non-root user: a skill that writes to /usr is a skill whose
 # violation should be observable, not one that silently succeeds.
-RUN useradd -m -u 1000 runner && mkdir -p /workspace && chown runner:runner /workspace
+#
+# ubuntu:24.04 ships a preexisting "ubuntu" user at UID 1000 (added for
+# cloud-init); it is removed first so "useradd -u 1000 runner" does not fail
+# with "UID 1000 is not unique".
+RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 runner && mkdir -p /workspace && chown runner:runner /workspace
 WORKDIR /workspace
 USER runner
