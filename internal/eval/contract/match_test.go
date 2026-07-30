@@ -87,11 +87,13 @@ func TestMatchPath_MalformedPatternsAreErrors(t *testing.T) {
 	// A malformed pattern must error, not silently return false — a forbid
 	// rule that silently never matches is the inert-rule problem again.
 	cases := []string{
-		"a/**/b", // "**" not the final segment
-		"**/a",   // "**" not the final segment
-		"a**b",   // "**" not a whole segment
-		"a***b",  // "**" not a whole segment (extra star)
-		"**",     // "**" with no preceding path
+		"a/**/b",  // "**" not the final segment
+		"**/a",    // "**" not the final segment
+		"a**b",    // "**" not a whole segment
+		"a***b",   // "**" not a whole segment (extra star)
+		"**",      // "**" with no preceding path
+		"/out/**", // absolute: can never match a workspace-relative candidate
+		"/etc/passwd",
 	}
 	for _, pattern := range cases {
 		_, err := contract.MatchPath(pattern, "a/b/c")

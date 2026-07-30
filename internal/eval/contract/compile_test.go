@@ -716,3 +716,34 @@ func TestClassifyForbid_NetworkPatternDoesNotFireOnOrdinaryCommands(t *testing.T
 		}
 	}
 }
+
+// TestCompile_RejectsAPatternMatchPathWouldReject closes the loop between the
+// compiler and its only sanctioned consumer: an emitted glob MatchPath calls
+// malformed must be a compile error, reported to the author, not a scoring-time
+// surprise.
+func TestCompile_RejectsAPatternMatchPathWouldReject(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"traversal", "Never write outside ../shared."},
+		{"absolute", "Never write outside /out/."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &spec.SkillSpec{
+				Name: "bad-scope",
+				Constraints: []spec.Rule{
+					{ID: "c1", Text: tc.text, Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+				},
+			}
+			c, err := contract.Compile(s)
+			if err == nil {
+				t.Fatalf("Compile accepted %q and emitted %+v", tc.text, c)
+			}
+			if !strings.Contains(err.Error(), "contract.Compile") {
+				t.Errorf("error %q does not name the compiler", err)
+			}
+		})
+	}
+}

@@ -69,6 +69,12 @@ import (
 //     step unsatisfied, and the resulting score merely wrong rather than
 //     visibly broken. Whichever component records or replays a Windows
 //     trajectory is responsible for converting to "/" first.
+//   - An absolute pattern ("/out/**") is a reported error, for the same
+//     reason a ".." segment is: every pattern this package compiles is
+//     workspace-relative, so an absolute one can never match any candidate.
+//     Silently returning false would make the rule inert — every write
+//     allowed, or every step unsatisfied — and look like a badly-behaved
+//     skill rather than a compiler bug.
 //   - An absolute candidate ("/etc/passwd") is a reported error, not a
 //     quiet false. Every path this package's compiled patterns describe is
 //     workspace-relative, so an absolute candidate reaching MatchPath means
@@ -111,6 +117,10 @@ func MatchPath(pattern, candidate string) (bool, error) {
 		if len(segments) == 1 {
 			return false, fmt.Errorf("contract: malformed pattern %q: %q needs a preceding path", pattern, "**")
 		}
+	}
+
+	if strings.HasPrefix(pattern, "/") {
+		return false, fmt.Errorf("contract: malformed pattern %q: an absolute pattern is not allowed; MatchPath compares workspace-relative paths only", pattern)
 	}
 
 	if strings.Contains(pattern, `\`) {

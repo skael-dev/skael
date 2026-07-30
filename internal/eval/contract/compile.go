@@ -138,7 +138,56 @@ func Compile(s *spec.SkillSpec) (*Contract, error) {
 		})
 	}
 
+	if err := validatePathPatterns(c); err != nil {
+		return nil, err
+	}
+
 	return c, nil
+}
+
+// probePath is an arbitrary well-formed relative path. MatchPath validates the
+// pattern before it looks at the candidate, so any candidate it accepts works
+// as a probe; whether it matches is irrelevant, only whether the pattern is
+// well-formed.
+const probePath = "probe"
+
+// validatePathPatterns runs every emitted path glob through MatchPath, the
+// only sanctioned consumer of these patterns, and turns a rejection into a
+// compile error.
+//
+// MatchPath deliberately reports a malformed pattern loudly rather than
+// silently never matching, and calls that "a defensive rejection of a compiler
+// bug". Without this check the compiler can emit exactly such a pattern (a
+// spec scoping writes to "../shared" or "/out" is enough), and the error
+// surfaces at scoring time — far from the spec text the author could fix —
+// instead of here.
+func validatePathPatterns(c *Contract) error {
+	check := func(kind, id, pattern string) error {
+		if pattern == "" {
+			return nil
+		}
+		if _, err := MatchPath(pattern, probePath); err != nil {
+			return fmt.Errorf("contract.Compile: %s %q compiled to an unusable path pattern: %w", kind, id, err)
+		}
+		return nil
+	}
+	for _, s := range c.Steps {
+		if err := check("step", s.ID, s.Match.PathGlob); err != nil {
+			return err
+		}
+		if err := check("step", s.ID, s.Match.PathNotGlob); err != nil {
+			return err
+		}
+	}
+	for _, f := range c.Forbid {
+		if err := check("constraint", f.ID, f.Match.PathGlob); err != nil {
+			return err
+		}
+		if err := check("constraint", f.ID, f.Match.PathNotGlob); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // classifyStep decides whether a step's action compiles to a deterministic
