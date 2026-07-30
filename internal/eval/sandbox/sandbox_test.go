@@ -57,6 +57,49 @@ func TestCheckPolicy_UntrustedRefusesASharedKernelDriver(t *testing.T) {
 	}
 }
 
+func TestGated_RefusesUntrustedWorkAtConstructionForASharedKernelDriver(t *testing.T) {
+	_, err := sandbox.Gated(&fakeDriver{isolated: false}, true)
+	if !errors.Is(err, sandbox.ErrUntrustedRequiresIsolation) {
+		t.Fatalf("err = %v, want ErrUntrustedRequiresIsolation", err)
+	}
+}
+
+func TestGated_ReturnsTheDriverUnchangedForTrustedWork(t *testing.T) {
+	fd := &fakeDriver{isolated: false}
+	d, err := sandbox.Gated(fd, false)
+	if err != nil {
+		t.Fatalf("Gated: %v", err)
+	}
+	if d != sandbox.Driver(fd) {
+		t.Error("Gated wrapped a driver that trusted work never needed wrapped")
+	}
+}
+
+// TestGated_WrapperKeepsRefusingEvenAfterEscapingIntoAField is the case the
+// wrapper exists for: a caller that stashes the *wrapped* driver into a
+// struct field, passes it somewhere that has never heard of CheckPolicy, and
+// calls Run directly. The refusal must still fire from inside Run, not just
+// at Gated's own construction time.
+func TestGated_WrapperKeepsRefusingEvenAfterEscapingIntoAField(t *testing.T) {
+	fd := &fakeDriver{isolated: true}
+	d, err := sandbox.Gated(fd, true)
+	if err != nil {
+		t.Fatalf("Gated: %v", err)
+	}
+
+	type holder struct{ d sandbox.Driver }
+	h := holder{d: d}
+
+	// Flip the underlying driver's isolation after construction — nothing
+	// stops it, and the wrapper is what re-checks on every Run rather than
+	// trusting a decision made once.
+	fd.isolated = false
+	_, err = h.d.Run(context.Background(), validSpec())
+	if !errors.Is(err, sandbox.ErrUntrustedRequiresIsolation) {
+		t.Fatalf("Run err = %v, want ErrUntrustedRequiresIsolation", err)
+	}
+}
+
 func TestRunSpec_Validate(t *testing.T) {
 	cases := []struct {
 		name string

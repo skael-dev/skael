@@ -85,8 +85,20 @@ func RunSuiteCheck(ctx context.Context, skill string, allowVoid bool) error {
 		return fmt.Errorf("suite check: preparing image: %w", err)
 	}
 
+	// suite.Check runs oracle/solve.sh and verifier/test.sh directly, and both
+	// are model-generated. Gated is what makes that trust decision structural
+	// rather than remembered by this call site: today's whole product is
+	// self-hosted, own-team skills, so this — like every other docker-driver
+	// caller — passes untrusted: false, matching runner.New's default. A
+	// caller that ever needs to run someone else's suite through this path
+	// gets refused here instead of silently running it in a shared kernel.
+	gd, err := sandbox.Gated(d, false)
+	if err != nil {
+		return fmt.Errorf("suite check: %w", err)
+	}
+
 	results, err := suite.Check(ctx, s, suite.CheckOptions{
-		Driver: d, Image: image, SuiteDir: suiteDir,
+		Driver: gd, Image: image, SuiteDir: suiteDir,
 		Timeout: checkRunTimeout, Concurrency: checkConcurrency, Logger: ui.Info,
 	})
 	if err != nil {

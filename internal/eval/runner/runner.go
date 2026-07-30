@@ -103,9 +103,16 @@ func New(o Options) (*Runner, error) {
 	if o.Store == nil || o.Driver == nil || o.Adapters == nil {
 		return nil, errors.New("runner: store, driver, and adapters are required")
 	}
-	if err := sandbox.CheckPolicy(o.Driver, o.Untrusted); err != nil {
+	// Gated makes the trust decision structural rather than a check every
+	// caller of o.Driver.Run must remember to make: it refuses here for
+	// untrusted work on a shared-kernel driver, and for untrusted work on a
+	// hardware-isolated driver it wraps Run so the same refusal still holds
+	// even if o.Driver is later read out of a struct field.
+	gd, err := sandbox.Gated(o.Driver, o.Untrusted)
+	if err != nil {
 		return nil, err
 	}
+	o.Driver = gd
 	if o.Concurrency <= 0 {
 		o.Concurrency = 4
 	}
