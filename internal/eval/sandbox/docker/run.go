@@ -132,13 +132,6 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	return res, nil
 }
 
-// prepareAllowlist sets up a private network with an egress proxy that
-// permits exactly the declared domains. Not implemented yet: wiring the
-// proxy container and network lifecycle is a separate task.
-func (d *Driver) prepareAllowlist(ctx context.Context, name string, allow []string) (string, func(), error) {
-	return "", func() {}, errors.New("docker: allowlist policy is not wired yet")
-}
-
 // containerName is unique per run so a timed-out container can be found and
 // removed by name.
 func containerName() (string, error) {
