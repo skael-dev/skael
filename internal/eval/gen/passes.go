@@ -93,6 +93,13 @@ func bodyPrompt(s *spec.SkillSpec, outline outlineRes) string {
 	b.WriteString(renderSteps(s.Steps))
 	b.WriteString("\n")
 
+	if rules := renderConstraints(s.Constraints); rules != "" {
+		b.WriteString("Constraints the skill is scored against. State each one in the body as a\n")
+		b.WriteString("guardrail placed next to the step it governs, not only in a preamble:\n")
+		b.WriteString(rules)
+		b.WriteString("\n")
+	}
+
 	if plan := renderResourcePlan(s.Resources); plan != "" {
 		b.WriteString("Bundled resources the steps may reference by their exact relative path:\n")
 		b.WriteString(plan)
@@ -205,6 +212,30 @@ func renderResourcePlan(plan spec.ResourcePlan) string {
 			}
 			b.WriteString("\n")
 		}
+	}
+	return b.String()
+}
+
+// renderConstraints renders a spec's constraints as bullets the prompt can
+// quote directly, each tagged with its kind and severity.
+//
+// The generator has to see these: contract.Compile turns every MUST-NOT into a
+// violation weighted by the same severity, and the eval suite's task prompts
+// render them too. Writing the body without them means generating a skill
+// against rules it is never told about, and satisfying the guardrail-placement
+// rule the body prompt states only by accident.
+func renderConstraints(rules []spec.Rule) string {
+	var b strings.Builder
+	for _, r := range rules {
+		kind := "MUST"
+		if r.Kind == spec.RuleMustNot {
+			kind = "MUST NOT"
+		}
+		fmt.Fprintf(&b, "- [%s] %s", kind, r.Text)
+		if r.Severity != "" {
+			fmt.Fprintf(&b, " (severity: %s)", r.Severity)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

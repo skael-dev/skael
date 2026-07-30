@@ -9,6 +9,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/gen"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
+	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
 // TestGenerate_PassOrderAndRoles asserts the four gateway calls happen in the
@@ -67,5 +68,43 @@ func TestGenerate_RefusesNestedTraversalResourcePath(t *testing.T) {
 				t.Error("a file was written outside the bundle directory")
 			}
 		})
+	}
+}
+
+// TestGenerate_BodyPromptCarriesTheConstraints closes the gap between what the
+// generator is told and what the drift contract scores. contract.Compile turns
+// every MUST-NOT into a violation weighted by its severity, and the task
+// prompts render them — but the body pass never saw them, so the generated
+// SKILL.md was written without knowing the rules it would be penalized for
+// breaking. The guardrail placement lint checks for could only be satisfied by
+// accident.
+func TestGenerate_BodyPromptCarriesTheConstraints(t *testing.T) {
+	s := genSpec()
+	s.Constraints = []spec.Rule{
+		{ID: "c1", Text: "Never write outside out/.", Kind: spec.RuleMustNot, Severity: spec.SeverityCritical},
+		{ID: "c2", Text: "Always validate the CSV before reporting success.", Kind: spec.RuleMust, Severity: spec.SeverityMajor},
+	}
+
+	g := fake.New(scripted()...)
+	if _, err := gen.Generate(context.Background(), g, s, t.TempDir()); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	calls := g.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("made %d gateway calls, want 4", len(calls))
+	}
+	body := calls[1].Prompt
+
+	for _, want := range []string{
+		"Never write outside out/.",
+		"Always validate the CSV before reporting success.",
+		"MUST NOT",
+		"MUST",
+		"critical",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body pass prompt does not carry %q:\n%s", want, body)
+		}
 	}
 }
