@@ -117,7 +117,16 @@ const DefaultWorkDir = "/workspace"
 type RunResult struct {
 	ExitCode int
 	TimedOut bool
-	Duration time.Duration
+	// Cancelled is true when the run did not finish because its context was
+	// cancelled out from under it (as opposed to TimedOut, its own
+	// Timeout elapsing). A driver that sets this always also returns a
+	// non-nil error — the field exists so a caller inspecting a partial
+	// result (rather than only the error) can still tell a cancellation
+	// apart from a genuine measurement, since neither ExitCode nor TimedOut
+	// says so on their own. A cancelled run must never be recorded as
+	// store.StatusFailed: it was not measured, not failed.
+	Cancelled bool
+	Duration  time.Duration
 }
 
 // Validate reports a RunSpec a driver should refuse. Each check exists because

@@ -25,7 +25,7 @@ func (e *Executor) Exec(ctx context.Context, argv []string, stdout, stderr io.Wr
 	rs.Stdout, rs.Stderr = stdout, stderr
 	res, err := e.d.Run(ctx, rs)
 	if err != nil {
-		return 0, err
+		return res.ExitCode, err
 	}
 	if res.TimedOut {
 		return res.ExitCode, context.DeadlineExceeded

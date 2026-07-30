@@ -138,6 +138,10 @@ type recordingDriver struct {
 	isolated bool
 	runs     []sandbox.RunSpec
 	onRun    func(sandbox.RunSpec)
+	// result, if set, overrides what Run returns — tests use it to simulate a
+	// driver failure (a cancelled context, a docker client error) without a
+	// real sandbox.
+	result func(sandbox.RunSpec) (sandbox.RunResult, error)
 }
 
 func (d *recordingDriver) Name() string           { return "recording" }
@@ -152,9 +156,13 @@ func (d *recordingDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.Ru
 	d.mu.Lock()
 	d.runs = append(d.runs, rs)
 	hook := d.onRun
+	result := d.result
 	d.mu.Unlock()
 	if hook != nil {
 		hook(rs)
+	}
+	if result != nil {
+		return result(rs)
 	}
 	return sandbox.RunResult{ExitCode: 0}, nil
 }
@@ -470,6 +478,37 @@ func TestExecute_AgentInternalErrorIsRecordedAsNotPerformed(t *testing.T) {
 	}
 	if !sawError {
 		t.Fatal("no outcome recorded as an error for an agent-reported internal error")
+	}
+}
+
+func TestExecute_ACancelledDriverRunIsRecordedAsErrorNotFailed(t *testing.T) {
+	h := newHarness(t)
+	// The verifier run (the only direct r.o.Driver.Run call executeRun makes)
+	// reports a cancelled context, the shape docker.Driver.Run now returns
+	// rather than folding a killed docker client's exit code into a
+	// RunResult. A cancelled run is not a measurement — it must be recorded
+	// as StatusError so a resume retries it, never as StatusFailed, which
+	// ClaimRun treats as a completed, permanent skill failure.
+	h.driver.result = func(sandbox.RunSpec) (sandbox.RunResult, error) {
+		return sandbox.RunResult{Cancelled: true}, fmt.Errorf("docker: run cancelled: %w", context.Canceled)
+	}
+
+	res, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawError bool
+	for _, o := range res.Outcomes {
+		if o.Status == store.StatusFailed {
+			t.Errorf("a cancelled run was recorded as StatusFailed: %+v", o)
+		}
+		if o.Status == store.StatusError {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Fatal("no outcome recorded as an error for a cancelled driver run")
 	}
 }
 

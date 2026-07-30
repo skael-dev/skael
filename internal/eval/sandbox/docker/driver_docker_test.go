@@ -141,6 +141,54 @@ func TestRun_TimesOutAndLeavesNoContainer(t *testing.T) {
 	}
 }
 
+// TestRun_DockersOwnFailuresAreErrorsNotResults pins the fix for exit codes
+// 125/126/127 (docker CLI/daemon errors, and "not executable"/"not found" in
+// the image) being folded into RunResult.ExitCode as if the container itself
+// had produced them. Before the fix, a missing image or an unreadable
+// verifier script came back indistinguishable from a verifier that legitimately
+// exited 125-127 — which does not happen in practice, but the failure mode
+// this guards is a driver failure being scored as "the verifier failed",
+// permanently (suite.Check marks the task Void; the runner writes
+// StatusFailed) rather than retried.
+func TestRun_DockersOwnFailuresAreErrorsNotResults(t *testing.T) {
+	d := driver(t)
+	ref := prepare(t, d)
+	ws := t.TempDir()
+
+	t.Run("missing image", func(t *testing.T) {
+		var out bytes.Buffer
+		res, err := d.Run(context.Background(), sandbox.RunSpec{
+			Image:     sandbox.ImageRef{Tag: "whetstone-does-not-exist:none"},
+			Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
+			Argv: []string{"true"}, Stdout: &out, Stderr: &out,
+		})
+		if err == nil {
+			t.Fatalf("Run against a missing image returned no error; res = %+v\n%s", res, out.String())
+		}
+		if res.ExitCode == 125 || res.ExitCode == 126 || res.ExitCode == 127 {
+			t.Errorf("docker's own exit code %d leaked into RunResult.ExitCode instead of staying in the error", res.ExitCode)
+		}
+	})
+
+	t.Run("command not executable", func(t *testing.T) {
+		// /etc/hostname exists in the image and is a regular file with no
+		// executable bit — running it directly is exactly the shape of error
+		// docker run reports as exit 126, not something a verifier script
+		// would ever legitimately produce.
+		var out bytes.Buffer
+		res, err := d.Run(context.Background(), sandbox.RunSpec{
+			Image: ref, Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
+			Argv: []string{"/etc/hostname"}, Stdout: &out, Stderr: &out,
+		})
+		if err == nil {
+			t.Fatalf("Run of a non-executable command returned no error; res = %+v\n%s", res, out.String())
+		}
+		if res.ExitCode == 125 || res.ExitCode == 126 || res.ExitCode == 127 {
+			t.Errorf("docker's own exit code %d leaked into RunResult.ExitCode instead of staying in the error", res.ExitCode)
+		}
+	})
+}
+
 func containerCount(t *testing.T) int {
 	t.Helper()
 	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=whetstone-run-", "-q").Output()

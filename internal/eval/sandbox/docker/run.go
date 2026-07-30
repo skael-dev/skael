@@ -72,9 +72,33 @@ func RunArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, err
 	return append(a, rs.Argv...), nil
 }
 
+// driverExitCodes are exit statuses `docker run` itself uses to report that
+// the client or daemon could not do what was asked — a missing image, an
+// unreadable bind-mount source, an entrypoint that isn't executable or
+// doesn't exist. They occupy the same integer space a container's own
+// command exits with, so a code in this set is never treated as the
+// command's result: it is the docker CLI's own failure, reported as an error
+// rather than folded into ExitCode.
+//
+// This is deliberately a conservative fallback rather than separating the
+// two exit spaces structurally (via `docker create` + `start` + `wait`,
+// where only `wait` reports the container's own status): the three-command
+// split touches the timeout, allowlist-network, and cleanup logic that this
+// function's tests and callers already depend on, and the risk of that
+// rewrite was judged larger than the risk of this list going stale. If a
+// future Docker version repurposes one of these codes for a container's own
+// exit, that would show up as a run's exit code being misreported as a
+// driver error — worth revisiting if this ever needs to change.
+var driverExitCodes = map[int]string{
+	125: "the docker CLI or daemon rejected the run (e.g. a bad flag, an unreadable bind-mount source, or a daemon error)",
+	126: "the command in the image could not be invoked (not executable)",
+	127: "the command in the image could not be found",
+}
+
 // Run executes one command. A non-zero exit is a result, not an error: a
 // verifier that fails is the measurement. An error means the run could not be
-// performed at all.
+// performed at all — including when docker's own client exits 125, 126, or
+// 127 (see driverExitCodes) or when ctx is cancelled out from under it.
 //
 // The container is named and removed explicitly on the way out. Relying on
 // --rm alone loses a container whose docker client was killed by the context,
@@ -110,12 +134,24 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	runErr := cmd.Run()
 	res := sandbox.RunResult{Duration: time.Since(start)}
 
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		res.TimedOut = true
 		// The docker client is already dead; the container is not. Removing it
 		// by name is the only thing that stops it.
 		_, _ = d.output(context.WithoutCancel(ctx), "rm", "-f", name)
 		return res, nil
+	case ctx.Err() != nil:
+		// The parent context was cancelled — not this run's own timeout. A
+		// ctx-killed docker client leaves an exec.ExitError behind (typically
+		// "signal: killed", ExitCode() == -1) that is not a measurement of
+		// anything the container did; recording it as a RunResult would let a
+		// worker shutdown or a caller's own deadline masquerade as a verifier
+		// or agent result. Reported as an error, and Cancelled marked in case a
+		// caller inspects the partial result rather than the error.
+		_, _ = d.output(context.WithoutCancel(ctx), "rm", "-f", name)
+		res.Cancelled = true
+		return res, fmt.Errorf("docker: run cancelled: %w", ctx.Err())
 	}
 	// Always attempt removal: --rm has not fired if the client was interrupted.
 	defer func() { _, _ = d.output(context.WithoutCancel(ctx), "rm", "-f", name) }()
@@ -125,7 +161,12 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	case runErr == nil:
 		res.ExitCode = 0
 	case errors.As(runErr, &ee):
-		res.ExitCode = ee.ExitCode()
+		code := ee.ExitCode()
+		if reason, isDriverCode := driverExitCodes[code]; isDriverCode {
+			return res, fmt.Errorf("docker: run %s exited %d: %s (not a container result): %w",
+				strings.Join(rs.Argv, " "), code, reason, runErr)
+		}
+		res.ExitCode = code
 	default:
 		return res, fmt.Errorf("docker: running %s: %w", strings.Join(rs.Argv, " "), runErr)
 	}

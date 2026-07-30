@@ -2,11 +2,35 @@ package sandbox_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 )
+
+// errDriver returns a fixed RunResult alongside a non-nil error, the shape a
+// cancelled or driver-failed docker run produces: Run does not promise a
+// zero-value RunResult just because it also returns an error.
+type errDriver struct{ fakeDriver }
+
+func (d *errDriver) Run(context.Context, sandbox.RunSpec) (sandbox.RunResult, error) {
+	return sandbox.RunResult{ExitCode: 7}, errors.New("boom")
+}
+
+func TestExec_ReturnsTheDriversExitCodeEvenOnError(t *testing.T) {
+	d := &errDriver{}
+	ex := sandbox.NewExec(d, validSpec())
+	code, err := ex.Exec(context.Background(), []string{"claude"}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("Exec: want an error")
+	}
+	// A caller logging both the exit code and the error must see the driver's
+	// real exit code, not a fabricated 0 that reads as a clean exit.
+	if code != 7 {
+		t.Errorf("code = %d, want 7 (the driver's own ExitCode, not a fabricated 0)", code)
+	}
+}
 
 func TestNewExec_SubstitutesArgvAndKeepsTheRestOfTheSpec(t *testing.T) {
 	d := &fakeDriver{}
