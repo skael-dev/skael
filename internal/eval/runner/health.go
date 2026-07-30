@@ -47,7 +47,7 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 		}
 	}()
 
-	mounts, err := authMounts(a.Caps().AuthDirs)
+	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: err.Error()}
 	}

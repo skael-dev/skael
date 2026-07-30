@@ -31,6 +31,20 @@ const DefaultBaseTag = "whetstone-base:1"
 // SlimBaseTag is the base the docker-tagged test job builds.
 const SlimBaseTag = "whetstone-base-ci:1"
 
+// ContainerHome is the home directory of the "runner" user every run executes
+// as inside the container — base/Dockerfile creates that user with
+// "useradd -m -u 1000 runner", and Docker derives HOME from /etc/passwd for a
+// USER set by name. A host path an adapter declares under "~" (an AuthDirs
+// entry, for instance) must be rewritten against this, not against the host's
+// own home: the two are different filesystems with different users, and the
+// container never sees the host's home directory at all.
+//
+// This is an image property, not a runner one: changing base/Dockerfile's
+// USER or the UID/home "useradd" assigns requires changing this constant to
+// match, or every auth mount silently starts landing in the wrong place
+// again.
+const ContainerHome = "/home/runner"
+
 // BaseDockerfile returns the base image definition, slim for CI or full for
 // real evaluation.
 func BaseDockerfile(slim bool) string {

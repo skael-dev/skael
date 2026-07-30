@@ -14,6 +14,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
+	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
@@ -146,7 +147,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs)
+	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -316,7 +317,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs)
+	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
 	if err != nil {
 		return finish(err)
 	}
@@ -503,9 +504,27 @@ func backoff(attempt int) time.Duration {
 // authMounts expands an adapter's declared auth directories to absolute host
 // paths, mounted read-only so subscription auth works inside the sandbox
 // without the run being able to modify it.
-func authMounts(dirs []string) ([]sandbox.Mount, error) {
+//
+// The host side and the container side are different filesystems with
+// different users: a "~/..." entry resolves against the host's own home
+// directory for HostPath, but against imagespec.ContainerHome — the home of
+// the "runner" user every run executes as — for ContainerPath. Mounting the
+// host path verbatim inside the container (the previous behavior) put every
+// credential at the host's own path, which the container-side CLI never
+// looks in, so no session could ever authenticate.
+//
+// An auth directory is optional: it holds subscription credentials, not
+// something every run requires, and most of them do not exist on a machine
+// that has not logged into every agent CLI. A missing one is skipped and
+// logged, not an error — failing the run over it, or letting Docker create a
+// root-owned placeholder on the host for a bind mount source that does not
+// exist, would both be worse than just not mounting it.
+func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, error) {
 	if len(dirs) == 0 {
 		return nil, nil
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -513,14 +532,24 @@ func authMounts(dirs []string) ([]sandbox.Mount, error) {
 	}
 	mounts := make([]sandbox.Mount, 0, len(dirs))
 	for _, d := range dirs {
-		p := d
+		var hostPath, containerPath string
 		switch {
-		case strings.HasPrefix(p, "~/"):
-			p = filepath.Join(home, p[2:])
-		case !filepath.IsAbs(p):
-			p = filepath.Join(home, p)
+		case strings.HasPrefix(d, "~/"):
+			rel := d[2:]
+			hostPath = filepath.Join(home, rel)
+			containerPath = filepath.Join(imagespec.ContainerHome, rel)
+		case !filepath.IsAbs(d):
+			hostPath = filepath.Join(home, d)
+			containerPath = filepath.Join(imagespec.ContainerHome, d)
+		default:
+			hostPath, containerPath = d, d
 		}
-		mounts = append(mounts, sandbox.Mount{HostPath: p, ContainerPath: p, ReadOnly: true})
+
+		if _, err := os.Stat(hostPath); err != nil {
+			logf("runner: skipping auth mount %s: %v", hostPath, err)
+			continue
+		}
+		mounts = append(mounts, sandbox.Mount{HostPath: hostPath, ContainerPath: containerPath, ReadOnly: true})
 	}
 	return mounts, nil
 }
