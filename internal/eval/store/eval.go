@@ -392,6 +392,60 @@ func (s *Store) SaveReport(evalID int64, doc []byte, m ReportMeta) error {
 	return nil
 }
 
+// ReportMeta returns the small set of report fields the store indexes
+// directly for evalID, the read side of SaveReport's ReportMeta write.
+// RobustnessGap round-trips as nil when it was stored as SQL NULL (not
+// computed), never silently as 0 — mirroring the write-side comment on
+// ReportMeta itself.
+func (s *Store) ReportMeta(evalID int64) (ReportMeta, error) {
+	var (
+		m             ReportMeta
+		panelComplete int64
+		gap           sql.NullFloat64
+	)
+	err := s.db.QueryRow(`SELECT headline, panel_complete, robustness_gap FROM reports WHERE eval_id = ?`, evalID).
+		Scan(&m.Headline, &panelComplete, &gap)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReportMeta{}, fmt.Errorf("store.ReportMeta: no report for eval %d", evalID)
+	}
+	if err != nil {
+		return ReportMeta{}, fmt.Errorf("store.ReportMeta: %w", err)
+	}
+	m.PanelComplete = panelComplete != 0
+	if gap.Valid {
+		g := gap.Float64
+		m.RobustnessGap = &g
+	}
+	return m, nil
+}
+
+// Scores lists every agent/model pair's stored scores for an eval, the read
+// side of SaveScore.
+func (s *Store) Scores(evalID int64) ([]ScoreRow, error) {
+	rows, err := s.db.Query(
+		`SELECT agent, model, trigger_f1, reliability, uplift, efficiency, effectiveness, adherence, drift, grade, healthy
+		 FROM scores WHERE eval_id = ? ORDER BY agent, model`, evalID)
+	if err != nil {
+		return nil, fmt.Errorf("store.Scores: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ScoreRow
+	for rows.Next() {
+		var (
+			r       ScoreRow
+			healthy int64
+		)
+		if err := rows.Scan(&r.Agent, &r.Model, &r.TriggerF1, &r.Reliability, &r.Uplift, &r.Efficiency,
+			&r.Effectiveness, &r.Adherence, &r.Drift, &r.Grade, &healthy); err != nil {
+			return nil, fmt.Errorf("store.Scores scan: %w", err)
+		}
+		r.Healthy = healthy != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // sqlNullFloat converts a *float64 into the sql.NullFloat64 the database/sql
 // driver needs to bind a nullable column: a nil pointer becomes SQL NULL
 // rather than a bound 0, which would collapse "not computed" into "computed

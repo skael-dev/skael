@@ -172,85 +172,12 @@ func TestRunDirIsUniquePerRunKey(t *testing.T) {
 	}
 }
 
-func TestMigration3_PreservesAnExistingWorkspace(t *testing.T) {
-	dir := t.TempDir()
-	s, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.SaveSpec(demoSpec()); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Cache().Put("k", "v"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Reopening applies pending migrations. A workspace authored before this
-	// phase must keep its specs and its completion cache — losing the cache
-	// re-asks every gateway call the author already paid for.
-	s2, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer func() { _ = s2.Close() }()
-	if _, _, err := s2.LoadSpec("demo"); err != nil {
-		t.Errorf("spec lost across migration: %v", err)
-	}
-	if v, ok, err := s2.Cache().Get("k"); err != nil || !ok || v != "v" {
-		t.Errorf("cache lost across migration: %q %v %v", v, ok, err)
-	}
-	if _, err := s2.CreateEval(store.EvalRecord{Skill: "demo", Tier: "smoke", Status: "running", StartedAt: time.Now()}); err != nil {
-		t.Errorf("migration 3 did not apply: %v", err)
-	}
-}
-
-func TestMigration9_PreservesAnExistingWorkspace(t *testing.T) {
-	dir := t.TempDir()
-	s, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := newEval(t, s)
-	if err := s.SaveReport(id, []byte(`{"headline":40}`), store.ReportMeta{Headline: 40, PanelComplete: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Reopening applies migration 9 (nullable robustness_gap, scores.healthy).
-	// A workspace authored before this phase must keep its evals, runs, and
-	// reports across the ALTER TABLE.
-	s2, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer func() { _ = s2.Close() }()
-
-	doc, gotID, err := s2.LatestReport("demo")
-	if err != nil {
-		t.Fatalf("report lost across migration: %v", err)
-	}
-	if gotID != id || string(doc) != `{"headline":40}` {
-		t.Errorf("report content changed across migration: id=%d doc=%s", gotID, doc)
-	}
-
-	// A gap saved as nil before the migration re-added the column nullable
-	// must still round-trip as absent, not silently become 0.
-	gap := 12.5
-	if err := s2.SaveReport(id, []byte(`{"headline":40,"robustness_gap":12.5}`), store.ReportMeta{Headline: 40, PanelComplete: true, RobustnessGap: &gap}); err != nil {
-		t.Errorf("SaveReport with a robustness gap failed post-migration: %v", err)
-	}
-	if err := s2.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: false}); err != nil {
-		t.Errorf("SaveScore with the new healthy column failed post-migration: %v", err)
-	}
-}
+// TestMigration3_PreservesAnExistingWorkspace and
+// TestMigration9_PreservesAnExistingWorkspace live in migration_internal_test.go
+// (package store, not store_test): they need direct access to the unexported
+// migrations slice to build a database at an arbitrary prior schema version,
+// rather than going through store.Open, which always applies every migration
+// and so never leaves anything for the migration under test to actually do.
 
 func TestReport_RoundTripsAndLatestFollowsTheNewestEval(t *testing.T) {
 	s := openStore(t)
@@ -269,5 +196,70 @@ func TestReport_RoundTripsAndLatestFollowsTheNewestEval(t *testing.T) {
 	}
 	if id != second || string(doc) != `{"headline":70}` {
 		t.Errorf("LatestReport = %d %s, want the newest eval's report", id, doc)
+	}
+}
+
+func TestReportMeta_RoundTripsANilRobustnessGapAsNilNotZero(t *testing.T) {
+	s := openStore(t)
+	id := newEval(t, s)
+	if err := s.SaveReport(id, []byte(`{"headline":40}`), store.ReportMeta{Headline: 40, PanelComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := s.ReportMeta(id)
+	if err != nil {
+		t.Fatalf("ReportMeta: %v", err)
+	}
+	if m.RobustnessGap != nil {
+		t.Errorf("RobustnessGap = %v, want nil for a report saved with no gap", *m.RobustnessGap)
+	}
+	if m.Headline != 40 || !m.PanelComplete {
+		t.Errorf("ReportMeta = %+v, want headline 40 and panel_complete true", m)
+	}
+}
+
+func TestReportMeta_RoundTripsAPresentRobustnessGap(t *testing.T) {
+	s := openStore(t)
+	id := newEval(t, s)
+	gap := 12.5
+	if err := s.SaveReport(id, []byte(`{"headline":40}`), store.ReportMeta{Headline: 40, PanelComplete: true, RobustnessGap: &gap}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := s.ReportMeta(id)
+	if err != nil {
+		t.Fatalf("ReportMeta: %v", err)
+	}
+	if m.RobustnessGap == nil || *m.RobustnessGap != gap {
+		t.Errorf("RobustnessGap = %v, want %v", m.RobustnessGap, gap)
+	}
+}
+
+func TestScores_RoundTripsTheHealthyFlag(t *testing.T) {
+	s := openStore(t)
+	id := newEval(t, s)
+	if err := s.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveScore(id, store.ScoreRow{Agent: "claude-code", Model: "haiku", Effectiveness: 40, Healthy: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.Scores(id)
+	if err != nil {
+		t.Fatalf("Scores: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("Scores returned %d rows, want 2", len(rows))
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.Model] = r.Healthy
+	}
+	if !got["opus"] {
+		t.Errorf("opus Healthy = false, want true")
+	}
+	if got["haiku"] {
+		t.Errorf("haiku Healthy = true, want false")
 	}
 }
