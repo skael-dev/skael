@@ -1,0 +1,23 @@
+name: deterministic-transform
+purpose: Transform an input JSON file into a validated output file using a fixed script, with no model judgment in the transformation itself.
+description: Use when the user asks to transform a JSON data file deterministically.
+triggers:
+  - text: Transform data.json into output.json deterministically.
+  - text: Run the deterministic transform on this input file.
+  - text: Summarize the themes in this JSON file for me.
+    negative: true
+steps:
+  - id: run-transform
+    action: Run scripts/transform.py input.json output.json.
+    postcondition: the script exits 0 and output.json exists.
+  - id: validate-output
+    action: Validate output.json against schema.json.
+    postcondition: validation exits 0.
+  - id: write-summary
+    action: Write a row-count summary to out/summary.txt.
+    postcondition: summary.txt exists and lists the row count.
+resources:
+  scripts:
+    - path: scripts/transform.py
+      purpose: Deterministically maps input records to output records.
+target_tier: floor
