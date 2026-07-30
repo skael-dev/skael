@@ -22,7 +22,19 @@ type SpecRecord struct {
 // SaveSpec appends a new spec version and rewrites the human-editable YAML.
 // Both, deliberately: the database gives history and approval state, the file
 // gives `whetstone spec edit` something to open.
+//
+// The database row commits before the file is written, so a file-write
+// failure loses no data — LoadSpec still returns the new version from the row
+// alone. Because of that ordering, SaveSpec still returns the version it
+// committed alongside a non-nil error from the file-write step: recomputing
+// MAX(version)+1 on a naive retry would skip the already-committed version
+// and leave a permanent gap. A caller that sees an error here should treat
+// the returned version as already durable rather than retrying from scratch.
 func (s *Store) SaveSpec(sp *spec.SkillSpec) (int, error) {
+	if errs := sp.Validate(); len(errs) > 0 {
+		return 0, fmt.Errorf("store.SaveSpec: invalid spec: %w", errors.Join(errs...))
+	}
+
 	var buf bytes.Buffer
 	if err := sp.Save(&buf); err != nil {
 		return 0, err
@@ -47,12 +59,17 @@ func (s *Store) SaveSpec(sp *spec.SkillSpec) (int, error) {
 		return 0, fmt.Errorf("store.SaveSpec commit: %w", err)
 	}
 
-	path := s.SpecPath(sp.Name)
+	// The row is durable from here on: every remaining return path keeps
+	// `next` rather than reporting 0, per the doc comment above.
+	path, err := s.SpecPath(sp.Name)
+	if err != nil {
+		return next, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return 0, fmt.Errorf("store.SaveSpec mkdir: %w", err)
+		return next, fmt.Errorf("store.SaveSpec mkdir: %w", err)
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
-		return 0, fmt.Errorf("store.SaveSpec write yaml: %w", err)
+		return next, fmt.Errorf("store.SaveSpec write yaml: %w", err)
 	}
 	return next, nil
 }
@@ -98,7 +115,11 @@ func (s *Store) SpecHistory(skill string) ([]SpecRecord, error) {
 		if err := rows.Scan(&r.Version, &r.Approved, &ts); err != nil {
 			return nil, fmt.Errorf("store.SpecHistory scan: %w", err)
 		}
-		r.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", ts)
+		parsed, err := time.Parse("2006-01-02 15:04:05", ts)
+		if err != nil {
+			return nil, fmt.Errorf("store.SpecHistory: parsing created_at %q for version %d: %w", ts, r.Version, err)
+		}
+		r.CreatedAt = parsed
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -10,8 +10,8 @@ import (
 // setup targets Postgres for the server, and a second dialect in that path
 // would confuse the server's migration story for no benefit.
 //
-// Only tables this phase reads are created. Runs and scores arrive with the
-// code that produces them.
+// Only the tables the current code reads are created here; more are added
+// alongside the code that reads them (runs, scores, and so on).
 var migrations = []string{
 	`CREATE TABLE specs (
 		id          INTEGER PRIMARY KEY AUTOINCREMENT,
