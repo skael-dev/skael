@@ -9,10 +9,23 @@
 // argument that could never match a frontmatter name, and a closed stdin that
 // errored instead of declining a prompt. None of them are reachable from a test
 // that calls the package function directly.
+//
+// Run this package alongside internal/eval/sandbox/docker with "go test"'s
+// default package parallelism and it fails intermittently with "No such
+// container" mid-run: that package's TestSweep_RemovesOrphanedContainersAndNetworks
+// and TestSweep_LeavesUnrelatedContainersAlone zero docker.SweepMinAge and
+// then call the real Sweep(), which lists containers and networks by a
+// docker-daemon-wide label with no per-process scoping. With the age guard
+// off, that sweep removes every whetstone-labeled resource that exists at
+// that instant — including this package's live, still-running containers, if
+// the two happen to be executing at the same moment. justfile's test-docker
+// and test-docker-ci recipes, and the CI "Sandbox tests" step, all pass "-p 1"
+// so the matched packages' test binaries run one at a time rather than
+// racing on the shared daemon; that is a workaround for this file, not a fix
+// to Sweep's scoping, which is unchanged.
 package whetstone_e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -458,7 +471,7 @@ const stubClaudeFixture = "../../internal/eval/agent/claudecode/testdata/basic-t
 // rather than digested: the fixture and the wrapper script are both
 // committed, so "the tag exists" and "it has today's stub" are the same
 // question — this file's own git history is what invalidates it.
-const stubClaudeTag = "whetstone-e2e-stub-claude:2"
+const stubClaudeTag = "whetstone-e2e-stub-claude:3"
 
 var stubClaudeOnce sync.Once
 
@@ -502,31 +515,19 @@ func stubClaudeBaseTag(t *testing.T) string {
 		if err != nil {
 			t.Fatalf("reading stub fixture: %v", err)
 		}
-		// The recorded fixture carries a genuine rate_limit_event line: a real
-		// transient the live session hit and recovered from mid-stream. The
-		// runner treats that event as reason to discard and retry the whole
-		// invocation (internal/eval/runner/session.go), which is the right
-		// call for a live agent — a retried call gets a fresh stream that may
-		// not repeat the transient — but is wrong for a canned replay: this
-		// stub answers identically every attempt, so the event never clears
-		// and the runner burns its three retries and fails every single
-		// session. Stripping it here is a property of the stub, not a fix to
-		// the runner: a live re-invocation would not carry the same stale
-		// blip forward the way a fixed transcript does. This is independent
-		// of, but adjacent to, the parser-level fix in
-		// internal/eval/agent/claudecode/parse.go's rateLimitInfo, which this
-		// suite's own debugging surfaced: that fix is what stops an
-		// "allowed"-status rate_limit_event (this fixture's own line included)
-		// from being misread as a hit in the first place.
-		var filtered []byte
-		for _, line := range bytes.Split(fixtureData, []byte("\n")) {
-			if bytes.Contains(line, []byte(`"type":"rate_limit_event"`)) {
-				continue
-			}
-			filtered = append(filtered, line...)
-			filtered = append(filtered, '\n')
-		}
-		if err := os.WriteFile(filepath.Join(buildDir, "session.jsonl"), filtered, 0o644); err != nil {
+		// The fixture is used verbatim, including its rate_limit_info line
+		// (status "allowed" — routine telemetry, not an actual throttle).
+		// Debugging this test against the pre-fix parser is what surfaced
+		// internal/eval/agent/claudecode/parse.go treating any
+		// rate_limit_event as a hit regardless of status: replaying this
+		// exact line made every session look throttled, so the runner burned
+		// its three retries and failed every task deterministically. That is
+		// now fixed at the parser (see the "don't treat an allowed
+		// rate_limit_event as a hit" commit); this stub no longer needs to
+		// route around it, and not stripping the line is what keeps this test
+		// exercising that fix rather than quietly making it unnecessary to be
+		// correct.
+		if err := os.WriteFile(filepath.Join(buildDir, "session.jsonl"), fixtureData, 0o644); err != nil {
 			t.Fatalf("staging stub fixture: %v", err)
 		}
 
