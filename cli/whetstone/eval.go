@@ -192,6 +192,10 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return nil, err
 	}
 	var evalID int64
+	// startedAt is the eval's own start time, not the moment this process
+	// happened to resume it — a resumed eval's report must still say when
+	// the measurement began, not when the Nth resume of it ran.
+	startedAt := now()
 	if req.Resume != 0 {
 		existing, err := d.Store.Eval(req.Resume)
 		if err != nil {
@@ -208,11 +212,12 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			return nil, fmt.Errorf("whetstone eval: --resume %d was measured against a different model panel; resuming would silently mix two measurements", req.Resume)
 		}
 		evalID = existing.ID
+		startedAt = existing.StartedAt
 	} else {
 		evalID, err = d.Store.CreateEval(store.EvalRecord{
 			Skill: req.Skill, SpecVersion: specVersion, Tier: string(req.Tier), SuiteRef: suiteRef,
 			EngineVersion: d.EngineVersion, ModelPanel: panelJSON, Seed: 1,
-			StartedAt: now(), Status: "running",
+			StartedAt: startedAt, Status: "running",
 		})
 		if err != nil {
 			return nil, err
@@ -357,8 +362,36 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		modelPanelOut = append(modelPanelOut, report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class)})
 	}
 
+	// taskAgg accumulates the per-task carriers (conditions, drift, judge
+	// notes) across every scored member, so the report's Tasks section shows
+	// the same measurements the per-member pillars were computed from,
+	// rather than discarding them once the member loop is done with them.
+	taskMeta := map[string]struct{ Kind, Split string }{}
+	for _, t := range plan.Tasks {
+		taskMeta[t.ID] = struct{ Kind, Split string }{t.Kind, t.Split}
+	}
+	taskAgg := map[string]*report.TaskInput{}
+	getTask := func(taskID string) *report.TaskInput {
+		if ti, ok := taskAgg[taskID]; ok {
+			return ti
+		}
+		meta := taskMeta[taskID]
+		ti := &report.TaskInput{TaskID: taskID, Kind: meta.Kind, Split: meta.Split}
+		taskAgg[taskID] = ti
+		return ti
+	}
+
+	var totalUnevaluable int
+	var unevalDetail []string
+
 	var members []report.MemberInput
-	var usedJudge bool
+	// scoredMembers and judgeMembers gate the report-wide UpliftSource
+	// label. Uplift itself is already computed per member (reliability,
+	// baseline pass rate, and verdicts all come from that member's own
+	// outcomes) — what is eval-wide is only the single UpliftSource field on
+	// the report, and it must not say "judge" while even one scored member's
+	// Uplift silently came from the pass-rate fallback.
+	var scoredMembers, judgeMembers int
 	for _, m := range panel {
 		if !scheduled[m] {
 			continue
@@ -382,31 +415,72 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		if len(skillTasks) == 0 {
 			return nil, fmt.Errorf("whetstone eval: member %s/%s produced no measurable skill run", m.Agent, m.Model)
 		}
-		reliability, err := score.Reliability(skillTasks, plan.K)
+		// taskReliability, not score.Reliability directly: a task with an
+		// errored run has fewer surviving samples than the tier planned for
+		// it, and that one task must degrade to a narrower (but still
+		// computable) estimate rather than aborting the whole eval — see
+		// taskReliability's doc.
+		reliability, err := taskReliability(skillTasks, plan.K)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("whetstone eval: member %s/%s: %w", m.Agent, m.Model, err)
+		}
+		for _, t := range skillTasks {
+			ti := getTask(t.TaskID)
+			ti.Conditions = append(ti.Conditions, report.ConditionReport{
+				Condition: runner.CondSkill, Model: m.Model, Passes: t.C, Runs: t.N,
+			})
 		}
 
 		efficiency := 1.0
-		if skillTok, blTok := tokenTotals(g.skill), tokenTotals(g.baseline); len(skillTok) > 0 && len(blTok) > 0 {
+		// Efficiency's neutral default is 1.0 ("no penalty"), not the middle
+		// of its range: with no baseline token data there is nothing the
+		// skill could have spent *more* than, and 1.0 is the only value that
+		// does not accuse an unmeasured member of bloat. Uplift's neutral
+		// default (below) is 0.5, not 1.0, because Uplift is a symmetric
+		// preference score (0 = baseline always wins, 1 = skill always
+		// wins) — an unmeasured comparison is undecided, which is the
+		// midpoint, not a win.
+		skillTok, blTok := tokenTotals(g.skill), tokenTotals(g.baseline)
+		if len(skillTok) > 0 && len(blTok) > 0 {
 			sm, smErr := score.Median(skillTok)
-			bm, bmErr := score.Median(blTok)
-			if smErr == nil && bmErr == nil {
-				if e, eerr := score.Efficiency(sm, bm); eerr == nil {
-					efficiency = e
-				}
+			if smErr != nil {
+				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, smErr)
 			}
+			bm, bmErr := score.Median(blTok)
+			if bmErr != nil {
+				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, bmErr)
+			}
+			e, eerr := score.Efficiency(sm, bm)
+			if eerr != nil {
+				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, eerr)
+			}
+			efficiency = e
 		}
 
 		var upliftVal float64
 		metaPartial, metaPartialReason := skillPartial, skillPartialReason
 		if len(g.baseline) > 0 {
+			scoredMembers++
 			baselineTasks, blPartial, blPartialReason := taskPasses(g.baseline)
+			// baselinePassRate defaults to reliability: when every baseline
+			// run for every task errored (baselineTasks is empty), there is
+			// truly nothing to compare against for this member, and
+			// UpliftFromPassRates(reliability, reliability) evaluates to the
+			// same neutral 0.5 the no-baseline-planned branch below uses
+			// directly.
 			baselinePassRate := reliability
 			if len(baselineTasks) > 0 {
-				if bp, berr := score.Reliability(baselineTasks, plan.K); berr == nil {
-					baselinePassRate = bp
+				bp, berr := taskReliability(baselineTasks, plan.BaselineK)
+				if berr != nil {
+					return nil, fmt.Errorf("whetstone eval: member %s/%s: baseline reliability: %w", m.Agent, m.Model, berr)
 				}
+				baselinePassRate = bp
+			}
+			for _, t := range baselineTasks {
+				ti := getTask(t.TaskID)
+				ti.Conditions = append(ti.Conditions, report.ConditionReport{
+					Condition: runner.CondBaseline, Model: m.Model, Passes: t.C, Runs: t.N,
+				})
 			}
 			metaPartial = metaPartial || blPartial
 			if !skillPartial && blPartial {
@@ -416,9 +490,15 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			upliftVal = score.UpliftFromPassRates(reliability, baselinePassRate)
 			if judgeTrusted && judge != nil {
 				if verdicts, jerr := pairwiseVerdicts(ctx, judge, promptFor, g); jerr == nil && len(verdicts) > 0 {
-					if jv, uerr := score.UpliftFromJudge(verdicts); uerr == nil {
+					if jv, uerr := score.UpliftFromJudge(verdictSlice(verdicts)); uerr == nil {
 						upliftVal = jv
-						usedJudge = true
+						judgeMembers++
+					}
+					for taskID, v := range verdicts {
+						ti := getTask(taskID)
+						ti.Judge = append(ti.Judge, report.JudgeNote{
+							Model: m.Model, Winner: v.Winner, Margin: v.Margin, Evidence: v.Evidence, Votes: v.Votes,
+						})
 					}
 				}
 			}
@@ -435,7 +515,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		mi.Pillars = score.Pillars{TriggerF1: triggerF1, Reliability: reliability, Uplift: upliftVal, Efficiency: efficiency}
 
 		var driftResults []drift.Result
-		for _, outs := range g.skill {
+		for taskID, outs := range g.skill {
 			for _, o := range outs {
 				semantic := semanticScore(ctx, judge, ct, func() string { return loadTranscript(o.ArtifactDir) })
 				obs, oerr := drift.Observe(ct, o.Events)
@@ -447,6 +527,13 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 					return nil, derr
 				}
 				driftResults = append(driftResults, dr)
+
+				ti := getTask(taskID)
+				ti.Drift = append(ti.Drift, report.RunDrift{
+					Model: m.Model, Attempt: o.Key.Attempt, Result: dr, Violations: obs.Violations,
+				})
+				totalUnevaluable += obs.Unevaluable
+				unevalDetail = append(unevalDetail, obs.UnevaluableDetail...)
 			}
 		}
 		mi.Drift = driftResults
@@ -454,13 +541,47 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		members = append(members, mi)
 	}
 
+	// usedJudge labels the whole report's UpliftSource as "judge" only when
+	// every scored member (one with baseline runs to compare) actually used
+	// the judge for its own Uplift — not when any single member happened to.
+	// The report carries one UpliftSource for the whole eval, so labelling
+	// it "judge" while even one scored member's Uplift silently came from
+	// pass rates would let a reader believe every member's number carries
+	// the judge's higher fidelity when some of them do not.
+	usedJudge := scoredMembers > 0 && judgeMembers == scoredMembers
+
+	taskIDs := make([]string, 0, len(taskAgg))
+	for id := range taskAgg {
+		taskIDs = append(taskIDs, id)
+	}
+	sort.Strings(taskIDs)
+	var tasksOut []report.TaskInput
+	for _, id := range taskIDs {
+		ti := taskAgg[id]
+		sort.Slice(ti.Conditions, func(i, j int) bool {
+			if ti.Conditions[i].Condition != ti.Conditions[j].Condition {
+				return ti.Conditions[i].Condition < ti.Conditions[j].Condition
+			}
+			return ti.Conditions[i].Model < ti.Conditions[j].Model
+		})
+		sort.Slice(ti.Drift, func(i, j int) bool {
+			if ti.Drift[i].Model != ti.Drift[j].Model {
+				return ti.Drift[i].Model < ti.Drift[j].Model
+			}
+			return ti.Drift[i].Attempt < ti.Drift[j].Attempt
+		})
+		sort.Slice(ti.Judge, func(i, j int) bool { return ti.Judge[i].Model < ti.Judge[j].Model })
+		tasksOut = append(tasksOut, *ti)
+	}
+
 	rep, err := report.Compose(report.ComposeInput{
 		Skill: req.Skill, SpecVersion: specVersion, Tier: string(req.Tier), SuiteRef: suiteRef,
 		EngineVersion: d.EngineVersion, ModelPanel: modelPanelOut, PanelComplete: execRes.PanelComplete,
-		Members: members, Void: voidTasks,
+		Members: members, Tasks: tasksOut, Void: voidTasks,
 		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy,
 		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown,
-		StartedAt: now(), FinishedAt: now(),
+		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
+		StartedAt: startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
@@ -566,6 +687,32 @@ func taskPasses(byTask map[string][]runner.Outcome) (ts []score.TaskPasses, meta
 	return ts, metaPartial, reason
 }
 
+// taskReliability mirrors score.Reliability (the mean of PassAtK over
+// tasks), but clamps k to each task's own N rather than applying the tier's
+// K uniformly. score.Reliability refuses outright when any task's N is below
+// k — which an errored run causes routinely, since taskPasses already
+// excludes errored runs from N. Without this, a single flaky session on one
+// task would abort scoring for the whole member. Clamping degrades just that
+// task to a narrower (k=N, "did every surviving run pass") estimate instead.
+func taskReliability(ts []score.TaskPasses, k int) (float64, error) {
+	if len(ts) == 0 {
+		return 0, errors.New("no tasks measured; an unknown reliability is not a zero one")
+	}
+	sum := 0.0
+	for _, t := range ts {
+		tk := k
+		if t.N < tk {
+			tk = t.N
+		}
+		p, err := score.PassAtK(t.N, t.C, tk)
+		if err != nil {
+			return 0, fmt.Errorf("task %s: %w", t.TaskID, err)
+		}
+		sum += p
+	}
+	return sum / float64(len(ts)), nil
+}
+
 // tokenTotals is the per-run total token spend (input+output) across every
 // task in byTask, excluding runs that never measured anything.
 func tokenTotals(byTask map[string][]runner.Outcome) []float64 {
@@ -628,9 +775,10 @@ func semanticScore(ctx context.Context, judge *score.Judge, ct *contract.Contrac
 // pairwiseVerdicts judges every task for which this member has both a skill
 // and a baseline run, comparing their first recorded attempt's transcript. A
 // task missing either side, or whose transcript could not be recovered, is
-// skipped rather than failing the whole comparison.
-func pairwiseVerdicts(ctx context.Context, judge *score.Judge, promptFor func(string) string, g *memberOutcomes) ([]score.Verdict, error) {
-	var verdicts []score.Verdict
+// skipped rather than failing the whole comparison. The result is keyed by
+// task id so a caller can attribute each verdict back onto its report.TaskInput.
+func pairwiseVerdicts(ctx context.Context, judge *score.Judge, promptFor func(string) string, g *memberOutcomes) (map[string]score.Verdict, error) {
+	verdicts := map[string]score.Verdict{}
 	for taskID, skillOuts := range g.skill {
 		blOuts, ok := g.baseline[taskID]
 		if !ok || len(skillOuts) == 0 || len(blOuts) == 0 {
@@ -649,9 +797,20 @@ func pairwiseVerdicts(ctx context.Context, judge *score.Judge, promptFor func(st
 		if err != nil {
 			return nil, err
 		}
-		verdicts = append(verdicts, v)
+		verdicts[taskID] = v
 	}
 	return verdicts, nil
+}
+
+// verdictSlice flattens pairwiseVerdicts' map into the slice
+// score.UpliftFromJudge takes; order does not matter to it (a mean win rate),
+// only membership.
+func verdictSlice(vs map[string]score.Verdict) []score.Verdict {
+	out := make([]score.Verdict, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, v)
+	}
+	return out
 }
 
 // writeReportFile creates path and hands it to write, closing it either way.
