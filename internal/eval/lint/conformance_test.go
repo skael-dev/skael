@@ -330,3 +330,24 @@ func TestResult_ExitCodeIgnoresWarnings(t *testing.T) {
 		t.Errorf("Errors=%d Warnings=%d, want 1 and 1", withError.Errors(), withError.Warnings())
 	}
 }
+
+func TestConformance_ReportsAnUnknownFrontmatterKey(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nname: demo\ndescription: Use when demoing a bundle with an unknown key present.\nauthr: nathan\n---\n\n# Demo\n\n1. Do the thing. Postcondition: it is done.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs, err := lint.Conformance(dir)
+	if err != nil {
+		t.Fatalf("Conformance: %v", err)
+	}
+	if !hasRule(fs, "unknown-key") {
+		t.Errorf("findings = %+v, want an unknown-key finding for \"authr\"", fs)
+	}
+	for _, f := range fs {
+		if f.Rule == "unknown-key" && f.Severity != lint.SeverityWarn {
+			t.Errorf("unknown-key severity = %q, want warn: an unrecognised key is advisory, not a failure", f.Severity)
+		}
+	}
+}
