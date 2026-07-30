@@ -32,7 +32,7 @@ func Argv(s agent.InvokeSpec) ([]string, error) {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-mode", "acceptEdits",
-		"--model", s.Model,
+		New().Caps().ModelFlag, s.Model,
 		s.Prompt,
 	}, nil
 }

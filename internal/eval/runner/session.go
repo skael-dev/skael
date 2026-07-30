@@ -160,17 +160,10 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		Timeout:   r.o.SessionTimeout,
 	})
 
-	skillName := ""
-	if k.Condition == CondSkill {
-		skillName = in.Skill
-	}
 	result, invokeRaw, status, err := r.invoke(ctx, a, agent.InvokeSpec{
-		Workspace: ws,
-		Prompt:    task.PromptMD,
-		Model:     k.Model,
-		Timeout:   r.o.SessionTimeout,
-		SkillName: skillName,
-		Exec:      exec,
+		Prompt: task.PromptMD,
+		Model:  k.Model,
+		Exec:   exec,
 	}, k)
 	raw = invokeRaw
 	if err != nil {
@@ -343,12 +336,9 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	})
 
 	result, invokeRaw, _, err := r.invoke(ctx, a, agent.InvokeSpec{
-		Workspace: ws,
-		Prompt:    p.Prompt,
-		Model:     p.Member.Model,
-		Timeout:   r.o.SessionTimeout,
-		SkillName: in.Skill,
-		Exec:      exec,
+		Prompt: p.Prompt,
+		Model:  p.Member.Model,
+		Exec:   exec,
 	}, k)
 	raw = invokeRaw
 	if err != nil {

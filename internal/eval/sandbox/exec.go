@@ -18,6 +18,14 @@ type Executor struct {
 // through unchanged.
 func NewExec(d Driver, base RunSpec) *Executor { return &Executor{d: d, base: base} }
 
+// Workspace reports the directory a session run through this executor
+// executes against. agent.InvokeSpec deliberately does not carry its own
+// copy of this (the sandbox already knows it, and a second copy an adapter
+// never reads is exactly the trap this exists to avoid) — a caller that
+// needs to know where a session's writes will land reads it from here
+// instead.
+func (e *Executor) Workspace() string { return e.base.Workspace }
+
 // Exec runs one command and returns its exit code.
 func (e *Executor) Exec(ctx context.Context, argv []string, stdout, stderr io.Writer) (int, error) {
 	rs := e.base

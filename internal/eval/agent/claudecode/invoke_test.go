@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
@@ -27,7 +26,7 @@ func (f *fakeExec) Exec(_ context.Context, argv []string, stdout, _ io.Writer) (
 
 func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
 	a, err := claudecode.Argv(agent.InvokeSpec{
-		Prompt: "Convert data.csv to out/tables.md", Model: "opus", SkillName: "csv-to-md",
+		Prompt: "Convert data.csv to out/tables.md", Model: "opus",
 	})
 	if err != nil {
 		t.Fatalf("Argv: %v", err)
@@ -65,7 +64,7 @@ func TestArgv_RequiresAPromptAndAModel(t *testing.T) {
 func TestInvoke_RunsThroughTheExecutorAndReturnsItsStream(t *testing.T) {
 	fx := &fakeExec{stdout: `{"type":"system","subtype":"init"}` + "\n"}
 	r, err := claudecode.New().Invoke(context.Background(), agent.InvokeSpec{
-		Workspace: "/ws", Prompt: "p", Model: "opus", Timeout: time.Minute, Exec: fx,
+		Prompt: "p", Model: "opus", Exec: fx,
 	})
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -92,7 +91,7 @@ func TestInvoke_RefusesToRunOutsideASandbox(t *testing.T) {
 func TestInvoke_SurfacesANonZeroExitWithItsOutput(t *testing.T) {
 	fx := &fakeExec{exit: 1, stdout: "API Error: 529"}
 	_, err := claudecode.New().Invoke(context.Background(), agent.InvokeSpec{
-		Prompt: "p", Model: "m", Timeout: time.Minute, Exec: fx,
+		Prompt: "p", Model: "m", Exec: fx,
 	})
 	if err == nil || !strings.Contains(err.Error(), "529") {
 		t.Errorf("err = %v, want the CLI's own output quoted", err)

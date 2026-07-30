@@ -87,11 +87,17 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 	// Snapshot the workspace now: it is staged and installed into by this
 	// point, and the runner removes it once the session (and, for a task run,
 	// its verifier) finishes — this is the only point a test can still see it.
+	// InvokeSpec carries no workspace of its own (the sandbox already knows
+	// it), so it comes from the executor the runner built around it.
+	ws := ""
+	if se, ok := s.Exec.(*sandbox.Executor); ok {
+		ws = se.Workspace()
+	}
 	f.snapshots = append(f.snapshots, wsSnapshot{
 		prompt:     s.Prompt,
-		workspace:  s.Workspace,
-		skillCount: skillDirCount(s.Workspace),
-		hasOracle:  hasOracleFile(s.Workspace),
+		workspace:  ws,
+		skillCount: skillDirCount(ws),
+		hasOracle:  hasOracleFile(ws),
 	})
 	f.mu.Unlock()
 	if f.invokeErr != nil {

@@ -62,11 +62,9 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 	})
 
 	stream, err := a.Invoke(ctx, agent.InvokeSpec{
-		Workspace: ws,
-		Prompt:    healthProbePrompt,
-		Model:     m.Model,
-		Timeout:   healthProbeTimeout,
-		Exec:      exec,
+		Prompt: healthProbePrompt,
+		Model:  m.Model,
+		Exec:   exec,
 	})
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: fmt.Sprintf("invoke: %v", err)}

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"time"
 
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
@@ -58,15 +57,17 @@ type Caps struct {
 	SupportsSkillInvocation bool
 }
 
-// InvokeSpec is one agent session request.
+// InvokeSpec is one agent session request. Workspace, a session-level
+// Timeout, and the installed skill's name are deliberately not here: the
+// sandbox already knows the workspace and enforces the timeout (both are
+// baked into Exec's underlying sandbox.RunSpec by the runner before Invoke is
+// ever called), and no adapter names the skill in its own invocation — a
+// field an adapter never reads but the runner always populates looks like a
+// bound or a behavior it is not, which is exactly the trap for the next
+// adapter author this exists to remove.
 type InvokeSpec struct {
-	Workspace string
-	Prompt    string
-	Model     string
-	Timeout   time.Duration
-	// SkillName is the installed skill under test, used by adapters whose
-	// invocation names it explicitly. Empty for a baseline session.
-	SkillName string
+	Prompt string
+	Model  string
 	// Exec is where the CLI runs. Required.
 	Exec Exec
 }
