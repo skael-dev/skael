@@ -19,7 +19,9 @@ import (
 // else. The proxy environment variables a run receives are a convenience for a
 // well-behaved client; this flag is what makes ignoring them futile.
 func NetworkArgv(name string) []string {
-	return []string{"network", "create", "--internal", name}
+	a := []string{"network", "create", "--internal"}
+	a = append(a, ownerLabelArgs()...)
+	return append(a, name)
 }
 
 // ProxyArgv starts the allowlist proxy on the internal network under the alias
@@ -38,15 +40,17 @@ func NetworkArgv(name string) []string {
 // process whose entire job is to sit on the network boundary carries the
 // minimum a working proxy needs and nothing more.
 func ProxyArgv(network, name, baseTag string) []string {
-	return []string{
-		"run", "-d", "--rm", "--name", name,
+	a := []string{"run", "-d", "--rm", "--name", name}
+	a = append(a, ownerLabelArgs()...)
+	a = append(a,
 		"--network", network, "--network-alias", proxyHost,
 		"--user", "root",
 		"--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID",
 		"--security-opt", "no-new-privileges",
 		baseTag,
 		"sh", "-c", proxyEntrypoint,
-	}
+	)
+	return a
 }
 
 // proxyReadyFile is written last among the files prepareAllowlist copies into

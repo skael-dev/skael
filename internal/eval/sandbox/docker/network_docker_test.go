@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
+	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
 )
 
 func TestAllowlist_PermitsListedHostsAndRefusesEverythingElse(t *testing.T) {
@@ -71,7 +72,12 @@ func TestAllowlist_RemovesItsNetworkAndProxy(t *testing.T) {
 	// One leaked user-defined network per run exhausts Docker's address pool
 	// well before a Deep tier finishes, and the failure it produces then is
 	// "could not create network", which reads as nothing to do with the eval.
-	out, err := exec.Command("docker", "network", "ls", "--filter", "name=whetstone-net-", "-q").Output()
+	//
+	// Scoped to this test binary's own resources via docker.OwnerLabel(): CI
+	// runs the docker-tagged suite without -p 1, so a name-substring filter
+	// here would also count another concurrently-running package's networks
+	// and containers.
+	out, err := exec.Command("docker", "network", "ls", "--filter", "label="+docker.OwnerLabel(), "-q").Output()
 	if err != nil {
 		t.Fatalf("docker network ls: %v", err)
 	}
@@ -79,7 +85,7 @@ func TestAllowlist_RemovesItsNetworkAndProxy(t *testing.T) {
 		t.Errorf("leaked %d networks", n)
 	}
 
-	proxies, err := exec.Command("docker", "ps", "-a", "--filter", "name=whetstone-proxy-", "-q").Output()
+	proxies, err := exec.Command("docker", "ps", "-a", "--filter", "label="+docker.OwnerLabel(), "-q").Output()
 	if err != nil {
 		t.Fatalf("docker ps: %v", err)
 	}
