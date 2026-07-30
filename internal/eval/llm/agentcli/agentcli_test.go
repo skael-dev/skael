@@ -286,6 +286,44 @@ func TestComplete_QuotedAPIErrorInRefusalIsNotRetried(t *testing.T) {
 	}
 }
 
+// TestComplete_TransportFailureOnStderrIsRetried covers the failure shape
+// where the process itself dies and stdout holds no parseable envelope at
+// all — a crash or a dropped connection. There is no envelope.Result to
+// carry a diagnostic on this path; it surfaces on stderr instead, and this
+// is retried only if isTransient actually looks there.
+func TestComplete_TransportFailureOnStderrIsRetried(t *testing.T) {
+	g, argv := newGateway(t, "transport_fail")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete unexpectedly succeeded against a CLI that always fails")
+	}
+
+	b, _ := os.ReadFile(argv)
+	// newGateway's default MaxRetries is 2, so 3 total invocations are
+	// expected once every retry is exhausted.
+	if n := strings.Count(string(b), "-p"); n != 3 {
+		t.Errorf("CLI invoked %d times; a transport failure on stderr must be retried up to MaxRetries", n)
+	}
+}
+
+// TestComplete_UsageFailureOnStderrIsNotRetried is the guard against
+// reintroducing the exact waste the earlier rounds removed: an unrecognised
+// flag also produces no parseable envelope and a non-zero exit — the same
+// structural shape as a transport failure — but carries no transport signal
+// on stderr and must not be retried.
+func TestComplete_UsageFailureOnStderrIsNotRetried(t *testing.T) {
+	g, argv := newGateway(t, "usage_fail")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded against a permanently broken invocation")
+	}
+
+	b, _ := os.ReadFile(argv)
+	if n := strings.Count(string(b), "-p"); n != 1 {
+		t.Errorf("CLI invoked %d times for a usage failure with no transport signal; it must not be retried", n)
+	}
+}
+
 func TestDetect_FindsABinaryOnPATH(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude")

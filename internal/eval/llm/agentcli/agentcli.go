@@ -87,22 +87,32 @@ type envelope struct {
 	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 }
 
-// cliFailure is returned when the envelope or the process itself reports
-// failure. result is the trimmed CLI result text, kept separate from msg so
-// isTransient can anchor on where the CLI's own text actually begins rather
-// than on a string that already has an "agentcli: call failed: " prefix
-// glued to the front of it. exitedNonZero records whether the process
-// exited non-zero: a bad flag or bad --model value also exits non-zero, so
-// this is corroborating evidence for isTransient, never sufficient by
-// itself — otherwise a permanent misconfiguration gets retried forever for
-// an answer that will never change.
+// cliFailure is returned when the envelope parsed successfully but reports
+// failure (is_error, or a non-zero exit alongside a valid envelope). result
+// is the trimmed CLI result text, kept separate from msg so isTransient can
+// anchor on where the CLI's own text actually begins rather than on a string
+// that already has an "agentcli: call failed: " prefix glued to the front
+// of it.
 type cliFailure struct {
-	msg           string
-	result        string
-	exitedNonZero bool
+	msg    string
+	result string
 }
 
 func (e *cliFailure) Error() string { return e.msg }
+
+// execFailure is returned when the process itself failed and stdout held no
+// parseable envelope at all — a crash, an unrecognised flag rejected before
+// any JSON was written, or a dropped connection. There is no envelope.Result
+// to inspect on this path; a transport diagnostic, if the failure produced
+// one, appears on stderr instead. stderr is kept separately from msg for the
+// same reason cliFailure keeps result separate: isTransient needs the raw
+// text, not a string with our own formatting glued on.
+type execFailure struct {
+	msg    string
+	stderr string
+}
+
+func (e *execFailure) Error() string { return e.msg }
 
 // Detect finds a supported agent CLI on PATH.
 func Detect() (string, error) {
@@ -198,13 +208,16 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 
 	runErr := cmd.Run()
 
-	// The envelope is parsed even on a non-zero exit, because the error detail
-	// is inside it rather than on stderr.
+	// The envelope is parsed even on a non-zero exit, because when it does
+	// parse, the error detail is inside it rather than on stderr.
 	var env envelope
 	if uerr := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &env); uerr != nil {
 		if runErr != nil {
-			return llm.Res{}, fmt.Errorf("agentcli: %s failed: %w (stderr: %s)",
-				g.opts.Binary, runErr, strings.TrimSpace(stderr.String()))
+			stderrText := strings.TrimSpace(stderr.String())
+			return llm.Res{}, &execFailure{
+				msg:    fmt.Sprintf("agentcli: %s failed: %v (stderr: %s)", g.opts.Binary, runErr, stderrText),
+				stderr: stderrText,
+			}
 		}
 		return llm.Res{}, fmt.Errorf("agentcli: unparseable envelope: %w (stdout: %.200s)", uerr, stdout.String())
 	}
@@ -213,9 +226,8 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 	if env.IsError || runErr != nil {
 		result := strings.TrimSpace(env.Result)
 		return llm.Res{}, &cliFailure{
-			msg:           fmt.Sprintf("agentcli: call failed: %s", result),
-			result:        result,
-			exitedNonZero: runErr != nil,
+			msg:    fmt.Sprintf("agentcli: call failed: %s", result),
+			result: result,
 		}
 	}
 
@@ -247,9 +259,18 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 // two apart.
 var apiErrorPattern = regexp.MustCompile(`^API Error:\s*(\d{3})`)
 
-// transientMarkers catches transport-level failures that do not go through
-// the "API Error: <status>" shape. These are less specific than the anchored
-// pattern above, so a marker match alone is not trusted — see isTransient.
+// transientMarkers catches transport-level failures. These only ever surface
+// on execFailure's stderr (see isTransient): a cliFailure means the envelope
+// parsed, and no case has been found where the real CLI reports a transport
+// error inside an otherwise-valid envelope rather than either the anchored
+// "API Error: <status>" shape or crashing outright with nothing parseable on
+// stdout. An earlier version of this classifier also scanned cliFailure's
+// result for these markers; it was removed after review showed every test
+// in this package passed whether that branch returned true or false — dead
+// code shaped like a safety net, covering a case that could not be
+// triggered. If the real CLI is ever observed emitting one of these inside a
+// parsed envelope's result, add it back here with a test that pins the
+// observation, the same way apiErrorPattern was pinned.
 var transientMarkers = []string{
 	"ECONNRESET",
 	"context deadline exceeded",
@@ -260,40 +281,45 @@ var transientMarkers = []string{
 // isTransient reports whether a failure is worth retrying rather than
 // returned immediately. The CLI gives no structured error code, so this
 // remains a heuristic calibrated to phrasing observed from the real CLI, not
-// an exhaustive classifier. It requires a genuine transient signal in the
-// CLI's own result text — the result leading with "API Error: <5xx-or-429>",
-// or a transport-level marker — before retrying at all:
+// an exhaustive classifier, and it looks for a transient signal in a
+// different place depending on which of the two failure shapes it was
+// handed:
 //
-//   - A leading "API Error: <5xx-or-429>" is sufficient on its own: this is
-//     the exact shape observed for real infrastructure failures.
-//   - A transport-level marker (ECONNRESET, a deadline/connection error) is
-//     weaker evidence on its own, so it additionally requires the process to
-//     have exited non-zero before being trusted.
-//   - A non-zero exit is never sufficient by itself: the CLI also exits
-//     non-zero for a permanent misconfiguration (bad --model, bad flag,
-//     expired auth), and retrying that spends sessions to receive the
-//     identical failure forever. It only corroborates a marker match above.
-//
-// A refusal that happens to mention a status code, "timeout", or a quoted
-// copy of the CLI's own error shape in its own prose must not match any of
-// this, or a non-retryable answer gets retried MaxRetries times for no
-// benefit.
+//   - cliFailure (the envelope parsed): transient only when result *begins*
+//     with "API Error: <5xx-or-429>" — the exact shape observed for real
+//     infrastructure failures. A refusal that merely mentions a status code,
+//     "timeout", or a quoted copy of that phrase partway through its own
+//     prose must not match, or a non-retryable answer gets retried
+//     MaxRetries times for no benefit. A non-zero exit is not consulted here
+//     at all: the CLI also exits non-zero for a permanent misconfiguration
+//     (bad --model, bad flag, expired auth), so exit code alone proves
+//     nothing about transience.
+//   - execFailure (no parseable envelope — a crash, a dropped connection, or
+//     a rejected flag): transient only when stderr contains one of
+//     transientMarkers. A bad flag lands on this same path (the CLI prints
+//     usage to stderr and exits non-zero) and must not match, so this is a
+//     positive check for an actual transport signal, not "unparseable plus
+//     non-zero exit implies transient".
 func isTransient(err error) bool {
 	var cf *cliFailure
-	if !errors.As(err, &cf) {
+	if errors.As(err, &cf) {
+		if m := apiErrorPattern.FindStringSubmatch(cf.result); m != nil {
+			if code, cerr := strconv.Atoi(m[1]); cerr == nil && (code == 429 || (code >= 500 && code < 600)) {
+				return true
+			}
+		}
 		return false
 	}
 
-	if m := apiErrorPattern.FindStringSubmatch(cf.result); m != nil {
-		if code, cerr := strconv.Atoi(m[1]); cerr == nil && (code == 429 || (code >= 500 && code < 600)) {
-			return true
+	var ef *execFailure
+	if errors.As(err, &ef) {
+		for _, marker := range transientMarkers {
+			if strings.Contains(ef.stderr, marker) {
+				return true
+			}
 		}
+		return false
 	}
 
-	for _, marker := range transientMarkers {
-		if strings.Contains(cf.result, marker) {
-			return cf.exitedNonZero
-		}
-	}
 	return false
 }

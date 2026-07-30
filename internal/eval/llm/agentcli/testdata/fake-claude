@@ -61,4 +61,20 @@ case "${FAKE_CLAUDE_MODE:-ok}" in
     # thing.
     printf '%s\n' '{"subtype":"success","is_error":true,"result":"Our support docs say: \"API Error: 503\" typically means your proxy is misconfigured; this has nothing to do with your request, which I am declining for policy reasons."}'
     ;;
+  transport_fail)
+    # A transport-level failure: the process itself dies before writing any
+    # parseable envelope to stdout at all. The diagnostic lands on stderr,
+    # which is where the transient-failure check for this failure shape
+    # actually looks.
+    printf 'connection reset by peer while contacting the API\n' >&2
+    exit 1
+    ;;
+  usage_fail)
+    # A permanent failure that produces no parseable envelope either, just
+    # like transport_fail structurally (non-zero exit, nothing readable on
+    # stdout) — but the stderr text here is a rejected flag, not a transport
+    # signal, so this must never be retried.
+    printf 'error: unknown flag: --bogus-flag\nusage: claude [options]\n' >&2
+    exit 1
+    ;;
 esac
