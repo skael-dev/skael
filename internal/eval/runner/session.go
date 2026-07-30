@@ -192,10 +192,15 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))
 	}
-	out.VerifierExit = vres.ExitCode
 	if vres.TimedOut {
+		// The verifier did not produce a real exit code; out.VerifierExit
+		// stays nil (not measured) rather than recording the zero value a
+		// timed-out RunResult happens to carry, which would misread as "the
+		// verifier passed."
 		return finish(store.StatusTimeout, fmt.Errorf("runner: verifier timed out: %w", context.DeadlineExceeded))
 	}
+	exitCode := vres.ExitCode
+	out.VerifierExit = &exitCode
 	if vres.ExitCode != 0 {
 		return finish(store.StatusFailed, nil)
 	}

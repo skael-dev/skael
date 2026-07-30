@@ -36,8 +36,11 @@ type Options struct {
 
 // Outcome is what one planned session (skill or baseline) reported.
 type Outcome struct {
-	Key          store.RunKey
-	VerifierExit int
+	Key store.RunKey
+	// VerifierExit is nil when the verifier never ran (the session failed
+	// before reaching it, or timed out inside it) and its exit code
+	// otherwise — see store.RunOutcome.VerifierExit, which this feeds.
+	VerifierExit *int
 	Events       []trajectory.Event
 	Meta         agent.Meta
 	ArtifactDir  string

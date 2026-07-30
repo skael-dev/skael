@@ -60,7 +60,13 @@ type RunKey struct {
 
 // RunOutcome is what a finished (or failed-to-run) session reported.
 type RunOutcome struct {
-	VerifierExit int
+	// VerifierExit is nil when the verifier never ran — a trigger probe (which
+	// has no verifier at all) or a run that failed before reaching it — and
+	// the verifier's exit code otherwise, including 0. A caller that reads
+	// *VerifierExit == 0 without checking it is non-nil first is the one bug
+	// this distinction exists to prevent: "not measured" and "measured and
+	// passed" must never collapse into the same value.
+	VerifierExit *int
 	InputTokens  int64
 	OutputTokens int64
 	DurationMS   int64
@@ -319,7 +325,10 @@ func (s *Store) Runs(evalID int64) ([]RunRecord, error) {
 			&r.Outcome.DurationMS, &r.Outcome.AgentVersion, &rateLimited, &r.Outcome.Status, &r.Outcome.Error); err != nil {
 			return nil, fmt.Errorf("store.Runs scan: %w", err)
 		}
-		r.Outcome.VerifierExit = int(verifierExit.Int64)
+		if verifierExit.Valid {
+			v := int(verifierExit.Int64)
+			r.Outcome.VerifierExit = &v
+		}
 		r.Outcome.RateLimited = rateLimited != 0
 		out = append(out, r)
 	}

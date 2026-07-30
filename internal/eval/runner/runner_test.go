@@ -361,11 +361,29 @@ func TestExecute_ResumeSpendsNoSessionOnACompletedRun(t *testing.T) {
 			t.Errorf("resume reported %+v, which the first run never produced", o.Key)
 			continue
 		}
-		if o.Status != w.Status || o.VerifierExit != w.VerifierExit {
-			t.Errorf("resume for %+v = {status=%s exit=%d}, want {status=%s exit=%d}",
-				o.Key, o.Status, o.VerifierExit, w.Status, w.VerifierExit)
+		if o.Status != w.Status || !sameVerifierExit(o.VerifierExit, w.VerifierExit) {
+			t.Errorf("resume for %+v = {status=%s exit=%v}, want {status=%s exit=%v}",
+				o.Key, o.Status, verifierExitStr(o.VerifierExit), w.Status, verifierExitStr(w.VerifierExit))
 		}
 	}
+}
+
+// sameVerifierExit compares two *int VerifierExit values by their pointed-to
+// value (or by both being nil), never by pointer identity: two separately
+// constructed Outcomes with "the verifier exited 0" must compare equal, and
+// nil must never compare equal to a pointer to 0.
+func sameVerifierExit(a, b *int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+func verifierExitStr(v *int) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d", *v)
 }
 
 func TestExecute_BaselineNeverInstallsTheSkill(t *testing.T) {

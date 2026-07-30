@@ -46,8 +46,10 @@ type Artifacts struct {
 // adapter's session metadata, and its terminal status. It is what a report
 // drills into and what makes a surprising score checkable.
 type Grading struct {
-	Key          store.RunKey
-	VerifierExit int
+	Key store.RunKey
+	// VerifierExit is nil when the verifier never ran — see
+	// store.RunOutcome.VerifierExit, which this mirrors.
+	VerifierExit *int
 	Meta         agent.Meta
 	Status       string
 	Error        string

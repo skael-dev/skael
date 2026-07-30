@@ -33,7 +33,8 @@ func TestClaimRun_IsIdempotentSoAnInterruptedEvalResumes(t *testing.T) {
 	if done {
 		t.Fatal("a fresh run reported as already done")
 	}
-	if err := s.FinishRun(runID, store.RunOutcome{VerifierExit: 0, Status: "ok", ArtifactDir: "d"}); err != nil {
+	verifierExit := 0
+	if err := s.FinishRun(runID, store.RunOutcome{VerifierExit: &verifierExit, Status: "ok", ArtifactDir: "d"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,6 +69,53 @@ func TestClaimRun_AnUnfinishedClaimIsRetried(t *testing.T) {
 	}
 	if done {
 		t.Error("an unfinished claim reported as done")
+	}
+}
+
+// TestFinishRun_NilVerifierExitStaysNullNotZero pins the fix for
+// verifier_exit being unable to distinguish "not measured" from "measured
+// and passed": the schema stores it nullable, but FinishRun previously always
+// bound an int, so NULL was unreachable and any of these three cases —
+// a probe with no verifier at all, a run that errored before reaching the
+// verifier, or a run whose verifier genuinely exited 0 — read back
+// identically.
+func TestFinishRun_NilVerifierExitStaysNullNotZero(t *testing.T) {
+	s := openStore(t)
+	id := newEval(t, s)
+
+	unmeasured := store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "trigger", Attempt: 1}
+	runID, _, err := s.ClaimRun(id, unmeasured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishRun(runID, store.RunOutcome{Status: "error", ArtifactDir: "d"}); err != nil {
+		t.Fatal(err)
+	}
+
+	passed := store.RunKey{TaskID: "t2", Agent: "claude-code", Model: "opus", Condition: "skill", Attempt: 1}
+	runID2, _, err := s.ClaimRun(id, passed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	if err := s.FinishRun(runID2, store.RunOutcome{VerifierExit: &zero, Status: "ok", ArtifactDir: "d"}); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := s.Runs(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[store.RunKey]store.RunRecord{}
+	for _, r := range runs {
+		byKey[r.Key] = r
+	}
+
+	if v := byKey[unmeasured].Outcome.VerifierExit; v != nil {
+		t.Errorf("unmeasured run's VerifierExit = %d, want nil", *v)
+	}
+	if v := byKey[passed].Outcome.VerifierExit; v == nil || *v != 0 {
+		t.Errorf("passed run's VerifierExit = %v, want a non-nil 0", v)
 	}
 }
 

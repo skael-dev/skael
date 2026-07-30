@@ -116,9 +116,10 @@ func TestWriteArtifacts_ExcludesTheInstalledSkillFromOutputs(t *testing.T) {
 
 func TestGrading_RoundTripsWithItsKeyAndMeta(t *testing.T) {
 	dir := t.TempDir()
+	verifierExit := 1
 	g := runner.Grading{
 		Key:          store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "skill", Attempt: 2},
-		VerifierExit: 1,
+		VerifierExit: &verifierExit,
 		Meta:         agent.Meta{AgentVersion: "2.1.220", InputTokens: 1200, OutputTokens: 800, NumTurns: 7},
 		Status:       "ok",
 		StartedAt:    time.Unix(1700000000, 0).UTC(),
@@ -134,11 +135,34 @@ func TestGrading_RoundTripsWithItsKeyAndMeta(t *testing.T) {
 	}
 	// Token counts feed Efficiency and the agent version is what attributes a
 	// score to a CLI build. Losing either makes a score unexplainable later.
-	if got.Meta.InputTokens != 1200 || got.Meta.AgentVersion != "2.1.220" || got.VerifierExit != 1 {
+	if got.Meta.InputTokens != 1200 || got.Meta.AgentVersion != "2.1.220" || got.VerifierExit == nil || *got.VerifierExit != 1 {
 		t.Errorf("grading round-trip lost data: %+v", got)
 	}
 	if got.Key != g.Key {
 		t.Errorf("key = %+v, want %+v", got.Key, g.Key)
+	}
+}
+
+// TestGrading_NilVerifierExitRoundTripsAsNil pins the distinction a nullable
+// VerifierExit exists for: "the verifier never ran" (nil) must not collapse
+// into "the verifier ran and exited 0" (a pointer to zero) anywhere along the
+// path grading.json takes to LoadGrading.
+func TestGrading_NilVerifierExitRoundTripsAsNil(t *testing.T) {
+	dir := t.TempDir()
+	g := runner.Grading{
+		Key:    store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "trigger", Attempt: 1},
+		Status: "error",
+	}
+	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := runner.LoadGrading(a.GradingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VerifierExit != nil {
+		t.Errorf("VerifierExit = %v, want nil (the verifier never ran)", *got.VerifierExit)
 	}
 }
 
