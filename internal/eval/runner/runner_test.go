@@ -620,6 +620,61 @@ func TestExecute_TriggerProbesInstallTheDistractorPack(t *testing.T) {
 	}
 }
 
+func TestExecute_ResumedProbeRecoversEventsFromArtifacts(t *testing.T) {
+	h := newHarness(t)
+	in := h.input()
+	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullSuite, nil)
+	in.Distractors = mustDistractors(t)
+
+	r, err := runner.New(h.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := r.Execute(context.Background(), h.evalID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Probes) == 0 {
+		t.Fatal("no probes ran")
+	}
+	for _, p := range first.Probes {
+		if p.Unknown {
+			t.Fatalf("probe %+v reported unknown on its first run: %s", p.Probe, p.Reason)
+		}
+		if len(p.Events) == 0 {
+			t.Fatalf("probe %+v recorded no events on its first run", p.Probe)
+		}
+	}
+
+	// A second Runner against the same eval resumes every probe from the
+	// store rather than re-invoking the agent. Its evidence must come back
+	// from events.jsonl, written where resumeProbeOutcome looks for it — not
+	// as Unknown, which is what a missing or misformatted file degrades to.
+	r2, err := runner.New(h.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := h.adapter.invokeCount()
+	second, err := r2.Execute(context.Background(), h.evalID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := h.adapter.invokeCount(); after != before {
+		t.Errorf("resume spent %d further probe sessions", after-before)
+	}
+	if len(second.Probes) != len(first.Probes) {
+		t.Fatalf("resume returned %d probes, want the %d already recorded", len(second.Probes), len(first.Probes))
+	}
+	for _, p := range second.Probes {
+		if p.Unknown {
+			t.Errorf("resumed probe %+v came back unknown: %s", p.Probe, p.Reason)
+		}
+		if len(p.Events) == 0 {
+			t.Errorf("resumed probe %+v recovered no events", p.Probe)
+		}
+	}
+}
+
 func TestExecute_NeverStagesTheOracleIntoASessionWorkspace(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.run(context.Background()); err != nil {

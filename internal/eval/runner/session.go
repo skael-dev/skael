@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +35,7 @@ func findTask(tasks []suite.TaskPkg, id string) (suite.TaskPkg, bool) {
 // handled by executeProbe — so this only ever sees CondSkill or CondBaseline.
 func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, byKey map[store.RunKey]store.RunRecord, k store.RunKey) Outcome {
 	out := Outcome{Key: k}
+	startedAt := time.Now().UTC()
 
 	runID, done, err := r.o.Store.ClaimRun(evalID, k)
 	if err != nil {
@@ -52,6 +55,15 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 			adErr = mkErr
 		}
 	}
+
+	// ws and raw are filled in as the session progresses; finish reads
+	// whatever they hold at call time, so artifacts are recorded even when
+	// the run ends before invoke completes.
+	var (
+		ws       string
+		raw      []byte
+		skipDirs []string
+	)
 
 	finish := func(status string, ferr error) Outcome {
 		out.Status, out.Err, out.ArtifactDir = status, ferr, artifactDir
@@ -73,6 +85,15 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		if err := r.o.Store.FinishRun(runID, fo); err != nil {
 			r.o.Logger("runner: finishing run %+v: %v", k, err)
 		}
+		if artifactDir != "" && ws != "" {
+			g := Grading{
+				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+			}
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
+				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
+			}
+		}
 		return out
 	}
 
@@ -90,7 +111,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	}
 
 	taskDir := filepath.Join(in.SuiteDir, "tasks", k.TaskID)
-	ws, err := stageRunWorkspace(taskDir)
+	ws, err = stageRunWorkspace(taskDir)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -101,11 +122,14 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	}()
 
 	// The skill installs only for the skill condition. A baseline workspace
-	// carrying the skill would make Uplift measure nothing.
+	// carrying the skill would make Uplift measure nothing. skipDirs mirrors
+	// that: a baseline has no installed skill to exclude from outputs/, so
+	// its real outputs are copied in full.
 	if k.Condition == CondSkill {
 		if err := a.InstallSkill(ws, in.BundleDir); err != nil {
 			return finish(store.StatusError, fmt.Errorf("runner: installing skill: %w", err))
 		}
+		skipDirs = []string{a.Caps().SkillDir}
 	}
 
 	mounts, err := authMounts(a.Caps().AuthDirs)
@@ -125,7 +149,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if k.Condition == CondSkill {
 		skillName = in.Skill
 	}
-	result, status, err := r.invoke(ctx, a, agent.InvokeSpec{
+	result, invokeRaw, status, err := r.invoke(ctx, a, agent.InvokeSpec{
 		Workspace: ws,
 		Prompt:    task.PromptMD,
 		Model:     k.Model,
@@ -133,6 +157,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		SkillName: skillName,
 		Exec:      exec,
 	}, k)
+	raw = invokeRaw
 	if err != nil {
 		return finish(status, err)
 	}
@@ -170,6 +195,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput, byKey map[store.RunKey]store.RunRecord, p Probe) ProbeOutcome {
 	po := ProbeOutcome{Probe: p}
 	k := probeKey(p)
+	startedAt := time.Now().UTC()
 
 	runID, done, err := r.o.Store.ClaimRun(evalID, k)
 	if err != nil {
@@ -190,6 +216,15 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		}
 	}
 
+	// ws, raw, and a are filled in as the probe progresses; finish reads
+	// whatever they hold at call time, so artifacts are recorded even when
+	// the probe ends before invoke completes.
+	var (
+		ws  string
+		raw []byte
+		a   agent.Adapter
+	)
+
 	finish := func(ferr error) ProbeOutcome {
 		status := store.StatusOK
 		errStr := ""
@@ -209,6 +244,20 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		if err := r.o.Store.FinishRun(runID, fo); err != nil {
 			r.o.Logger("runner: finishing probe %+v: %v", k, err)
 		}
+		if artifactDir != "" && ws != "" {
+			g := Grading{
+				Key: k, Meta: po.Meta, Status: status, Error: errStr,
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+			}
+			// A probe always installs the skill and, when configured, the
+			// distractor pack alongside it — both live under the adapter's
+			// SkillDir, so excluding it keeps every copy of the bundle out
+			// of outputs/ regardless of which distractors were installed.
+			skipDirs := []string{a.Caps().SkillDir}
+			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
+				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
+			}
+		}
 		po.Err = ferr
 		if ferr != nil {
 			po.Unknown, po.Reason = true, ferr.Error()
@@ -220,12 +269,13 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: preparing artifact dir: %w", adErr))
 	}
 
-	a, ok := r.o.Adapters(p.Member.Agent)
+	var ok bool
+	a, ok = r.o.Adapters(p.Member.Agent)
 	if !ok {
 		return finish(fmt.Errorf("runner: no adapter registered for %q", p.Member.Agent))
 	}
 
-	ws, err := stageProbeWorkspace()
+	ws, err = stageProbeWorkspace()
 	if err != nil {
 		return finish(err)
 	}
@@ -255,7 +305,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		Timeout:   r.o.SessionTimeout,
 	})
 
-	result, _, err := r.invoke(ctx, a, agent.InvokeSpec{
+	result, invokeRaw, _, err := r.invoke(ctx, a, agent.InvokeSpec{
 		Workspace: ws,
 		Prompt:    p.Prompt,
 		Model:     p.Member.Model,
@@ -263,6 +313,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		SkillName: in.Skill,
 		Exec:      exec,
 	}, k)
+	raw = invokeRaw
 	if err != nil {
 		return finish(err)
 	}
@@ -375,7 +426,10 @@ func loadProbeEvents(artifactDir string) ([]trajectory.Event, error) {
 // it is reported as a hard failure so ClaimRun retries it on the next
 // Execute, rather than permanently recording a rate-limit artifact as if it
 // were a skill failure. The returned status is empty on success.
-func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeSpec, k store.RunKey) (*agent.Result, string, error) {
+// invoke returns the parsed result alongside the raw bytes of the native
+// stream that produced it (for the attempt actually returned — a discarded,
+// rate-limited attempt's bytes are not kept), so a caller can record both.
+func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeSpec, k store.RunKey) (*agent.Result, []byte, string, error) {
 	for attempt := 0; ; attempt++ {
 		stream, err := a.Invoke(ctx, spec)
 		if err != nil {
@@ -383,11 +437,15 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 			if errors.Is(err, context.DeadlineExceeded) {
 				status = store.StatusTimeout
 			}
-			return nil, status, err
+			return nil, nil, status, err
 		}
-		result, err := a.Parse(stream)
+		raw, err := io.ReadAll(stream)
 		if err != nil {
-			return nil, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
+			return nil, nil, store.StatusError, fmt.Errorf("runner: reading session stream: %w", err)
+		}
+		result, err := a.Parse(bytes.NewReader(raw))
+		if err != nil {
+			return nil, raw, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
 		}
 
 		if result.Meta.RateLimited {
@@ -397,12 +455,12 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 				r.o.Sleep(d)
 				continue
 			}
-			return nil, store.StatusError, fmt.Errorf("runner: %+v still rate limited after %d attempts", k, r.o.MaxRateLimitRetries)
+			return nil, raw, store.StatusError, fmt.Errorf("runner: %+v still rate limited after %d attempts", k, r.o.MaxRateLimitRetries)
 		}
 		if result.Meta.IsError {
-			return nil, store.StatusError, fmt.Errorf("runner: %+v agent reported an internal error", k)
+			return nil, raw, store.StatusError, fmt.Errorf("runner: %+v agent reported an internal error", k)
 		}
-		return result, "", nil
+		return result, raw, "", nil
 	}
 }
 
