@@ -59,25 +59,68 @@ var fragmentSafelist = map[string]bool{
 // ValidateFragment checks a task-declared Dockerfile fragment instruction by
 // instruction. The fragment is model-authored, so it is validated rather than
 // trusted.
+//
+// A Dockerfile instruction can span several physical lines via a trailing
+// backslash, so lines are first reassembled into logical lines before either
+// check runs: the safelist check applies only to the keyword that starts a
+// logical line (a continuation is not a new instruction, whatever its own
+// first token looks like), while the build-secret check scans the whole
+// reassembled line, because a "--mount=type=secret" flag can itself be split
+// across a continuation.
 func ValidateFragment(frag string) error {
-	for i, line := range strings.Split(frag, "\n") {
-		t := strings.TrimSpace(line)
-		if t == "" || strings.HasPrefix(t, "#") {
-			continue
-		}
-		// A continued line belongs to the instruction above it, which was
-		// already checked.
-		if strings.HasPrefix(t, "&&") || strings.HasPrefix(t, "|") {
-			continue
+	lines := strings.Split(frag, "\n")
+
+	var logical strings.Builder
+	logicalStart := 0
+	continued := false
+
+	check := func() error {
+		t := strings.TrimSpace(logical.String())
+		if t == "" {
+			return nil
 		}
 		fields := strings.Fields(t)
 		instr := strings.ToUpper(fields[0])
 		if !fragmentSafelist[instr] {
-			return fmt.Errorf("%w: line %d uses %s, which is not one of RUN, ENV, COPY, WORKDIR, USER, ARG", ErrUnsafeFragment, i+1, instr)
+			return fmt.Errorf("%w: line %d uses %s, which is not one of RUN, ENV, COPY, WORKDIR, USER, ARG", ErrUnsafeFragment, logicalStart, instr)
 		}
 		if strings.Contains(t, "--mount=type=secret") {
-			return fmt.Errorf("%w: line %d mounts a build secret", ErrUnsafeFragment, i+1)
+			return fmt.Errorf("%w: line %d mounts a build secret", ErrUnsafeFragment, logicalStart)
 		}
+		return nil
+	}
+
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+
+		if !continued {
+			if t == "" || strings.HasPrefix(t, "#") {
+				continue
+			}
+			logical.Reset()
+			logicalStart = i + 1
+		} else if logical.Len() > 0 {
+			logical.WriteString(" ")
+		}
+
+		// The one signal that determines continuation in Dockerfile syntax is
+		// a trailing backslash on the previous physical line — not what the
+		// current line's text happens to start with.
+		continued = strings.HasSuffix(t, "\\")
+		t = strings.TrimSpace(strings.TrimSuffix(t, "\\"))
+		logical.WriteString(t)
+
+		if continued {
+			continue
+		}
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	if continued {
+		// A fragment ending mid-continuation; check what was accumulated
+		// rather than silently dropping it.
+		return check()
 	}
 	return nil
 }

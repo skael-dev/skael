@@ -125,6 +125,39 @@ func TestValidateFragment_AcceptsTheSafelist(t *testing.T) {
 	}
 }
 
+func TestValidateFragment_TracksRealLineContinuation(t *testing.T) {
+	// A continuation line belongs to the instruction above it, but only when
+	// the previous physical line actually ends in a trailing backslash — not
+	// merely because the continuation line's own text starts with "&&" or "|".
+
+	// The false-reject the earlier prefix heuristic produced: a multi-line ENV
+	// that doesn't use the "&&"-per-line idiom.
+	if err := imagespec.ValidateFragment("ENV FOO=bar \\\n    BAZ=qux\n"); err != nil {
+		t.Errorf("ValidateFragment rejected a real backslash continuation of ENV: %v", err)
+	}
+
+	// The idiomatic multi-line RUN must keep working.
+	if err := imagespec.ValidateFragment("RUN apt-get update \\\n    && apt-get install -y jq\n"); err != nil {
+		t.Errorf("ValidateFragment rejected a real backslash continuation of RUN: %v", err)
+	}
+
+	// A line starting with "&&" whose predecessor has no trailing backslash is
+	// not a continuation, and the validator must say so on its own rather than
+	// relying on Docker's parser to reject it later.
+	err := imagespec.ValidateFragment("RUN apt-get update\n&& apt-get install -y jq\n")
+	if !errors.Is(err, imagespec.ErrUnsafeFragment) {
+		t.Errorf("ValidateFragment(%q) = %v, want ErrUnsafeFragment for a false continuation", "&&...", err)
+	}
+
+	// A build-secret flag split across a real continuation must still be
+	// caught: the safelist check is skipped for a continuation line, but the
+	// secret-mount check is not.
+	err = imagespec.ValidateFragment("RUN --mount=type=secret,id=k \\\n    cat /run/secrets/k\n")
+	if !errors.Is(err, imagespec.ErrUnsafeFragment) {
+		t.Errorf("ValidateFragment(%q) = %v, want ErrUnsafeFragment for a secret mount split across a continuation", "--mount=type=secret...", err)
+	}
+}
+
 func TestRender_LayersOverTheBaseAndValidatesFirst(t *testing.T) {
 	got, err := imagespec.Render(env())
 	if err != nil {
