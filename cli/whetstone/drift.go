@@ -117,7 +117,12 @@ func renderDrift(rep *report.Report) {
 		ui.Info("%s/%s: adherence %.1f (grade %s)", m.Member.Agent, m.Member.Model, m.Drift.Mean, m.DriftGrade)
 		for _, t := range rep.Tasks {
 			for _, d := range t.Drift {
-				if d.Model != m.Member.Model {
+				// Match the full member identity (agent and model), not model
+				// alone: a cross-vendor panel (e.g. --agents claude-code,cursor
+				// --models opus) can put two members on the same model string,
+				// and Model alone would attribute one member's task-level
+				// drift and violations to the other member's table section.
+				if d.Agent != m.Member.Agent || d.Model != m.Member.Model {
 					continue
 				}
 				ui.Info("  %s attempt %d: adherence %.1f (coverage=%.2f order=%.2f violation=%.2f checkpoint=%.2f semantic=%.2f focus=%.2f)",

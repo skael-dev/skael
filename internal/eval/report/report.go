@@ -62,7 +62,13 @@ type ConditionReport struct {
 // the per-task view rendered here and the per-member view drift.Aggregate
 // consumes are always the same numbers, not two hand-built copies that can
 // silently disagree.
+//
+// Agent, alongside Model, is what disambiguates which panel member this run
+// belongs to: a cross-vendor panel (e.g. --agents claude-code,cursor
+// --models opus) can put two members on the same model string, and Model
+// alone cannot tell them apart.
 type RunDrift struct {
+	Agent   string `json:"agent"`
 	Model   string `json:"model"`
 	Attempt int    `json:"attempt"`
 	drift.Result

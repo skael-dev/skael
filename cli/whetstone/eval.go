@@ -530,7 +530,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 
 				ti := getTask(taskID)
 				ti.Drift = append(ti.Drift, report.RunDrift{
-					Model: m.Model, Attempt: o.Key.Attempt, Result: dr, Violations: obs.Violations,
+					Agent: m.Agent, Model: m.Model, Attempt: o.Key.Attempt, Result: dr, Violations: obs.Violations,
 				})
 				totalUnevaluable += obs.Unevaluable
 				unevalDetail = append(unevalDetail, obs.UnevaluableDetail...)
