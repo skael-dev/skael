@@ -153,3 +153,68 @@ func sortFindings(f []expectedFinding) {
 		return f[i].Severity < f[j].Severity
 	})
 }
+
+// TestCorpus_ExercisesTheBrokenLinkRule proves the corpus actually feeds the
+// broken-link rule an input. A corpus whose SKILL.md files contain no relative
+// markdown link at all would pass every expectation above while leaving the
+// rule entirely unexercised — so this copies an archetype, removes the file its
+// link resolves to, and requires the finding to appear.
+func TestCorpus_ExercisesTheBrokenLinkRule(t *testing.T) {
+	src := filepath.Join("testdata", "corpus", "document-formatter")
+	dst := filepath.Join(t.TempDir(), "document-formatter")
+	copyTree(t, src, dst)
+
+	res, err := lint.Run(dst)
+	if err != nil {
+		t.Fatalf("lint.Run: %v", err)
+	}
+	if hasRule(res, "broken-link") {
+		t.Fatalf("the unmodified corpus already reports a broken link: %+v", res.Findings)
+	}
+
+	if err := os.Remove(filepath.Join(dst, "references", "style-guide.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = lint.Run(dst)
+	if err != nil {
+		t.Fatalf("lint.Run: %v", err)
+	}
+	if !hasRule(res, "broken-link") {
+		t.Errorf("removing a linked corpus file produced no broken-link finding: %+v", res.Findings)
+	}
+}
+
+func hasRule(res *lint.Result, rule string) bool {
+	for _, f := range res.Findings {
+		if f.Rule == rule {
+			return true
+		}
+	}
+	return false
+}
+
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
