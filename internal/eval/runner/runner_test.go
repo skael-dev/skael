@@ -552,6 +552,30 @@ func TestExecute_AFailingSessionDoesNotAbortTheEval(t *testing.T) {
 	}
 }
 
+func TestExecute_VerifierRunUsesSuitesTimeoutNotTheSessionTimeout(t *testing.T) {
+	h := newHarness(t)
+	// Deliberately different from suite.VerifierTimeout, so the two cannot
+	// pass this test by coincidence.
+	h.opts.SessionTimeout = 20 * time.Minute
+
+	if _, err := h.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// recordingDriver.Run is only ever called for the verifier (the agent
+	// session itself goes through fakeAdapter.Invoke, which never touches the
+	// driver) — every recorded run's Timeout must be suite.VerifierTimeout,
+	// the same bound suite.Check uses for the identical script, not
+	// whatever SessionTimeout the panel happens to be configured with.
+	if len(h.driver.runs) == 0 {
+		t.Fatal("no verifier runs were recorded")
+	}
+	for _, rs := range h.driver.runs {
+		if rs.Timeout != suite.VerifierTimeout {
+			t.Errorf("verifier run timeout = %s, want suite.VerifierTimeout (%s)", rs.Timeout, suite.VerifierTimeout)
+		}
+	}
+}
+
 func TestExecute_NeverExceedsItsConcurrency(t *testing.T) {
 	h := newHarness(t)
 	h.opts.Concurrency = 3

@@ -181,13 +181,20 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	// The verifier runs under NetNone in the same workspace: it must not be
 	// able to reach the network, or a task could be satisfied by fetching the
 	// answer instead of solving it.
+	//
+	// Timeout is suite.VerifierTimeout, not r.o.SessionTimeout: this is the
+	// same verifier/test.sh suite.Check bounds at that value, and the two
+	// disagreeing by 4x (the runner's SessionTimeout defaults to 20 minutes)
+	// meant a hung verifier script was tolerated four times longer here than
+	// in the oracle gate that is supposed to have already proven it doesn't
+	// hang.
 	vres, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
 		Argv:      []string{"sh", "/verifier/test.sh"},
 		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
 		Network:   sandbox.NetNone,
-		Timeout:   r.o.SessionTimeout,
+		Timeout:   suite.VerifierTimeout,
 	})
 	if err != nil {
 		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))

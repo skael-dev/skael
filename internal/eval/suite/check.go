@@ -13,6 +13,16 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 )
 
+// VerifierTimeout bounds one oracle or verifier script run — both the oracle
+// gate (Check, below) and a session's own post-run verifier in
+// runner/session.go run the identical verifier/test.sh. suite owns the
+// scripts, so it owns the one bound on how long they may run: these are
+// reference scripts a suite author controls, not an agent session, so a few
+// minutes is generous headroom rather than a tight budget. A caller with a
+// different opinion is a caller that has forgotten these are the same
+// script, not a caller with a legitimate reason to run it longer.
+const VerifierTimeout = 5 * time.Minute
+
 // CheckResult is one task's verdict from the oracle gate.
 type CheckResult struct {
 	TaskID string

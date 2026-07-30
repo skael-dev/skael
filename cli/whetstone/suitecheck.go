@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,11 +14,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/ui"
 )
-
-// checkRunTimeout bounds one oracle or verifier script. These are reference
-// scripts the suite author controls, not an agent session, so a few minutes
-// is generous headroom rather than a tight budget.
-const checkRunTimeout = 5 * time.Minute
 
 // checkConcurrency bounds how many tasks are checked in parallel. It mirrors
 // the default sandbox.Driver resource footprint (see docker.Options), so a
@@ -107,7 +101,7 @@ func RunSuiteCheck(ctx context.Context, skill string, allowVoid bool) error {
 
 	results, err := suite.Check(ctx, s, suite.CheckOptions{
 		Driver: gd, Image: image, SuiteDir: suiteDir,
-		Timeout: checkRunTimeout, Concurrency: checkConcurrency, Logger: ui.Info,
+		Timeout: suite.VerifierTimeout, Concurrency: checkConcurrency, Logger: ui.Info,
 	})
 	if err != nil {
 		return fmt.Errorf("suite check: %w", err)
