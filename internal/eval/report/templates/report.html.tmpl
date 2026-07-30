@@ -98,7 +98,7 @@
       spec v{{.SpecVersion}} &middot; tier <strong>{{.Tier}}</strong>
       &middot; suite {{shortref .SuiteRef}}
       &middot; engine {{.EngineVersion}}
-      &middot; started {{.StartedAt.Format "2006-01-02 15:04 MST"}}
+      &middot; started {{if .StartedAt.IsZero}}<span class="empty">not recorded</span>{{else}}{{.StartedAt.Format "2006-01-02 15:04 MST"}}{{end}}
       {{if not .FinishedAt.IsZero}}&middot; finished {{.FinishedAt.Format "2006-01-02 15:04 MST"}}{{end}}
     </p>
   </header>
@@ -118,14 +118,14 @@
       <tr>
         <th>Member</th>
         <th>Class</th>
-        <th>Trigger F1</th>
-        <th>Reliability</th>
-        <th>Uplift</th>
-        <th>Efficiency</th>
-        <th>Effectiveness</th>
-        <th>Drift mean</th>
-        <th>Drift worst</th>
-        <th>Drift σ</th>
+        <th>Trigger F1 (%)</th>
+        <th>Reliability (%)</th>
+        <th>Uplift (%)</th>
+        <th>Efficiency (%)</th>
+        <th>Effectiveness (0&ndash;100)</th>
+        <th>Drift mean (%)</th>
+        <th>Drift worst (%)</th>
+        <th>Drift σ (pp)</th>
         <th>Grade</th>
         <th>Health</th>
       </tr>
@@ -136,14 +136,14 @@
         <td>{{.Member.Agent}} / {{.Member.Model}}</td>
         <td>{{.Member.Class}}</td>
         {{if .Healthy}}
-        <td>{{round1 .Pillars.TriggerF1}}</td>
-        <td>{{round1 .Pillars.Reliability}}</td>
-        <td>{{round1 .Pillars.Uplift}}</td>
-        <td>{{round1 .Pillars.Efficiency}}</td>
+        <td>{{pct .Pillars.TriggerF1}}</td>
+        <td>{{pct .Pillars.Reliability}}</td>
+        <td>{{pct .Pillars.Uplift}}</td>
+        <td>{{pct .Pillars.Efficiency}}</td>
         <td>{{round1 .Effectiveness}}</td>
-        <td>{{round1 .Drift.Mean}}</td>
-        <td>{{round1 .Drift.Worst}}</td>
-        <td>{{round1 .Drift.Sigma}}</td>
+        <td>{{pct .Drift.Mean}}</td>
+        <td>{{pct .Drift.Worst}}</td>
+        <td>{{pct .Drift.Sigma}}</td>
         <td>{{.DriftGrade}}</td>
         <td>healthy</td>
         {{else}}
@@ -226,18 +226,18 @@
     <h4>Drift per run</h4>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage</th><th>Order</th><th>Violation</th><th>Checkpoint</th><th>Semantic</th><th>Focus</th><th>Adherence</th></tr></thead>
+      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage (%)</th><th>Order (%)</th><th>Violation (%)</th><th>Checkpoint (%)</th><th>Semantic (%)</th><th>Focus (%)</th><th>Adherence (0&ndash;100)</th></tr></thead>
       <tbody>
         {{range .Drift}}
         <tr>
           <td>{{.Model}}</td>
           <td>{{.Attempt}}</td>
-          <td>{{round1 .Components.StepCoverage}}</td>
-          <td>{{round1 .Components.Order}}</td>
-          <td>{{round1 .Components.Violation}}</td>
-          <td>{{round1 .Components.Checkpoint}}</td>
-          <td>{{round1 .Components.Semantic}}</td>
-          <td>{{round1 .Components.Focus}}</td>
+          <td>{{pct .Components.StepCoverage}}</td>
+          <td>{{pct .Components.Order}}</td>
+          <td>{{pct .Components.Violation}}</td>
+          <td>{{pct .Components.Checkpoint}}</td>
+          <td>{{pct .Components.Semantic}}</td>
+          <td>{{pct .Components.Focus}}</td>
           <td>{{round1 .Adherence}}</td>
         </tr>
         {{end}}

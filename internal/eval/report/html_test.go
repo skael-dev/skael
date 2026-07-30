@@ -18,8 +18,10 @@ func renderHTML(t *testing.T, r *report.Report) string {
 	return buf.String()
 }
 
-// externalRef matches any attribute pointing at another host.
-var externalRef = regexp.MustCompile(`(?i)(src|href)\s*=\s*["']?(https?:)?//`)
+// externalRef matches any attribute or CSS url()/@import pointing at another
+// host, whether as an HTML attribute (src=/href=) or inside the inline
+// stylesheet (@import url(...), background: url(https://...)).
+var externalRef = regexp.MustCompile(`(?i)(src|href)\s*=\s*["']?(https?:)?//|url\(\s*["']?(https?:)?//|@import\s+["']?(https?:)?//`)
 
 func TestHTML_IsSelfContained(t *testing.T) {
 	got := renderHTML(t, demoReport())
