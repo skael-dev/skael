@@ -33,6 +33,12 @@ type Contract struct {
 // against a normalized event; Pattern is a regular expression matched against
 // the event's command or name, and PathGlob/PathNotGlob constrain the event's
 // paths.
+//
+// PathGlob and PathNotGlob are written in this package's own glob dialect —
+// notably, a trailing "/**" means "at any depth", unlike path/filepath's
+// standard-library "**". A consumer must test a path against them with
+// MatchPath, not filepath.Match; see MatchPath's doc comment for the exact
+// semantics.
 type Matcher struct {
 	Type        trajectory.EventType `yaml:"type" json:"type"`
 	Pattern     string               `yaml:"pattern,omitempty" json:"pattern,omitempty"`

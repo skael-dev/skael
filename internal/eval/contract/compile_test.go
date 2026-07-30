@@ -2,7 +2,6 @@ package contract_test
 
 import (
 	"bytes"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -587,9 +586,13 @@ func TestClassifyForbid_PathScopeTrimsTrailingPunctuation(t *testing.T) {
 
 // TestClassifyForbid_PathScopeGlobActuallyMatches goes one step further than
 // asserting the glob's string form: it proves the compiled PathNotGlob
-// behaves correctly as a glob via path/filepath.Match — a write inside the
-// declared scope must match (no violation), and a write outside it must not
-// (a violation) — rather than only checking the pattern text looks right.
+// behaves correctly against real paths, at any nesting depth, using this
+// package's own contract.MatchPath — never path/filepath.Match directly,
+// which treats "**" as two non-recursive stars and would wrongly call
+// "out/tables/q1.csv" a violation of a "stay inside out/" rule.
+//
+// A path violates a PathNotGlob rule when it does NOT match the glob (the
+// rule says "nothing outside X", so anything outside X is the violation).
 func TestClassifyForbid_PathScopeGlobActuallyMatches(t *testing.T) {
 	s := &spec.SkillSpec{
 		Name: "path-scope-glob-match",
@@ -606,21 +609,25 @@ func TestClassifyForbid_PathScopeGlobActuallyMatches(t *testing.T) {
 	}
 	glob := c.Forbid[0].Match.PathNotGlob
 
-	insideScope := "out/tables.csv"
-	matched, err := filepath.Match(glob, insideScope)
-	if err != nil {
-		t.Fatalf("filepath.Match(%q, %q): %v", glob, insideScope, err)
+	cases := []struct {
+		path        string
+		wantViolate bool
+	}{
+		{"out/tables.csv", false},
+		// The case Go's stdlib filepath.Match gets wrong: nested under out/,
+		// still fully in scope, must NOT be a violation.
+		{"out/tables/q1.csv", false},
+		{"out/a/b/c.csv", false},
+		{"tmp/x.csv", true},
 	}
-	if !matched {
-		t.Errorf("glob %q does not match in-scope path %q; the forbid rule would wrongly flag every write, even compliant ones", glob, insideScope)
-	}
-
-	outsideScope := "elsewhere/secrets.txt"
-	matched, err = filepath.Match(glob, outsideScope)
-	if err != nil {
-		t.Fatalf("filepath.Match(%q, %q): %v", glob, outsideScope, err)
-	}
-	if matched {
-		t.Errorf("glob %q matches out-of-scope path %q; the forbid rule would never fire", glob, outsideScope)
+	for _, tc := range cases {
+		matched, err := contract.MatchPath(glob, tc.path)
+		if err != nil {
+			t.Fatalf("MatchPath(%q, %q): %v", glob, tc.path, err)
+		}
+		violated := !matched
+		if violated != tc.wantViolate {
+			t.Errorf("path %q: violated = %v, want %v (glob %q, matched = %v)", tc.path, violated, tc.wantViolate, glob, matched)
+		}
 	}
 }
