@@ -10,6 +10,7 @@ import (
 )
 
 func TestEvent_JSONShape(t *testing.T) {
+	// Test with non-nil ExitCode (0 value must survive omitempty).
 	exit := 0
 	e := trajectory.Event{
 		Seq:        3,
@@ -43,6 +44,29 @@ func TestEvent_JSONShape(t *testing.T) {
 	// dropped zero exit code turns every success into "no exit code recorded".
 	if got["exit_code"] != float64(0) {
 		t.Errorf("exit_code = %v, want 0", got["exit_code"])
+	}
+
+	// Test with nil ExitCode (must be completely absent, not "exit_code": null).
+	e2 := trajectory.Event{
+		Seq:  1,
+		TS:   time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		Type: trajectory.TypeMessage,
+		// ExitCode is intentionally nil
+	}
+
+	b2, err := json.Marshal(e2)
+	if err != nil {
+		t.Fatalf("Marshal e2: %v", err)
+	}
+	var got2 map[string]any
+	if err := json.Unmarshal(b2, &got2); err != nil {
+		t.Fatalf("Unmarshal e2: %v", err)
+	}
+
+	// When ExitCode is nil, the field must be completely absent, not present as null.
+	// This is the critical test: without omitempty, nil becomes "exit_code": null.
+	if _, ok := got2["exit_code"]; ok {
+		t.Errorf("nil exit_code should be completely omitted, not present as null: %s", b2)
 	}
 }
 
@@ -81,6 +105,16 @@ func TestDigest_StableAndNonReversible(t *testing.T) {
 	}
 	if a == trajectory.Digest("secret-token-valuf") {
 		t.Error("Digest collided on a one-character change")
+	}
+
+	// Pin the actual SHA256-derived output to verify the implementation uses a
+	// real cryptographic hash, not a fake reversible transformation. The SHA256
+	// of "secret-token-value" is e578add6b8420b292631d534db97f1b661de8bcbceb4adf077d6f6ffd707072b;
+	// we pin the first 16 hex characters after the sha256: prefix.
+	// Computed independently via: printf '%s' "secret-token-value" | shasum -a 256
+	expectedDigest := "sha256:e578add6b8420b29"
+	if a != expectedDigest {
+		t.Errorf("Digest(%q) = %q, want %q (SHA256 mismatch)", "secret-token-value", a, expectedDigest)
 	}
 }
 
