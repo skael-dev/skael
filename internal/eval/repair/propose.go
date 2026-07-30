@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/skael-dev/skael/internal/eval/bundlepath"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
@@ -156,9 +157,17 @@ func buildPrompt(in ProposeInput) (string, error) {
 }
 
 // implicatedFiles returns the bundle-relative files a repair prompt should
-// carry the contents of. SKILL.md is always included: every cluster kind
-// this package produces — contract, verifier, lint — traces back to the
-// instructions or steps it describes.
+// carry the contents of.
+//
+// Today this is a placeholder, not a design decision: it always returns only
+// "SKILL.md", because FailureCluster carries no file reference and there is
+// no signal yet to pick any other bundle file. A contract cluster naming a
+// failure in, say, scripts/convert.py will still only see SKILL.md's
+// contents — the model is asked to write a Before string against text it
+// never saw, which reliably fails Admissible's verbatim check for that file.
+// Extending this requires Failure/FailureCluster to carry the file a
+// failure implicates (e.g. from the step or verifier that produced it), at
+// which point this function can select those files instead of a fixed list.
 func implicatedFiles(in ProposeInput) ([]string, error) {
 	return []string{"SKILL.md"}, nil
 }
@@ -204,9 +213,18 @@ func Admissible(bundleDir string, p Proposal, clusters []FailureCluster) error {
 	}
 
 	if len(text) > 0 {
-		fraction := float64(len(p.Before)) / float64(len(text))
+		// Measure the larger of what is removed and what is added. Bounding
+		// only len(Before) misses a small anchor whose After balloons into a
+		// large block — that is a whole-file rewrite wearing a small Before,
+		// and MaxRewriteFraction exists to stop exactly that, not just a
+		// large deletion.
+		footprint := len(p.Before)
+		if len(p.After) > footprint {
+			footprint = len(p.After)
+		}
+		fraction := float64(footprint) / float64(len(text))
 		if fraction > MaxRewriteFraction {
-			return fmt.Errorf("%w: proposal replaces %.0f%% of %s, exceeding MaxRewriteFraction (%.0f%%)",
+			return fmt.Errorf("%w: proposal's replacement covers %.0f%% of %s, exceeding MaxRewriteFraction (%.0f%%)",
 				ErrInadmissible, fraction*100, p.File, MaxRewriteFraction*100)
 		}
 	}
@@ -308,20 +326,14 @@ func Apply(bundleDir string, ps []Proposal) error {
 // proposal's file path comes from the model, so it is untrusted input: an
 // absolute path or a traversal must be an error rather than something
 // quietly cleaned up.
+//
+// The containment check itself lives in bundlepath, shared with gen's
+// resource paths, so there is exactly one implementation of the rule; this
+// wrapper only adds repair's error context.
 func safeJoin(dir, rel string) (string, error) {
-	if rel == "" {
-		return "", fmt.Errorf("empty file path")
-	}
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("absolute file path %q", rel)
-	}
-	target := filepath.Join(dir, rel)
-	within, err := filepath.Rel(dir, target)
+	target, err := bundlepath.SafeJoin(dir, rel)
 	if err != nil {
-		return "", fmt.Errorf("resolving %q: %w", rel, err)
-	}
-	if within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("file path %q escapes the bundle", rel)
+		return "", fmt.Errorf("proposal %w", err)
 	}
 	return target, nil
 }

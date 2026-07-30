@@ -81,6 +81,22 @@ func TestAdmissible_RejectsAWholeFileRewrite(t *testing.T) {
 	}
 }
 
+func TestAdmissible_RejectsASmallAnchorWithABallooningAfter(t *testing.T) {
+	dir := bundle(t)
+	p := repair.Proposal{
+		File:   "SKILL.md",
+		Before: "2. Consider validating the output if appropriate.",
+		After:  "2. " + strings.Repeat("Validate the output thoroughly and report every anomaly found. ", 40),
+	}
+	err := repair.Admissible(dir, p, stepClusters)
+	// A one-line anchor expanding into a huge block is a whole-file rewrite
+	// wearing a small Before. Measuring only len(Before) against the file
+	// would miss this; the check must also account for len(After).
+	if !errors.Is(err, repair.ErrInadmissible) {
+		t.Errorf("err = %v, want a proposal with a small Before but a huge After refused", err)
+	}
+}
+
 func TestAdmissible_RejectsAPathOutsideTheBundle(t *testing.T) {
 	dir := bundle(t)
 	for _, file := range []string{"../escape.md", "/etc/passwd", "scripts/../../x"} {
