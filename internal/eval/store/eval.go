@@ -47,6 +47,18 @@ type EvalRecord struct {
 	Status        string
 }
 
+// Condition identifies which side of a comparison a run belongs to: the
+// skill condition, the baseline condition, or a trigger probe. It is the
+// shared representation store.RunKey and report.ConditionReport both use, so
+// the concept has one type across the eval engine rather than a bare string
+// re-encoded at each consumer.
+//
+// This is a different vocabulary from a judge's verdict (which candidate
+// won a pairwise comparison — "skill"/"baseline"/"tie") even though the two
+// happen to share two words: a Condition names which run produced a
+// measurement, a verdict names which measurement came out ahead.
+type Condition string
+
 // RunKey identifies one session within an eval: a task, an agent/model pair,
 // the skill/baseline condition, and an attempt number. The UNIQUE constraint
 // on runs is keyed on exactly these fields.
@@ -54,7 +66,7 @@ type RunKey struct {
 	TaskID    string
 	Agent     string
 	Model     string
-	Condition string
+	Condition Condition
 	Attempt   int
 }
 
@@ -584,7 +596,7 @@ func (s *Store) RunDir(skill string, evalID int64, k RunKey) (string, error) {
 	taskID := sanitizePathComponent(k.TaskID)
 	agent := sanitizePathComponent(k.Agent)
 	model := sanitizePathComponent(k.Model)
-	condition := sanitizePathComponent(k.Condition)
+	condition := sanitizePathComponent(string(k.Condition))
 	leaf := fmt.Sprintf("%s__%s__%s__%d", agent, model, condition, k.Attempt)
 
 	return filepath.Join(dir, "runs", strconv.FormatInt(evalID, 10), taskID, leaf), nil

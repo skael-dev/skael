@@ -31,11 +31,12 @@ const (
 
 // Conditions a session runs under. The skill/baseline pair is what Uplift
 // compares; a trigger probe is a short session measuring only whether the skill
-// fired.
+// fired. Typed as store.Condition — the shared representation store.RunKey
+// and report.ConditionReport both use — rather than a bare string.
 const (
-	CondSkill    = "skill"
-	CondBaseline = "baseline"
-	CondTrigger  = "trigger"
+	CondSkill    store.Condition = "skill"
+	CondBaseline store.Condition = "baseline"
+	CondTrigger  store.Condition = "trigger"
 )
 
 // Member is one entry in the model panel.

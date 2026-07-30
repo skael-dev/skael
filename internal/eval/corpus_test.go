@@ -377,7 +377,7 @@ func fixtureRunKey(t *testing.T, base string) store.RunKey {
 	if err != nil {
 		t.Fatalf("fixture file name %q has a non-numeric attempt: %v", base, err)
 	}
-	return store.RunKey{TaskID: parts[0], Agent: parts[1], Model: parts[2], Condition: parts[3], Attempt: attempt}
+	return store.RunKey{TaskID: parts[0], Agent: parts[1], Model: parts[2], Condition: store.Condition(parts[3]), Attempt: attempt}
 }
 
 // fixtureClass classifies a fixture model name into the capability tier it

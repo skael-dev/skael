@@ -11,6 +11,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/score"
+	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
@@ -51,10 +52,10 @@ type MemberReport struct {
 // ConditionReport is the pass rate for one task's condition (skill or
 // baseline), across models.
 type ConditionReport struct {
-	Condition string `json:"condition"`
-	Model     string `json:"model"`
-	Passes    int    `json:"passes"`
-	Runs      int    `json:"runs"`
+	Condition store.Condition `json:"condition"`
+	Model     string          `json:"model"`
+	Passes    int             `json:"passes"`
+	Runs      int             `json:"runs"`
 }
 
 // RunDrift is one run's drift measurement. It embeds drift.Result rather
