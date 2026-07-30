@@ -96,12 +96,13 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 
 	src := filepath.Join(o.SuiteDir, "tasks", task.ID)
 
-	// A separate workspace per (task, phase) run, or a shared one would let
-	// one phase's side effects silently satisfy another. The oracle phase and
-	// the post-oracle verifier phase are staged into different directories
-	// too: the verifier's workspace is staged from the oracle's finished
-	// workspace, so it sees the oracle's edits without literally sharing the
-	// oracle's directory with it.
+	// Two workspaces, not three: "solved" and "bare". A shared workspace
+	// between the two would let one phase's side effects silently satisfy the
+	// other — which is exactly what "bare" exists to rule out — but the
+	// oracle and the post-oracle verifier are deliberately staged into the
+	// SAME directory (see the comment below). Sharing that one is not a bug;
+	// it is the only way to ask "does this task's verifier accept this task's
+	// own reference solution."
 	solved, err := stageWorkspace(src)
 	if err != nil {
 		return r, err
@@ -127,13 +128,12 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 		return r, err
 	}
 
-	verified, err := stageWorkspace(solved)
-	if err != nil {
-		return r, err
-	}
-	defer func() { _ = os.RemoveAll(verified) }()
+	// Deliberately reuses "solved": this run's whole question is whether the
+	// verifier accepts the oracle's own output, which it can only see by
+	// running in the directory the oracle just wrote to. Do not "fix" this
+	// into a fresh copy — that would just be the bare run with extra steps.
 	o.Logger("check %s: running verifier against the oracle's workspace", task.ID)
-	if r.VerifierExit, err = run(verified, "verifier/test.sh"); err != nil {
+	if r.VerifierExit, err = run(solved, "verifier/test.sh"); err != nil {
 		return r, err
 	}
 

@@ -163,7 +163,14 @@ func TestCheck_VoidsATaskWhoseVerifierPassesOnAnUntouchedWorkspace(t *testing.T)
 	}
 }
 
-func TestCheck_RunsEachTaskInItsOwnWorkspaceWithNoNetwork(t *testing.T) {
+// TestCheck_TheBareVerifierRunNeverSharesTheOraclesWorkspace is the assertion
+// with teeth: the oracle and the verifier that checks its own output are
+// *supposed* to share a workspace (that run's entire question is whether the
+// verifier accepts what the oracle just produced), but the bare-verifier run
+// must never land in that same directory. If it did, the oracle's output
+// would satisfy it, and the check that run exists to perform — does the
+// verifier reject an untouched workspace — would silently become vacuous.
+func TestCheck_TheBareVerifierRunNeverSharesTheOraclesWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	s := twoTaskSuite()
 	if err := s.Write(dir); err != nil {
@@ -177,19 +184,48 @@ func TestCheck_RunsEachTaskInItsOwnWorkspaceWithNoNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seen := map[string]bool{}
+	const runsPerTask = 3
+	if len(specs) != len(s.Tasks)*runsPerTask {
+		t.Fatalf("got %d runs, want %d (%d tasks x %d runs)", len(specs), len(s.Tasks)*runsPerTask, len(s.Tasks), runsPerTask)
+	}
 	for _, rs := range specs {
 		// An oracle with network access can fetch the answer, and then the task
 		// measures the network rather than the skill.
 		if rs.Network != sandbox.NetNone {
 			t.Errorf("check run with network policy %q", rs.Network)
 		}
-		seen[rs.Workspace] = true
 	}
-	// One workspace per (task, phase). A shared workspace lets the oracle's
-	// output satisfy the bare verifier run, which is the exact thing that run
-	// exists to detect.
-	if len(seen) != len(specs) {
-		t.Errorf("%d runs shared %d workspaces", len(specs), len(seen))
+
+	// Concurrency 1 serializes checkOne end to end (the semaphore is held for
+	// its whole body), so each task's three runs are contiguous in the
+	// recorded order: oracle, verifier-on-the-oracle's-workspace,
+	// bare-verifier.
+	allWorkspaces := map[string]bool{}
+	for i := 0; i < len(specs); i += runsPerTask {
+		oracle, postOracleVerifier, bare := specs[i], specs[i+1], specs[i+2]
+		if !isOracle(oracle.Argv) || !isVerifier(postOracleVerifier.Argv) || !isVerifier(bare.Argv) {
+			t.Fatalf("run order = %v, %v, %v; want oracle, verifier, verifier", oracle.Argv, postOracleVerifier.Argv, bare.Argv)
+		}
+
+		// The verifier checking the oracle's own solution must see the
+		// oracle's edits, which it only can by running in that same directory.
+		if oracle.Workspace != postOracleVerifier.Workspace {
+			t.Errorf("oracle workspace %q != its own verifier's workspace %q; the verifier can't see the oracle's output",
+				oracle.Workspace, postOracleVerifier.Workspace)
+		}
+
+		// The bare run must land somewhere else entirely.
+		if bare.Workspace == oracle.Workspace {
+			t.Errorf("bare verifier workspace %q reused the oracle's workspace; the bare run must see an untouched workspace", bare.Workspace)
+		}
+
+		allWorkspaces[oracle.Workspace] = true
+		allWorkspaces[bare.Workspace] = true
+	}
+
+	// Exactly two distinct workspaces per task (solved, bare), and none of
+	// them reused across tasks.
+	if want := len(s.Tasks) * 2; len(allWorkspaces) != want {
+		t.Errorf("got %d distinct workspaces across %d tasks, want %d", len(allWorkspaces), len(s.Tasks), want)
 	}
 }
