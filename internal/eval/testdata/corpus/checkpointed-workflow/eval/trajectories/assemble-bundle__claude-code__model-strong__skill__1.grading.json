@@ -6,14 +6,14 @@
     "Condition": "skill",
     "Attempt": 1
   },
-  "VerifierExit": 0,
+  "VerifierExit": 1,
   "Meta": {
     "AgentVersion": "",
     "Model": "model-strong",
-    "InputTokens": 350,
-    "OutputTokens": 350,
+    "InputTokens": 150,
+    "OutputTokens": 150,
     "DurationMS": 0,
-    "NumTurns": 2,
+    "NumTurns": 1,
     "VisibleSkills": null,
     "PermissionDenials": null,
     "RateLimited": false,

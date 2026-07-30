@@ -1,2 +1,4 @@
 {"seq":1,"ts":"2026-07-01T12:00:01Z","type":"shell","name":"python3 scripts/build.py","args_digest":"digest-1","exit_code":0}
-{"seq":2,"ts":"2026-07-01T12:00:02Z","type":"shell","name":"python3 scripts/package.py","args_digest":"digest-2","exit_code":0}
+{"seq":2,"ts":"2026-07-01T12:00:02Z","type":"shell","name":"python3 scripts/validate.py","args_digest":"digest-2","exit_code":0}
+{"seq":3,"ts":"2026-07-01T12:00:03Z","type":"shell","name":"python3 scripts/package.py","args_digest":"digest-3","exit_code":0}
+{"seq":4,"ts":"2026-07-01T12:00:04Z","type":"shell","name":"python3 scripts/verify.py","args_digest":"digest-4","exit_code":0}

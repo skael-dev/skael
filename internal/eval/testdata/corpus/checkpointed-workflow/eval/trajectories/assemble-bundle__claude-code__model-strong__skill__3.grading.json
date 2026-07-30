@@ -10,10 +10,10 @@
   "Meta": {
     "AgentVersion": "",
     "Model": "model-strong",
-    "InputTokens": 350,
-    "OutputTokens": 350,
+    "InputTokens": 450,
+    "OutputTokens": 450,
     "DurationMS": 0,
-    "NumTurns": 2,
+    "NumTurns": 4,
     "VisibleSkills": null,
     "PermissionDenials": null,
     "RateLimited": false,

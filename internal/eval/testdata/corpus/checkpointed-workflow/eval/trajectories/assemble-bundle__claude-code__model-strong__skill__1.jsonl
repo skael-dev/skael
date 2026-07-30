@@ -1,2 +1,1 @@
-{"seq":1,"ts":"2026-07-01T12:00:01Z","type":"shell","name":"python3 scripts/build.py","args_digest":"digest-1","exit_code":0}
-{"seq":2,"ts":"2026-07-01T12:00:02Z","type":"shell","name":"python3 scripts/package.py","args_digest":"digest-2","exit_code":0}
+{"seq":1,"ts":"2026-07-01T12:00:01Z","type":"message","name":"the bundle sources could not be located","args_digest":"digest-1"}

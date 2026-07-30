@@ -4,5 +4,7 @@
   "drift_grade": "C",
   "min_violations": 1,
   "violation_ids": ["no-writes-outside-out"],
-  "unevaluable": 1
+  "unevaluable": 1,
+  "robustness_gap_min": -1.0,
+  "robustness_gap_max": 1.0
 }

@@ -238,6 +238,13 @@ type expectedScore struct {
 	MinViolations int      `json:"min_violations"`
 	Violations    []string `json:"violation_ids"`
 	Unevaluable   int      `json:"unevaluable"`
+	// RobustnessGapMin/Max bound strong.Drift.Mean - floor.Drift.Mean (see
+	// drift.RobustnessGap). Committed here because it is the primary input
+	// to the repair loop: an archetype whose two panel members drift
+	// identically cannot regression-test whether that gap is measured at
+	// all.
+	RobustnessGapMin float64 `json:"robustness_gap_min"`
+	RobustnessGapMax float64 `json:"robustness_gap_max"`
 }
 
 func TestCorpus_ScoresWithinItsCommittedBand(t *testing.T) {
@@ -267,6 +274,11 @@ func TestCorpus_ScoresWithinItsCommittedBand(t *testing.T) {
 			// like an improvement.
 			if rep.Unevaluable != want.Unevaluable {
 				t.Errorf("unevaluable = %d, want %d", rep.Unevaluable, want.Unevaluable)
+			}
+			if rep.RobustnessGap == nil {
+				t.Errorf("robustness gap not computed; want a value in [%.1f, %.1f]", want.RobustnessGapMin, want.RobustnessGapMax)
+			} else if *rep.RobustnessGap < want.RobustnessGapMin || *rep.RobustnessGap > want.RobustnessGapMax {
+				t.Errorf("robustness gap %.2f outside the committed band [%.1f, %.1f]", *rep.RobustnessGap, want.RobustnessGapMin, want.RobustnessGapMax)
 			}
 		})
 	}

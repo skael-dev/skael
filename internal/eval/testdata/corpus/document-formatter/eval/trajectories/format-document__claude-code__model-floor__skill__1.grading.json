@@ -13,7 +13,7 @@
     "InputTokens": 500,
     "OutputTokens": 500,
     "DurationMS": 0,
-    "NumTurns": 6,
+    "NumTurns": 5,
     "VisibleSkills": null,
     "PermissionDenials": null,
     "RateLimited": false,
