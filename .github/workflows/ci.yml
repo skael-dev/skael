@@ -38,7 +38,7 @@ jobs:
       - name: Sandbox tests
         env:
           WHETSTONE_BASE_TAG: whetstone-base-ci:1
-        run: go test -tags docker ./internal/eval/... ./cli/whetstone/ -count=1 -timeout 2400s
+        run: go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
   lint:
     runs-on: ubuntu-latest

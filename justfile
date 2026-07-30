@@ -118,11 +118,11 @@ test-eval:
 
 # Sandbox + execution tests (needs a Docker daemon)
 test-docker:
-    go test -tags docker ./internal/eval/... ./cli/whetstone/ -count=1 -timeout 2400s
+    go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
 # Sandbox tests against the slim CI base image
 test-docker-ci:
-    WHETSTONE_BASE_TAG=whetstone-base-ci:1 go test -tags docker ./internal/eval/... ./cli/whetstone/ -count=1 -timeout 2400s
+    WHETSTONE_BASE_TAG=whetstone-base-ci:1 go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
 # --- Lint / Check ---
 
