@@ -38,12 +38,7 @@ jobs:
       - name: Sandbox tests
         env:
           WHETSTONE_BASE_TAG: whetstone-base-ci:1
-        # -p 1: internal/eval/sandbox/docker's own sweep tests zero Sweep's
-        # age guard and sweep by a daemon-wide label with no per-process
-        # scoping, so run concurrently with any other docker-tagged package
-        # they reap that package's live containers outright. See justfile's
-        # test-docker for the full account.
-        run: go test -tags docker -p 1 ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
+        run: go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
   lint:
     runs-on: ubuntu-latest

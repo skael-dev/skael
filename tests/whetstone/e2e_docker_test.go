@@ -10,19 +10,20 @@
 // errored instead of declining a prompt. None of them are reachable from a test
 // that calls the package function directly.
 //
-// Run this package alongside internal/eval/sandbox/docker with "go test"'s
-// default package parallelism and it fails intermittently with "No such
-// container" mid-run: that package's TestSweep_RemovesOrphanedContainersAndNetworks
-// and TestSweep_LeavesUnrelatedContainersAlone zero docker.SweepMinAge and
-// then call the real Sweep(), which lists containers and networks by a
-// docker-daemon-wide label with no per-process scoping. With the age guard
-// off, that sweep removes every whetstone-labeled resource that exists at
-// that instant — including this package's live, still-running containers, if
-// the two happen to be executing at the same moment. justfile's test-docker
-// and test-docker-ci recipes, and the CI "Sandbox tests" step, all pass "-p 1"
-// so the matched packages' test binaries run one at a time rather than
-// racing on the shared daemon; that is a workaround for this file, not a fix
-// to Sweep's scoping, which is unchanged.
+// This package used to be unsafe to run alongside internal/eval/sandbox/docker
+// at "go test"'s default package parallelism: that package's own
+// TestSweep_RemovesOrphanedContainersAndNetworks and
+// TestSweep_LeavesUnrelatedContainersAlone zero docker.SweepMinAge and then
+// call the real Sweep(), which used to list containers and networks by a
+// docker-daemon-wide label with no per-process scoping — so with the age
+// guard off, that sweep removed every whetstone-labeled resource on the
+// daemon, including this package's live, still-running containers, if the
+// two happened to be executing at the same moment. Sweep now also requires
+// the labeled resource's owning pid to be confirmed dead
+// (internal/eval/sandbox/docker/sweep.go's pidAlive) before removing it, so
+// a live container created by this package's own test binary — a different,
+// running pid — is never a candidate no matter how the age guard is set
+// elsewhere on the daemon. This package runs at default parallelism again.
 package whetstone_e2e
 
 import (

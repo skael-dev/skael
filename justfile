@@ -116,24 +116,19 @@ test-fast:
 test-eval:
     go test ./internal/eval/... ./cli/whetstone/... -count=1
 
-# Sandbox + execution tests (needs a Docker daemon). -p 1 runs the matched
-# packages' test binaries one at a time rather than concurrently: Sweep()
-# (internal/eval/sandbox/docker/sweep.go) filters by a docker-daemon-wide
-# label with no per-process scoping, and internal/eval/sandbox/docker's own
-# TestSweep_RemovesOrphanedContainersAndNetworks and
-# TestSweep_LeavesUnrelatedContainersAlone zero its age guard to sweep
-# instantly. Run concurrently with any other docker-tagged package, that
-# reaps the other package's live, still-running containers outright — this
-# reproduced twice against tests/whetstone before -p 1 was added; see
-# tests/whetstone/e2e_docker_test.go's package doc and the task report for
-# the full account. Serializing is the safe fix available without touching
-# Sweep's design.
+# Sandbox + execution tests (needs a Docker daemon). Safe to run at default
+# parallelism against any other docker-tagged package: every whetstone
+# container and network is labeled with its creating process's pid
+# (internal/eval/sandbox/docker/labels.go), and Sweep only removes a resource
+# once that pid is confirmed dead (see sweep.go's pidAlive) — a still-running
+# process's containers are never touched, regardless of test-induced age
+# zeroing elsewhere on the daemon.
 test-docker:
-    go test -tags docker -p 1 ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
+    go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
 # Sandbox tests against the slim CI base image
 test-docker-ci:
-    WHETSTONE_BASE_TAG=whetstone-base-ci:1 go test -tags docker -p 1 ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
+    WHETSTONE_BASE_TAG=whetstone-base-ci:1 go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
 # --- Lint / Check ---
 
