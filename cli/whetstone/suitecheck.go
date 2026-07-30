@@ -77,6 +77,14 @@ func RunSuiteCheck(ctx context.Context, skill string, allowVoid bool) error {
 	if err != nil {
 		return fmt.Errorf("suite check: %w", err)
 	}
+	// A prior invocation killed by something stronger than its own context
+	// (SIGKILL, a crash, or — before root.go installed a signal handler — a
+	// plain Ctrl-C) can leave whetstone-run-*/whetstone-proxy-* containers
+	// and whetstone-net-* networks behind. Sweeping before this run starts
+	// keeps those from silently exhausting the docker address pool over a
+	// long-lived host.
+	d.Sweep(ctx)
+
 	if err := d.EnsureBase(ctx, baseTag == imagespec.SlimBaseTag); err != nil {
 		return fmt.Errorf("suite check: preparing base image: %w", err)
 	}

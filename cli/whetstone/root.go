@@ -5,8 +5,11 @@
 package whetstone
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -52,9 +55,19 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-// Execute runs the root command.
+// Execute runs the root command. A command that runs sandboxed sessions
+// (eval, suite check) passes cmd.Context() into docker.Driver.Run and
+// suite.Check, both of which already clean up their containers and networks
+// on context cancellation — but only if something actually cancels that
+// context on SIGINT/SIGTERM. Without signal.NotifyContext here, Ctrl-C is
+// process death: the docker client is killed with no chance to run its own
+// cleanup, and every in-flight run leaks a whetstone-net-* network and a
+// whetstone-proxy-* container.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		ui.Errorf("%s", err)
 		if ui.JSONMode {
 			ui.PrintJSONError(err.Error(), "", "")
