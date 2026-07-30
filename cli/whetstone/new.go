@@ -3,7 +3,9 @@ package whetstone
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skael-dev/skael/internal/eval/contract"
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/ui"
@@ -30,7 +33,8 @@ var newCmd = &cobra.Command{
 	},
 }
 
-// RunNew runs the full authoring pipeline for a new skill.
+// RunNew runs the full authoring pipeline for a new skill against the
+// workspace and gateway this machine is configured for.
 func RunNew(ctx context.Context, intent string, yes bool) error {
 	st, err := openStore()
 	if err != nil {
@@ -42,7 +46,15 @@ func RunNew(ctx context.Context, intent string, yes bool) error {
 	if err != nil {
 		return err
 	}
+	return runNew(ctx, st, g, os.Stdin, intent, yes)
+}
 
+// runNew is the pipeline itself, with the store, the gateway, and the
+// approval gate's input passed in. RunNew is the thin wrapper that resolves
+// those from the environment; everything worth testing — the approval gate's
+// parsing, and stopping before the contract when the bundle fails lint — is
+// here, where a fake gateway and a string reader can reach it.
+func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, intent string, yes bool) error {
 	ui.Info("drafting a specification…")
 	sp, err := spec.Interview(ctx, g, intent)
 	if err != nil {
@@ -56,7 +68,7 @@ func RunNew(ctx context.Context, intent string, yes bool) error {
 	ui.Success("stored %s spec version %d", sp.Name, version)
 
 	if !yes {
-		approved, err := confirmSpec(sp)
+		approved, err := confirmSpec(sp, in)
 		if err != nil {
 			return err
 		}
@@ -128,14 +140,19 @@ func writeContract(st *store.Store, sp *spec.SkillSpec) error {
 // confirmSpec prints the drafted spec and asks for approval. It is the human
 // gate: everything downstream — the bundle, the contract, the suite — is
 // derived from this document, so it is the only place review is cheap.
-func confirmSpec(sp *spec.SkillSpec) (bool, error) {
+func confirmSpec(sp *spec.SkillSpec, in io.Reader) (bool, error) {
 	if err := sp.Save(os.Stdout); err != nil {
 		return false, err
 	}
 	fmt.Fprintf(os.Stderr, "\n  Approve this spec for %s? [y/N] ", sp.Name)
 
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && line == "" {
+	// EOF is a decline, not a failure. The prompt is "[y/N]", so a closed or
+	// empty stdin — `whetstone new … < /dev/null`, or any non-interactive
+	// runner — means no consent was given, which is exactly what N means.
+	// Reporting it as an error instead would turn "the gate said no" into "the
+	// gate broke", and the caller cannot tell those apart.
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("whetstone new: reading approval: %w", err)
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))

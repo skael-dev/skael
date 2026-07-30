@@ -3,6 +3,7 @@ package whetstone
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -106,7 +107,12 @@ func RunLint(path string, strict bool) (int, error) {
 // commands own the single JSON document on stdout, so they need the outcome
 // without RunLint's rendering.
 func lintBundle(path string, strict bool) (*lint.Result, int, error) {
-	res, err := lint.Run(path)
+	dir, err := bundleRoot(path)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	res, err := lint.Run(dir)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -116,6 +122,22 @@ func lintBundle(path string, strict bool) (*lint.Result, int, error) {
 		code = 1
 	}
 	return res, code, nil
+}
+
+// bundleRoot resolves a bundle path to an absolute directory.
+//
+// lint derives the skill's expected name from the last element of the
+// directory it is handed, so a relative "." — packing or linting the bundle
+// you are standing in, the most natural invocation — would be compared against
+// the frontmatter name as the literal string ".", failing every clean bundle
+// with a name-dir-mismatch. Resolving first is what makes that path work. The
+// caller keeps the path the user typed for display.
+func bundleRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("whetstone: resolving %q: %w", path, err)
+	}
+	return abs, nil
 }
 
 // renderFindings prints one line per finding, at the severity's own style. It

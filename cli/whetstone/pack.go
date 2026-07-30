@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
@@ -24,6 +23,9 @@ const evalDirName = "eval"
 // inside the sidecar, so it needs its own exclusion: an installer has no use
 // for it and it describes the skill's internals.
 const specFileName = "spec.yaml"
+
+// archiveMode is the permission the finished archive carries.
+const archiveMode = os.FileMode(0o644)
 
 var packOutput string
 
@@ -63,7 +65,12 @@ var packCmd = &cobra.Command{
 // Linting first is not a convenience: an archive built from a bundle that
 // fails lint installs and then fails at use time, a long way from the cause.
 func RunPack(bundleDir, outPath string) error {
-	res, err := lint.Run(bundleDir)
+	root, err := bundleRoot(bundleDir)
+	if err != nil {
+		return err
+	}
+
+	res, _, err := lintBundle(bundleDir, false)
 	if err != nil {
 		return err
 	}
@@ -72,16 +79,38 @@ func RunPack(bundleDir, outPath string) error {
 			bundleDir, res.Errors(), bundleDir)
 	}
 
-	f, err := os.Create(outPath)
+	out, err := filepath.Abs(outPath)
+	if err != nil {
+		return fmt.Errorf("whetstone pack: resolving %q: %w", outPath, err)
+	}
+
+	// The archive is built in a temp file beside its destination and renamed
+	// into place only once it is complete. Writing straight to outPath would
+	// truncate the last good archive before the first byte of the new one is
+	// written, so any failure during the walk replaces a valid archive with a
+	// corrupt one. Beside its destination, rather than in the system temp
+	// directory, so the rename is within one filesystem and therefore atomic.
+	tmp, err := os.CreateTemp(filepath.Dir(out), ".whetstone-pack-*.tar.gz")
 	if err != nil {
 		return fmt.Errorf("whetstone pack: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	tmpName := tmp.Name()
+	// Removing the temp file is a no-op once the rename has moved it away.
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
 
-	gzw := gzip.NewWriter(f)
+	// Both the destination and the temp file can sit inside the directory
+	// about to be walked — `whetstone pack .` is the most natural invocation
+	// there is — and an archive that packs a truncated copy of itself is the
+	// result if the walk is allowed to see them.
+	skip := map[string]bool{out: true, tmpName: true}
+
+	gzw := gzip.NewWriter(tmp)
 	tw := tar.NewWriter(gzw)
 
-	if err := writeBundleEntries(tw, bundleDir); err != nil {
+	if err := writeBundleEntries(tw, root, skip); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -90,12 +119,27 @@ func RunPack(bundleDir, outPath string) error {
 	if err := gzw.Close(); err != nil {
 		return fmt.Errorf("whetstone pack: closing gzip: %w", err)
 	}
-	return f.Close()
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("whetstone pack: closing %s: %w", tmpName, err)
+	}
+
+	// os.CreateTemp opens at 0600 and the rename preserves that, so without
+	// this the archive is readable only by its author — a regression against
+	// the 0666-and-umask an ordinary create would have produced, and an
+	// archive exists to be handed to someone else.
+	if err := os.Chmod(tmpName, archiveMode); err != nil {
+		return fmt.Errorf("whetstone pack: %w", err)
+	}
+
+	if err := os.Rename(tmpName, out); err != nil {
+		return fmt.Errorf("whetstone pack: writing %s: %w", outPath, err)
+	}
+	return nil
 }
 
 // writeBundleEntries walks bundleDir and writes every regular file that is not
-// part of the eval sidecar into tw.
-func writeBundleEntries(tw *tar.Writer, bundleDir string) error {
+// part of the eval sidecar, and not one of the absolute paths in skip, into tw.
+func writeBundleEntries(tw *tar.Writer, bundleDir string, skip map[string]bool) error {
 	return filepath.Walk(bundleDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -121,7 +165,7 @@ func writeBundleEntries(tw *tar.Writer, bundleDir string) error {
 			// lint already reports a symlinked bundle entry as an error.
 			return nil
 		}
-		if rel == specFileName {
+		if rel == specFileName || skip[path] {
 			return nil
 		}
 

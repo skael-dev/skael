@@ -80,6 +80,67 @@ func TestRunPack_KeepsEverythingElse(t *testing.T) {
 	}
 }
 
+// TestRunPack_DoesNotArchiveItsOwnOutput covers the most natural invocation:
+// packing the bundle you are standing in, with the default output name. The
+// archive is created inside the directory about to be walked, so a walk that
+// starts after the file exists packs a truncated copy of the archive into
+// itself.
+func TestRunPack_DoesNotArchiveItsOwnOutput(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	t.Chdir(dir)
+
+	out := "pdf-extract.tar.gz"
+	if err := whetstone.RunPack(".", out); err != nil {
+		t.Fatalf("RunPack: %v", err)
+	}
+
+	for _, name := range namesIn(t, out) {
+		if filepath.Base(name) == out {
+			t.Errorf("packed archive contains its own output file: %s", name)
+		}
+		if strings.HasSuffix(name, ".tar.gz") {
+			t.Errorf("packed archive contains an archive: %s", name)
+		}
+	}
+
+	// The archive is built in a temp file; nothing may be left behind, and the
+	// finished file must be readable by someone other than its author.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".whetstone-pack-") {
+			t.Errorf("pack left a temp file behind: %s", e.Name())
+		}
+	}
+
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("archive mode = %#o, want 0644", info.Mode().Perm())
+	}
+}
+
+// TestRunPack_LintsTheBundleUnderItsRealName covers packing and linting the
+// directory you are standing in. lint derives the skill's expected name from
+// the last element of the directory it is handed, so a literal "." is compared
+// against the frontmatter name and every clean bundle fails.
+func TestRunPack_LintsTheBundleUnderItsRealName(t *testing.T) {
+	dir := writeSkill(t, "pdf-extract", cleanSkillMD)
+	t.Chdir(dir)
+
+	code, err := whetstone.RunLint(".", false)
+	if err != nil {
+		t.Fatalf("RunLint: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("linting the current directory exit code = %d, want 0", code)
+	}
+}
+
 func namesIn(t *testing.T, archive string) []string {
 	t.Helper()
 	f, err := os.Open(archive)
