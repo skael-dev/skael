@@ -111,12 +111,12 @@ func ProxyConfig(allow []string) (string, error) {
 	b.WriteString("\n" + FilterMarker + "\n")
 	for _, d := range sorted(allow) {
 		// tinyproxy's filter is a regexp list; anchor each entry so
-		// "api.anthropic.com" does not also permit "api.anthropic.com.evil.example".
-		// domainPattern has already restricted d to [A-Za-z0-9.-], so there is
-		// no metacharacter left for QuoteMeta to neutralize; escaping it here
-		// would only turn the entry's literal dots into "\.", which is not
-		// what the anchor needs to do its job.
-		fmt.Fprintf(&b, "(^|\\.)%s$\n", strings.TrimPrefix(d, "."))
+		// "api.anthropic.com" does not also permit "api.anthropic.com.evil.example",
+		// and escape it with QuoteMeta so its literal dots stay literal dots
+		// rather than becoming "any character" — an unescaped entry would also
+		// let through a look-alike like "api-anthropic.com", which defeats a
+		// proxy whose entire job is to be default-deny.
+		fmt.Fprintf(&b, "(^|\\.)%s$\n", regexp.QuoteMeta(strings.TrimPrefix(d, ".")))
 	}
 	return b.String(), nil
 }

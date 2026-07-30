@@ -2,6 +2,7 @@ package imagespec_test
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -167,10 +168,52 @@ func TestProxyConfig_EmitsOneFilterEntryPerDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"api.anthropic.com", "statsig.anthropic.com", "FilterDefaultDeny Yes"} {
+
+	for _, want := range []string{"FilterDefaultDeny Yes", "FilterExtended On"} {
+		// The config is only default-deny if both directives survive: without
+		// FilterDefaultDeny Yes an unlisted domain is let through, and without
+		// FilterExtended On the entries below are basic-regexp syntax where
+		// "(", ")" and "|" are literal characters, so every entry matches
+		// nothing — a silent total block, not a working allowlist.
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q:\n%s", want, cfg)
 		}
+	}
+
+	parts := strings.SplitN(cfg, imagespec.FilterMarker, 2)
+	if len(parts) != 2 {
+		t.Fatalf("config did not contain the filter marker %q:\n%s", imagespec.FilterMarker, cfg)
+	}
+	var entry *regexp.Regexp
+	for _, line := range strings.Split(strings.TrimSpace(parts[1]), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		re, err := regexp.Compile(line)
+		if err != nil {
+			t.Fatalf("filter entry %q did not compile as a regexp: %v", line, err)
+		}
+		if re.MatchString("api.anthropic.com") {
+			entry = re
+		}
+	}
+	if entry == nil {
+		t.Fatalf("no filter entry matched api.anthropic.com:\n%s", cfg)
+	}
+
+	if !entry.MatchString("metrics.api.anthropic.com") {
+		t.Error("the entry for api.anthropic.com should also match a subdomain, metrics.api.anthropic.com")
+	}
+	// The suffix attack the trailing $ anchor exists to stop.
+	if entry.MatchString("api.anthropic.com.evil.example") {
+		t.Error("the entry for api.anthropic.com also matched api.anthropic.com.evil.example; the $ anchor is not doing its job")
+	}
+	// The look-alike domain QuoteMeta exists to stop: an unescaped "." in the
+	// entry is "any character" and would let this through a proxy whose whole
+	// job is to be default-deny.
+	if entry.MatchString("api-anthropic.com") {
+		t.Error("the entry for api.anthropic.com also matched api-anthropic.com; its dots are not escaped")
 	}
 
 	// A domain carrying config syntax would otherwise rewrite the proxy's own

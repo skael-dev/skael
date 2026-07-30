@@ -10,6 +10,10 @@ LogLevel Warning
 MaxClients 32
 Filter "/etc/tinyproxy/filter"
 FilterDefaultDeny Yes
-FilterExtended Off
+# The filter entries are extended regexps (they use "(", ")" and "|" for
+# grouping and alternation); under basic regex those are literal characters
+# and every anchored entry would match nothing, which combined with
+# FilterDefaultDeny Yes is a silent total egress block, not a working allowlist.
+FilterExtended On
 FilterCaseSensitive Off
 ConnectPort 443
