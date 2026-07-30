@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Stands in for the real `claude` binary. Records argv so the test can assert
+# which flags were passed, and emits whatever the test scripted.
+set -euo pipefail
+
+printf '%s\n' "$@" >> "${FAKE_CLAUDE_ARGV:-/dev/null}"
+
+case "${FAKE_CLAUDE_MODE:-ok}" in
+  ok)
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"ok\":true}","num_turns":1,"duration_ms":12,"modelUsage":{"claude-opus-5":{}}}'
+    ;;
+  api_error)
+    # The observed shape of a transient failure: subtype claims success.
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded. Try again."}'
+    exit 1
+    ;;
+  flaky)
+    # Fail the first call, succeed after. Uses the argv log to count attempts.
+    if [ "$(grep -c -- '-p' "${FAKE_CLAUDE_ARGV}" 2>/dev/null || echo 0)" -le 1 ]; then
+      printf '%s\n' '{"subtype":"success","is_error":true,"result":"API Error: 529 Overloaded."}'
+      exit 1
+    fi
+    printf '%s\n' '{"subtype":"success","is_error":false,"result":"{\"ok\":true}","modelUsage":{"claude-opus-5":{}}}'
+    ;;
+  garbage)
+    printf '%s\n' 'not json'
+    ;;
+esac
