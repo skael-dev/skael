@@ -218,12 +218,14 @@ func TestPropose_DropsInadmissibleProposalsRatherThanFailing(t *testing.T) {
 // received and returns a fixed reply, so tests can assert on prompt content
 // without a network call or an LLM subscription.
 type recordingGateway struct {
-	reply  string
-	prompt string
+	reply   string
+	prompt  string
+	prompts []string
 }
 
 func (g *recordingGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	g.prompt = r.Prompt
+	g.prompts = append(g.prompts, r.Prompt)
 	return llm.Res{Text: g.reply, Model: "fake"}, nil
 }
 
