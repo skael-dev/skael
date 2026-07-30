@@ -35,7 +35,11 @@ func (p Pillars) Validate() error {
 }
 
 // Exponents weight the geometric mean. They sum to 1 so that a perfect skill
-// scores exactly 100.
+// scores exactly 100 — provided every pillar was actually measured. At the
+// Smoke tier, trigger firing is not probed at all and Uplift has no baseline
+// to compare against, so those two pillars default to their unmeasured
+// neutral values (TriggerF1 = 1.0, Uplift = 0.5) rather than being scored;
+// a flawless Smoke-tier skill tops out around 87, not 100.
 type Exponents struct {
 	Trigger     float64
 	Reliability float64

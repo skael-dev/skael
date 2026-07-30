@@ -88,12 +88,15 @@ func RunSuiteCheck(ctx context.Context, skill string, allowVoid bool) error {
 	}
 
 	// suite.Check runs oracle/solve.sh and verifier/test.sh directly, and both
-	// are model-generated. Gated is what makes that trust decision structural
-	// rather than remembered by this call site: today's whole product is
-	// self-hosted, own-team skills, so this — like every other docker-driver
-	// caller — passes untrusted: false, matching runner.New's default. A
-	// caller that ever needs to run someone else's suite through this path
-	// gets refused here instead of silently running it in a shared kernel.
+	// are model-generated. Gated(d, false) returns d unchanged on this trusted
+	// path — no wrapper, no re-check on every Run — so the construction-time
+	// refusal here (CheckPolicy, run once) is the entire benefit at this call
+	// site: today's whole product is self-hosted, own-team skills, so this —
+	// like every other docker-driver caller — passes untrusted: false,
+	// matching runner.New's default. A caller that ever needs to run someone
+	// else's suite through this path gets refused here instead of silently
+	// running it in a shared kernel; it does not get an ongoing, structural
+	// guard the way an untrusted: true caller does.
 	gd, err := sandbox.Gated(d, false)
 	if err != nil {
 		return fmt.Errorf("suite check: %w", err)

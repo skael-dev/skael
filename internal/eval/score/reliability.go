@@ -29,6 +29,17 @@ type TaskPasses struct {
 // []TaskPasses fed to Reliability must exclude such a task from that slice —
 // the same way report.Compose excludes a report.VoidTask from the tasks it
 // scores — rather than let it reach PassAtK, which refuses N==0.
+//
+// This is a different exclusion from report.VoidTask, which is a task the
+// oracle gate refused before any run was ever attempted. The two share the
+// same underlying behaviour (drop from the scored denominator, don't count
+// as a failure) but not, today, the same visibility: a report.VoidTask is
+// listed on Report.VoidTasks with its reason, while a task that goes Void
+// here (every run errored) is currently dropped by cli/whetstone's
+// taskPasses with no corresponding report-level record — a reader sees a
+// missing task, not a labelled one. Distinguishing the two kinds in the
+// report is future work; for now, know that "void" means two different
+// things depending on which of these two types you're looking at.
 func (t TaskPasses) Void() bool { return t.N == 0 && t.Errored > 0 }
 
 // PassAtK is the unbiased estimator of the probability that k independently

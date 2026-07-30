@@ -60,9 +60,15 @@ type ComposeInput struct {
 
 	Members []MemberInput
 	Tasks   []TaskInput
-	// Void lists tasks the oracle gate excluded from scoring. Their TaskIDs
-	// are removed from Tasks before scoring; the list itself survives to the
-	// report so a reader can see what was excluded and why.
+	// Void lists tasks the oracle gate excluded from scoring, before any run
+	// was ever attempted. Their TaskIDs are removed from Tasks before
+	// scoring; the list itself survives to the report so a reader can see
+	// what was excluded and why.
+	//
+	// This is a different exclusion from score.TaskPasses.Void, which is a
+	// task whose runs all errored — see that doc for why "void" means two
+	// different things here and how their report-level visibility currently
+	// differs.
 	Void []VoidTask
 
 	// JudgeTrusted is whether the judge's calibration cleared the κ floor

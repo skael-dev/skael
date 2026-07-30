@@ -24,6 +24,15 @@ const (
 )
 
 // ModelTier names the capability floor the generator writes for.
+//
+// "Tier" is heavily overloaded in this codebase: runner.Tier is eval depth
+// (smoke/full/deep), ModelTier is model capability (floor/mid/strong),
+// distractor difficulty is graded by distance from the skill (near/mid/far), and
+// agent.Caps.EventTier grades how much fidelity an adapter's event stream
+// carries (A/B/C). Four different axes, one overloaded word. runner.Member
+// uses the field name Class rather than Tier for exactly this reason — its
+// value is still a ModelTier, but the field name doesn't collide with
+// runner.Tier sitting one struct away.
 type ModelTier string
 
 const (
