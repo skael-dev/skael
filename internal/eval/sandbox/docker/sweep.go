@@ -2,13 +2,18 @@ package docker
 
 import (
 	"context"
+	"errors"
+	"os"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-// SweepMinAge is how long a whetstone-labeled container or network must have
-// existed before Sweep will touch it. A var, not a const, solely so a test
-// can shrink it — production code has no legitimate reason to change it.
+// SweepMinAge is how long an orphaned whetstone-labeled container or network
+// must have existed before Sweep will remove it. A var, not a const, solely
+// so a test can shrink it — production code has no legitimate reason to
+// change it.
 //
 // The label alone cannot tell "an orphan left by a process that died" apart
 // from "a network or proxy container another, currently-starting process is
@@ -19,7 +24,8 @@ import (
 // container is trivially removable with "-f" regardless of who it belongs
 // to. SweepMinAge is what keeps something that recent out of scope; anything
 // that age or younger is left for a later Sweep call to pick up once it has
-// actually gone stale.
+// actually gone stale. This is a secondary safety net, not the primary
+// protection — see the pid check below for that.
 var SweepMinAge = time.Minute
 
 // Sweep removes containers and networks left behind by a run that never got
@@ -33,19 +39,28 @@ var SweepMinAge = time.Minute
 //
 // Call it once per eval, before any run starts.
 //
-// What this actually guarantees: Sweep only ever acts on a resource carrying
-// ownerLabelKey (so it never touches anything outside whetstone's own
-// containers and networks) and only once that resource is older than
-// SweepMinAge. That age check is a necessary, not sufficient, protection
-// against removing a resource a concurrently-running evaluation still
-// owns — a session that legitimately runs longer than SweepMinAge (any real
-// agent session; the default SessionTimeout is twenty minutes) looks
-// identical, by age alone, to an orphan from a crashed process, and Sweep
-// cannot tell the two apart. Do not call Sweep from anywhere that might run
-// concurrently with a long-lived session unless that risk is accepted; the
-// one call site today (suite check, which only runs the oracle gate) is
-// short-lived enough that the risk window is the CLI startup itself, not a
-// whole eval.
+// The invariant this guarantees: a live container or network belonging to
+// another process is never removed. Every whetstone-created resource carries
+// both ownerLabelKey (so Sweep never touches anything outside whetstone's
+// own containers and networks) and pidLabelKey (the pid of the process that
+// created it). Sweep only removes a labeled resource once both hold:
+//
+//  1. pidAlive(that pid) is false — the creating process is confirmed gone,
+//     not merely old. This is what makes the guarantee a fact about the
+//     resource's owner rather than a guess from its age: a session that
+//     legitimately runs longer than SweepMinAge (any real agent session; the
+//     default SessionTimeout is twenty minutes) still has a live pid, so it
+//     is never touched, no matter how long it has been running or how many
+//     other whetstone processes are sweeping concurrently.
+//  2. the resource is older than SweepMinAge — a secondary guard against the
+//     narrow window (described above) where a resource has just been created
+//     and does not yet reflect its owner's final state, independent of pid
+//     liveness.
+//
+// A resource with no parseable pid label (for instance one hand-labeled by a
+// test, or one from a version of whetstone that predates the pid label) is
+// treated as ownerless and falls back to the age check alone — the same
+// behavior this function had before the pid check existed.
 func (d *Driver) Sweep(ctx context.Context) {
 	d.sweepContainers(ctx)
 	d.sweepNetworks(ctx)
@@ -58,8 +73,8 @@ func (d *Driver) sweepContainers(ctx context.Context) {
 		return
 	}
 	for _, id := range splitIDs(out) {
-		age, ok := d.resourceAge(ctx, "inspect", "--format", "{{.Created}}", id)
-		if !ok || age < SweepMinAge {
+		if !d.orphaned(ctx, "inspect",
+			"--format", "{{.Created}}|{{index .Config.Labels \""+pidLabelKey+"\"}}", id) {
 			continue
 		}
 		if rmOut, err := d.output(ctx, "rm", "-f", id); err != nil {
@@ -75,8 +90,8 @@ func (d *Driver) sweepNetworks(ctx context.Context) {
 		return
 	}
 	for _, id := range splitIDs(out) {
-		age, ok := d.resourceAge(ctx, "network", "inspect", "--format", "{{.Created}}", id)
-		if !ok || age < SweepMinAge {
+		if !d.orphaned(ctx, "network", "inspect",
+			"--format", "{{.Created}}|{{index .Labels \""+pidLabelKey+"\"}}", id) {
 			continue
 		}
 		if rmOut, err := d.output(ctx, "network", "rm", id); err != nil {
@@ -89,32 +104,82 @@ func (d *Driver) sweepNetworks(ctx context.Context) {
 // been observed to use: RFC3339Nano for a container, and a space-separated
 // "date time offset zone-name" form (no "T", a bare zone abbreviation after
 // the numeric offset) for a network. Both are tried because nothing in
-// docker's docs promises one over the other, and resourceAge is called for
-// both resource kinds through the same code path.
+// docker's docs promises one over the other, and orphaned is called for both
+// resource kinds through the same code path.
 var createdLayouts = []string{
 	time.RFC3339Nano,
 	"2006-01-02 15:04:05.999999999 -0700 MST",
 }
 
-// resourceAge runs a docker inspect variant (container or network) formatted
-// to emit only the resource's creation time, and returns how long ago that
-// was. ok is false when the resource could not be inspected at all (already
-// removed by a concurrent sweep or by its owner finishing normally between
-// the listing call and this one — not something Sweep should log as an
-// error) or when docker's own timestamp could not be parsed in any known
-// layout.
-func (d *Driver) resourceAge(ctx context.Context, inspectArgs ...string) (time.Duration, bool) {
+// orphaned runs a docker inspect variant (container or network) formatted to
+// emit "<created>|<pid label>", and reports whether the resource is safe to
+// remove: its owning pid must be confirmed dead (or absent/unparseable, in
+// which case age is the only signal available) and it must be older than
+// SweepMinAge. It returns false — leave it alone — when the resource could
+// not be inspected at all (already removed by a concurrent sweep or by its
+// owner finishing normally between the listing call and this one, not
+// something Sweep should log as an error), when docker's own timestamp could
+// not be parsed in any known layout, or when the owning pid is still alive.
+func (d *Driver) orphaned(ctx context.Context, inspectArgs ...string) bool {
 	out, err := d.output(ctx, inspectArgs...)
 	if err != nil {
-		return 0, false
+		return false
 	}
+	created, rest, ok := strings.Cut(out, "|")
+	if !ok {
+		return false
+	}
+	var age time.Duration
+	parsed := false
 	for _, layout := range createdLayouts {
-		if created, err := time.Parse(layout, out); err == nil {
-			return time.Since(created), true
+		if t, err := time.Parse(layout, created); err == nil {
+			age = time.Since(t)
+			parsed = true
+			break
 		}
 	}
-	d.o.Logger("docker: sweep: could not parse creation time %q in any known layout", out)
-	return 0, false
+	if !parsed {
+		d.o.Logger("docker: sweep: could not parse creation time %q in any known layout", created)
+		return false
+	}
+	if age < SweepMinAge {
+		return false
+	}
+	if pid, err := strconv.Atoi(rest); err == nil && pidAlive(pid) {
+		return false
+	}
+	return true
+}
+
+// pidAlive reports whether pid names a currently-running process on this
+// host, as best as a signal-0 probe can tell. It errs toward "alive": an
+// error other than "no such process" (for instance a permission error,
+// which would happen if the pid was reused by a process running as a
+// different user) is treated as alive rather than risk removing a resource
+// whose owner cannot be proven dead. This is the primary protection Sweep
+// relies on to avoid ever removing a resource a live process still owns; the
+// docker daemon and every whetstone process are assumed to run on the same
+// host, which holds for this driver (it shells out to a local docker CLI).
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrProcessDone) {
+		return false
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == syscall.ESRCH {
+		return false
+	}
+	return true
 }
 
 // splitIDs splits docker's newline-delimited -q output (already

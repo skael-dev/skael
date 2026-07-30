@@ -3,6 +3,8 @@ package docker
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"os"
 )
 
 // ownerLabelKey is the docker label every whetstone-created container and
@@ -14,14 +16,25 @@ import (
 // matching a convention.
 const ownerLabelKey = "whetstone.owner"
 
+// pidLabelKey is a second label, carrying the OS pid of the process whose
+// Driver created the resource. This is what lets Sweep tell "an orphan left
+// by a process that is gone" apart from "a resource that belongs to a
+// different, still-running whetstone process" without relying on age alone:
+// a pid that is still alive can never be a false negative the way a purely
+// time-based guard can (a legitimate session can easily outlive
+// SweepMinAge). See sweep.go's pidAlive.
+const pidLabelKey = "whetstone.owner.pid"
+
 // ownerLabelValue identifies the process that created a resource — visible on
 // `docker inspect` for anything this process creates. It is generated once
-// per process, not read back by Sweep to decide what to remove: Sweep exists
-// to reap orphans left by an *earlier* whetstone process, which by
-// definition carries a different value here, not just this process's own
-// leftovers. What actually protects a concurrently-running process's
-// resources is sweepMinAge (sweep.go), not this value.
+// per process and, together with pidLabelKey, is what OwnerLabel()-scoped
+// callers (this package's own tests) and Sweep use to reason about which
+// process a resource belongs to.
 var ownerLabelValue = newOwnerLabelValue()
+
+// ownerPID is this process's OS pid, recorded once at package init and
+// stamped onto every resource this process's Driver instances create.
+var ownerPID = os.Getpid()
 
 func newOwnerLabelValue() string {
 	var b [8]byte
@@ -34,11 +47,15 @@ func newOwnerLabelValue() string {
 	return hex.EncodeToString(b[:])
 }
 
-// ownerLabelArgs is the "--label" pair every docker create/run/network create
-// call appends, so every whetstone-owned resource is discoverable by label
-// without re-deriving it from a name.
+// ownerLabelArgs is the "--label" pairs every docker create/run/network
+// create call appends, so every whetstone-owned resource is discoverable by
+// label without re-deriving it from a name, and carries the creating
+// process's pid so Sweep can tell whether that process is still alive.
 func ownerLabelArgs() []string {
-	return []string{"--label", OwnerLabel()}
+	return []string{
+		"--label", OwnerLabel(),
+		"--label", fmt.Sprintf("%s=%d", pidLabelKey, ownerPID),
+	}
 }
 
 // OwnerLabel is the "key=value" docker label filter matching every container
