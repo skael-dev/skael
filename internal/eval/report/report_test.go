@@ -227,6 +227,72 @@ func TestCompose_MarksTheFallbackWhenTheJudgeIsUntrusted(t *testing.T) {
 	}
 }
 
+func TestComparable_DifferentUpliftSources(t *testing.T) {
+	a, b := demoReport(), demoReport()
+	a.UpliftSource = score.UpliftJudge
+	b.UpliftSource = score.UpliftPassRate
+	// A judge-scored uplift and a pass-rate-derived one are different
+	// measurements on the same axis. Charting them as one series is exactly
+	// the silent mixing Comparable exists to prevent.
+	ok, why := a.Comparable(b)
+	if ok {
+		t.Error("reports with different uplift sources reported as comparable")
+	}
+	if !strings.Contains(why, string(score.UpliftJudge)) || !strings.Contains(why, string(score.UpliftPassRate)) {
+		t.Errorf("reason = %q, want it to name both uplift sources", why)
+	}
+}
+
+func TestComparable_PanelOrderDoesNotMatter(t *testing.T) {
+	a, b := demoReport(), demoReport()
+	b.ModelPanel = []report.PanelMember{a.ModelPanel[1], a.ModelPanel[0]}
+	// The planner's iteration order is an implementation detail, not part of
+	// what the panel measured. A reordered panel is the same panel.
+	if ok, why := a.Comparable(b); !ok {
+		t.Errorf("a reordered panel was reported as a different one: %s", why)
+	}
+}
+
+func TestCompose_LeavesRobustnessGapAbsentWhenTheClassIsAmbiguous(t *testing.T) {
+	in := demoComposeInput()
+	// A second "strong" member makes ByClass(strong) ambiguous: "the strong
+	// member" is no longer defined, so neither is a strong/floor comparison.
+	extra := in.Members[0]
+	extra.Member = report.PanelMember{Agent: "claude-code", Model: "sonnet", Class: "strong", CLIVersion: "2.1.220"}
+	in.Members = append(in.Members, extra)
+	in.ModelPanel = append(in.ModelPanel, extra.Member)
+
+	r, err := report.Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A zero gap means "the floor model kept up." An ambiguous class means "we
+	// could not tell" — the two must not be indistinguishable on the report.
+	if r.HasRobustnessGap {
+		t.Errorf("HasRobustnessGap = true with an ambiguous strong class; RobustnessGap = %v", r.RobustnessGap)
+	}
+	if r.RobustnessGap != 0 {
+		t.Errorf("RobustnessGap = %v, want the zero value paired with HasRobustnessGap = false", r.RobustnessGap)
+	}
+
+	var buf bytes.Buffer
+	if err := r.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("emitted JSON for the absent-gap case:\n%s", buf.String())
+	if !strings.Contains(buf.String(), `"has_robustness_gap": false`) {
+		t.Errorf("serialised report does not carry the absent flag: %s", buf.String())
+	}
+
+	got, err := report.Load(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HasRobustnessGap {
+		t.Error("round trip turned an absent gap present")
+	}
+}
+
 func TestCompose_ExcludesVoidTasksFromScoringAndListsThem(t *testing.T) {
 	in := demoComposeInput()
 	in.Void = []report.VoidTask{{TaskID: "t03", Reason: "the verifier passes without the oracle having run"}}
