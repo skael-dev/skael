@@ -142,6 +142,8 @@ func TestAggregate_ReportsWorstAndInstability(t *testing.T) {
 	// out of five is a different failure from one that half-works every time,
 	// and a mean cannot tell them apart.
 	near(t, "Worst", a.Worst, 70)
+	// Population stddev over the 3 runs (90, 70, 80), mean 80:
+	// sqrt(((90-80)^2 + (70-80)^2 + (80-80)^2) / 3) = sqrt((100+100+0)/3) = sqrt(200/3).
 	near(t, "Sigma", a.Sigma, math.Sqrt(200.0/3.0))
 
 	same, err := drift.Aggregate([]drift.Result{{Adherence: 80}, {Adherence: 80}})

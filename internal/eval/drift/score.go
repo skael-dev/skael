@@ -171,6 +171,14 @@ func orderScore(steps []StepObs) float64 {
 // because they are different failure modes: a skill that works four runs in five
 // is not the same as one that half-works every run, and a mean cannot tell them
 // apart. Sigma is trajectory instability — same input, divergent behaviour.
+//
+// Sigma is the population standard deviation over the runs actually performed
+// (divide by N, not N-1): it describes the spread of this member's own
+// observed runs, not an estimate of some wider population those runs were
+// drawn from, so Bessel's correction does not apply. This also matters at
+// n=2 (the Full tier's budget): a sample stddev from two points is unstable
+// and inflated relative to the spread anyone actually observed, which would
+// overstate instability beyond what the evidence supports.
 type Agg struct {
 	Mean  float64
 	Worst float64
@@ -195,6 +203,7 @@ func Aggregate(rs []Result) (Agg, error) {
 
 	// Population standard deviation: these runs are the entire measured
 	// behaviour for this member at this budget, not a sample drawn from it.
+	// Deliberately ÷N, not ÷(N-1) — do not "fix" this to Bessel's correction.
 	sigma := 0.0
 	if len(rs) > 1 {
 		var ss float64
