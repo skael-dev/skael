@@ -404,12 +404,22 @@ func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 // Two realistic regressions would still make an earlier version of this test
 // pass: calling Do on a bare &http.Client{} that ignores Options.HTTPClient
 // entirely, or New() unconditionally overwriting a caller-supplied HTTPClient
-// with its own default. Both return an error within the test's time bound —
-// but only because the handler used to give up on its own short timer, not
-// because any timeout actually fired. This version closes that gap two ways:
-// the handler now blocks on a channel closed only in t.Cleanup (so nothing
-// but a real client-side timeout can make Complete return), and a recording
+// with its own default. Both used to return an error within the test's time
+// bound — but only because the handler gave up on its own short timer, not
+// because any timeout actually fired. That gap is closed two ways: the
+// handler now blocks on a channel closed only in t.Cleanup (so nothing but a
+// real client-side timeout can make Complete return), and a recording
 // RoundTripper proves the caller-supplied client is the one actually used.
+//
+// Complete runs in a goroutine, selected against a short local deadline,
+// rather than being called inline: this repo's `just test` runs `go test
+// ./... -count=1` with no -timeout flag, so if either regression above ever
+// reintroduces a genuine hang, calling Complete directly would deadlock this
+// test — and with no harness -timeout to kill it, Go's ten-minute per-package
+// default would be what finally reports the failure, which is worse than the
+// weak test it would be replacing. Fail fast and cleanly instead: this
+// deadline is well above the 50ms client timeout (the honoured path returns
+// in that ~50ms) and far below anything a CI harness would notice.
 func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
 	release := make(chan struct{})
 	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -427,22 +437,36 @@ func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
 		o.MaxRetries = 0
 	})
 
+	type result struct {
+		err     error
+		elapsed time.Duration
+	}
+	// Buffered so the goroutine can always send and exit, even if the select
+	// below times out first — it cannot leak waiting for a reader.
+	done := make(chan result, 1)
 	start := time.Now()
-	_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
-	elapsed := time.Since(start)
+	go func() {
+		_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+		done <- result{err: err, elapsed: time.Since(start)}
+	}()
 
-	if err == nil {
-		t.Fatal("Complete succeeded against a server that never responds")
-	}
-	if elapsed > time.Second {
-		t.Errorf("Complete took %s against a 50ms client timeout, want it to return promptly", elapsed)
-	}
-	lower := strings.ToLower(err.Error())
-	if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline exceeded") {
-		t.Errorf("err = %v, want a timeout-shaped error", err)
-	}
-	if atomic.LoadInt32(&rt.called) == 0 {
-		t.Error("the caller-supplied HTTPClient's Transport was never invoked — Options.HTTPClient must be the client actually used")
+	select {
+	case res := <-done:
+		if res.err == nil {
+			t.Fatal("Complete succeeded against a server that never responds")
+		}
+		if res.elapsed > time.Second {
+			t.Errorf("Complete took %s against a 50ms client timeout, want it to return promptly", res.elapsed)
+		}
+		lower := strings.ToLower(res.err.Error())
+		if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline exceeded") {
+			t.Errorf("err = %v, want a timeout-shaped error", res.err)
+		}
+		if atomic.LoadInt32(&rt.called) == 0 {
+			t.Error("the caller-supplied HTTPClient's Transport was never invoked — Options.HTTPClient must be the client actually used")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Complete did not return within 500ms of a 50ms client timeout — it is blocking instead of honouring the timeout")
 	}
 }
 
