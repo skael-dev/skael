@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"path"
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -262,10 +263,14 @@ func mapToolUse(b block) trajectory.Event {
 		e.Type = trajectory.TypeShell
 		e.ArgsDigest = trajectory.Digest(in.Command)
 	case "Skill":
-		// The native skill-invocation event. Name carries the invoked skill so
-		// trigger measurement can match it without path heuristics.
-		e.Type = trajectory.TypeSkillRead
-		e.Name = in.Skill
+		// The native skill-invocation event: an explicit "used this skill" signal,
+		// not a mere read of its SKILL.md. Keep it a tool_call named "Skill" so
+		// score.DetectFiring's explicit branch can see it, and also record the
+		// invoked skill as a synthetic path so eventNamesSkill's path heuristic
+		// (parent-directory match) can find it without depending on Name, the
+		// same way a Read of SKILL.md would be matched.
+		e.Type = trajectory.TypeToolCall
+		e.Paths = []string{path.Join(in.Skill, "SKILL.md")}
 	case "AskUserQuestion":
 		e.Type = trajectory.TypeAskUser
 	default:
