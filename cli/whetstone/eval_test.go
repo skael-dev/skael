@@ -318,6 +318,31 @@ func TestRunEvalWith_FullTierScoresBaselineAtItsOwnK(t *testing.T) {
 	}
 }
 
+func TestRunEvalWith_RecordsWhichMemberTheTriggerF1CameFrom(t *testing.T) {
+	// Trigger firing is measured once, on the primary panel member, and that
+	// single F1 is copied into every scored member's Pillars — it is not a
+	// per-member measurement. The report must record which member it actually
+	// came from, so a reader is not told a number was measured where it
+	// wasn't.
+	d, req := evalHarnessFull(t)
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+	if r.TriggerSource.Agent == "" || r.TriggerSource.Model == "" {
+		t.Fatalf("TriggerSource is unset despite the Full tier planning trigger probes: %+v", r.TriggerSource)
+	}
+	found := false
+	for _, m := range r.ModelPanel {
+		if m.Agent == r.TriggerSource.Agent && m.Model == r.TriggerSource.Model {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TriggerSource %+v does not name a member of the actual panel %+v", r.TriggerSource, r.ModelPanel)
+	}
+}
+
 func TestRunEvalWith_PopulatesTaskAndUnevaluableCarriers(t *testing.T) {
 	d, req := evalHarnessFull(t)
 	r, err := whetstone.RunEvalWith(context.Background(), d, req)

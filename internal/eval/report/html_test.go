@@ -107,6 +107,18 @@ func TestHTML_SurfacesTriggerUnknownAndMetaPartial(t *testing.T) {
 	}
 }
 
+func TestHTML_SurfacesTriggerSource(t *testing.T) {
+	r := demoReport()
+	r.TriggerSource = report.PanelMember{Agent: "claude-code", Model: "haiku", Class: "floor"}
+	got := renderHTML(t, r)
+	// Trigger F1 is measured once, on a single panel member, and copied into
+	// every member's row — a reader must be able to see which member the
+	// figure actually came from rather than assume it was measured per row.
+	if !strings.Contains(got, "claude-code/haiku") {
+		t.Errorf("report does not name the trigger source member (claude-code/haiku): %s", got)
+	}
+}
+
 func TestHTML_SurfacesUnevaluableCountPerDriftRun(t *testing.T) {
 	r := demoReport()
 	r.Tasks = []report.TaskReport{{

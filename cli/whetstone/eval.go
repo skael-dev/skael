@@ -338,9 +338,18 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		}
 	}
 
-	// Trigger firing is a property of the skill's description, not of which
-	// panel member happened to run the probe (probes run on the primary
-	// member only) — so one F1 result is shared across every scored member.
+	// Trigger firing is measured on the primary panel member only, not on
+	// every member individually, and the single F1 result is then copied into
+	// every scored member's Pillars. That rests on an assumption this eval
+	// does not verify — that trigger firing is model-independent, i.e. a
+	// weaker model infers no less from the skill's description than the
+	// strong one probes ran on. RobustnessGap's own premise is that weaker
+	// models infer less from the same text, so this may be the assumption
+	// most likely to be false; the report at least records which member the
+	// figure came from (report.TriggerSource) rather than presenting it as
+	// measured per member. Planning one probe set per capability class would
+	// remove the assumption but is a larger change than this fix covers.
+	//
 	// A tier that plans no probes (Smoke) measures nothing here; that is
 	// treated as vacuously satisfied, the same convention drift.Score already
 	// uses for a contract with no required steps, rather than as a zero that
@@ -348,7 +357,10 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	triggerF1 := 1.0
 	var triggerUnknown int
 	var triggerInferred bool
+	var triggerSource report.PanelMember
 	if len(execRes.Probes) > 0 {
+		probeMember := execRes.Probes[0].Probe.Member
+		triggerSource = report.PanelMember{Agent: probeMember.Agent, Model: probeMember.Model, Class: string(probeMember.Class)}
 		probes := make([]score.Probe, 0, len(execRes.Probes))
 		for _, p := range execRes.Probes {
 			if p.Unknown {
@@ -598,7 +610,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		EngineVersion: d.EngineVersion, ModelPanel: modelPanelOut, PanelComplete: execRes.PanelComplete,
 		Members: members, Tasks: tasksOut, Void: voidTasks,
 		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy,
-		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown,
+		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
 		StartedAt: startedAt, FinishedAt: now(),
 	})

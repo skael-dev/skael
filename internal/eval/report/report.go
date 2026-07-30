@@ -148,6 +148,12 @@ type Report struct {
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`
 
 	TriggerInferred bool `json:"trigger_inferred"`
+	// TriggerSource is the single panel member the trigger probes actually ran
+	// on. Trigger firing is measured once per eval, on this member, and the
+	// resulting F1 is then copied into every scored member's Pillars — it is
+	// not a per-member measurement, whatever the member's own row in Members
+	// might suggest. A zero value means no probes were planned for this tier.
+	TriggerSource PanelMember `json:"trigger_source,omitempty"`
 	// TriggerUnknown is the count of trigger probes excluded from the trigger
 	// confusion matrix because their session could not be measured — see
 	// score.Probe.Unknown. Excluded rather than counted as a miss, so an

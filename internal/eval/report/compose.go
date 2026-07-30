@@ -79,6 +79,9 @@ type ComposeInput struct {
 	JudgeLabeledBy string
 
 	TriggerInferred bool
+	// TriggerSource is passed through to Report.TriggerSource unchanged: the
+	// single panel member the trigger probes ran on.
+	TriggerSource PanelMember
 	// TriggerUnknown is score.F1Result.Unknown passed through: the count of
 	// trigger probes whose session could not be measured (e.g. it errored) and
 	// so were excluded from every quadrant of the trigger confusion matrix
@@ -221,6 +224,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		Tasks:             tasks,
 		VoidTasks:         in.Void,
 		TriggerInferred:   in.TriggerInferred,
+		TriggerSource:     in.TriggerSource,
 		TriggerUnknown:    in.TriggerUnknown,
 		Unevaluable:       in.Unevaluable,
 		UnevaluableDetail: in.UnevaluableDetail,
