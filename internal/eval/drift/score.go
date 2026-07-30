@@ -67,6 +67,12 @@ type Result struct {
 	// Grade is not set by Score. Set it from Grade(agg.Mean, agg.Worst) after
 	// aggregating this run with its siblings.
 	Grade string
+	// Unevaluable and UnevaluableDetail mirror Observation's fields of the same
+	// name: checks that could not be performed at all, surfaced here rather
+	// than folded into any of Components — a missed violation must not look
+	// like a clean run.
+	Unevaluable       int
+	UnevaluableDetail []string
 }
 
 // Score turns an Observation plus a judge-scored semantic rate into Adherence.
@@ -133,7 +139,13 @@ func Score(o *Observation, semantic float64, w Weights) (Result, error) {
 		w.Semantic*c.Semantic +
 		w.Focus*c.Focus)
 
-	return Result{Components: c, Adherence: adherence, Drift: 100 - adherence}, nil
+	return Result{
+		Components:        c,
+		Adherence:         adherence,
+		Drift:             100 - adherence,
+		Unevaluable:       o.Unevaluable,
+		UnevaluableDetail: o.UnevaluableDetail,
+	}, nil
 }
 
 // orderScore is 1 minus the normalized count of inversions among the matched,
@@ -236,4 +248,14 @@ func Grade(mean, worst float64) string {
 // explicit instruction — the strong model inferred what the text did not say.
 // It is the primary input to repair, which is why the sign convention is fixed
 // here rather than at each call site.
-func RobustnessGap(strong, floor Agg) float64 { return strong.Mean - floor.Mean }
+//
+// Both aggregates must carry at least one run: an Agg with N==0 is a zero
+// value, not a measurement of zero adherence, and a gap computed against it
+// would fabricate a maximal (or minimal) gap out of an absent measurement —
+// mirroring Aggregate's refusal of zero runs.
+func RobustnessGap(strong, floor Agg) (float64, error) {
+	if strong.N == 0 || floor.N == 0 {
+		return 0, errors.New("drift.RobustnessGap: both members need at least one drift run")
+	}
+	return strong.Mean - floor.Mean, nil
+}

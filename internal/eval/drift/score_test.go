@@ -160,11 +160,45 @@ func TestAggregate_ReportsWorstAndInstability(t *testing.T) {
 }
 
 func TestRobustnessGap_IsPositiveWhenTheSkillLeansOnTheStrongModel(t *testing.T) {
-	gap := drift.RobustnessGap(drift.Agg{Mean: 92, N: 2}, drift.Agg{Mean: 61, N: 2})
+	gap, err := drift.RobustnessGap(drift.Agg{Mean: 92, N: 2}, drift.Agg{Mean: 61, N: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
 	near(t, "gap", gap, 31)
 	// The sign convention is load-bearing: repair reads a positive gap as
 	// "the instructions are carrying less weight than the model is".
-	if drift.RobustnessGap(drift.Agg{Mean: 70, N: 2}, drift.Agg{Mean: 75, N: 2}) >= 0 {
+	neg, err := drift.RobustnessGap(drift.Agg{Mean: 70, N: 2}, drift.Agg{Mean: 75, N: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if neg >= 0 {
 		t.Error("gap is not negative when the floor model adhered better")
+	}
+}
+
+func TestRobustnessGap_RefusesAnUnmeasuredMember(t *testing.T) {
+	// An Agg with N==0 is a zero value, not a measurement of zero adherence.
+	// A gap computed against it would fabricate a maximal gap out of an
+	// absent measurement.
+	if _, err := drift.RobustnessGap(drift.Agg{Mean: 92, N: 2}, drift.Agg{}); err == nil {
+		t.Error("RobustnessGap accepted a floor Agg with N==0")
+	}
+	if _, err := drift.RobustnessGap(drift.Agg{}, drift.Agg{Mean: 61, N: 2}); err == nil {
+		t.Error("RobustnessGap accepted a strong Agg with N==0")
+	}
+}
+
+func TestScore_SurfacesUnevaluableChecksFromTheObservation(t *testing.T) {
+	o := &drift.Observation{
+		Total:             1,
+		Unevaluable:       2,
+		UnevaluableDetail: []string{"/etc/passwd against out/**: absolute candidate"},
+	}
+	r, err := drift.Score(o, 1.0, drift.DefaultWeights)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Unevaluable != 2 || len(r.UnevaluableDetail) != 1 {
+		t.Errorf("Result did not carry the observation's unevaluable checks: %+v", r)
 	}
 }
