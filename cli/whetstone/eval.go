@@ -858,7 +858,7 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 	baseTag := os.Getenv("WHETSTONE_BASE_TAG")
 	drv, err := docker.New(docker.Options{BaseTag: baseTag, Logger: ui.Info})
 	if err != nil {
-		return fmt.Errorf("whetstone eval: %w", err)
+		return fmt.Errorf("whetstone eval: %w; run `whetstone doctor` to check your setup", err)
 	}
 	// See suitecheck.go's identical call: a prior run killed by something
 	// stronger than its own context can leave containers and networks behind.
