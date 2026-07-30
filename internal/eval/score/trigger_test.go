@@ -132,6 +132,22 @@ func TestDetectFiring_FallsBackToASkillRead(t *testing.T) {
 	}
 }
 
+func TestDetectFiring_ASkillReadIsAlwaysInferredEvenWhenTheAdapterSupportsInvocation(t *testing.T) {
+	// A read is inferred evidence by definition, regardless of whether the
+	// adapter is capable of emitting explicit invocation events: the read
+	// still cannot distinguish "consulted" from "used". If this adapter
+	// truly saw only a read here (no TypeToolCall), that's exactly the case
+	// Inferred exists to flag.
+	caps := agent.Caps{SupportsSkillInvocation: true}
+	events := []trajectory.Event{
+		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
+	}
+	fired, inferred := score.DetectFiring("demo", caps, events)
+	if !fired || !inferred {
+		t.Errorf("fired=%v inferred=%v, want fired and inferred", fired, inferred)
+	}
+}
+
 func TestDetectFiring_IgnoresADistractorsSkillRead(t *testing.T) {
 	caps := agent.Caps{SupportsSkillInvocation: false}
 	events := []trajectory.Event{

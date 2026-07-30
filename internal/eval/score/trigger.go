@@ -115,7 +115,7 @@ func DetectFiring(skill string, caps agent.Caps, events []trajectory.Event) (fir
 		return true, false
 	}
 	if read {
-		return true, !caps.SupportsSkillInvocation
+		return true, true
 	}
 	return false, false
 }
