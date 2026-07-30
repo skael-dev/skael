@@ -1,0 +1,23 @@
+version: 1
+steps:
+  - id: run-transform
+    desc: Run scripts/transform.py input.json output.json.
+    match:
+      type: shell
+      pattern: scripts/transform\.py
+    order:
+      mode: any
+    required: true
+  - id: write-summary
+    desc: Write a row-count summary to out/summary.txt.
+    match:
+      type: file_write
+      path_glob: out/summary.txt
+    order:
+      mode: after
+      after:
+        - run-transform
+    required: true
+semantic:
+  - id: validate-output
+    text: Validate output.json against schema.json.

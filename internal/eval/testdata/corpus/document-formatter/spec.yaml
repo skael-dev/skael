@@ -16,6 +16,11 @@ steps:
   - id: write-report
     action: Write the rendered report to out/report.md.
     postcondition: out/report.md exists and matches the template's section order.
+constraints:
+  - id: no-writes-outside-out
+    text: Must not write any file outside out/.
+    kind: must_not
+    severity: major
 resources:
   references:
     - path: references/style-guide.md

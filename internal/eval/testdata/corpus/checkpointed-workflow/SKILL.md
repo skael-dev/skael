@@ -11,12 +11,12 @@ without ever writing outside the designated output directory.
 
 MUST NOT write any file outside out/ at any point in this workflow.
 
-2. Validate the bundle contents against manifest.json — postcondition:
-   validation exits 0.
-3. Package the bundle into out/report.zip — postcondition: out/report.zip
-   exists.
-4. Validate out/report.zip against the manifest checksum — postcondition:
-   checksum validation exits 0.
+2. Run `scripts/validate.py` — postcondition: validates the bundle
+   contents against manifest.json and exits 0.
+3. Run `scripts/package.py` — postcondition: packages the bundle into
+   out/report.zip.
+4. Run `scripts/verify.py` — postcondition: validates out/report.zip
+   against the manifest checksum and exits 0.
 
 If any step cannot complete, stop and report the failure state before
 proceeding to any further step.
