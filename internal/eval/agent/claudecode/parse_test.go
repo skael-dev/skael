@@ -1,7 +1,6 @@
 package claudecode_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,13 +234,6 @@ func TestCaps(t *testing.T) {
 	}
 	if c.ModelFlag == "" {
 		t.Error("ModelFlag empty; the panel varies models via this flag")
-	}
-}
-
-func TestInvokeIsNotImplementedYet(t *testing.T) {
-	_, err := claudecode.New().Invoke(context.TODO(), agent.InvokeSpec{})
-	if err != agent.ErrInvokeNotImplemented {
-		t.Errorf("Invoke err = %v, want ErrInvokeNotImplemented", err)
 	}
 }
 

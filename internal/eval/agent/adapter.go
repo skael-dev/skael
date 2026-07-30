@@ -22,6 +22,20 @@ var ErrInvokeNotImplemented = errors.New("agent: Invoke not implemented")
 // filesystem layout, which is why it is distinct from ErrInvokeNotImplemented.
 var ErrInstallNotImplemented = errors.New("agent: InstallSkill not implemented")
 
+// ErrNoExecutor is returned when Invoke is called with no Exec. Failing closed
+// is deliberate: an adapter that fell back to exec.Command would run an
+// untrusted skill on the host.
+var ErrNoExecutor = errors.New("agent: Invoke needs an executor; a session must run in a sandbox")
+
+// Exec runs one command somewhere an adapter does not choose. Adapters build
+// argv and hand it here; they never exec on the host, because the entire point
+// of running a skill under evaluation is that it runs in a sandbox. Passing the
+// executor in rather than the sandbox keeps flags in the adapter and containers
+// out of it — and makes argv assertable without a daemon.
+type Exec interface {
+	Exec(ctx context.Context, argv []string, stdout, stderr io.Writer) (exitCode int, err error)
+}
+
 // RawStream is an agent's native output, verbatim.
 type RawStream = io.Reader
 
@@ -50,6 +64,11 @@ type InvokeSpec struct {
 	Prompt    string
 	Model     string
 	Timeout   time.Duration
+	// SkillName is the installed skill under test, used by adapters whose
+	// invocation names it explicitly. Empty for a baseline session.
+	SkillName string
+	// Exec is where the CLI runs. Required.
+	Exec Exec
 }
 
 // Meta is everything a parsed stream reports about the session itself, as
