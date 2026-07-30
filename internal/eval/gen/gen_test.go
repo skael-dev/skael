@@ -80,6 +80,18 @@ func TestGenerate_OutputPassesItsOwnLint(t *testing.T) {
 	// The point of the robustness rule set is that generated bundles are clean
 	// by construction. If generation can emit a bundle its own linter rejects,
 	// the rules are decoration.
+	//
+	// This asserts zero findings of ANY severity, not just HasErrors(). The
+	// warn-tier rules — no-terminal-fallback, description-no-trigger,
+	// step-without-postcondition, global-only-guardrail — are exactly the
+	// robustness properties this generator exists to produce (a description
+	// with no "use when" trigger language is the single most common reason a
+	// real skill never fires), so a check that only looks at HasErrors() would
+	// let every one of them regress silently. The scripted fixture below
+	// currently produces zero findings at any severity, so the tight form is
+	// achievable; if a legitimately-generated bundle is ever found to need a
+	// warn-tier finding, tighten this to assert the exact expected finding set
+	// (by rule name) rather than loosening it back to HasErrors().
 	out := t.TempDir()
 	b, err := gen.Generate(context.Background(), fake.New(scripted()...), genSpec(), out)
 	if err != nil {
@@ -90,12 +102,8 @@ func TestGenerate_OutputPassesItsOwnLint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.Run: %v", err)
 	}
-	if res.HasErrors() {
-		for _, f := range res.Findings {
-			if f.Severity == lint.SeverityError {
-				t.Errorf("generated bundle fails its own lint: %s %s:%d %s", f.Rule, f.File, f.Line, f.Message)
-			}
-		}
+	for _, f := range res.Findings {
+		t.Errorf("generated bundle fails its own lint: [%s] %s %s:%d %s", f.Severity, f.Rule, f.File, f.Line, f.Message)
 	}
 }
 
