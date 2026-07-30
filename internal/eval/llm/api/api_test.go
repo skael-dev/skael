@@ -242,6 +242,117 @@ func TestComplete_SchemaReachesThePrompt(t *testing.T) {
 	}
 }
 
+// TestComplete_MalformedSuccessBodyIsAnError guards against the failure class
+// this project treats as most serious: a silent wrong answer rather than a
+// loud failure. A 200 whose body is not valid JSON — a truncating proxy, an
+// HTML error page served with a 200, a partial write — must not come back as
+// a nil error with an empty Text, indistinguishable from "the model
+// legitimately returned nothing".
+func TestComplete_MalformedSuccessBodyIsAnError(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<html>not json</html>`)
+	})
+
+	_, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded on a malformed 200 body")
+	}
+}
+
+// TestComplete_NoTextBlocksIsAnError pins the decision that a well-formed 200
+// with zero text content blocks is reported as an error, not a valid empty
+// completion — the caller asked for a completion and got none.
+func TestComplete_NoTextBlocksIsAnError(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[],"model":"m"}`)
+	})
+
+	_, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded on a 200 with zero text content blocks")
+	}
+}
+
+// TestComplete_TrimsBaseURLTrailingSlash pins the fix that prevents
+// "//v1/messages": a BaseURL ending in "/" must not double the slash.
+func TestComplete_TrimsBaseURLTrailingSlash(t *testing.T) {
+	var gotPath string
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{}"}],"model":"m"}`)
+	})
+
+	g := gateway(t, s.URL+"/")
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotPath != "/v1/messages" {
+		t.Errorf("path = %q, want exactly /v1/messages", gotPath)
+	}
+}
+
+// TestComplete_MaxRetriesZeroMakesExactlyOneCall pins MaxRetries: 0 as "try
+// once, no retry loop" rather than an off-by-one that still retries, and
+// checks the underlying error message is not lost inside the wrapping.
+func TestComplete_MaxRetriesZeroMakesExactlyOneCall(t *testing.T) {
+	var calls int32
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"message":"boom"}}`)
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) { o.MaxRetries = 0 })
+	_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded on a persistent 500")
+	}
+	if calls != 1 {
+		t.Errorf("made %d calls with MaxRetries: 0, want 1", calls)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("err = %v, want the underlying message to survive wrapping", err)
+	}
+}
+
+// TestComplete_HonoursHTTPClientTimeout pins that a hung server returns a
+// transport error promptly rather than blocking forever — the sibling
+// agentcli gateway had a genuine hang bug on its equivalent path, so this is
+// worth pinning rather than assuming the stdlib client covers it by default.
+// The test's own bound is kept short so a regression fails fast instead of
+// stalling CI.
+func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Return as soon as the client gives up, so the test (and the
+		// server's own Close on cleanup) doesn't wait out the full timer.
+		// The fallback is comfortably above the client timeout below but
+		// still short, so a leaked handler goroutine can't stall the suite.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) {
+		o.HTTPClient = &http.Client{Timeout: 50 * time.Millisecond}
+		// A single attempt is enough to prove the timeout is honoured; more
+		// would only add lingering server goroutines from earlier attempts
+		// for Close to wait out.
+		o.MaxRetries = 0
+	})
+
+	start := time.Now()
+	_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Complete succeeded against a server that never responded")
+	}
+	if elapsed > time.Second {
+		t.Errorf("Complete took %s against a 50ms client timeout, want it to return promptly", elapsed)
+	}
+}
+
 type memCache struct{ m map[string]string }
 
 func (c *memCache) Get(k string) (string, bool, error) { v, ok := c.m[k]; return v, ok, nil }

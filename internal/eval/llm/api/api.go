@@ -160,10 +160,11 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, true, fmt.Errorf("api: read body: %w", err)
 	}
 
-	var parsed response
-	_ = json.Unmarshal(raw, &parsed)
-
 	if resp.StatusCode != http.StatusOK {
+		// Best-effort: a malformed error body just falls back to the raw,
+		// trimmed body below rather than failing to report the failure at all.
+		var parsed response
+		_ = json.Unmarshal(raw, &parsed)
 		msg := strings.TrimSpace(string(raw))
 		if parsed.Error != nil && parsed.Error.Message != "" {
 			msg = parsed.Error.Message
@@ -172,11 +173,31 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, retryable, fmt.Errorf("api: %d: %s", resp.StatusCode, msg)
 	}
 
+	// Unlike the error path above, a 200 must decode: a body that doesn't is a
+	// truncating proxy, an HTML error page served with a 200, or a partial
+	// write — never a legitimate empty answer — and swallowing that here would
+	// return a nil error with an empty Text indistinguishable from "the model
+	// said nothing". That silent-wrong-answer failure mode is worse than a
+	// loud one, so it is reported instead. Treated as retryable: it looks like
+	// a transport-level anomaly rather than a considered response.
+	var parsed response
+	if uerr := json.Unmarshal(raw, &parsed); uerr != nil {
+		return llm.Res{}, true, fmt.Errorf("api: malformed response body: %w (body: %.200s)", uerr, raw)
+	}
+
 	var sb strings.Builder
 	for _, b := range parsed.Content {
 		if b.Type == "text" {
 			sb.WriteString(b.Text)
 		}
+	}
+	if sb.Len() == 0 {
+		// A well-formed 200 with no text block is the caller's completion
+		// request going unanswered, not a valid empty completion — not
+		// retryable, since the request was well-formed and got a considered
+		// (if content-free) reply; retrying a deterministic non-text answer
+		// would just spend quota to hear the same thing again.
+		return llm.Res{}, false, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
 	}
 	return llm.Res{Text: sb.String(), Model: parsed.Model}, false, nil
 }
