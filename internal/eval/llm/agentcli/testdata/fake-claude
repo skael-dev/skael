@@ -25,4 +25,25 @@ case "${FAKE_CLAUDE_MODE:-ok}" in
   garbage)
     printf '%s\n' 'not json'
     ;;
+  hang)
+    # Models a CLI whose script forks an external command — any real shell
+    # script does this for anything it shells out to — and that child hangs.
+    # Killing only this direct process, as exec.CommandContext's default
+    # cancellation does, leaves the child running and holding stdout/stderr
+    # open. This reproduces the bug the timeout-enforcement test pins.
+    sleep 30 &
+    wait
+    ;;
+  refusal)
+    # A policy refusal the CLI still treats as a handled, successful
+    # invocation: exit 0, but is_error true. The prose coincidentally
+    # mentions words ("timeout", "503") that must not be mistaken for the
+    # CLI's actual infrastructure-error shape ("API Error: <status>").
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"I cannot help with that request. If you are seeing a timeout or a 503 from your reverse proxy, check its configuration."}'
+    ;;
+  rate_limited)
+    # A genuine rate-limit failure in the CLI's real "API Error: <status>"
+    # shape, always failing so the test can count retry attempts.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"API Error: 429 Too Many Requests. Please retry after a short wait."}'
+    ;;
 esac

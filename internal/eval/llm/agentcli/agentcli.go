@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,18 @@ var ErrNoCLI = errors.New("agentcli: no supported agent CLI found on PATH")
 
 // defaultTimeout bounds a single gateway call.
 const defaultTimeout = 3 * time.Minute
+
+// waitDelay bounds how long Wait keeps draining the CLI's stdout/stderr
+// pipes after the context is cancelled or the process exits on its own. A
+// shell script's external commands (any real one shells out to something)
+// run as further children; killing only the direct process — as
+// exec.CommandContext's default cancellation does — leaves an orphaned
+// grandchild holding those pipes open, and Wait blocks past the configured
+// Timeout waiting for EOF that never comes. WaitDelay forces Wait to give up
+// and return regardless. setupProcessGroup (platform-specific) additionally
+// tries to kill that grandchild outright rather than merely stop waiting for
+// it.
+const waitDelay = 5 * time.Second
 
 // preamble is prepended to every prompt. The CLI is a coding agent by default,
 // so it has to be told it is being used as a text completion endpoint.
@@ -60,12 +74,31 @@ type Gateway struct {
 }
 
 // envelope is the single JSON object `--output-format json` emits.
+//
+// The CLI also reports a subtype field, deliberately not decoded here: a
+// real transient failure was observed with subtype "success" while is_error
+// was true and the failure text sat in result. Trusting subtype would have
+// handed that error text to the JSON extractor as if it were a legitimate
+// response. is_error and the process exit code are the only signals this
+// package treats as authoritative.
 type envelope struct {
-	Subtype    string                     `json:"subtype"`
 	IsError    bool                       `json:"is_error"`
 	Result     string                     `json:"result"`
 	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 }
+
+// cliFailure is returned when the envelope or the process itself reports
+// failure. exitedNonZero records whether the process exited non-zero, which
+// distinguishes an actual infrastructure fault from a policy refusal the CLI
+// still treats as a handled, successful invocation (and so exits zero for) —
+// the two need different retry treatment, and only cliFailure carries enough
+// information for isTransient to tell them apart.
+type cliFailure struct {
+	msg           string
+	exitedNonZero bool
+}
+
+func (e *cliFailure) Error() string { return e.msg }
 
 // Detect finds a supported agent CLI on PATH.
 func Detect() (string, error) {
@@ -156,6 +189,8 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = waitDelay
+	setupProcessGroup(cmd)
 
 	runErr := cmd.Run()
 
@@ -170,11 +205,12 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 		return llm.Res{}, fmt.Errorf("agentcli: unparseable envelope: %w (stdout: %.200s)", uerr, stdout.String())
 	}
 
-	// is_error is the authority, not subtype. A transient upstream failure was
-	// observed reporting subtype "success" with is_error true and the error
-	// message in result; trusting subtype would parse that text as a response.
+	// is_error is the authority, not subtype (see the envelope doc comment).
 	if env.IsError || runErr != nil {
-		return llm.Res{}, fmt.Errorf("agentcli: call failed: %s", strings.TrimSpace(env.Result))
+		return llm.Res{}, &cliFailure{
+			msg:           fmt.Sprintf("agentcli: call failed: %s", strings.TrimSpace(env.Result)),
+			exitedNonZero: runErr != nil,
+		}
 	}
 
 	res := llm.Res{Text: env.Result, Model: model}
@@ -194,12 +230,50 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 	return g.opts.StrongModel
 }
 
-// isTransient reports whether an error is worth retrying. Upstream overload and
-// rate limiting resolve on their own; a refusal or a bad flag will not.
+// apiErrorPattern anchors on the shape observed for the CLI's own
+// infrastructure failures: "API Error: <status> ...". Anchoring on this
+// shape, rather than scanning arbitrary prose for words like "timeout" or
+// "503", avoids retrying a refusal that merely discusses those numbers in
+// unrelated text.
+var apiErrorPattern = regexp.MustCompile(`API Error:\s*(\d{3})`)
+
+// transientMarkers catches transport-level failures that do not go through
+// the "API Error: <status>" shape.
+var transientMarkers = []string{
+	"ECONNRESET",
+	"context deadline exceeded",
+	"connection reset",
+	"connection refused",
+}
+
+// isTransient reports whether a failure is worth retrying rather than
+// returned immediately. The CLI gives no structured error code, so this
+// remains a heuristic calibrated to phrasing observed from the real CLI, not
+// an exhaustive classifier: a refusal that happens to mention a status code
+// or the word "timeout" in its own prose must not match, or a non-retryable
+// answer gets retried MaxRetries times for no benefit.
 func isTransient(err error) bool {
-	s := err.Error()
-	for _, marker := range []string{"529", "overloaded", "Overloaded", "rate limit", "timeout", "502", "503", "504"} {
-		if strings.Contains(s, marker) {
+	var cf *cliFailure
+	if !errors.As(err, &cf) {
+		return false
+	}
+
+	// A process that exited non-zero alongside a reported failure is
+	// stronger evidence of an infrastructure fault than any word match — a
+	// refusal the CLI still treats as a handled, successful invocation exits
+	// zero.
+	if cf.exitedNonZero {
+		return true
+	}
+
+	if m := apiErrorPattern.FindStringSubmatch(cf.msg); m != nil {
+		if code, cerr := strconv.Atoi(m[1]); cerr == nil && (code == 429 || (code >= 500 && code < 600)) {
+			return true
+		}
+	}
+
+	for _, marker := range transientMarkers {
+		if strings.Contains(cf.msg, marker) {
 			return true
 		}
 	}

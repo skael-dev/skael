@@ -2,6 +2,7 @@ package agentcli_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,6 +174,104 @@ func TestComplete_ContextCancellationIsRespected(t *testing.T) {
 func TestNew_RejectsAMissingBinary(t *testing.T) {
 	if _, err := agentcli.New(agentcli.Options{Binary: "/nonexistent/claude"}); err == nil {
 		t.Error("New accepted a binary that does not exist")
+	}
+}
+
+// TestComplete_TimeoutIsEnforcedEvenWhenTheCLIForksAChild reproduces a real
+// bug: a CLI invocation that forks an external child (any shell script does
+// this for anything it shells out to) and that child hangs. Killing only the
+// direct process, as exec.CommandContext's default cancellation does, leaves
+// the grandchild running and holding stdout/stderr open, so Wait blocks well
+// past the configured Timeout. The select below bounds the test itself so a
+// regression fails fast instead of hanging CI.
+func TestComplete_TimeoutIsEnforcedEvenWhenTheCLIForksAChild(t *testing.T) {
+	g, _ := newGateway(t, "hang", func(o *agentcli.Options) {
+		o.Timeout = 300 * time.Millisecond
+		o.MaxRetries = 0
+	})
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Complete succeeded against a CLI that produced no output")
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("Complete took %s to return; the timeout was not enforced", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Complete did not return within 5s; a CLI that forks a hung child blocked the call indefinitely")
+	}
+}
+
+// TestComplete_RefusalMentioningTransientWordsIsNotRetried covers the false
+// positive found in the original word-scan classifier: a refusal (is_error
+// true, but the process itself exits 0 — the CLI still considers this a
+// handled, successful invocation) whose own prose happens to mention
+// "timeout" and "503" must not be classified as a transient infrastructure
+// failure, or a non-retryable answer gets retried MaxRetries times for no
+// benefit.
+func TestComplete_RefusalMentioningTransientWordsIsNotRetried(t *testing.T) {
+	g, argv := newGateway(t, "refusal")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded on a refusal")
+	}
+
+	b, _ := os.ReadFile(argv)
+	if n := strings.Count(string(b), "-p"); n != 1 {
+		t.Errorf("CLI invoked %d times for a non-retryable refusal; retrying wastes a session on an answer that cannot change", n)
+	}
+}
+
+// TestComplete_429IsRetried covers the false negative found in the original
+// classifier: 429 was absent from the marker list even though "rate limit"
+// was present. The fake CLI's rate_limited mode always fails, so a
+// successful retry classification shows up as every one of MaxRetries+1
+// attempts being made.
+func TestComplete_429IsRetried(t *testing.T) {
+	g, argv := newGateway(t, "rate_limited")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete unexpectedly succeeded against a CLI that always reports 429")
+	}
+
+	b, _ := os.ReadFile(argv)
+	// newGateway's default MaxRetries is 2, so 3 total invocations are
+	// expected once every retry is exhausted.
+	if n := strings.Count(string(b), "-p"); n != 3 {
+		t.Errorf("CLI invoked %d times; a 429 must be retried up to MaxRetries", n)
+	}
+}
+
+func TestDetect_FindsABinaryOnPATH(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	got, err := agentcli.Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got != bin {
+		t.Errorf("Detect = %q, want %q", got, bin)
+	}
+}
+
+func TestDetect_ReturnsErrNoCLIWhenNothingIsOnPATH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	if _, err := agentcli.Detect(); !errors.Is(err, agentcli.ErrNoCLI) {
+		t.Errorf("Detect error = %v, want ErrNoCLI", err)
 	}
 }
 
