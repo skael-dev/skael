@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/contract"
@@ -97,6 +98,68 @@ func TestMatchPath_MalformedPatternsAreErrors(t *testing.T) {
 		if err == nil {
 			t.Errorf("MatchPath(%q, ...): want an error for a malformed pattern, got nil", pattern)
 		}
+	}
+}
+
+// TestMatchPath_DotDotInPatternIsAnError closes the pattern-side mirror of
+// the candidate-side ".." fix: only candidate goes through path.Clean, so a
+// ".." segment written directly into pattern would otherwise be compared
+// literally against a cleaned candidate that essentially never contains a
+// literal "..", making such a pattern permanently and silently inert —
+// exactly the failure mode the candidate-side fix closed, just relocated to
+// the other argument. A ".." segment in pattern must error instead.
+func TestMatchPath_DotDotInPatternIsAnError(t *testing.T) {
+	cases := []string{
+		"out/../etc",
+		"../out",
+		"out/..",
+	}
+	for _, pattern := range cases {
+		_, err := contract.MatchPath(pattern, "out/tables.csv")
+		if err == nil {
+			t.Errorf("MatchPath(%q, ...): want an error for a \"..\" segment in the pattern, got nil", pattern)
+		}
+	}
+}
+
+// TestMatchPath_ErrorsAreDistinguishable confirms a caller can tell which
+// rule an invalid MatchPath call violated: the ".."-in-pattern, malformed-
+// "**", and backslash errors must not read alike or collide on the same
+// message, since a caller catching an error and trying to explain it to a
+// user (or branch on it) needs the messages to actually differ.
+func TestMatchPath_ErrorsAreDistinguishable(t *testing.T) {
+	_, dotdotErr := contract.MatchPath("out/../etc", "out/tables.csv")
+	_, starErr := contract.MatchPath("a**b", "a/b/c")
+	_, backslashErr := contract.MatchPath(`out\tables.py`, "out/tables.csv")
+
+	if dotdotErr == nil || starErr == nil || backslashErr == nil {
+		t.Fatalf("expected all three calls to error: dotdot=%v star=%v backslash=%v", dotdotErr, starErr, backslashErr)
+	}
+
+	msgs := map[string]string{
+		"dotdot":    dotdotErr.Error(),
+		"star":      starErr.Error(),
+		"backslash": backslashErr.Error(),
+	}
+	for name, msg := range msgs {
+		for otherName, otherMsg := range msgs {
+			if name == otherName {
+				continue
+			}
+			if msg == otherMsg {
+				t.Errorf("%s error and %s error are identical: %q", name, otherName, msg)
+			}
+		}
+	}
+
+	if !strings.Contains(msgs["dotdot"], "..") {
+		t.Errorf("dotdot error %q does not name the offending %q", msgs["dotdot"], "..")
+	}
+	if !strings.Contains(msgs["star"], "**") {
+		t.Errorf("star error %q does not name the offending %q", msgs["star"], "**")
+	}
+	if !strings.Contains(msgs["backslash"], "backslash") {
+		t.Errorf("backslash error %q does not name the offending condition", msgs["backslash"])
 	}
 }
 

@@ -38,6 +38,17 @@ import (
 //     malformed pattern and returns an error. A malformed pattern must not
 //     silently return false: a forbid rule that silently never matches is
 //     the inert-rule problem in a new disguise.
+//   - pattern is matched segment-wise exactly as written: unlike candidate,
+//     it is never passed through path.Clean. A ".." segment in pattern is
+//     therefore rejected as malformed, with its own distinct error, rather
+//     than compared literally against a candidate that path.Clean will
+//     essentially never render as a literal "..": a pattern segment of ".."
+//     would otherwise never match anything, permanently and silently — the
+//     same inert-rule failure the candidate-side normalization exists to
+//     prevent, just relocated to the other argument. Patterns are produced
+//     by this package's own compiler, not by comparing untrusted text, so
+//     this is a defensive rejection of a compiler bug, not a security
+//     boundary the way the candidate-side checks are.
 //   - candidate is lexically normalized with path.Clean before matching, so
 //     "." and ".." segments are resolved rather than compared literally: a
 //     leading "./" is stripped ("./out/x.csv" behaves as "out/x.csv"), and
@@ -85,6 +96,9 @@ import (
 func MatchPath(pattern, candidate string) (bool, error) {
 	segments := strings.Split(pattern, "/")
 	for i, seg := range segments {
+		if seg == ".." {
+			return false, fmt.Errorf("contract: malformed pattern %q: a %q segment is not allowed; the pattern side is matched as written, without \"..\" normalization", pattern, "..")
+		}
 		if !strings.Contains(seg, "**") {
 			continue
 		}
