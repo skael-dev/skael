@@ -63,7 +63,12 @@ type Components struct {
 type Result struct {
 	Components Components `json:"components"`
 	Adherence  float64    `json:"adherence"`
-	Drift      float64    `json:"drift"`
+	// Drift is 100-Adherence, kept as a stored field for in-process callers
+	// that want it computed once alongside Adherence, but never serialized:
+	// a report is one fact (Adherence) with two encodings otherwise, and a
+	// hand-edited or third-party report.json could set them inconsistently
+	// with no cross-field validation to catch it.
+	Drift float64 `json:"-"`
 	// Grade is not set by Score. Set it from Grade(agg.Mean, agg.Worst) after
 	// aggregating this run with its siblings.
 	Grade string `json:"grade,omitempty"`

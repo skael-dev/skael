@@ -326,6 +326,21 @@ func TestRunDrift_EmbedsDriftResultAndRoundTripsThroughJSON(t *testing.T) {
 		t.Errorf("embedded drift.Result fields did not flatten into RunDrift's JSON: %s", b)
 	}
 
+	// drift.Result.Drift is 100-Adherence: a second serialized encoding of the
+	// same fact as Adherence, which a hand-edited or third-party report.json
+	// could set inconsistently since Load performs no cross-field validation.
+	// It must never appear on the wire.
+	var asMap map[string]any
+	if err := json.Unmarshal(b, &asMap); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := asMap["drift"]; present {
+		t.Errorf("RunDrift JSON contains a \"drift\" key: %s", b)
+	}
+	if _, present := asMap["adherence"]; !present {
+		t.Errorf("RunDrift JSON is missing \"adherence\": %s", b)
+	}
+
 	var got report.RunDrift
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
