@@ -248,6 +248,14 @@ func TestComplete_SchemaReachesThePrompt(t *testing.T) {
 // HTML error page served with a 200, a partial write — must not come back as
 // a nil error with an empty Text, indistinguishable from "the model
 // legitimately returned nothing".
+//
+// A failed decode also leaves the response zero-valued, which means the
+// separate zero-text-blocks check (see TestComplete_NoTextBlocksIsAnError)
+// would also produce a non-nil error here — so "err != nil" alone does not
+// pin this check specifically. The assertions below require the malformed-
+// body error's own signature (it quotes the offending body) and require the
+// absence of the zero-blocks check's signature, so the two tests can only
+// pass together if each check is doing its own, distinct job.
 func TestComplete_MalformedSuccessBodyIsAnError(t *testing.T) {
 	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `<html>not json</html>`)
@@ -257,11 +265,22 @@ func TestComplete_MalformedSuccessBodyIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Complete succeeded on a malformed 200 body")
 	}
+	if !strings.Contains(err.Error(), "not json") {
+		t.Errorf("err = %v, want it to quote the malformed body", err)
+	}
+	if strings.Contains(err.Error(), "no text content blocks") {
+		t.Errorf("err = %v, misattributed to the zero-text-blocks check instead of the decode failure", err)
+	}
 }
 
 // TestComplete_NoTextBlocksIsAnError pins the decision that a well-formed 200
 // with zero text content blocks is reported as an error, not a valid empty
 // completion — the caller asked for a completion and got none.
+//
+// See the discussion on TestComplete_MalformedSuccessBodyIsAnError: this
+// asserts the zero-blocks error's own signature (it names the empty-content
+// condition) and the absence of the malformed-body check's signature, so a
+// mutation that quietly drops this check cannot hide behind the other one.
 func TestComplete_NoTextBlocksIsAnError(t *testing.T) {
 	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"content":[],"model":"m"}`)
@@ -270,6 +289,55 @@ func TestComplete_NoTextBlocksIsAnError(t *testing.T) {
 	_, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
 	if err == nil {
 		t.Fatal("Complete succeeded on a 200 with zero text content blocks")
+	}
+	if !strings.Contains(err.Error(), "no text content blocks") {
+		t.Errorf("err = %v, want it to name the empty-content condition", err)
+	}
+	if strings.Contains(err.Error(), "malformed") {
+		t.Errorf("err = %v, misattributed to the malformed-body check instead of the empty-content check", err)
+	}
+}
+
+// TestComplete_MalformedSuccessBodyIsRetried pins the retry classification
+// for a malformed 200 body: it reads as a transport-level anomaly (a
+// truncating proxy, a partial write), not a considered answer, so it is
+// worth another attempt.
+func TestComplete_MalformedSuccessBodyIsRetried(t *testing.T) {
+	var calls int32
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_, _ = io.WriteString(w, `<html>not json</html>`)
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) { o.MaxRetries = 2 })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded on a persistently malformed 200 body")
+	}
+	if calls <= 1 {
+		t.Errorf("made %d calls for a malformed 200 body, want more than 1 — it should be retried", calls)
+	}
+	if calls > 3 { // MaxRetries + 1
+		t.Errorf("made %d calls, want at most MaxRetries+1 = 3", calls)
+	}
+}
+
+// TestComplete_NoTextBlocksIsNotRetried pins the retry classification for a
+// well-formed 200 with no text: the server gave a considered, if
+// content-free, reply — retrying it would only spend quota to hear the same
+// answer again.
+func TestComplete_NoTextBlocksIsNotRetried(t *testing.T) {
+	var calls int32
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_, _ = io.WriteString(w, `{"content":[],"model":"m"}`)
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) { o.MaxRetries = 2 })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded on a 200 with zero text content blocks")
+	}
+	if calls != 1 {
+		t.Errorf("made %d calls for a zero-text-blocks 200, want exactly 1 — it should not be retried", calls)
 	}
 }
 
@@ -315,29 +383,47 @@ func TestComplete_MaxRetriesZeroMakesExactlyOneCall(t *testing.T) {
 	}
 }
 
+// recordingRoundTripper wraps a real transport and records whether it was
+// invoked, so a test can assert the caller-supplied HTTPClient — not some
+// other, unconfigured client — is what actually made the request.
+type recordingRoundTripper struct {
+	http.RoundTripper
+	called int32
+}
+
+func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	atomic.AddInt32(&rt.called, 1)
+	return rt.RoundTripper.RoundTrip(req)
+}
+
 // TestComplete_HonoursHTTPClientTimeout pins that a hung server returns a
 // transport error promptly rather than blocking forever — the sibling
 // agentcli gateway had a genuine hang bug on its equivalent path, so this is
 // worth pinning rather than assuming the stdlib client covers it by default.
-// The test's own bound is kept short so a regression fails fast instead of
-// stalling CI.
+//
+// Two realistic regressions would still make an earlier version of this test
+// pass: calling Do on a bare &http.Client{} that ignores Options.HTTPClient
+// entirely, or New() unconditionally overwriting a caller-supplied HTTPClient
+// with its own default. Both return an error within the test's time bound —
+// but only because the handler used to give up on its own short timer, not
+// because any timeout actually fired. This version closes that gap two ways:
+// the handler now blocks on a channel closed only in t.Cleanup (so nothing
+// but a real client-side timeout can make Complete return), and a recording
+// RoundTripper proves the caller-supplied client is the one actually used.
 func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
-	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
-		// Return as soon as the client gives up, so the test (and the
-		// server's own Close on cleanup) doesn't wait out the full timer.
-		// The fallback is comfortably above the client timeout below but
-		// still short, so a leaked handler goroutine can't stall the suite.
-		select {
-		case <-r.Context().Done():
-		case <-time.After(300 * time.Millisecond):
-		}
+	release := make(chan struct{})
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		<-release // never returns on its own; only the test's cleanup frees it
 	})
+	// Registered after newServer's own t.Cleanup(s.Close), so it runs first
+	// (cleanups are LIFO) — the handler is released before Close is asked to
+	// wait for it, and the server's own Close can never stall the suite.
+	t.Cleanup(func() { close(release) })
 
+	rt := &recordingRoundTripper{RoundTripper: http.DefaultTransport}
 	g := gateway(t, s.URL, func(o *api.Options) {
-		o.HTTPClient = &http.Client{Timeout: 50 * time.Millisecond}
-		// A single attempt is enough to prove the timeout is honoured; more
-		// would only add lingering server goroutines from earlier attempts
-		// for Close to wait out.
+		o.HTTPClient = &http.Client{Timeout: 50 * time.Millisecond, Transport: rt}
+		// A single attempt is enough to prove the timeout is honoured.
 		o.MaxRetries = 0
 	})
 
@@ -346,10 +432,17 @@ func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if err == nil {
-		t.Fatal("Complete succeeded against a server that never responded")
+		t.Fatal("Complete succeeded against a server that never responds")
 	}
 	if elapsed > time.Second {
 		t.Errorf("Complete took %s against a 50ms client timeout, want it to return promptly", elapsed)
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline exceeded") {
+		t.Errorf("err = %v, want a timeout-shaped error", err)
+	}
+	if atomic.LoadInt32(&rt.called) == 0 {
+		t.Error("the caller-supplied HTTPClient's Transport was never invoked — Options.HTTPClient must be the client actually used")
 	}
 }
 
