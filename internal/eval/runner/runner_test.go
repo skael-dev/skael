@@ -20,17 +20,55 @@ import (
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
+// wsSnapshot is what fakeAdapter observed about a session's workspace at the
+// moment it was invoked — the last point before the runner cleans the
+// workspace up, and so the only reliable place left to check what the agent
+// could actually see.
+type wsSnapshot struct {
+	prompt     string
+	workspace  string
+	skillCount int
+	hasOracle  bool
+}
+
+// skillDirCount reports how many skill directories are present under
+// ws/.claude/skills right now — the fixed skill directory fakeAdapter.Caps()
+// reports.
+func skillDirCount(ws string) int {
+	entries, err := os.ReadDir(filepath.Join(ws, ".claude", "skills"))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			n++
+		}
+	}
+	return n
+}
+
+// hasOracleFile reports whether ws carries the task's reference solution.
+func hasOracleFile(ws string) bool {
+	_, err := os.Stat(filepath.Join(ws, "oracle", "solve.sh"))
+	return err == nil
+}
+
 // fakeAdapter records what it was asked to do and replays a canned stream.
 type fakeAdapter struct {
 	mu        sync.Mutex
 	installs  []string
 	invokes   []agent.InvokeSpec
+	snapshots []wsSnapshot
 	stream    string
 	meta      agent.Meta
 	invokeErr error
 	// rateLimitFirst makes the first invocation report a rate limit, so the
 	// backoff path is exercised without a real 429.
 	rateLimitFirst atomic.Bool
+	// alwaysRateLimited makes every invocation report a rate limit, so the
+	// retry-exhaustion path is exercised without a real 429 that never lets up.
+	alwaysRateLimited atomic.Bool
 }
 
 func (f *fakeAdapter) Name() string { return "claude-code" }
@@ -46,6 +84,15 @@ func (f *fakeAdapter) InstallSkill(ws, bundle string) error {
 func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawStream, error) {
 	f.mu.Lock()
 	f.invokes = append(f.invokes, s)
+	// Snapshot the workspace now: it is staged and installed into by this
+	// point, and the runner removes it once the session (and, for a task run,
+	// its verifier) finishes — this is the only point a test can still see it.
+	f.snapshots = append(f.snapshots, wsSnapshot{
+		prompt:     s.Prompt,
+		workspace:  s.Workspace,
+		skillCount: skillDirCount(s.Workspace),
+		hasOracle:  hasOracleFile(s.Workspace),
+	})
 	f.mu.Unlock()
 	if f.invokeErr != nil {
 		return nil, f.invokeErr
@@ -54,7 +101,7 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 }
 func (f *fakeAdapter) Parse(agent.RawStream) (*agent.Result, error) {
 	m := f.meta
-	if f.rateLimitFirst.CompareAndSwap(true, false) {
+	if f.alwaysRateLimited.Load() || f.rateLimitFirst.CompareAndSwap(true, false) {
 		m.RateLimited = true
 	}
 	return &agent.Result{
@@ -73,6 +120,14 @@ func (f *fakeAdapter) installCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.installs)
+}
+
+func (f *fakeAdapter) invokeSnapshots() []wsSnapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]wsSnapshot, len(f.snapshots))
+	copy(out, f.snapshots)
+	return out
 }
 
 // recordingDriver is a Driver that records every RunSpec it was asked to run
@@ -102,14 +157,6 @@ func (d *recordingDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.Ru
 		hook(rs)
 	}
 	return sandbox.RunResult{ExitCode: 0}, nil
-}
-
-func (d *recordingDriver) recordedRuns() []sandbox.RunSpec {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]sandbox.RunSpec, len(d.runs))
-	copy(out, d.runs)
-	return out
 }
 
 // harness wires a Store, a recordingDriver, a fakeAdapter, and a two-suite
@@ -218,7 +265,7 @@ func newHarness(t *testing.T) *harness {
 		Store: st, Driver: driver, Adapters: adapters,
 		Concurrency: 4, SessionTimeout: time.Minute,
 		// No-op by default so tests that never touch rate limiting run at
-		// full speed; the backoff test overrides this.
+		// full speed; the backoff tests override this.
 		Sleep: func(time.Duration) {},
 	}
 	return h
@@ -261,66 +308,6 @@ func (h *harness) run(ctx context.Context) (*runner.ExecuteResult, error) {
 	return r.Execute(ctx, h.evalID, h.input())
 }
 
-// workspaces returns the distinct session workspaces the driver saw while
-// running a task's verifier — every skill and baseline run has exactly one.
-func (h *harness) workspaces() []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, rs := range h.driver.recordedRuns() {
-		if rs.Workspace != "" && !seen[rs.Workspace] {
-			seen[rs.Workspace] = true
-			out = append(out, rs.Workspace)
-		}
-	}
-	return out
-}
-
-// probeWorkspaces returns the distinct workspaces used for trigger-probe
-// sessions, identified by their prompt belonging to the full suite's trigger
-// set (a probe session has no verifier, so it never appears in
-// h.workspaces(), which only sees driver.Run calls).
-func (h *harness) probeWorkspaces() []string {
-	prompts := map[string]bool{}
-	for _, p := range h.fullSuite.Triggers.Positive {
-		prompts[p] = true
-	}
-	for _, p := range h.fullSuite.Triggers.Negative {
-		prompts[p] = true
-	}
-
-	h.adapter.mu.Lock()
-	defer h.adapter.mu.Unlock()
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range h.adapter.invokes {
-		if prompts[s.Prompt] && !seen[s.Workspace] {
-			seen[s.Workspace] = true
-			out = append(out, s.Workspace)
-		}
-	}
-	return out
-}
-
-// countInstalledSkills counts directories under <ws>/.claude/skills, the
-// fixed skill directory fakeAdapter.Caps() reports.
-func countInstalledSkills(t *testing.T, ws string) int {
-	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(ws, ".claude", "skills"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0
-		}
-		t.Fatalf("reading skills dir: %v", err)
-	}
-	n := 0
-	for _, e := range entries {
-		if e.IsDir() {
-			n++
-		}
-	}
-	return n
-}
-
 func mustDistractors(t *testing.T) []suite.Distractor {
 	t.Helper()
 	ds, err := suite.Distractors()
@@ -352,6 +339,24 @@ func TestExecute_ResumeSpendsNoSessionOnACompletedRun(t *testing.T) {
 	}
 	if len(second.Outcomes) != len(first.Outcomes) {
 		t.Errorf("resume returned %d outcomes, want the %d already recorded", len(second.Outcomes), len(first.Outcomes))
+	}
+
+	// Not just the count: a resume that silently returned the wrong status or
+	// exit code for a key would pass the checks above and still be wrong.
+	want := map[store.RunKey]runner.Outcome{}
+	for _, o := range first.Outcomes {
+		want[o.Key] = o
+	}
+	for _, o := range second.Outcomes {
+		w, ok := want[o.Key]
+		if !ok {
+			t.Errorf("resume reported %+v, which the first run never produced", o.Key)
+			continue
+		}
+		if o.Status != w.Status || o.VerifierExit != w.VerifierExit {
+			t.Errorf("resume for %+v = {status=%s exit=%d}, want {status=%s exit=%d}",
+				o.Key, o.Status, o.VerifierExit, w.Status, w.VerifierExit)
+		}
 	}
 }
 
@@ -401,6 +406,70 @@ func TestExecute_RetriesARateLimitedSessionAfterBackingOff(t *testing.T) {
 		if o.Status == "error" && strings.Contains(o.Err.Error(), "rate") {
 			t.Errorf("rate-limited run recorded as an error: %+v", o)
 		}
+	}
+}
+
+func TestExecute_ExhaustingRateLimitRetriesIsRecordedAsAnErrorNotAResult(t *testing.T) {
+	h := newHarness(t)
+	h.adapter.alwaysRateLimited.Store(true)
+	h.opts.MaxRateLimitRetries = 2
+
+	res, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawError bool
+	for _, o := range res.Outcomes {
+		// A rate-limit artifact that exhausted its retries must not be scored
+		// via the verifier at all — once StatusFailed is written, ClaimRun
+		// treats it as a completed measurement and it is never retried.
+		if o.Status == store.StatusOK || o.Status == store.StatusFailed {
+			t.Errorf("a permanently rate-limited session was scored as a completed measurement: %+v", o)
+		}
+		if o.Status == store.StatusError {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Fatal("no outcome recorded as an error for a permanently rate-limited session")
+	}
+
+	// Once the account stops rate-limiting, a resumed Execute must retry the
+	// run rather than treating the earlier error as a completed measurement.
+	h.adapter.alwaysRateLimited.Store(false)
+	before := h.adapter.invokeCount()
+	if _, err := h.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := h.adapter.invokeCount(); after == before {
+		t.Error("resume did not retry a run recorded as an error")
+	}
+}
+
+func TestExecute_AgentInternalErrorIsRecordedAsNotPerformed(t *testing.T) {
+	h := newHarness(t)
+	h.adapter.meta = agent.Meta{IsError: true}
+
+	res, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawError bool
+	for _, o := range res.Outcomes {
+		// Meta.IsError means the CLI reported an internal error even though the
+		// transport succeeded — the session was not performed, and scoring it
+		// via the verifier's exit code would read that as a skill failure.
+		if o.Status == store.StatusOK || o.Status == store.StatusFailed {
+			t.Errorf("an agent-reported internal error was scored as a completed measurement: %+v", o)
+		}
+		if o.Status == store.StatusError {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Fatal("no outcome recorded as an error for an agent-reported internal error")
 	}
 }
 
@@ -523,12 +592,31 @@ func TestExecute_TriggerProbesInstallTheDistractorPack(t *testing.T) {
 	if len(res.Probes) == 0 {
 		t.Fatal("no probes ran")
 	}
-	// Trigger precision measured against no distractors measures nothing: the
-	// skill is the only candidate, so it always "wins".
-	for _, ws := range h.probeWorkspaces() {
-		if n := countInstalledSkills(t, ws); n < len(in.Distractors) {
-			t.Errorf("probe workspace has %d skills, want the skill plus %d distractors", n, len(in.Distractors))
+
+	prompts := map[string]bool{}
+	for _, p := range h.fullSuite.Triggers.Positive {
+		prompts[p] = true
+	}
+	for _, p := range h.fullSuite.Triggers.Negative {
+		prompts[p] = true
+	}
+
+	var sawProbeSession bool
+	for _, snap := range h.adapter.invokeSnapshots() {
+		if !prompts[snap.prompt] {
+			continue
 		}
+		sawProbeSession = true
+		// Trigger precision measured against no distractors measures nothing:
+		// the skill is the only candidate, so it always "wins". Checked at
+		// invoke time, since the runner removes the workspace once the
+		// session ends.
+		if snap.skillCount < len(in.Distractors) {
+			t.Errorf("probe workspace has %d skills, want the skill plus %d distractors", snap.skillCount, len(in.Distractors))
+		}
+	}
+	if !sawProbeSession {
+		t.Fatal("no probe sessions were observed")
 	}
 }
 
@@ -537,9 +625,28 @@ func TestExecute_NeverStagesTheOracleIntoASessionWorkspace(t *testing.T) {
 	if _, err := h.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, ws := range h.workspaces() {
-		if _, err := os.Stat(filepath.Join(ws, "oracle", "solve.sh")); err == nil {
-			t.Errorf("%s carries the oracle; the agent can read the reference solution", ws)
+	snapshots := h.adapter.invokeSnapshots()
+	if len(snapshots) == 0 {
+		t.Fatal("no sessions ran")
+	}
+	for _, snap := range snapshots {
+		if snap.hasOracle {
+			t.Errorf("%s carries the oracle; the agent can read the reference solution", snap.workspace)
+		}
+	}
+}
+
+func TestExecute_RemovesTheWorkspaceOnceASessionFinishes(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A Full or Deep tier stages 60-100+ workspaces; nothing must be left
+	// behind once each one's session (and, for a task run, its verifier) is
+	// done.
+	for _, snap := range h.adapter.invokeSnapshots() {
+		if _, err := os.Stat(snap.workspace); !os.IsNotExist(err) {
+			t.Errorf("workspace %s was not removed after its session finished (stat err = %v)", snap.workspace, err)
 		}
 	}
 }
