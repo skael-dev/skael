@@ -63,12 +63,20 @@ type ComposeInput struct {
 	// (a later task selects the floor itself). false demotes UpliftSource to
 	// the pass-rate fallback, but JudgeKappa is still recorded — it is the κ
 	// that caused the demotion.
+	//
+	// JudgeKappa is nil when no judge was calibrated for this run at all — a
+	// run with no gateway available produces no calibration, and that must
+	// not read as a judge that scored κ = 0.0. Compose passes it straight
+	// through to Report.JudgeKappa without manufacturing a value.
 	JudgeTrusted   bool
-	JudgeKappa     float64
+	JudgeKappa     *float64
 	JudgeLabeledBy string
 
-	TriggerInferred   bool
-	Unevaluable       int
+	TriggerInferred bool
+	Unevaluable     int
+	// UnevaluableDetail is passed through to the report as given: Compose
+	// does not aggregate it per-run or de-duplicate it. The caller owns
+	// assembling this list from whatever per-run observations it holds.
 	UnevaluableDetail []string
 
 	StartedAt  time.Time
@@ -155,7 +163,6 @@ func Compose(in ComposeInput) (*Report, error) {
 	if !in.JudgeTrusted {
 		upliftSource = score.UpliftPassRate
 	}
-	kappa := in.JudgeKappa
 
 	var tasks []TaskReport
 	for _, ti := range in.Tasks {
@@ -177,7 +184,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		Headline:          headline,
 		HeadlineCI:        [2]float64{lo, hi},
 		UpliftSource:      upliftSource,
-		JudgeKappa:        &kappa,
+		JudgeKappa:        in.JudgeKappa,
 		JudgeLabeledBy:    in.JudgeLabeledBy,
 		Members:           members,
 		RobustnessGap:     gap,

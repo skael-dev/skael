@@ -42,6 +42,7 @@ func demoComposeInput() report.ComposeInput {
 		{Agent: "claude-code", Model: "opus", Class: "strong", CLIVersion: "2.1.220"},
 		{Agent: "claude-code", Model: "haiku", Class: "floor", CLIVersion: "2.1.220"},
 	}
+	kappa := 0.75
 	return report.ComposeInput{
 		Skill:         "csv-to-md",
 		SpecVersion:   3,
@@ -99,7 +100,7 @@ func demoComposeInput() report.ComposeInput {
 			},
 		},
 		JudgeTrusted:   true,
-		JudgeKappa:     0.75,
+		JudgeKappa:     &kappa,
 		JudgeLabeledBy: "author",
 		StartedAt:      time.Unix(1700000000, 0).UTC(),
 		FinishedAt:     time.Unix(1700004000, 0).UTC(),
@@ -215,7 +216,8 @@ func TestReport_CarriesEveryUnevaluableCheckToTheSurface(t *testing.T) {
 func TestCompose_MarksTheFallbackWhenTheJudgeIsUntrusted(t *testing.T) {
 	in := demoComposeInput()
 	in.JudgeTrusted = false
-	in.JudgeKappa = 0.41
+	kappa := 0.41
+	in.JudgeKappa = &kappa
 	r, err := report.Compose(in)
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +227,80 @@ func TestCompose_MarksTheFallbackWhenTheJudgeIsUntrusted(t *testing.T) {
 	}
 	if r.JudgeKappa == nil || *r.JudgeKappa != 0.41 {
 		t.Error("the κ that caused the demotion is not on the report")
+	}
+}
+
+func TestCompose_LeavesJudgeKappaAbsentWhenNoJudgeRan(t *testing.T) {
+	in := demoComposeInput()
+	// A run with no gateway available produces no calibration at all — that
+	// must not read as a judge that scored κ = 0.0.
+	in.JudgeKappa = nil
+	r, err := report.Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.JudgeKappa != nil {
+		t.Errorf("JudgeKappa = %v, want nil when no judge was calibrated", *r.JudgeKappa)
+	}
+
+	var buf bytes.Buffer
+	if err := r.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("emitted JSON with no judge calibrated:\n%s", buf.String())
+	if strings.Contains(buf.String(), "judge_kappa") {
+		t.Errorf("serialised report carries a judge_kappa key when no judge ran: %s", buf.String())
+	}
+
+	got, err := report.Load(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JudgeKappa != nil {
+		t.Error("round trip turned an absent kappa present")
+	}
+}
+
+func TestCompose_MarksAnUnhealthyMemberRatherThanScoringItZero(t *testing.T) {
+	in := demoComposeInput()
+	in.Members[1] = report.MemberInput{
+		Member:  in.Members[1].Member,
+		Healthy: false,
+		Detail:  "adapter timed out during the health probe",
+	}
+	// PanelComplete no longer holds with an unhealthy member; Compose does not
+	// derive it, so set it to match what a real caller would report.
+	in.PanelComplete = false
+
+	r, err := report.Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var unhealthy *report.MemberReport
+	for i := range r.Members {
+		if r.Members[i].Member.Model == "haiku" {
+			unhealthy = &r.Members[i]
+		}
+	}
+	if unhealthy == nil {
+		t.Fatal("the unhealthy member is missing from the report entirely")
+	}
+	// A zero Effectiveness on a healthy member and a zero Effectiveness on an
+	// unhealthy one mean opposite things — "measured and failed" versus "not
+	// measured at all" — and a consumer must check Healthy first to tell them
+	// apart rather than reading the zero as a real score.
+	if unhealthy.Healthy {
+		t.Error("Healthy = true for a member whose adapter failed its probe")
+	}
+	if unhealthy.Detail != "adapter timed out during the health probe" {
+		t.Errorf("Detail = %q, the reason the member was unhealthy did not survive to the report", unhealthy.Detail)
+	}
+	if unhealthy.Effectiveness != 0 {
+		t.Errorf("Effectiveness = %v, want the zero value for an unhealthy member (not a real score)", unhealthy.Effectiveness)
+	}
+	if unhealthy.Drift != (drift.Agg{}) {
+		t.Errorf("Drift = %+v, want the zero value for an unhealthy member", unhealthy.Drift)
 	}
 }
 
