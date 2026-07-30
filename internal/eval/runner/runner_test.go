@@ -675,6 +675,112 @@ func TestExecute_ResumedProbeRecoversEventsFromArtifacts(t *testing.T) {
 	}
 }
 
+// targetRunKey is the first task's skill-condition run key on the harness's
+// default panel — a fixed, single run the events-write-failure tests can
+// locate deterministically among the whole plan's concurrent outcomes.
+func (h *harness) targetRunKey() store.RunKey {
+	primary := runner.DefaultPanel()[0]
+	return store.RunKey{TaskID: h.suite.Tasks[0].ID, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondSkill, Attempt: 1}
+}
+
+// outcomeFor finds the outcome for k among res.Outcomes, failing the test if
+// it is absent.
+func outcomeFor(t *testing.T, res *runner.ExecuteResult, k store.RunKey) runner.Outcome {
+	t.Helper()
+	for _, o := range res.Outcomes {
+		if o.Key == k {
+			return o
+		}
+	}
+	t.Fatalf("no outcome for %+v", k)
+	return runner.Outcome{}
+}
+
+func TestExecute_EventsWriteFailureRecordsTheRunAsNotPerformed(t *testing.T) {
+	h := newHarness(t)
+	k := h.targetRunKey()
+
+	artifactDir, err := h.store.RunDir(h.skill, h.evalID, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-occupy events.jsonl with a directory so writing the trajectory
+	// specifically fails while transcript.raw and grading.json — different
+	// filenames — still succeed.
+	if err := os.Mkdir(filepath.Join(artifactDir, "events.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := outcomeFor(t, first, k)
+	// Events are the only artifact scoring and resume read back. Recording
+	// this as StatusOK would tell a later ClaimRun the run never needs
+	// retrying, even though the one thing it produced that resume depends on
+	// was never written.
+	if got.Status != store.StatusError {
+		t.Errorf("status = %q, want %q", got.Status, store.StatusError)
+	}
+	if _, err := os.ReadFile(filepath.Join(artifactDir, "transcript.raw")); err != nil {
+		t.Errorf("transcript.raw was not written even though only events failed: %v", err)
+	}
+
+	before := h.adapter.invokeCount()
+	second, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := h.adapter.invokeCount(); after == before {
+		t.Fatal("resume did not retry a run whose events could not be recorded")
+	}
+	resumed := outcomeFor(t, second, k)
+	// The obstruction is still in place, so the retried attempt fails the
+	// same way — which is the correct outcome, not a bug in the test: it
+	// confirms the run keeps being treated as not-yet-performed rather than
+	// being accepted once and then silently left broken.
+	if resumed.Status != store.StatusError {
+		t.Errorf("resumed status = %q, want %q (the obstruction was not removed)", resumed.Status, store.StatusError)
+	}
+}
+
+func TestExecute_TranscriptWriteFailureStillRecordsACompletedMeasurement(t *testing.T) {
+	h := newHarness(t)
+	k := h.targetRunKey()
+
+	artifactDir, err := h.store.RunDir(h.skill, h.evalID, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-occupy transcript.raw with a directory so only the transcript write
+	// fails; events.jsonl and grading.json still succeed.
+	if err := os.Mkdir(filepath.Join(artifactDir, "transcript.raw"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := outcomeFor(t, res, k)
+	// The transcript is secondary evidence a human digs into after the fact.
+	// Losing it does not make the run unscoreable, so it must not be
+	// downgraded to a retryable error the way an events failure is.
+	if got.Status != store.StatusOK {
+		t.Errorf("status = %q, want %q (a transcript failure must not block a completed measurement)", got.Status, store.StatusOK)
+	}
+	if _, err := os.ReadFile(filepath.Join(artifactDir, "events.jsonl")); err != nil {
+		t.Errorf("events.jsonl was not written even though only the transcript failed: %v", err)
+	}
+}
+
 func TestExecute_NeverStagesTheOracleIntoASessionWorkspace(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.run(context.Background()); err != nil {

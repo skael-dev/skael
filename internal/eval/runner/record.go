@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +16,14 @@ import (
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
+
+// ErrEventsNotWritten wraps a failure to write events.jsonl specifically, so
+// a caller can tell that failure apart from a transcript, grading, or
+// outputs failure with errors.Is rather than by parsing a message. Events
+// are the one artifact scoring and resume actually read back — losing the
+// transcript or a verifier's output files is a loss of secondary evidence,
+// but losing events.jsonl means the run cannot be scored or resumed at all.
+var ErrEventsNotWritten = errors.New("runner: events.jsonl was not written")
 
 // eventScanBuffer is the maximum size of a single events.jsonl line LoadEvents
 // will accept. A digested event is small, but a Paths slice from a wide glob
@@ -59,11 +68,15 @@ type Grading struct {
 // runs/ would be most of the disk an evaluation uses for zero evidentiary
 // value. A baseline session installs no skill, so its caller passes no
 // skipDirs and its real outputs are copied in full.
+//
+// WriteArtifacts is best-effort across the four artifacts: it attempts every
+// one rather than stopping at the first failure, so a caller that only cares
+// about (say) the events failure is not also denied the transcript that did
+// write successfully. Every failure is accumulated and returned via
+// errors.Join; a failure to write events.jsonl specifically is wrapped in
+// ErrEventsNotWritten so a caller can single it out with errors.Is without
+// parsing the message.
 func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Artifacts{}, fmt.Errorf("runner: creating artifact dir %s: %w", dir, err)
-	}
-
 	a := Artifacts{
 		Dir:            dir,
 		TranscriptPath: filepath.Join(dir, "transcript.raw"),
@@ -72,25 +85,31 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 		OutputsDir:     filepath.Join(dir, "outputs"),
 	}
 
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return a, fmt.Errorf("runner: creating artifact dir %s: %w", dir, err)
+	}
+
+	var errs []error
+
 	// The transcript is the record of what the CLI actually said. Written
 	// verbatim: no normalization, no re-encoding, no truncation.
 	if err := os.WriteFile(a.TranscriptPath, raw, 0o644); err != nil {
-		return Artifacts{}, fmt.Errorf("runner: writing transcript: %w", err)
+		errs = append(errs, fmt.Errorf("runner: writing transcript: %w", err))
 	}
 
 	if err := writeEvents(a.EventsPath, events); err != nil {
-		return Artifacts{}, err
+		errs = append(errs, fmt.Errorf("%w: %w", ErrEventsNotWritten, err))
 	}
 
 	if err := writeGrading(a.GradingPath, g); err != nil {
-		return Artifacts{}, err
+		errs = append(errs, fmt.Errorf("runner: writing grading: %w", err))
 	}
 
 	if err := copyOutputs(workspace, a.OutputsDir, skipDirs); err != nil {
-		return Artifacts{}, err
+		errs = append(errs, fmt.Errorf("runner: copying outputs: %w", err))
 	}
 
-	return a, nil
+	return a, errors.Join(errs...)
 }
 
 // writeEvents writes one compact JSON object per line, in slice order — the

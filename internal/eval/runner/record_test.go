@@ -68,6 +68,33 @@ func TestWriteArtifacts_EventsAreOnePerLineInOrder(t *testing.T) {
 	}
 }
 
+func TestLoadEvents_RoundTripsALineLargerThanTheDefaultScannerBuffer(t *testing.T) {
+	dir := t.TempDir()
+	// bufio.Scanner's default MaxScanTokenSize is 64KiB. A Paths entry from a
+	// wide glob can exceed that on its own; a scanner that has not raised its
+	// buffer stops silently at this line rather than erroring, dropping the
+	// rest of the trajectory.
+	bigPath := strings.Repeat("a", 100*1024)
+	events := []trajectory.Event{
+		{Seq: 1, Type: trajectory.TypeFileWrite, Paths: []string{bigPath}},
+	}
+	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := runner.LoadEvents(a.EventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadEvents = %d events, want 1 (a line over the default 64KiB buffer was dropped)", len(got))
+	}
+	if len(got[0].Paths) != 1 || got[0].Paths[0] != bigPath {
+		t.Error("LoadEvents did not round-trip the oversized Paths entry")
+	}
+}
+
 func TestWriteArtifacts_ExcludesTheInstalledSkillFromOutputs(t *testing.T) {
 	ws := t.TempDir()
 	mustWrite(t, filepath.Join(ws, "out", "tables.md"), "| a |")

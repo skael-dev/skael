@@ -66,11 +66,34 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	)
 
 	finish := func(status string, ferr error) Outcome {
-		out.Status, out.Err, out.ArtifactDir = status, ferr, artifactDir
 		errStr := ""
 		if ferr != nil {
 			errStr = ferr.Error()
 		}
+
+		if artifactDir != "" && ws != "" {
+			g := Grading{
+				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+			}
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
+				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
+				// Events are the only artifact scoring and resume read back;
+				// losing them must not be recorded as a completed
+				// measurement (StatusOK/StatusFailed), or a later resume
+				// silently degrades to Unknown with nothing durable to show
+				// why. A run already recorded as an error or timeout stays
+				// that way — it is retried regardless, and overwriting its
+				// original error would lose the reason it actually failed.
+				if errors.Is(wErr, ErrEventsNotWritten) && (status == store.StatusOK || status == store.StatusFailed) {
+					status = store.StatusError
+					ferr = fmt.Errorf("runner: recording trajectory for %+v: %w", k, wErr)
+					errStr = ferr.Error()
+				}
+			}
+		}
+
+		out.Status, out.Err, out.ArtifactDir = status, ferr, artifactDir
 		fo := store.RunOutcome{
 			VerifierExit: out.VerifierExit,
 			InputTokens:  out.Meta.InputTokens,
@@ -84,15 +107,6 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		}
 		if err := r.o.Store.FinishRun(runID, fo); err != nil {
 			r.o.Logger("runner: finishing run %+v: %v", k, err)
-		}
-		if artifactDir != "" && ws != "" {
-			g := Grading{
-				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
-				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
-			}
-			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
-				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
-			}
 		}
 		return out
 	}
@@ -231,19 +245,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		if ferr != nil {
 			status, errStr = store.StatusError, ferr.Error()
 		}
-		fo := store.RunOutcome{
-			InputTokens:  po.Meta.InputTokens,
-			OutputTokens: po.Meta.OutputTokens,
-			DurationMS:   po.Meta.DurationMS,
-			AgentVersion: po.Meta.AgentVersion,
-			RateLimited:  po.Meta.RateLimited,
-			Status:       status,
-			Error:        errStr,
-			ArtifactDir:  artifactDir,
-		}
-		if err := r.o.Store.FinishRun(runID, fo); err != nil {
-			r.o.Logger("runner: finishing probe %+v: %v", k, err)
-		}
+
 		if artifactDir != "" && ws != "" {
 			g := Grading{
 				Key: k, Meta: po.Meta, Status: status, Error: errStr,
@@ -256,7 +258,29 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 			skipDirs := []string{a.Caps().SkillDir}
 			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
 				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
+				// Same rule as executeRun: a probe's events are the only
+				// evidence resumeProbeOutcome can recover, so losing them
+				// must not be recorded as a completed measurement.
+				if errors.Is(wErr, ErrEventsNotWritten) && status == store.StatusOK {
+					status = store.StatusError
+					ferr = fmt.Errorf("runner: recording trajectory for probe %+v: %w", k, wErr)
+					errStr = ferr.Error()
+				}
 			}
+		}
+
+		fo := store.RunOutcome{
+			InputTokens:  po.Meta.InputTokens,
+			OutputTokens: po.Meta.OutputTokens,
+			DurationMS:   po.Meta.DurationMS,
+			AgentVersion: po.Meta.AgentVersion,
+			RateLimited:  po.Meta.RateLimited,
+			Status:       status,
+			Error:        errStr,
+			ArtifactDir:  artifactDir,
+		}
+		if err := r.o.Store.FinishRun(runID, fo); err != nil {
+			r.o.Logger("runner: finishing probe %+v: %v", k, err)
 		}
 		po.Err = ferr
 		if ferr != nil {
