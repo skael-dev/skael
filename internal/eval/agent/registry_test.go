@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -73,12 +74,8 @@ func TestRegistry_UnparsableAdaptersCannotClaimSkillInvocation(t *testing.T) {
 	// in that stream. Claiming SupportsSkillInvocation: true for an adapter
 	// returning ErrParseNotImplemented would silently zero the trigger-measurement
 	// metric, which is the highest-weighted scoring pillar.
-	for _, name := range []string{"codex", "opencode", "cursor"} {
-		a, ok := agent.Get(name)
-		if !ok {
-			t.Fatalf("adapter %q not registered", name)
-		}
-		_, err := a.Parse(nil)
+	for _, a := range agent.All() {
+		_, err := a.Parse(strings.NewReader(""))
 		if err == agent.ErrParseNotImplemented && a.Caps().SupportsSkillInvocation {
 			t.Errorf("%s: cannot parse (ErrParseNotImplemented) but claims SupportsSkillInvocation=true", a.Name())
 		}
