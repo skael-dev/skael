@@ -1,9 +1,12 @@
-// Package lint validates a generated or imported skill bundle. Two layers, both
-// deterministic: spec conformance (does this satisfy the Agent Skills format)
-// and quality (is it written the way skills that actually work are written).
+// Package lint validates a generated or imported skill bundle. Three layers,
+// all deterministic: spec conformance (does this satisfy the Agent Skills
+// format), quality (is it written the way skills that actually work are
+// written), and injection (does it carry a security risk).
 //
 // Conformance delegates to internal/skill's validator rather than restating its
 // rules, so a bundle cannot pass lint here and fail compliance at publish.
+// Injection delegates to internal/scan rather than defining a second pattern
+// set, for the same reason.
 package lint
 
 // Severity classifies how serious a finding is.
@@ -81,16 +84,5 @@ func Run(bundleDir string) (*Result, error) {
 	return res, nil
 }
 
-// Quality checks whether a bundle reads the way skills that actually work are
-// written: instruction structure, checkpoint discipline, and similar style
-// signals beyond spec conformance. The real implementation lands with the
-// quality layer.
-func Quality(_ string) ([]Finding, error) {
-	return nil, nil
-}
-
-// Injection scans a bundle's instructions for prompt-injection risk. The real
-// implementation lands with the quality layer.
-func Injection(_ string) ([]Finding, error) {
-	return nil, nil
-}
+// Quality and Injection are defined in quality.go and injection.go
+// respectively.
