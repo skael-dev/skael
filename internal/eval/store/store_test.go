@@ -34,20 +34,6 @@ func sampleSpec() *spec.SkillSpec {
 	}
 }
 
-// demoSpec is a minimal valid spec named "demo", used by tests that need a
-// skill name matching the "demo" skill used elsewhere (e.g. eval_test.go's
-// newEval helper), distinct from sampleSpec's "pdf-extract".
-func demoSpec() *spec.SkillSpec {
-	return &spec.SkillSpec{
-		Name:        "demo",
-		Purpose:     "Demo skill for store tests.",
-		Description: "A minimal skill used to exercise the store.",
-		Triggers:    []spec.TriggerPhrase{{Text: "do the demo"}},
-		Steps:       []spec.Step{{ID: "s1", Action: "run it", Postcondition: "out/ exists"}},
-		TargetTier:  spec.TierMid,
-	}
-}
-
 func TestOpen_CreatesLayoutAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 
