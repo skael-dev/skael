@@ -19,6 +19,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/llm"
+	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
@@ -388,9 +389,20 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return ""
 	}
 
+	// cliVersion is the same probe `whetstone doctor` reports as
+	// AgentCLIVersion: the version of the agent CLI actually on this host's
+	// PATH. Recorded on every panel member so Report.Comparable can tell a CLI
+	// upgrade between two runs from a change in the skill — without it, every
+	// report asserted an empty CLIVersion and two runs made with different CLI
+	// builds compared as identical.
+	var cliVersion string
+	if bin, err := agentcli.Detect(); err == nil {
+		cliVersion = probeVersion(bin)
+	}
+
 	var modelPanelOut []report.PanelMember
 	for _, m := range panel {
-		modelPanelOut = append(modelPanelOut, report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class)})
+		modelPanelOut = append(modelPanelOut, report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion})
 	}
 
 	// taskAgg accumulates the per-task carriers (conditions, drift, judge
@@ -428,7 +440,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			continue
 		}
 		mi := report.MemberInput{
-			Member:  report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class)},
+			Member:  report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion},
 			Healthy: healthy[m],
 			Detail:  healthDetail[m],
 		}

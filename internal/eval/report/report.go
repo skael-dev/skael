@@ -226,6 +226,8 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 		return false, fmt.Sprintf("different tiers (%s and %s): a smoke score and a full score are not the same measurement", r.Tier, o.Tier)
 	case !samePanel(r.ModelPanel, o.ModelPanel):
 		return false, "different model panels: a score change could be the models rather than the skill"
+	case !sameCLIVersions(r.ModelPanel, o.ModelPanel):
+		return false, "different agent CLI versions on the panel: a score change could be the CLI rather than the skill"
 	case r.PanelComplete != o.PanelComplete:
 		return false, "one panel was incomplete, so its minimum was taken over fewer members"
 	case r.UpliftSource != o.UpliftSource:
@@ -254,6 +256,34 @@ func sortedKeys(ms []PanelMember) []string {
 	out := make([]string, len(ms))
 	for i, m := range ms {
 		out[i] = m.Agent + "\x00" + m.Model + "\x00" + m.Class
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameCLIVersions compares the CLIVersion recorded against each panel member,
+// as a sorted multiset alongside samePanel's identity check — order is a
+// planner implementation detail, not a fact about the panel. Called only
+// after samePanel has already confirmed the two panels have the same
+// members, so a mismatch here means the same members were measured with
+// different agent CLI builds.
+func sameCLIVersions(a, b []PanelMember) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := sortedVersions(a), sortedVersions(b)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedVersions(ms []PanelMember) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.CLIVersion
 	}
 	sort.Strings(out)
 	return out

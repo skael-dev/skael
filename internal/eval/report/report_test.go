@@ -181,6 +181,22 @@ func TestComparable_RequiresTheSameSuiteAndPanel(t *testing.T) {
 	}
 }
 
+func TestComparable_DifferentCLIVersionsAreNotComparable(t *testing.T) {
+	// The panel's CLIVersion is the real capture of "which build of the agent
+	// CLI ran this" (doctor calls the same thing AgentCLIVersion). A score
+	// change could be the CLI rather than the skill, so two reports differing
+	// only there must not be reported as measuring the same thing.
+	a, b := demoReport(), demoReport()
+	b.ModelPanel[0].CLIVersion = "2.2.0"
+	ok, why := a.Comparable(b)
+	if ok {
+		t.Error("reports with different agent CLI versions reported as comparable")
+	}
+	if !strings.Contains(why, "CLI version") {
+		t.Errorf("reason = %q, want it to name the CLI version", why)
+	}
+}
+
 func TestComparable_IgnoresWhatDoesNotAffectTheMeasurement(t *testing.T) {
 	a, b := demoReport(), demoReport()
 	b.SpecVersion = 4
