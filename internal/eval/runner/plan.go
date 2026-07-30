@@ -7,6 +7,7 @@ package runner
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -105,6 +106,24 @@ func ParsePanel(agents, models []string) (Panel, error) {
 			p = append(p, Member{Agent: a, Model: m, Class: class})
 		}
 	}
+
+	// A panel is only useful if it can back both the panel-minimum gate and
+	// RobustnessGap, and both need a strong member and a floor member. Rather
+	// than invent a cleverer class assignment, the panel validates itself: a
+	// single-model panel, or a multi-agent panel given only one model, would
+	// otherwise silently produce an all-strong panel with no error at all.
+	seen := map[spec.ModelTier]bool{}
+	for _, m := range p {
+		seen[m.Class] = true
+	}
+	if !seen[spec.TierStrong] || !seen[spec.TierFloor] {
+		missing := spec.TierFloor
+		if !seen[spec.TierStrong] {
+			missing = spec.TierStrong
+		}
+		return nil, fmt.Errorf("runner: panel has no %s member (agents=%v, models=%v); the panel minimum and the robustness gap both need a strong member and a floor member to mean anything — pass a second model to get a floor member",
+			missing, agents, models)
+	}
 	return p, nil
 }
 
@@ -155,7 +174,47 @@ func BuildPlan(t Tier, p Panel, s *suite.Suite, void map[string]bool) (*Plan, er
 		return nil, fmt.Errorf("runner: tier %s needs %d eligible tasks, the suite has %d (void or holdout tasks are excluded); regenerate the suite or run a smaller tier",
 			t, b.Tasks, len(eligible))
 	}
-	eligible = eligible[:b.Tasks]
+
+	var selected []suite.TaskPkg
+	if b.DevOnly {
+		selected = eligible[:b.Tasks]
+	} else {
+		// A plain ID-order prefix would keep whichever split happens to sort
+		// first and could starve the other — in particular, silently select
+		// zero holdout tasks. The reported score of an eval *is* the holdout
+		// score, so holdout gets its own reserved share of the budget,
+		// mirroring the fraction Suite.Split itself uses, with the same
+		// max(1, ...) floor and for the same reason: no holdout tasks means
+		// no reportable result at all.
+		var dev, holdout []suite.TaskPkg
+		for _, task := range eligible {
+			if task.Split == "holdout" {
+				holdout = append(holdout, task)
+			} else {
+				dev = append(dev, task)
+			}
+		}
+		holdoutN := int(math.Round(0.3 * float64(b.Tasks)))
+		if holdoutN < 1 {
+			holdoutN = 1
+		}
+		devN := b.Tasks - holdoutN
+
+		if len(dev) < devN {
+			return nil, fmt.Errorf("runner: tier %s needs %d dev tasks, the suite has %d eligible dev tasks (void tasks excluded); regenerate the suite or run a smaller tier",
+				t, devN, len(dev))
+		}
+		if len(holdout) < holdoutN {
+			return nil, fmt.Errorf("runner: tier %s needs %d holdout tasks, the suite has %d eligible holdout tasks (void tasks excluded); regenerate the suite or run a smaller tier",
+				t, holdoutN, len(holdout))
+		}
+
+		selected = make([]suite.TaskPkg, 0, b.Tasks)
+		selected = append(selected, dev[:devN]...)
+		selected = append(selected, holdout[:holdoutN]...)
+		sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
+	}
+	eligible = selected
 
 	members := p
 	if b.PrimaryOnly {
