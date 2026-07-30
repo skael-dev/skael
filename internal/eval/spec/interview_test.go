@@ -57,9 +57,22 @@ func TestInterview_CritiqueSeesTheDraftAndItsValidationErrors(t *testing.T) {
 	// A draft missing postconditions must have those specific errors quoted into
 	// the critique prompt. Without them the second call is a re-roll rather than
 	// a repair, and it will reproduce the same defect.
+	//
+	// The word "postcondition" alone does not prove this: it appears in the
+	// critique prompt's static instructions and in the rendered draft's own
+	// field names (postcondition: "") regardless of whether errors are quoted.
+	// So this asserts on the header line the implementation writes only when
+	// there are errors to report, plus the exact per-step messages Validate()
+	// actually returns for this broken draft — tying the assertion to the
+	// draft's real defects rather than to a hardcoded or stale-looking string.
 	broken := fixture()
 	broken.Steps[0].Postcondition = ""
 	broken.Steps[1].Postcondition = ""
+
+	wantErrs := broken.Validate()
+	if len(wantErrs) == 0 {
+		t.Fatal("test setup bug: the broken draft is not actually invalid")
+	}
 
 	g := fake.New(mustJSON(t, broken), mustJSON(t, fixture()))
 
@@ -68,8 +81,15 @@ func TestInterview_CritiqueSeesTheDraftAndItsValidationErrors(t *testing.T) {
 	}
 
 	critique := g.Calls()[1].Prompt
-	if !strings.Contains(critique, "postcondition") {
-		t.Errorf("critique prompt does not quote the validation errors:\n%s", critique)
+
+	const header = "Validation of your draft reported these problems"
+	if !strings.Contains(critique, header) {
+		t.Errorf("critique prompt does not contain the validation-errors header %q:\n%s", header, critique)
+	}
+	for _, e := range wantErrs {
+		if !strings.Contains(critique, e.Error()) {
+			t.Errorf("critique prompt does not quote validation error %q:\n%s", e.Error(), critique)
+		}
 	}
 	if !strings.Contains(critique, broken.Purpose) {
 		t.Error("critique prompt does not include the draft")
@@ -89,13 +109,27 @@ func TestInterview_RejectsAnEmptyIntent(t *testing.T) {
 func TestInterview_StillFailsIfTheCritiquedSpecIsInvalid(t *testing.T) {
 	// Two rounds is the budget. If the result is still invalid the caller must
 	// hear about it rather than receive a spec that cannot be generated from.
+	//
+	// A bare "err != nil" would also pass for an unrelated failure (a parse
+	// error, say), which would prove nothing about this specific path. Both
+	// scripted responses are valid JSON here, so the only way Interview can
+	// return an error is the final-validity check — but the message is still
+	// asserted explicitly, and tied to the actual defect (no steps), so a
+	// regression that fired this error for the wrong reason would be caught.
 	broken := fixture()
 	broken.Steps = nil
 
 	g := fake.New(mustJSON(t, broken), mustJSON(t, broken))
 
-	if _, err := spec.Interview(context.Background(), g, "x"); err == nil {
+	_, err := spec.Interview(context.Background(), g, "x")
+	if err == nil {
 		t.Fatal("Interview returned an invalid spec without error")
+	}
+	if !strings.Contains(err.Error(), "still invalid after critique") {
+		t.Errorf("error does not report that the critiqued spec is still invalid: %v", err)
+	}
+	if !strings.Contains(err.Error(), "at least one step") {
+		t.Errorf("error does not name the actual defect (missing steps): %v", err)
 	}
 }
 
