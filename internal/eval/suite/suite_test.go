@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
@@ -125,8 +126,17 @@ func TestSplit_HoldoutIsNonEmptyForSmallSuites(t *testing.T) {
 // TestSplit_PartitionsWithoutDroppingOrDuplicating asserts the split is a
 // genuine partition, not just a count that happens to add up. A
 // counting-only assertion (dev==7, holdout==3) would still pass even if a
-// task were silently dropped and another duplicated across both sets, which
-// would quietly shrink the suite and corrupt the holdout guarantee.
+// task were silently dropped (landing in neither set) or duplicated
+// (counted in a set more than once), which would quietly shrink or
+// double-count the suite and corrupt the holdout guarantee.
+//
+// This walks every task and requires its Split to be exactly "dev" or
+// "holdout" (a dropped task, left with Split == "" or anything else, fails
+// immediately here — checking presence in s.Tasks would not catch this,
+// since Split never removes entries from the slice, only sets a field on
+// them), tracks per-set membership to catch a task recorded twice within
+// one set, and finally checks the union of dev+holdout IDs is exactly the
+// original ID set — neither short nor long.
 func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
 	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
 	if err != nil {
@@ -134,25 +144,49 @@ func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
 	}
 	s.Split(99)
 
-	original := make(map[string]bool)
+	original := make(map[string]bool, len(s.Tasks))
 	for _, task := range s.Tasks {
 		original[task.ID] = true
 	}
 
-	seen := make(map[string]string) // id -> split
+	dev := make(map[string]bool)
+	holdout := make(map[string]bool)
 	for _, task := range s.Tasks {
-		if prevSplit, ok := seen[task.ID]; ok {
-			t.Fatalf("task %s appears more than once (splits %q and %q)", task.ID, prevSplit, task.Split)
+		switch task.Split {
+		case "dev":
+			if dev[task.ID] {
+				t.Fatalf("task %s appears more than once in dev", task.ID)
+			}
+			dev[task.ID] = true
+		case "holdout":
+			if holdout[task.ID] {
+				t.Fatalf("task %s appears more than once in holdout", task.ID)
+			}
+			holdout[task.ID] = true
+		default:
+			t.Fatalf("task %s has split %q, want exactly one of dev or holdout — a dropped task "+
+				"lands here with an empty or stray value", task.ID, task.Split)
 		}
-		seen[task.ID] = task.Split
+		if dev[task.ID] && holdout[task.ID] {
+			t.Fatalf("task %s is recorded in both dev and holdout", task.ID)
+		}
 	}
 
-	if len(seen) != len(original) {
-		t.Fatalf("union of dev+holdout has %d tasks, want %d — a task was dropped", len(seen), len(original))
+	union := make(map[string]bool, len(dev)+len(holdout))
+	for id := range dev {
+		union[id] = true
+	}
+	for id := range holdout {
+		union[id] = true
+	}
+
+	if len(union) != len(original) {
+		t.Fatalf("union of dev+holdout has %d distinct tasks, want %d (the original set) — a task "+
+			"was dropped or duplicated", len(union), len(original))
 	}
 	for id := range original {
-		if _, ok := seen[id]; !ok {
-			t.Errorf("task %s from the original set is missing from the split", id)
+		if !union[id] {
+			t.Errorf("task %s from the original set is missing from dev/holdout", id)
 		}
 	}
 }
@@ -258,6 +292,152 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 	if mutatedT0.Kind != "mutated" {
 		t.Errorf("Kind = %q after mutating meta.yaml's kind tag, want %q — the field is not "+
 			"actually carried by that tag", mutatedT0.Kind, "mutated")
+	}
+}
+
+// TestWriteAndLoad_RoundTripsEveryTaskField is the field-by-field audit: every
+// TaskPkg field and every TriggerSet field is set to a distinguishable,
+// non-zero value and checked for exact content after a Write/Load round
+// trip, not just presence or length. A silently-lost field in the on-disk
+// task package mis-scores a later sandbox run rather than erroring, so a
+// count- or existence-only assertion (as the layout test above uses) is not
+// enough on its own.
+func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
+	s := &suite.Suite{
+		Tasks: []suite.TaskPkg{
+			{
+				ID:       "custom-task",
+				Kind:     "edge",
+				Split:    "holdout",
+				PromptMD: "# Prompt\n\nDo the thing precisely.\n",
+				EnvFrag:  "FROM ubuntu:24.04\nRUN apt-get update\n",
+				Oracle:   "#!/bin/sh\necho solved > solved.txt\nexit 0\n",
+				Verifier: "#!/bin/sh\ntest -f solved.txt\n",
+			},
+		},
+		Triggers: suite.TriggerSet{
+			Positive: []string{"positive one", "positive two"},
+			Negative: []string{"negative one", "negative two"},
+		},
+	}
+
+	dir := t.TempDir()
+	if err := s.Write(dir); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, err := suite.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Tasks) != 1 {
+		t.Fatalf("loaded %d tasks, want 1", len(got.Tasks))
+	}
+
+	want := s.Tasks[0]
+	loaded := got.Tasks[0]
+
+	if loaded.ID != want.ID {
+		t.Errorf("ID = %q, want %q", loaded.ID, want.ID)
+	}
+	if loaded.Kind != want.Kind {
+		t.Errorf("Kind = %q, want %q", loaded.Kind, want.Kind)
+	}
+	if loaded.Split != want.Split {
+		t.Errorf("Split = %q, want %q", loaded.Split, want.Split)
+	}
+	if loaded.PromptMD != want.PromptMD {
+		t.Errorf("PromptMD = %q, want %q", loaded.PromptMD, want.PromptMD)
+	}
+	if loaded.EnvFrag != want.EnvFrag {
+		t.Errorf("EnvFrag = %q, want %q", loaded.EnvFrag, want.EnvFrag)
+	}
+	if loaded.Oracle != want.Oracle {
+		t.Errorf("Oracle = %q, want %q", loaded.Oracle, want.Oracle)
+	}
+	if loaded.Verifier != want.Verifier {
+		t.Errorf("Verifier = %q, want %q", loaded.Verifier, want.Verifier)
+	}
+
+	if !reflect.DeepEqual(got.Triggers.Positive, s.Triggers.Positive) {
+		t.Errorf("Triggers.Positive = %v, want %v", got.Triggers.Positive, s.Triggers.Positive)
+	}
+	if !reflect.DeepEqual(got.Triggers.Negative, s.Triggers.Negative) {
+		t.Errorf("Triggers.Negative = %v, want %v", got.Triggers.Negative, s.Triggers.Negative)
+	}
+}
+
+// TestWriteAndLoad_RoundTripsEnvFrag covers EnvFrag specifically: the on-disk
+// layout only writes environment/Dockerfile.frag when EnvFrag is non-empty,
+// so both the non-empty and the empty case need their own assertions, and
+// the non-empty case needs proof that Load is actually reading that exact
+// file rather than happening to return the right string some other way.
+func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
+	const frag = "FROM ubuntu:24.04\nRUN apt-get update\n"
+
+	s := &suite.Suite{Tasks: []suite.TaskPkg{
+		{ID: "with-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v", EnvFrag: frag},
+		{ID: "without-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v"},
+	}}
+
+	dir := t.TempDir()
+	if err := s.Write(dir); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	envPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag")
+	if _, err := os.Stat(envPath); err != nil {
+		t.Fatalf("environment fragment not written for a task with non-empty EnvFrag: %v", err)
+	}
+	// A task with an empty EnvFrag must get no environment/ directory at all —
+	// not an empty stray file, no directory.
+	noEnvDir := filepath.Join(dir, "tasks", "without-env", "environment")
+	if _, err := os.Stat(noEnvDir); !os.IsNotExist(err) {
+		t.Fatalf("environment/ was written for a task with an empty EnvFrag (stat err = %v)", err)
+	}
+
+	got, err := suite.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	byID := make(map[string]suite.TaskPkg, len(got.Tasks))
+	for _, task := range got.Tasks {
+		byID[task.ID] = task
+	}
+
+	if byID["with-env"].EnvFrag != frag {
+		t.Errorf("EnvFrag = %q after round trip, want %q", byID["with-env"].EnvFrag, frag)
+	}
+	if byID["without-env"].EnvFrag != "" {
+		t.Errorf("EnvFrag = %q for a task that never had one, want empty", byID["without-env"].EnvFrag)
+	}
+
+	// Discrimination: prove the round trip depends on the exact path
+	// environment/Dockerfile.frag, rather than the assertion above passing by
+	// accident (e.g. EnvFrag defaulting to the zero value that happens to be
+	// empty and the non-empty case being read from somewhere else). Rename
+	// the file the layout doc says Load must read, and confirm the round
+	// trip now comes back empty instead of quietly finding the content
+	// elsewhere.
+	mutatedPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag.bak")
+	if err := os.Rename(envPath, mutatedPath); err != nil {
+		t.Fatalf("renaming fragment for the discrimination check: %v", err)
+	}
+
+	mutated, err := suite.Load(dir)
+	if err != nil {
+		t.Fatalf("Load after renaming the fragment: %v", err)
+	}
+	var mutatedFrag string
+	for _, task := range mutated.Tasks {
+		if task.ID == "with-env" {
+			mutatedFrag = task.EnvFrag
+		}
+	}
+	if mutatedFrag != "" {
+		t.Errorf("EnvFrag = %q after moving environment/Dockerfile.frag away, want empty — Load "+
+			"must depend on that exact path, not incidentally recover the content some other way",
+			mutatedFrag)
 	}
 }
 
