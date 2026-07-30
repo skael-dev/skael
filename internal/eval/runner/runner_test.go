@@ -69,6 +69,12 @@ type fakeAdapter struct {
 	// alwaysRateLimited makes every invocation report a rate limit, so the
 	// retry-exhaustion path is exercised without a real 429 that never lets up.
 	alwaysRateLimited atomic.Bool
+	// failOnce, when true, makes exactly the next Invoke call fail and then
+	// clears itself atomically — CompareAndSwap rather than a plain bool field
+	// so concurrent workers racing to invoke never see (or write) it
+	// unsynchronized, and exactly one session fails regardless of scheduling,
+	// not "whichever session happens to land inside a sleep window."
+	failOnce atomic.Bool
 }
 
 func (f *fakeAdapter) Name() string { return "claude-code" }
@@ -100,6 +106,9 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 		hasOracle:  hasOracleFile(ws),
 	})
 	f.mu.Unlock()
+	if f.failOnce.CompareAndSwap(true, false) {
+		return nil, errors.New("boom")
+	}
 	if f.invokeErr != nil {
 		return nil, f.invokeErr
 	}
@@ -538,23 +547,28 @@ func TestExecute_ACancelledDriverRunIsRecordedAsErrorNotFailed(t *testing.T) {
 
 func TestExecute_AFailingSessionDoesNotAbortTheEval(t *testing.T) {
 	h := newHarness(t)
-	var n atomic.Int32
-	h.driver.onRun = func(sandbox.RunSpec) {
-		if n.Add(1) == 1 {
-			// one broken run, everything else fine
-			h.adapter.invokeErr = errors.New("boom")
-			go func() { time.Sleep(10 * time.Millisecond); h.adapter.invokeErr = nil }()
-		}
-	}
+	// failOnce fails exactly the next Invoke call, atomically, so exactly one
+	// session breaks regardless of how the runner schedules its concurrent
+	// workers — not "whichever session happens to invoke inside a sleep
+	// window," which is timing-dependent and races the same field against
+	// every other concurrent Invoke.
+	h.adapter.failOnce.Store(true)
 
 	res, err := h.run(context.Background())
 	if err != nil {
 		t.Fatalf("one failed session aborted the eval: %v", err)
 	}
-	// Fifty-nine usable sessions and one recorded failure is a result. Zero
-	// sessions and an error is fifty-nine wasted.
 	if len(res.Outcomes) == 0 {
 		t.Error("no outcomes survived a single failed session")
+	}
+	var errored int
+	for _, o := range res.Outcomes {
+		if o.Status == store.StatusError {
+			errored++
+		}
+	}
+	if errored != 1 {
+		t.Errorf("errored outcomes = %d, want exactly 1 (one broken session, everything else fine)", errored)
 	}
 }
 
