@@ -179,6 +179,40 @@ func TestConformance_InvalidUTF8IsAnError(t *testing.T) {
 	}
 }
 
+func TestConformance_LinkFragmentsAndQueriesAreNotBroken(t *testing.T) {
+	// A link into a heading, or with a cache-busting query string, still
+	// points at a file that exists — the #fragment and ?query are not part
+	// of the filesystem path and must be stripped before the existence
+	// check, not treated as making the whole target unresolvable.
+	dir := writeBundle(t, "pdf-extract", map[string]string{
+		"SKILL.md": goodSkill +
+			"\nSee [a](references/doc.md#section), [b](references/doc.md?v=2)," +
+			" and [c](references/doc.md?v=2#section).\n",
+		"references/doc.md":   "# Doc\n",
+		"scripts/extract.py":  "x",
+		"scripts/validate.py": "x",
+	})
+	got, err := lint.Conformance(dir)
+	if err != nil {
+		t.Fatalf("Conformance: %v", err)
+	}
+	if hasRule(got, "broken-link") {
+		t.Errorf("existing file with #fragment/?query suffix reported as broken: %v", got)
+	}
+}
+
+func TestConformance_LinkFragmentOnMissingFileIsStillBroken(t *testing.T) {
+	// Stripping the suffix must not blind the rule: a genuinely missing file
+	// is still broken even when the link also names a fragment.
+	dir := writeBundle(t, "pdf-extract", map[string]string{
+		"SKILL.md": goodSkill + "\nSee [a](references/missing.md#section).\n",
+	})
+	got, _ := lint.Conformance(dir)
+	if !hasRule(got, "broken-link") {
+		t.Errorf("no broken-link finding for a missing file with a #fragment: %v", rules(got))
+	}
+}
+
 func TestConformance_DelegatesToValidateSpec(t *testing.T) {
 	// The point of calling skill.ValidateSpec instead of reimplementing its
 	// rules is that conformance and the registry's publish-time compliance
@@ -214,6 +248,68 @@ func TestConformance_DelegatesToValidateSpec(t *testing.T) {
 	const wantSubstr = `frontmatter name "something-else" differs from skill name "pdf-extract"`
 	if !strings.Contains(found.Message, wantSubstr) {
 		t.Errorf("spec-warning message = %q, want it to contain skill.ValidateSpec's exact wording %q", found.Message, wantSubstr)
+	}
+}
+
+func TestConformance_FileSymlinkIsNotFollowed(t *testing.T) {
+	dir := writeBundle(t, "pdf-extract", map[string]string{
+		"SKILL.md":            goodSkill,
+		"scripts/extract.py":  "x",
+		"scripts/validate.py": "x",
+	})
+
+	// A file outside the bundle with invalid UTF-8 content. If the linter
+	// ever follows a symlink, this content would incorrectly surface as an
+	// invalid-utf8 finding attributed to a file inside the bundle.
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte{0xff, 0xfe, 0x00}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "scripts", "linked.py")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks not supported on this filesystem: %v", err)
+	}
+
+	got, err := lint.Conformance(dir)
+	if err != nil {
+		t.Fatalf("Conformance: %v", err)
+	}
+	if !hasRule(got, "symlink-not-allowed") {
+		t.Errorf("no symlink-not-allowed finding: %v", rules(got))
+	}
+	for _, f := range got {
+		if f.Rule == "invalid-utf8" {
+			t.Errorf("symlink target's content was read despite the symlink: %+v", f)
+		}
+	}
+}
+
+func TestConformance_SymlinkedSkillMDIsNotFollowed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pdf-extract")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A file outside the bundle that, if read, would produce a
+	// name-dir-mismatch finding ("secret" != "pdf-extract") — proof the
+	// linter never opened it.
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("---\nname: secret\ndescription: leaked\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "SKILL.md")); err != nil {
+		t.Skipf("symlinks not supported on this filesystem: %v", err)
+	}
+
+	got, err := lint.Conformance(dir)
+	if err != nil {
+		t.Fatalf("Conformance: %v", err)
+	}
+	if !hasRule(got, "symlink-not-allowed") {
+		t.Errorf("no symlink-not-allowed finding for a symlinked SKILL.md: %v", rules(got))
+	}
+	if hasRule(got, "name-dir-mismatch") {
+		t.Errorf("symlinked SKILL.md's target content was read: %v", got)
 	}
 }
 

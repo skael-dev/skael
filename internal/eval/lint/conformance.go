@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -16,6 +17,16 @@ import (
 // kebab-case characters. This is stricter than the registry's own name rule,
 // which additionally allows colons for namespacing — a namespaced registry
 // name is not a spec-compliant skill name.
+//
+// This is a third copy of the same character class: internal/skill's
+// specKebab and internal/eval/spec's specName are both unexported, so neither
+// can be imported here. internal/eval/spec.SkillSpec.Validate can't be
+// reused as a probe either — it validates SkillSpec.DirName(), which strips
+// everything up to and including a ':' before checking, so it silently
+// accepts "superpowers:brainstorming" (the exact registry-namespaced input
+// this rule exists to reject). If the character class ever changes, check
+// internal/skill/archive.go's specKebab and internal/eval/spec/validate.go's
+// specName too.
 var specName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // mdLink extracts the target of a markdown link: [text](target).
@@ -25,6 +36,17 @@ var mdLink = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
 // mailto links, and same-document anchors. Linting is offline and
 // deterministic, so these are never checked for existence.
 var externalLink = regexp.MustCompile(`^(https?:|mailto:|#)`)
+
+// stripLinkSuffix removes a trailing #fragment or ?query from a relative
+// link target before it is resolved on disk — "doc.md#section" and
+// "doc.md?v=2" both link to doc.md, and neither suffix is part of a
+// filesystem path.
+func stripLinkSuffix(target string) string {
+	if i := strings.IndexAny(target, "#?"); i >= 0 {
+		return target[:i]
+	}
+	return target
+}
 
 // knownFrontmatterKeys are the top-level keys the Agent Skills spec and
 // skael's registry both understand. Anything else is a warning, not an
@@ -50,7 +72,12 @@ func Conformance(bundleDir string) ([]Finding, error) {
 	var findings []Finding
 
 	skillPath := filepath.Join(bundleDir, "SKILL.md")
-	raw, err := os.ReadFile(skillPath)
+
+	// Lstat rather than Stat: a symlinked SKILL.md must not be read, since its
+	// target can point anywhere the process can reach. Lstat also reports a
+	// dangling symlink's own entry (not an error following it), which is
+	// treated the same as any other symlink below.
+	skillInfo, err := os.Lstat(skillPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			findings = append(findings, Finding{
@@ -63,6 +90,21 @@ func Conformance(bundleDir string) ([]Finding, error) {
 		}
 		return nil, fmt.Errorf("lint: reading SKILL.md: %w", err)
 	}
+	if skillInfo.Mode()&os.ModeSymlink != 0 {
+		findings = append(findings, symlinkFinding(bundleDir, skillPath))
+		return findings, nil
+	}
+
+	raw, err := os.ReadFile(skillPath)
+	if err != nil {
+		return nil, fmt.Errorf("lint: reading SKILL.md: %w", err)
+	}
+
+	symlinkFindings, err := checkSymlinks(bundleDir)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, symlinkFindings...)
 
 	utf8Findings, err := checkUTF8(bundleDir)
 	if err != nil {
@@ -100,14 +142,56 @@ func Conformance(bundleDir string) ([]Finding, error) {
 	return findings, nil
 }
 
-// checkUTF8 flags any file in the bundle whose bytes are not valid UTF-8.
+// checkSymlinks flags every file symlink in the bundle without following it.
+// skill.Unpack rejects symlinks outright when a bundle is packed for
+// publishing, so a symlinked file here is one that will be rejected anyway —
+// surfacing it during lint means the author learns about it while working on
+// the source tree, not after a failed publish. filepath.Walk already never
+// traverses into a symlinked directory, so this only needs to check the
+// entries it does visit.
+func checkSymlinks(bundleDir string) ([]Finding, error) {
+	var findings []Finding
+	err := filepath.Walk(bundleDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return nil
+		}
+		findings = append(findings, symlinkFinding(bundleDir, path))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return findings, nil
+}
+
+// symlinkFinding builds the finding for a symlinked bundle entry at path.
+func symlinkFinding(bundleDir, path string) Finding {
+	rel, err := filepath.Rel(bundleDir, path)
+	if err != nil {
+		rel = path
+	}
+	rel = filepath.ToSlash(rel)
+	return Finding{
+		Rule:     "symlink-not-allowed",
+		Severity: SeverityError,
+		File:     rel,
+		Message:  fmt.Sprintf("%s is a symlink; skill.Unpack rejects symlinks when the bundle is packed for publishing", rel),
+	}
+}
+
+// checkUTF8 flags any file in the bundle whose bytes are not valid UTF-8. It
+// never follows a symlink — checkSymlinks already reports those — since
+// reading through one would describe content that isn't part of the bundle.
 func checkUTF8(bundleDir string) ([]Finding, error) {
 	var findings []Finding
 	err := filepath.Walk(bundleDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		b, err := os.ReadFile(path)
@@ -148,13 +232,13 @@ func checkDescription(content string, fm map[string]interface{}) []Finding {
 			File:     "SKILL.md",
 			Message:  "frontmatter has no description",
 		}}
-	case len(desc) > 1024:
+	case len(desc) > spec.MaxDescription:
 		return []Finding{{
 			Rule:     "description-too-long",
 			Severity: SeverityError,
 			File:     "SKILL.md",
 			Line:     frontmatterKeyLine(content, "description"),
-			Message:  fmt.Sprintf("description is %d bytes, over the 1024-byte limit", len(desc)),
+			Message:  fmt.Sprintf("description is %d bytes, over the %d-byte limit", len(desc), spec.MaxDescription),
 		}}
 	}
 	return nil
@@ -172,13 +256,13 @@ func checkName(content string, fm map[string]interface{}, dirName string) []Find
 	var findings []Finding
 	line := frontmatterKeyLine(content, "name")
 
-	if !specName.MatchString(name) || len(name) > 64 {
+	if !specName.MatchString(name) || len(name) > spec.MaxName {
 		findings = append(findings, Finding{
 			Rule:     "name-not-spec-compliant",
 			Severity: SeverityError,
 			File:     "SKILL.md",
 			Line:     line,
-			Message:  fmt.Sprintf("name %q does not match the spec format (1-64 lowercase kebab-case)", name),
+			Message:  fmt.Sprintf("name %q does not match the spec format (1-%d lowercase kebab-case)", name, spec.MaxName),
 		})
 	}
 
@@ -234,7 +318,7 @@ func checkLinks(bundleDir, content string) []Finding {
 			if externalLink.MatchString(target) {
 				continue
 			}
-			resolved := filepath.Join(bundleDir, filepath.FromSlash(target))
+			resolved := filepath.Join(bundleDir, filepath.FromSlash(stripLinkSuffix(target)))
 			if _, err := os.Stat(resolved); err != nil {
 				findings = append(findings, Finding{
 					Rule:     "broken-link",
