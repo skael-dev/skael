@@ -2,11 +2,12 @@ package contract
 
 import (
 	"fmt"
+	stdpath "path"
 	"path/filepath"
 	"strings"
 )
 
-// MatchPath reports whether path satisfies pattern, under the small glob
+// MatchPath reports whether candidate satisfies pattern, under the small glob
 // dialect every Matcher.PathGlob and Matcher.PathNotGlob value in this
 // package is written in. Consumers evaluating a compiled Contract against a
 // trajectory must call MatchPath rather than path/filepath.Match directly:
@@ -17,7 +18,9 @@ import (
 // violation. MatchPath defines "/**" to mean "any path under here, at any
 // depth" instead.
 //
-// The dialect, and the choices this implementation makes explicit:
+// The full dialect, every behaviour it commits to, and the reasoning behind
+// each — so that a caller can predict MatchPath's result for any input from
+// this comment alone, without reading the implementation:
 //
 //   - A trailing "/**" matches recursively, at any depth: "out/**" matches
 //     "out/tables.csv", "out/tables/q1.csv", and "out/a/b/c.csv" alike.
@@ -29,16 +32,57 @@ import (
 //     crosses a "/": "out/*" matches "out/tables.csv" but not
 //     "out/tables/q1.csv". Only a trailing "/**" is recursive; a bare "*"
 //     is not made recursive by this package.
-//   - A leading "./" on path is stripped before matching, so "./out/x.csv"
-//     and "out/x.csv" are equivalent. Patterns are not similarly normalized:
-//     this package never compiles a pattern with a leading "./".
 //   - "**" is only meaningful as a whole path segment, and only as the
 //     pattern's final segment, immediately after a "/". Any other use —
 //     "a/**/b", "**/a", "a**b", a bare "**" with no preceding segment — is a
 //     malformed pattern and returns an error. A malformed pattern must not
 //     silently return false: a forbid rule that silently never matches is
 //     the inert-rule problem in a new disguise.
-func MatchPath(pattern, path string) (bool, error) {
+//   - candidate is lexically normalized with path.Clean before matching, so
+//     "." and ".." segments are resolved rather than compared literally: a
+//     leading "./" is stripped ("./out/x.csv" behaves as "out/x.csv"), and
+//     "out/../etc/passwd" is recognised as "etc/passwd" — outside out/, not
+//     inside it. Without this, a MUST-NOT scoped to "out/" would let a
+//     traversal write escape undetected: the worse of the two directions
+//     this package can get wrong, since a missed violation looks like a
+//     clean run rather than a run worth investigating. A path that still
+//     escapes its own relative root after normalizing — "../x",
+//     "out/../../x" — can never satisfy a relative pattern, so MatchPath
+//     reports no match: a MUST-NOT scoped to a subdirectory correctly flags
+//     it, and a MUST/step matcher correctly refuses to count it as done.
+//   - The dialect is POSIX ("/"-separated) only. A pattern or candidate
+//     containing a literal backslash is a reported error, never a silent
+//     false: this repository cross-compiles for windows/amd64, and a
+//     Windows-recorded trajectory's "\"-separated paths would otherwise
+//     fail every path rule silently — every forbid rule inert, every path
+//     step unsatisfied, and the resulting score merely wrong rather than
+//     visibly broken. Whichever component records or replays a Windows
+//     trajectory is responsible for converting to "/" first.
+//   - An absolute candidate ("/etc/passwd") is a reported error, not a
+//     quiet false. Every path this package's compiled patterns describe is
+//     workspace-relative, so an absolute candidate reaching MatchPath means
+//     something upstream already lost the workspace root; silently
+//     comparing it against a relative pattern would almost always report
+//     "no match" for the wrong reason — worth surfacing loudly rather than
+//     folding into the same "false" a legitimate out-of-scope path returns.
+//   - An empty pattern matches only a candidate that normalizes to the
+//     empty string — which none do, since path.Clean("") is "." and
+//     path.Clean never produces "" for any input. So in practice
+//     MatchPath("", candidate) is false for every candidate MatchPath
+//     accepts, including MatchPath("", ""). An empty candidate normalizes
+//     to "." (the current directory) and matches only a pattern that
+//     itself resolves to exactly ".".
+//   - Single-segment matching — the plain (non-"/**") case, and each fixed
+//     prefix segment of a recursive pattern — is filepath.Match underneath,
+//     unchanged. Its metacharacters ("*", "?", and a "[...]" character
+//     class) stay live in every segment. A pattern segment containing a
+//     literal "[" or "]" is parsed as a character class, not a literal
+//     bracket, so a real path segment containing the same literal bracket
+//     text will not match it unless the shapes coincide by accident (e.g.
+//     pattern segment "a.b[1]" matches path segment "a.b1", not "a.b[1]").
+//     This is inherited from filepath.Match unchanged, not something this
+//     package attempts to fix.
+func MatchPath(pattern, candidate string) (bool, error) {
 	segments := strings.Split(pattern, "/")
 	for i, seg := range segments {
 		if !strings.Contains(seg, "**") {
@@ -50,25 +94,42 @@ func MatchPath(pattern, path string) (bool, error) {
 		if i != len(segments)-1 {
 			return false, fmt.Errorf("contract: malformed pattern %q: %q is only meaningful as the final segment", pattern, "**")
 		}
+		if len(segments) == 1 {
+			return false, fmt.Errorf("contract: malformed pattern %q: %q needs a preceding path", pattern, "**")
+		}
 	}
 
-	path = strings.TrimPrefix(path, "./")
+	if strings.Contains(pattern, `\`) {
+		return false, fmt.Errorf("contract: pattern %q contains a backslash; this package's patterns are POSIX-style (\"/\"-separated) only", pattern)
+	}
+	if strings.Contains(candidate, `\`) {
+		return false, fmt.Errorf("contract: path %q contains a backslash; this package compares POSIX-style (\"/\"-separated) paths only", candidate)
+	}
+	if strings.HasPrefix(candidate, "/") {
+		return false, fmt.Errorf("contract: path %q is absolute; MatchPath compares workspace-relative paths only", candidate)
+	}
+
+	// Resolve "." and ".." lexically before matching, so a traversal like
+	// "out/../etc/passwd" is compared as "etc/passwd" rather than by its
+	// literal, misleading text.
+	clean := stdpath.Clean(candidate)
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		// Escapes its own relative root entirely: cannot satisfy any
+		// relative pattern this package compiles.
+		return false, nil
+	}
 
 	if segments[len(segments)-1] == "**" {
 		prefix := segments[:len(segments)-1]
-		if len(prefix) == 0 {
-			return false, fmt.Errorf("contract: malformed pattern %q: %q needs a preceding path", pattern, "**")
-		}
-
-		pathSegments := strings.Split(path, "/")
-		if len(pathSegments) <= len(prefix) {
+		cleanSegments := strings.Split(clean, "/")
+		if len(cleanSegments) <= len(prefix) {
 			// Either fewer segments than the prefix (can't match), or exactly
 			// the prefix's length — the bare directory itself, which "/**"
 			// deliberately does not match.
 			return false, nil
 		}
 		for i, seg := range prefix {
-			ok, err := filepath.Match(seg, pathSegments[i])
+			ok, err := filepath.Match(seg, cleanSegments[i])
 			if err != nil {
 				return false, fmt.Errorf("contract: pattern %q: %w", pattern, err)
 			}
@@ -79,7 +140,7 @@ func MatchPath(pattern, path string) (bool, error) {
 		return true, nil
 	}
 
-	ok, err := filepath.Match(pattern, path)
+	ok, err := filepath.Match(pattern, clean)
 	if err != nil {
 		return false, fmt.Errorf("contract: pattern %q: %w", pattern, err)
 	}

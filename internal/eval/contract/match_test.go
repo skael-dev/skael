@@ -99,3 +99,117 @@ func TestMatchPath_MalformedPatternsAreErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchPath_DotDotIsResolvedBeforeMatching is the missed-violation fix:
+// a traversal like "out/../etc/passwd" lexically resolves to "etc/passwd",
+// which is outside "out/". Before this fix, MatchPath split the raw string
+// on "/" without resolving "..", so "out/../etc/passwd" was compared
+// segment-by-segment and its leading "out" segment matched the "out/**"
+// prefix — reporting it as inside scope. That is worse than the recursive-
+// suffix bug this package fixed earlier: a false violation gets found on
+// investigation, a missed one — a misbehaving skill scoring clean — does
+// not.
+func TestMatchPath_DotDotIsResolvedBeforeMatching(t *testing.T) {
+	cases := []struct {
+		name        string
+		path        string
+		wantMatched bool
+	}{
+		// The core fix: escapes out/ via traversal, must NOT match.
+		{"traversal escapes scope", "out/../etc/passwd", false},
+		// Stays legitimately inside out/ after resolving "a/..": must still
+		// match, so normalizing ".." doesn't turn into over-eager rejection.
+		{"traversal stays in scope", "out/a/../b.csv", true},
+		// Escapes its own relative root entirely before even reaching "out".
+		{"escapes relative root", "../x", false},
+		// Same, via a compound traversal from inside out/.
+		{"compound escape", "out/../../x", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched, err := contract.MatchPath("out/**", tc.path)
+			if err != nil {
+				t.Fatalf("MatchPath(%q, %q): %v", "out/**", tc.path, err)
+			}
+			if matched != tc.wantMatched {
+				t.Errorf("MatchPath(%q, %q) = %v, want %v", "out/**", tc.path, matched, tc.wantMatched)
+			}
+		})
+	}
+}
+
+// TestMatchPath_BackslashIsAnError pins the POSIX-only decision: a pattern
+// or candidate containing a literal backslash is a reported error, never a
+// silent false. A silent false here would mean a Windows-recorded
+// trajectory's "\"-separated paths fail every path rule invisibly, since
+// this repository cross-compiles for windows/amd64.
+func TestMatchPath_BackslashIsAnError(t *testing.T) {
+	if _, err := contract.MatchPath("out/**", `out\tables\q1.csv`); err == nil {
+		t.Error(`MatchPath("out/**", "out\tables\q1.csv"): want an error, got nil`)
+	}
+	// A pattern with a backslash but no "**" at all, so this exercises only
+	// the backslash check, not the (separately tested) malformed-"**" check
+	// a pattern like "out\**" would also trip.
+	if _, err := contract.MatchPath(`out\tables.py`, "out/tables.csv"); err == nil {
+		t.Error(`MatchPath("out\tables.py", "out/tables.csv"): want an error, got nil`)
+	}
+}
+
+// TestMatchPath_AbsolutePathIsAnError pins the decision that an absolute
+// candidate is a reported error rather than a quiet false: every path this
+// package's patterns describe is workspace-relative, so an absolute
+// candidate means something upstream already lost the workspace root, which
+// is worth surfacing rather than silently folding into an ordinary mismatch.
+func TestMatchPath_AbsolutePathIsAnError(t *testing.T) {
+	if _, err := contract.MatchPath("out/**", "/etc/passwd"); err == nil {
+		t.Error(`MatchPath("out/**", "/etc/passwd"): want an error, got nil`)
+	}
+}
+
+// TestMatchPath_EmptyPatternAndPath pins the documented (if slightly
+// surprising) behaviour for empty inputs: path.Clean("") is ".", and
+// path.Clean never produces "" for any input, so an empty pattern never
+// matches any candidate MatchPath accepts — including MatchPath("", "").
+// An empty candidate is treated as "." and matches only a pattern that
+// itself resolves to exactly ".".
+func TestMatchPath_EmptyPatternAndPath(t *testing.T) {
+	matched, err := contract.MatchPath("", "")
+	if err != nil {
+		t.Fatalf(`MatchPath("", ""): %v`, err)
+	}
+	if matched {
+		t.Error(`MatchPath("", "") = true, want false (an empty candidate normalizes to ".", which an empty pattern does not match)`)
+	}
+
+	matched, err = contract.MatchPath("out/**", "")
+	if err != nil {
+		t.Fatalf(`MatchPath("out/**", ""): %v`, err)
+	}
+	if matched {
+		t.Error(`MatchPath("out/**", "") = true, want false (an empty candidate normalizes to ".", not something inside out/)`)
+	}
+
+	matched, err = contract.MatchPath(".", "")
+	if err != nil {
+		t.Fatalf(`MatchPath(".", ""): %v`, err)
+	}
+	if !matched {
+		t.Error(`MatchPath(".", "") = false, want true (both sides normalize to ".")`)
+	}
+}
+
+// TestMatchPath_LiteralBracketInPathSegment pins a known, inherited
+// limitation rather than fixing it: single-segment matching is
+// filepath.Match underneath, so "[" and "]" in a pattern segment are parsed
+// as a character class, not literal brackets. A real path segment
+// containing the same literal bracket text does not match its own literal
+// text back.
+func TestMatchPath_LiteralBracketInPathSegment(t *testing.T) {
+	matched, err := contract.MatchPath("out/a.b[1]/x.csv", "out/a.b[1]/x.csv")
+	if err != nil {
+		t.Fatalf("MatchPath: %v", err)
+	}
+	if matched {
+		t.Error(`MatchPath("out/a.b[1]/x.csv", "out/a.b[1]/x.csv") = true, want false (documented filepath.Match-inherited limitation: "[1]" is a character class, not a literal bracket)`)
+	}
+}
