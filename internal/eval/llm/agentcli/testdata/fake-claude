@@ -46,4 +46,19 @@ case "${FAKE_CLAUDE_MODE:-ok}" in
     # shape, always failing so the test can count retry attempts.
     printf '%s\n' '{"subtype":"success","is_error":true,"result":"API Error: 429 Too Many Requests. Please retry after a short wait."}'
     ;;
+  bad_model)
+    # A permanent failure: a typo'd flag or bad --model value, not an
+    # infrastructure fault. The process itself exits non-zero, but nothing
+    # in the result is a genuine transient signal, so this must never be
+    # retried no matter how many attempts remain.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"Error: unrecognized model \"claude-typo-9\". Check --model and try again."}'
+    exit 1
+    ;;
+  quoted_error)
+    # A refusal whose prose quotes the infrastructure-error shape without
+    # actually being one: the API Error text is not the first thing in the
+    # result, so the anchored classifier must not mistake it for the real
+    # thing.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"Our support docs say: \"API Error: 503\" typically means your proxy is misconfigured; this has nothing to do with your request, which I am declining for policy reasons."}'
+    ;;
 esac

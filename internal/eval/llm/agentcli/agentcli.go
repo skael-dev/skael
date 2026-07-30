@@ -88,13 +88,17 @@ type envelope struct {
 }
 
 // cliFailure is returned when the envelope or the process itself reports
-// failure. exitedNonZero records whether the process exited non-zero, which
-// distinguishes an actual infrastructure fault from a policy refusal the CLI
-// still treats as a handled, successful invocation (and so exits zero for) —
-// the two need different retry treatment, and only cliFailure carries enough
-// information for isTransient to tell them apart.
+// failure. result is the trimmed CLI result text, kept separate from msg so
+// isTransient can anchor on where the CLI's own text actually begins rather
+// than on a string that already has an "agentcli: call failed: " prefix
+// glued to the front of it. exitedNonZero records whether the process
+// exited non-zero: a bad flag or bad --model value also exits non-zero, so
+// this is corroborating evidence for isTransient, never sufficient by
+// itself — otherwise a permanent misconfiguration gets retried forever for
+// an answer that will never change.
 type cliFailure struct {
 	msg           string
+	result        string
 	exitedNonZero bool
 }
 
@@ -207,8 +211,10 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 
 	// is_error is the authority, not subtype (see the envelope doc comment).
 	if env.IsError || runErr != nil {
+		result := strings.TrimSpace(env.Result)
 		return llm.Res{}, &cliFailure{
-			msg:           fmt.Sprintf("agentcli: call failed: %s", strings.TrimSpace(env.Result)),
+			msg:           fmt.Sprintf("agentcli: call failed: %s", result),
+			result:        result,
 			exitedNonZero: runErr != nil,
 		}
 	}
@@ -231,14 +237,19 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 }
 
 // apiErrorPattern anchors on the shape observed for the CLI's own
-// infrastructure failures: "API Error: <status> ...". Anchoring on this
-// shape, rather than scanning arbitrary prose for words like "timeout" or
-// "503", avoids retrying a refusal that merely discusses those numbers in
-// unrelated text.
-var apiErrorPattern = regexp.MustCompile(`API Error:\s*(\d{3})`)
+// infrastructure failures: the result *beginning with* "API Error: <status>".
+// Anchoring at the start, rather than searching for the phrase anywhere in
+// the text, matters because the live observation was the result equal to
+// "API Error: 529 Overloaded. This is a server-side issue...", not an error
+// mentioned partway through a longer answer — a refusal's prose can quote or
+// discuss that exact phrase (e.g. "our docs say 'API Error: 503' means...")
+// without the CLI itself having failed, and only the anchored form tells the
+// two apart.
+var apiErrorPattern = regexp.MustCompile(`^API Error:\s*(\d{3})`)
 
 // transientMarkers catches transport-level failures that do not go through
-// the "API Error: <status>" shape.
+// the "API Error: <status>" shape. These are less specific than the anchored
+// pattern above, so a marker match alone is not trusted — see isTransient.
 var transientMarkers = []string{
 	"ECONNRESET",
 	"context deadline exceeded",
@@ -249,32 +260,39 @@ var transientMarkers = []string{
 // isTransient reports whether a failure is worth retrying rather than
 // returned immediately. The CLI gives no structured error code, so this
 // remains a heuristic calibrated to phrasing observed from the real CLI, not
-// an exhaustive classifier: a refusal that happens to mention a status code
-// or the word "timeout" in its own prose must not match, or a non-retryable
-// answer gets retried MaxRetries times for no benefit.
+// an exhaustive classifier. It requires a genuine transient signal in the
+// CLI's own result text — the result leading with "API Error: <5xx-or-429>",
+// or a transport-level marker — before retrying at all:
+//
+//   - A leading "API Error: <5xx-or-429>" is sufficient on its own: this is
+//     the exact shape observed for real infrastructure failures.
+//   - A transport-level marker (ECONNRESET, a deadline/connection error) is
+//     weaker evidence on its own, so it additionally requires the process to
+//     have exited non-zero before being trusted.
+//   - A non-zero exit is never sufficient by itself: the CLI also exits
+//     non-zero for a permanent misconfiguration (bad --model, bad flag,
+//     expired auth), and retrying that spends sessions to receive the
+//     identical failure forever. It only corroborates a marker match above.
+//
+// A refusal that happens to mention a status code, "timeout", or a quoted
+// copy of the CLI's own error shape in its own prose must not match any of
+// this, or a non-retryable answer gets retried MaxRetries times for no
+// benefit.
 func isTransient(err error) bool {
 	var cf *cliFailure
 	if !errors.As(err, &cf) {
 		return false
 	}
 
-	// A process that exited non-zero alongside a reported failure is
-	// stronger evidence of an infrastructure fault than any word match — a
-	// refusal the CLI still treats as a handled, successful invocation exits
-	// zero.
-	if cf.exitedNonZero {
-		return true
-	}
-
-	if m := apiErrorPattern.FindStringSubmatch(cf.msg); m != nil {
+	if m := apiErrorPattern.FindStringSubmatch(cf.result); m != nil {
 		if code, cerr := strconv.Atoi(m[1]); cerr == nil && (code == 429 || (code >= 500 && code < 600)) {
 			return true
 		}
 	}
 
 	for _, marker := range transientMarkers {
-		if strings.Contains(cf.msg, marker) {
-			return true
+		if strings.Contains(cf.result, marker) {
+			return cf.exitedNonZero
 		}
 	}
 	return false

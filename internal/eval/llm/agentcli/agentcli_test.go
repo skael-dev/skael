@@ -250,6 +250,42 @@ func TestComplete_429IsRetried(t *testing.T) {
 	}
 }
 
+// TestComplete_PermanentFailureIsNotRetried covers a regression the previous
+// retry-classification fix introduced: treating any non-zero exit as
+// sufficient evidence of a transient failure retried a permanent
+// misconfiguration (a typo'd --model here; equally a bad flag or expired
+// auth) for no benefit — the identical failure forever, at the cost of two
+// extra sessions per occurrence.
+func TestComplete_PermanentFailureIsNotRetried(t *testing.T) {
+	g, argv := newGateway(t, "bad_model")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded against a permanently broken invocation")
+	}
+
+	b, _ := os.ReadFile(argv)
+	if n := strings.Count(string(b), "-p"); n != 1 {
+		t.Errorf("CLI invoked %d times for a permanent failure (bad --model); a non-zero exit alone must not be sufficient to retry", n)
+	}
+}
+
+// TestComplete_QuotedAPIErrorInRefusalIsNotRetried covers the residual false
+// positive in an unanchored pattern: a refusal that merely quotes the CLI's
+// own "API Error: <status>" shape inside unrelated prose must not be
+// mistaken for that shape actually being the result.
+func TestComplete_QuotedAPIErrorInRefusalIsNotRetried(t *testing.T) {
+	g, argv := newGateway(t, "quoted_error")
+
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded on a refusal")
+	}
+
+	b, _ := os.ReadFile(argv)
+	if n := strings.Count(string(b), "-p"); n != 1 {
+		t.Errorf("CLI invoked %d times for a refusal that only quotes an API Error shape; it must not be retried", n)
+	}
+}
+
 func TestDetect_FindsABinaryOnPATH(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude")
