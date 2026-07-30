@@ -143,15 +143,12 @@ func Compose(in ComposeInput) (*Report, error) {
 		return nil, fmt.Errorf("report.Compose: %w", err)
 	}
 
-	var (
-		gap    float64
-		hasGap bool
-	)
+	var gap *float64
 	strong, okStrong := matrix.ByClass(spec.TierStrong)
 	floor, okFloor := matrix.ByClass(spec.TierFloor)
 	if okStrong && okFloor {
-		gap = drift.RobustnessGap(strong.Drift, floor.Drift)
-		hasGap = true
+		g := drift.RobustnessGap(strong.Drift, floor.Drift)
+		gap = &g
 	}
 
 	upliftSource := score.UpliftJudge
@@ -184,7 +181,6 @@ func Compose(in ComposeInput) (*Report, error) {
 		JudgeLabeledBy:    in.JudgeLabeledBy,
 		Members:           members,
 		RobustnessGap:     gap,
-		HasRobustnessGap:  hasGap,
 		Tasks:             tasks,
 		VoidTasks:         in.Void,
 		TriggerInferred:   in.TriggerInferred,

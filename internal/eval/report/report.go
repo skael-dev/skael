@@ -119,14 +119,14 @@ type Report struct {
 	JudgeLabeledBy string   `json:"judge_labeled_by,omitempty"`
 
 	Members []MemberReport `json:"members"`
-	// RobustnessGap is 0 both when it genuinely measured zero and when it
-	// could not be computed at all — score.Matrix.ByClass returns ok == false
-	// when a class has zero or more than one member, so a strong/floor
-	// comparison is not always defined. HasRobustnessGap disambiguates the
-	// two: a zero value would otherwise read as "the floor model kept up",
-	// the opposite of "we could not tell".
-	RobustnessGap    float64 `json:"robustness_gap"`
-	HasRobustnessGap bool    `json:"has_robustness_gap"`
+	// RobustnessGap is nil when it could not be computed — score.Matrix.ByClass
+	// returns ok == false when a class has zero or more than one member, so a
+	// strong/floor comparison is not always defined. A pointer rather than a
+	// value-plus-flag pair: a zero value would otherwise read as "the floor
+	// model kept up", the opposite of "we could not tell", and a two-field
+	// representation makes that wrong state constructible by forgetting to set
+	// the flag alongside the value.
+	RobustnessGap *float64 `json:"robustness_gap,omitempty"`
 
 	Tasks     []TaskReport `json:"tasks"`
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`

@@ -13,6 +13,7 @@ import (
 
 func demoReport() *report.Report {
 	k := 0.71
+	gap := 18.2
 	return &report.Report{
 		SchemaVersion: report.SchemaVersion,
 		Skill:         "csv-to-md",
@@ -30,7 +31,7 @@ func demoReport() *report.Report {
 		UpliftSource:   score.UpliftJudge,
 		JudgeKappa:     &k,
 		JudgeLabeledBy: "author",
-		RobustnessGap:  18.2,
+		RobustnessGap:  &gap,
 		StartedAt:      time.Unix(1700000000, 0).UTC(),
 		FinishedAt:     time.Unix(1700004000, 0).UTC(),
 	}
@@ -267,12 +268,11 @@ func TestCompose_LeavesRobustnessGapAbsentWhenTheClassIsAmbiguous(t *testing.T) 
 		t.Fatal(err)
 	}
 	// A zero gap means "the floor model kept up." An ambiguous class means "we
-	// could not tell" — the two must not be indistinguishable on the report.
-	if r.HasRobustnessGap {
-		t.Errorf("HasRobustnessGap = true with an ambiguous strong class; RobustnessGap = %v", r.RobustnessGap)
-	}
-	if r.RobustnessGap != 0 {
-		t.Errorf("RobustnessGap = %v, want the zero value paired with HasRobustnessGap = false", r.RobustnessGap)
+	// could not tell" — the two must not be indistinguishable on the report, and
+	// a pointer makes "has a value" and "the value" the same fact so the wrong
+	// state cannot even be constructed.
+	if r.RobustnessGap != nil {
+		t.Errorf("RobustnessGap = %v, want nil with an ambiguous strong class", *r.RobustnessGap)
 	}
 
 	var buf bytes.Buffer
@@ -280,16 +280,46 @@ func TestCompose_LeavesRobustnessGapAbsentWhenTheClassIsAmbiguous(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Logf("emitted JSON for the absent-gap case:\n%s", buf.String())
-	if !strings.Contains(buf.String(), `"has_robustness_gap": false`) {
-		t.Errorf("serialised report does not carry the absent flag: %s", buf.String())
+	if strings.Contains(buf.String(), "robustness_gap") {
+		t.Errorf("serialised report carries a robustness_gap key when the gap is absent: %s", buf.String())
 	}
 
 	got, err := report.Load(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.HasRobustnessGap {
+	if got.RobustnessGap != nil {
 		t.Error("round trip turned an absent gap present")
+	}
+}
+
+func TestCompose_SetsRobustnessGapWhenTheClassesAreUnambiguous(t *testing.T) {
+	in := demoComposeInput()
+	r, err := report.Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The counterpart to the ambiguous case: with exactly one strong and one
+	// floor member, the gap is computable and must appear on the report.
+	if r.RobustnessGap == nil {
+		t.Fatal("RobustnessGap = nil, want a computed value with unambiguous classes")
+	}
+
+	var buf bytes.Buffer
+	if err := r.Save(&buf); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("emitted JSON for the present-gap case:\n%s", buf.String())
+	if !strings.Contains(buf.String(), `"robustness_gap":`) {
+		t.Errorf("serialised report does not carry robustness_gap when it was computed: %s", buf.String())
+	}
+
+	got, err := report.Load(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RobustnessGap == nil || *got.RobustnessGap != *r.RobustnessGap {
+		t.Errorf("round trip lost the robustness gap: got %v, want %v", got.RobustnessGap, r.RobustnessGap)
 	}
 }
 
