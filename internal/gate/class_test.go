@@ -42,9 +42,16 @@ func TestEveryRuleHasAClass(t *testing.T) {
 		c, ok := r.ResolvedClass()
 		assert.Truef(t, ok, "rule %q has category %q with no class mapping", r.Name, r.Category)
 		if ok {
-			_, known := gate.ClassOf(string(c))
-			assert.Truef(t, known || isKnownClass(c),
-				"rule %q resolves to class %q, which is not one the gate recognises", r.Name, c)
+			// isKnownClass, and only isKnownClass. ClassOf takes a *category*,
+			// and two of its entries are not identity mappings
+			// ("secrets"→secret, "obfuscation"→heuristic), so accepting a
+			// value merely because ClassOf recognises it would wave through
+			// Class: "secrets" — a value Decide never branches on, which
+			// falls into its fail-closed default and becomes a permanent
+			// unappealable Block. Those are the two likeliest typos for
+			// someone hand-writing an override.
+			assert.Truef(t, isKnownClass(c),
+				"rule %q resolves to class %q, which is not one Decide branches on", r.Name, c)
 		}
 	}
 }
