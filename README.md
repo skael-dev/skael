@@ -101,7 +101,31 @@ whetstone suite gen my-skill      # generate and write the evaluation suite for 
 whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
 ```
 
-Evaluation and scoring are **not implemented yet** — `whetstone` can generate a suite and lint a bundle, but it does not run skills against a model panel or produce a score. Treat any mention of scoring as forward-looking, not available today.
+## Running the eval worker
+
+A skill only gets scored if it has a registered evaluation suite — by design, not as a failure mode. Publishing a skill with no suite leaves it unscored indefinitely; there's no default suite and nothing generates one automatically.
+
+Register a suite once you've generated and approved one locally with `whetstone`:
+
+```bash
+whetstone suite gen my-skill      # draft a suite from the skill's approved spec
+whetstone suite push my-skill     # register it with the server as the skill's current suite
+```
+
+From then on, every `skael publish` for that skill looks up its registered suite and enqueues an evaluation job automatically — publishing never fails because the queue is down or a suite lookup errors; the version is already durable, and an unscored version is a state the product already models.
+
+Jobs sit on the server; nothing evaluates them until a worker is running to claim, execute, and report them back:
+
+```bash
+export SKAEL_ENDPOINT=http://localhost:8080
+export SKAEL_API_KEY=<your-api-key>
+export ANTHROPIC_API_KEY=<your-anthropic-key>   # direct API gateway — never a subscription CLI on PATH
+skael-worker
+```
+
+`SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and `ANTHROPIC_API_KEY` are the only strictly required variables — the worker exits at startup listing whichever are missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [CLAUDE.md](CLAUDE.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
+
+Once a job completes, `GET /api/skills/{name}/quality` returns the most recent score; `.../quality/history` returns the full history, newest first. Until then, that endpoint 404s — there's no "pending" score record, just none yet (the publish response does carry a `quality.state` of `"pending"` with the job's ID while it's in flight, versus `"none"` when no suite is registered at all).
 
 ## Development
 
@@ -122,10 +146,12 @@ Run `just` to see all available commands.
 ### Project structure
 
 ```
-cmd/server/     → API server binary (Huma v2 + Chi + Postgres)
-cmd/skael/      → CLI binary (Cobra + Lipgloss)
-internal/       → Server packages (skill, scan, analytics, auth, platform, server, import, sync)
-cli/            → CLI packages (commands, client, config, agents, hooks)
+cmd/server/       → API server binary (Huma v2 + Chi + Postgres)
+cmd/skael/        → CLI binary (Cobra + Lipgloss)
+cmd/whetstone/    → Skill authoring/eval CLI binary
+cmd/skael-worker/ → Eval queue worker binary (claim/materialise/evaluate/report loop)
+internal/         → Server packages (skill, scan, analytics, auth, platform, server, import, sync, evalqueue, evalsuite, quality, worker)
+cli/              → CLI packages (commands, client, config, agents, hooks)
 web/            → React 19 SPA (Vite 8, Tailwind 4, TanStack Query) — embedded into server binary
 examples/       → Example skills (hello-world, code-review, scanner demo)
 tests/e2e/      → End-to-end integration tests

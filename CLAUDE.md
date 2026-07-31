@@ -11,7 +11,7 @@ Skael is a self-hostable platform + CLI for managing AI agent skills (SKILL.md f
 Uses [just](https://github.com/casey/just) as the task runner. Run `just` to see all commands. Key ones:
 
 ```bash
-just build                    # build both binaries to bin/
+just build                    # build binaries to bin/ (server, skael, whetstone, skael-worker)
 just dev                      # run server (reads .env)
 just db                       # start Postgres in Docker
 just test                     # all tests (needs Docker for testcontainers)
@@ -34,11 +34,13 @@ Server reads config from `.env` (see `.env.example`). Copy it before first run: 
 
 ## Architecture
 
-Two binaries from one Go module (`github.com/skael-dev/skael`):
+Three binaries from one Go module (`github.com/skael-dev/skael`):
 
 **`cmd/server`** — HTTP API server. Chi router + Huma v2 (auto-generates OpenAPI spec). Embeds a React SPA via `embed.FS` from `web/dist/`. Auth via user accounts (bcrypt passwords, session cookies) + personal API keys (SHA-256, `X-API-Key` header). Middleware stack: security headers, request ID, CORS, per-route-class rate limiting, request logging. Auth middleware skips `/api/health`, `/api/health/ready`, `/api/openapi.json`, `/api/capabilities`, `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout`, and `/metrics`. Subcommand `reset-password --email` for operator-run password recovery (requires direct database access; run by whoever operates the server, not the `admin` role).
 
 **`cmd/skael`** — CLI. Cobra commands, Lipgloss styling. Talks to the server API via `cli/client/`. Config at `~/.skael/config.json`, sync state at `~/.skael/state.json`.
+
+**`cmd/skael-worker`** — Eval queue worker. Polls `POST /api/eval/jobs/claim`, materialises a local whetstone workspace from the claimed job's skill bundle and suite, runs the evaluation against a Docker sandbox and the direct Anthropic API gateway (never a subscription CLI on PATH — a verified score has to come from a reproducible, metered backend), heartbeats the lease while running, and posts the report back. One poll loop, one job at a time per process; run more replicas for throughput. `checkAdapters` at startup asserts every agent adapter blank-import actually registered, since a forgotten import compiles clean but silently thins the panel.
 
 ### Package layout
 
@@ -48,8 +50,12 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 - `internal/platform/` — Infrastructure. `Config` (env vars), `NewPool` + `RunMigrations` (pgx + embedded SQL), `Storage` (local filesystem or S3 with path traversal validation), `middleware.go` (security headers, request ID), `clientip.go` (trust-aware client IP resolution — see `TRUSTED_PROXIES`), `ratelimit.go` (per-route-class limits keyed by API key, falling back to IP), `metrics.go` (Prometheus HTTP instrumentation), `logging.go` (request logger with health-check exclusion).
 - `internal/auth/` — User accounts, sessions, API keys. `Middleware(sessionManager, userStore, keyStore)` enforces auth on `/api/` routes. Three roles: `owner` (first account created, sole role-granter, exactly one per instance), `admin` (granted by the owner; can override a blocked publish), `member` (default for every new account). `PUT /api/admin/users/{id}/role` (owner only) sets another user's role to `admin` or `member`; the owner's own role cannot be changed. `GET /api/admin/users` lists all users (owner only). Password reset: change own + `POST /api/admin/reset-password` (owner only) issues a temporary password.
 - `internal/import/` — GitHub skill import. `POST /api/import` discovers and imports skills from GitHub repos. Uses `GITHUB_TOKEN` for API rate limits.
-- `internal/server/` — Server assembly. `Builder` pattern wires stores, middleware, routes, and the embedded SPA. `Capabilities` endpoint (`/api/capabilities`) reports edition/features. `Readiness` check (`/api/health/ready`) verifies DB + storage. Enterprise extension points (`WithAuthorizer`, `WithExtraRoutes`).
+- `internal/server/` — Server assembly. `Builder` pattern wires stores, middleware, routes, and the embedded SPA. `Capabilities` endpoint (`/api/capabilities`) reports edition/features. `Readiness` check (`/api/health/ready`) verifies DB + storage. Enterprise extension points (`WithAuthorizer`, `WithExtraRoutes`). `RegisterAPIRoutes` (in `routes.go`) is the single place every `/api/*` route group is registered — both `Builder.Build()` and `skael-server --openapi` call it, so the generated OpenAPI spec cannot drift from what the real server serves.
 - `internal/sync/` — `GetManifest()` query joining skills + latest versions for sync diffing.
+- `internal/evalqueue/` — Postgres-backed job queue for skill evaluations, with a claim/lease/heartbeat protocol (`StatusQueued` → `running` → `done`/`failed`/`cancelled`) so a worker that dies mid-job doesn't strand it; a lapsed lease returns the job to the pool. Routes under `/api/eval/jobs/*`.
+- `internal/evalsuite/` — Registry-side counterpart to `internal/eval/suite`: evaluation task-suites become content-addressable archives stored alongside skill bundles (`suites/{ref}.tar.gz`), so a quality score can be re-run later against the exact same tasks with a different model panel. Routes under `/api/eval/suites*`.
+- `internal/quality/` — `Store` persists scored `Record`s to `skill_quality`; `RegisterRoutes` exposes read-only `GET /api/skills/{name}/quality` (most recent score across versions) and `.../quality/history` (full history, newest first). It only ever ingests a report the worker posts back through `internal/evalqueue` — there is no direct write path.
+- `internal/worker/` — The eval queue worker's run loop: claim a job from the server, materialise a local whetstone workspace from the downloaded skill bundle and suite, run the evaluation via the `Runner` interface (Docker and the LLM gateway live outside this package, injected by `cmd/skael-worker`), and post the report back. Fully testable without Docker or a network.
 - `internal/testutil/` — `SetupTestDB(t)` spins up Postgres 17 via testcontainers per test.
 - `internal/ui/` — Lipgloss styles and output helpers (`Success`, `Error`, `Warn`, `Download`, `Summary`). `JSONMode` flag suppresses styled output; commands write JSON to stdout instead.
 - `cli/` — Cobra commands (one file per command): `setup`, `list`, `search`, `show`, `publish`, `sync`, `scan`, `init`, `doctor`, `hook`, `import`, `add`, `remove`. `cli/client/` is the HTTP client (with retry), `cli/config/` handles `~/.skael/` (config.json tracks installed skills like package.json, state.json caches sync state), `cli/agents/` detects installed agents (Claude Code, Codex, OpenCode, Cursor), `cli/hooks/` manages activation tracking and auto-sync hook scripts.
@@ -57,7 +63,7 @@ Two binaries from one Go module (`github.com/skael-dev/skael`):
 ### Key patterns
 
 - **Huma v2 routes:** JSON endpoints use `huma.Register(api, huma.Operation{...}, handler)`. Binary endpoints (download, scan results) use Chi router directly.
-- **`skill.RegisterRoutes` takes `(api huma.API, router chi.Router, store *Store, storage platform.Storage, ext ...*scan.ExternalScanner)`** — it needs both the Huma API and the underlying Chi router.
+- **`skill.RegisterRoutes` takes `(api huma.API, router chi.Router, store *Store, storage platform.Storage, opts RouteOptions)`** — it needs both the Huma API and the underlying Chi router. `RouteOptions.Queue`/`.Suites` are local interfaces (`QueueSubmitter`, `SuiteLookup`) rather than concrete `evalqueue`/`evalsuite` types: `internal/skill` cannot import either package because both of them import `internal/skill` for their own route wiring, and Go doesn't allow the reverse. `internal/server` (`evalQueueAdapter`, `evalSuiteAdapter` in `server.go`) bridges the two, since it already imports everything.
 - **Testcontainers:** DB-backed tests use `testutil.SetupTestDB(t)` which spins up Postgres 17 per test. Each test gets a fresh migrated database.
 - **Content-addressable archives:** Published archives are stored at `{skillName}/{checksum[:16]}.tar.gz`, not by version number. This prevents race conditions on concurrent publishes.
 - **Skill names:** Must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`, max 128 chars. Colons support namespaced names (e.g., `superpowers:brainstorming`).
@@ -79,6 +85,7 @@ Each of these has already caused a real bug or a wasted debugging session.
 - **Always test with `-count=1`.** Go caches passing results, and a cached pass has already produced one false verification here.
 - **Test package conventions differ:** `cli/client/client_test.go` is `package client` (internal, so it can reach unexported helpers); most others are `package X_test`. Check before adding a file.
 - **The hook script tests execute real bash** (`cli/hooks/script_exec_test.go`), with a fake `curl` on `PATH`, and wait on the script's process group rather than a timeout — the scripts background their POST and `disown` it. The file is `//go:build unix`.
+- **`cmd/server` holds no Docker socket and no LLM key — both live on `cmd/skael-worker`.** Neither `cmd/server` nor `internal/server` imports anything Docker- or Anthropic-related; `cmd/skael-worker` is the only binary that does (`internal/eval/sandbox/docker`, `ANTHROPIC_API_KEY`). That's a deliberate boundary, not an oversight — it's why evaluation is a queue the server enqueues to and the worker drains, rather than something the server runs inline. A change that makes the server execute an eval directly breaks it.
 
 ## Server env vars
 
@@ -110,6 +117,21 @@ Each of these has already caused a real bug or a wasted debugging session.
 | `GITHUB_TOKEN` | no | — | GitHub personal access token for import; raises API rate limits |
 
 Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
+
+## Worker env vars
+
+`cmd/skael-worker` reads its own environment, independent of the server's `.env`:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SKAEL_ENDPOINT` | yes | — | Base URL of the Skael server the worker claims jobs from |
+| `SKAEL_API_KEY` | yes | — | API key the worker authenticates with |
+| `ANTHROPIC_API_KEY` | yes | — | Direct Anthropic API gateway key. The worker never falls back to a subscription CLI on PATH — a verified score has to come from a reproducible, metered backend |
+| `WORKER_ID` | no | `{hostname}-{pid}` | Identifies this worker in job leases |
+| `WORKER_LEASE` | no | `5m` | How long a claimed job's lease lasts before it's considered abandoned (Go duration) |
+| `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
+| `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under |
+| `WORKER_CONCURRENCY` | no | `1` | Must be a positive integer |
 
 Each of the events/read/write classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
 
