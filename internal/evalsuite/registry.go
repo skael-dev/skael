@@ -50,6 +50,17 @@ type Record struct {
 	CreatedAt   time.Time
 }
 
+// ErrInvalidArchive is wrapped into any Put error caused by the caller's
+// archive itself (unpack failure, unreadable suite tree, missing checks) —
+// bad input that should be reported to the caller as a 4xx, as opposed to a
+// storage or database failure on the server's side.
+var ErrInvalidArchive = errors.New("evalsuite: invalid archive")
+
+// ErrNotFound is wrapped into any Get/LatestForSkill error caused by no
+// matching row existing, as opposed to a database failure while looking one
+// up.
+var ErrNotFound = errors.New("evalsuite: suite not found")
+
 // Registry stores suite archives content-addressably and records their
 // metadata in eval_suites.
 type Registry struct {
@@ -75,7 +86,7 @@ func archiveKey(ref string) string {
 // construction rather than by convention.
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string) (*Record, error) {
 	if len(checks) == 0 {
-		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none")
+		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
 
 	dir, err := os.MkdirTemp("", "evalsuite-put-*")
@@ -85,17 +96,17 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 	defer os.RemoveAll(dir)
 
 	if err := Unpack(archive, dir); err != nil {
-		return nil, fmt.Errorf("evalsuite: Put unpack: %w", err)
+		return nil, fmt.Errorf("evalsuite: Put unpack: %w: %w", ErrInvalidArchive, err)
 	}
 
 	ref, err := suite.Ref(dir)
 	if err != nil {
-		return nil, fmt.Errorf("evalsuite: Put ref: %w", err)
+		return nil, fmt.Errorf("evalsuite: Put ref: %w: %w", ErrInvalidArchive, err)
 	}
 
 	s, err := suite.Load(dir)
 	if err != nil {
-		return nil, fmt.Errorf("evalsuite: Put load: %w", err)
+		return nil, fmt.Errorf("evalsuite: Put load: %w: %w", ErrInvalidArchive, err)
 	}
 	taskCount := len(s.Tasks)
 
@@ -131,7 +142,7 @@ func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	row := r.db.QueryRow(ctx, q, ref)
 	rec, err := scanRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evalsuite: no suite recorded for ref %s", ref)
+		return nil, fmt.Errorf("evalsuite: no suite recorded for ref %s: %w", ref, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("evalsuite: Get: %w", err)
@@ -170,7 +181,7 @@ func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Recor
 	row := r.db.QueryRow(ctx, q, skillName)
 	rec, err := scanRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evalsuite: no suite recorded for skill %s", skillName)
+		return nil, fmt.Errorf("evalsuite: no suite recorded for skill %s: %w", skillName, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("evalsuite: LatestForSkill: %w", err)

@@ -21,6 +21,7 @@ type RateLimitConfig struct {
 	Events int // POST /api/events — activation tracking
 	Read   int // GET/HEAD — list, search, manifest, downloads
 	Write  int // everything else — publish, import, delete
+	Suites int // POST /api/eval/suites — accepts up to a base64-encoded 10MB archive
 }
 
 type rateLimitClass string
@@ -30,6 +31,7 @@ const (
 	classEvents rateLimitClass = "events"
 	classRead   rateLimitClass = "read"
 	classWrite  rateLimitClass = "write"
+	classSuites rateLimitClass = "suites"
 )
 
 // Defaults chosen so a ten-person team syncing a hundred-skill registry never
@@ -39,6 +41,7 @@ const (
 	defaultRateLimitEvents = 600
 	defaultRateLimitRead   = 300
 	defaultRateLimitWrite  = 60
+	defaultRateLimitSuites = 20
 )
 
 // ipCeilingFactor sizes the shared, IP-keyed ceiling bucket applied to every
@@ -65,6 +68,8 @@ func classifyRequest(r *http.Request) rateLimitClass {
 		return classEvents
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		return classRead
+	case r.URL.Path == "/api/eval/suites" && r.Method == http.MethodPost:
+		return classSuites
 	default:
 		return classWrite
 	}
@@ -206,6 +211,7 @@ func ClassifiedRateLimiter(cfg RateLimitConfig) func(http.Handler) http.Handler 
 		classEvents: newClassLimiter(cfg.Events, defaultRateLimitEvents),
 		classRead:   newClassLimiter(cfg.Read, defaultRateLimitRead),
 		classWrite:  newClassLimiter(cfg.Write, defaultRateLimitWrite),
+		classSuites: newClassLimiter(cfg.Suites, defaultRateLimitSuites),
 	}
 
 	reject := func(w http.ResponseWriter) {

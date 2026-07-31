@@ -2,8 +2,11 @@ package evalsuite_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +23,30 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
+// flakyStorage wraps a real platform.Storage but can be told to fail Write
+// or Read unconditionally, so tests can force the infrastructure-failure
+// branches (500) that a real disk-full or object-store outage would hit —
+// without actually breaking the test's storage backend.
+type flakyStorage struct {
+	platform.Storage
+	failWrite bool
+	failRead  bool
+}
+
+func (f *flakyStorage) Write(ctx context.Context, name string, r io.Reader) (string, error) {
+	if f.failWrite {
+		return "", errors.New("flakyStorage: simulated write failure")
+	}
+	return f.Storage.Write(ctx, name, r)
+}
+
+func (f *flakyStorage) Read(ctx context.Context, name string) (io.ReadCloser, error) {
+	if f.failRead {
+		return nil, errors.New("flakyStorage: simulated read failure")
+	}
+	return f.Storage.Read(ctx, name)
+}
+
 // testServer wires the real router (auth context attached, evalsuite routes
 // registered) for HTTP-level tests.
 type testServer struct {
@@ -32,12 +59,20 @@ type testServer struct {
 // middleware that attaches an authenticated member to every request.
 func newTestServer(t *testing.T) *testServer {
 	t.Helper()
-
-	pool := testutil.SetupTestDB(t)
 	storage, err := platform.NewLocalStorage(t.TempDir())
 	if err != nil {
 		t.Fatalf("newTestServer: storage: %v", err)
 	}
+	return newTestServerWithStorage(t, storage)
+}
+
+// newTestServerWithStorage is newTestServer but with caller-supplied storage,
+// so tests can inject a flakyStorage to exercise the infrastructure-failure
+// (500) branches without a real disk-full or object-store outage.
+func newTestServerWithStorage(t *testing.T, storage platform.Storage) *testServer {
+	t.Helper()
+
+	pool := testutil.SetupTestDB(t)
 
 	skillStore := skill.NewStore(pool)
 	reg := evalsuite.NewRegistry(pool, storage)
@@ -55,6 +90,30 @@ func newTestServer(t *testing.T) *testServer {
 			next.ServeHTTP(w, req)
 		})
 	})
+	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
+	evalsuite.RegisterRoutes(api, r, reg, skillStore)
+
+	return &testServer{handler: r, skills: skillStore}
+}
+
+// newUnauthTestServer wires the eval suite routes behind the real
+// auth.Middleware (no session manager, no key store — every request is
+// unauthenticated), so a test can prove the routes are not accidentally
+// reachable without credentials.
+func newUnauthTestServer(t *testing.T) *testServer {
+	t.Helper()
+
+	pool := testutil.SetupTestDB(t)
+	storage, err := platform.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("newUnauthTestServer: storage: %v", err)
+	}
+
+	skillStore := skill.NewStore(pool)
+	reg := evalsuite.NewRegistry(pool, storage)
+
+	r := chi.NewMux()
+	r.Use(auth.Middleware(nil, nil, nil))
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	evalsuite.RegisterRoutes(api, r, reg, skillStore)
 
@@ -156,5 +215,80 @@ func TestGetSuite_UnknownRefIs404(t *testing.T) {
 	resp := srv.get(t, "/api/eval/suites/does-not-exist")
 	if resp.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
+	}
+}
+
+// TestPostSuite_StorageFailureIs500 proves a storage write failure (disk
+// full, object store outage) is reported as a 500, not folded into the same
+// 422 an unusable archive gets — the caller did nothing wrong here.
+func TestPostSuite_StorageFailureIs500(t *testing.T) {
+	local, err := platform.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	srv := newTestServerWithStorage(t, &flakyStorage{Storage: local, failWrite: true})
+	srv.createSkill(t, "deploy-helper")
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", resp.Code, resp.Body)
+	}
+}
+
+// TestGetSuite_StorageFailureIs500 proves a storage read failure on a suite
+// that genuinely exists (the DB row is there, the object store fails) is a
+// 500, distinguishable from an unknown ref (404).
+func TestGetSuite_StorageFailureIs500(t *testing.T) {
+	local, err := platform.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	flaky := &flakyStorage{Storage: local}
+	srv := newTestServerWithStorage(t, flaky)
+	srv.createSkill(t, "deploy-helper")
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("setup upload status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		Ref string `json:"ref"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &out)
+
+	flaky.failRead = true
+	dl := srv.get(t, "/api/eval/suites/"+url.PathEscape(out.Ref))
+	if dl.Code != http.StatusInternalServerError {
+		t.Fatalf("download status = %d, want 500: %s", dl.Code, dl.Body)
+	}
+}
+
+// TestPostSuite_UnauthenticatedIsRejected proves the route is not reachable
+// without credentials, so a future accidental addition of these paths to the
+// auth middleware's skip-list fails this test instead of passing silently.
+func TestPostSuite_UnauthenticatedIsRejected(t *testing.T) {
+	srv := newUnauthTestServer(t)
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", resp.Code, resp.Body)
 	}
 }

@@ -76,6 +76,7 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 		Events: cfg.RateLimitEvents,
 		Read:   cfg.RateLimitRead,
 		Write:  cfg.RateLimitWrite,
+		Suites: cfg.RateLimitSuites,
 	}))
 
 	if os.Getenv("METRICS_ENABLED") != "false" {

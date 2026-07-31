@@ -3,11 +3,15 @@ package evalsuite
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/skill"
@@ -82,7 +86,11 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 
 		rec, err := reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy)
 		if err != nil {
-			return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
+			if errors.Is(err, ErrInvalidArchive) {
+				return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
+			}
+			log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store suite failed")
+			return nil, huma.Error500InternalServerError("upload eval suite: internal error")
 		}
 
 		return &suiteOutput{
@@ -100,20 +108,40 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a suite
-// ref.
+// ref. It mirrors internal/skill/routes.go's makeDownloadHandler: a lookup
+// failure that isn't "no such ref" is a 500 (something is wrong on this
+// side), a genuine unknown ref is a 404, and a storage read failure is a 404
+// only when the object itself is missing — any other storage error is a 500.
 func makeDownloadHandler(reg *Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ref := chi.URLParam(r, "ref")
 
-		archive, err := reg.Fetch(r.Context(), ref)
+		rec, err := reg.Get(r.Context(), ref)
 		if err != nil {
-			http.NotFound(w, r)
+			if errors.Is(err, ErrNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			log.Error().Err(err).Str("ref", ref).Msg("evalsuite: lookup suite failed")
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+
+		rc, err := reg.st.Read(r.Context(), rec.ArchivePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			log.Error().Err(err).Str("ref", ref).Msg("evalsuite: read suite archive failed")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer rc.Close()
 
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.tar.gz"`, ref))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(archive)
+		io.Copy(w, rc) //nolint:errcheck
 	}
 }
