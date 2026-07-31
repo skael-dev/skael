@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/skael-dev/skael/internal/gate"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -109,7 +110,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 	}
 
 	fileLine := func(p syntax.Pos) int { return sn.startLine - 1 + int(p.Line()) }
-	add := func(rule, severity, msg string, pos syntax.Pos) {
+	add := func(rule, severity, class, msg string, pos syntax.Pos) {
 		report.Findings = append(report.Findings, Finding{
 			Rule:       rule,
 			Severity:   severity,
@@ -117,6 +118,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			File:       filename,
 			Line:       fileLine(pos),
 			Message:    msg,
+			Class:      class,
 		})
 	}
 
@@ -130,7 +132,10 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			analyzeCall(n, add)
 		case *syntax.Redirect:
 			if n.Word != nil && strings.Contains(n.Word.Lit(), "/dev/tcp/") {
-				add("DANGEROUS_SHELL", "critical",
+				// A pipe-to-shell RCE pattern is structurally identical to
+				// what a network-off sandbox measures directly, so it takes
+				// the same appealable class as its regex counterpart.
+				add("DANGEROUS_SHELL", "critical", string(gate.ClassExecution),
 					"Shell AST: /dev/tcp reverse shell", n.OpPos)
 			}
 		}
@@ -141,7 +146,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 // analyzePipeline flags a pipeline whose final stage is a shell interpreter fed
 // by a remote fetch (RCE) or a base64 decode (obfuscated execution). It is
 // anchored at the final (shell) stage so nested-pipe revisits dedupe.
-func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, pos syntax.Pos)) {
+func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, class, msg string, pos syntax.Pos)) {
 	var stages []*syntax.Stmt
 	collectPipeStages(bc.X, &stages)
 	collectPipeStages(bc.Y, &stages)
@@ -165,10 +170,13 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, 
 	}
 	switch {
 	case sawFetch:
-		add("DATA_EXFILTRATION", "critical",
+		// Unappealable, deliberately: remote content piped straight into a
+		// shell is the exfiltration/RCE pattern itself, not a shape that a
+		// sandbox run could exonerate.
+		add("DATA_EXFILTRATION", "critical", string(gate.ClassExfiltration),
 			"Shell AST: remote content piped to a shell (RCE pattern)", last.Pos())
 	case sawDecode:
-		add("OBFUSCATION", "critical",
+		add("OBFUSCATION", "critical", string(gate.ClassHeuristic),
 			"Shell AST: decoded content piped to a shell", last.Pos())
 	}
 }
@@ -200,7 +208,7 @@ func callName(ce *syntax.CallExpr) string {
 }
 
 // analyzeCall flags eval of dynamic content and `shell -c <dynamic>`.
-func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos syntax.Pos)) {
+func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, class, msg string, pos syntax.Pos)) {
 	name := callName(ce)
 	if name == "" {
 		return
@@ -208,7 +216,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos s
 	if name == "eval" {
 		for _, arg := range ce.Args[1:] {
 			if wordHasExpansion(arg) {
-				add("CODE_EXECUTION", "high",
+				add("CODE_EXECUTION", "high", string(gate.ClassExecution),
 					"Shell AST: eval of dynamic (expanded/substituted) content", ce.Pos())
 				break
 			}
@@ -218,7 +226,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos s
 	if shellInterpreters[name] {
 		for i := 1; i < len(ce.Args)-1; i++ {
 			if ce.Args[i].Lit() == "-c" && wordHasExpansion(ce.Args[i+1]) {
-				add("CODE_EXECUTION", "high",
+				add("CODE_EXECUTION", "high", string(gate.ClassExecution),
 					"Shell AST: shell -c executes a dynamic command string", ce.Pos())
 				break
 			}
