@@ -60,7 +60,13 @@ type RegisterAPIDeps struct {
 // eval queue, and quality. It does not register the embedded SPA catch-all —
 // callers that serve the SPA (only Build) mount that separately, after this
 // returns, per Huma/chi ordering requirements.
-func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) {
+//
+// It returns the eval queue's PoolExecutor so Build can start the lease
+// reaper against the same queue this registered — constructing a second
+// PoolExecutor there would work against the same table but would be a
+// needless second handle, and would drift from this function if the two
+// ever needed to differ.
+func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *evalqueue.PoolExecutor {
 	cfg := d.Config
 	if cfg == nil {
 		cfg = &platform.Config{}
@@ -180,4 +186,6 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) {
 
 	// Read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)
+
+	return evalPool
 }

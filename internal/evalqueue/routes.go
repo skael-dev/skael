@@ -112,6 +112,10 @@ type getJobOutput struct {
 	Body jobOutput
 }
 
+type cancelJobInput struct {
+	ID string `path:"id"`
+}
+
 // rerunBody is the request to re-run an evaluation for a skill. Every field
 // is optional: omitting version re-runs the latest, omitting suite_ref uses
 // the skill's stored suite (never a freshly generated one — that would be a
@@ -276,6 +280,28 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID:   "cancel-eval-job",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/{id}/cancel",
+		Summary:       "Cancel an eval job that has not finished",
+		DefaultStatus: http.StatusOK,
+	}, func(ctx context.Context, input *cancelJobInput) (*emptyOutput, error) {
+		u := auth.UserFromContext(ctx)
+		if !u.IsPrivileged() {
+			return nil, huma.Error403Forbidden("cancel eval job: privileged callers only")
+		}
+
+		if err := q.Cancel(ctx, JobID(input.ID)); err != nil {
+			if errors.Is(err, ErrNotCancellable) {
+				return nil, huma.Error409Conflict("cancel eval job: job already finished")
+			}
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: cancel failed")
+			return nil, huma.Error500InternalServerError("cancel eval job: internal error")
+		}
+		return &emptyOutput{Status: http.StatusOK}, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID:   "report-eval-job",
 		Method:        http.MethodPost,
 		Path:          "/api/eval/jobs/{id}/report",
@@ -314,6 +340,16 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
 				"report eval job: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, j.SuiteRef))
 		}
+		// An empty or "dev" engine_version defeats report.Comparable's check
+		// for whether two scores come from the same worker build — a
+		// constant value means that check can never fire, and scores from
+		// different worker builds get charted as one trend. "dev" is the
+		// unset default a binary built without -ldflags -X main.version=...
+		// carries; reject it here rather than storing it.
+		if rep.EngineVersion == "" || rep.EngineVersion == "dev" {
+			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
+				"report eval job: engine_version %q is not acceptable; the worker binary must be built with its version set", rep.EngineVersion))
+		}
 
 		// d. FromReport is pure validation/mapping; a malformed report at
 		// this stage is a 400, an unexpected error is a 500.
@@ -324,11 +360,17 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		// e. Identity and version come from the job row, never the report
 		// body — a worker cannot nominate which skill or version its number
-		// lands on.
+		// lands on. ScoredAt is likewise set here, not taken from the
+		// report's finished_at: that field is worker-supplied and
+		// unvalidated, and it is the sole ordering key for
+		// Latest/LatestAcrossVersions/History. A worker that omits it (the
+		// zero value, 0001-01-01) would sort last forever; a worker with a
+		// fast clock would permanently pin its score as "latest".
 		rec.Verified = true
 		rec.SkillID = j.SkillID
 		rec.Version = j.Version
 		rec.JobID = string(j.ID)
+		rec.ScoredAt = time.Now()
 
 		// f/g. Persist the quality record and mark the job done in a single
 		// transaction. Without this, a transient failure between the two

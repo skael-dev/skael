@@ -183,6 +183,32 @@ func reportFixture(skillName, suiteRef string, headline float64) []byte {
 	return b
 }
 
+// reportFixtureWith builds the same fixture as reportFixture but lets a test
+// override the engine version and/or finished-at timestamp, to cover the
+// server-side validation and normalization of those two fields.
+func reportFixtureWith(skillName, suiteRef string, headline float64, engineVersion string, finishedAt time.Time) []byte {
+	rep := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		Skill:         skillName,
+		SpecVersion:   1,
+		Tier:          "full",
+		SuiteRef:      suiteRef,
+		EngineVersion: engineVersion,
+		ModelPanel:    []report.PanelMember{{Agent: "claude-code", Model: "opus", Class: "strong"}},
+		PanelComplete: true,
+		Headline:      headline,
+		HeadlineCI:    [2]float64{headline - 5, headline + 5},
+		Members:       []report.MemberReport{{Healthy: true, DriftGrade: "B"}},
+		StartedAt:     finishedAt.Add(-time.Minute),
+		FinishedAt:    finishedAt,
+	}
+	b, err := json.Marshal(rep)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func TestClaimRoute_RequiresPrivilege(t *testing.T) {
 	srv := newTestServer(t) // authenticated as a plain member
 	resp := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 60})
@@ -318,6 +344,111 @@ func TestReportRoute_RejectsAReportForAnotherSkill(t *testing.T) {
 	resp := srv.postReport(t, jobID, token, reportFixture("other-skill", "sha256:abc", 99))
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", resp.Code)
+	}
+}
+
+// A worker built without -X main.version=... reports engine_version "dev";
+// storing that constant would make report.Comparable's engine-version check
+// unable to ever fire, silently charting scores from different worker
+// builds as one trend. The server must reject it, not store it.
+func TestReportRoute_RejectsDevEngineVersion(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 99, "dev", time.Now()))
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", resp.Code, resp.Body)
+	}
+}
+
+func TestReportRoute_RejectsEmptyEngineVersion(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 99, "", time.Now()))
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", resp.Code, resp.Body)
+	}
+}
+
+// scored_at must be set server-side, not taken from the report's
+// finished_at: that field is worker-supplied and is the sole ordering key
+// for Latest. A zero finished_at (an omitted field) or a far-future one (a
+// worker with a fast clock) must not affect where the score sorts.
+func TestReportRoute_ScoredAtIsServerSideNotReportSupplied(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	before := time.Now()
+	// Zero finished_at: an omitted field would marshal as the Go zero value,
+	// 0001-01-01. If the server trusted it, this score would sort before
+	// every other score forever.
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 42, "0.9.1", time.Time{}))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	after := time.Now()
+
+	q := quality.NewStore(srv.pool)
+	rec, err := q.Latest(context.Background(), skillID, 2)
+	if err != nil || rec == nil {
+		t.Fatalf("no quality row was written: %v", err)
+	}
+	if rec.ScoredAt.Before(before) || rec.ScoredAt.After(after) {
+		t.Fatalf("scored_at = %v, want between %v and %v (server clock, not the report's zero finished_at)", rec.ScoredAt, before, after)
+	}
+}
+
+func TestCancelRoute_RequiresPrivilege(t *testing.T) {
+	srv := newTestServer(t) // authenticated as a plain member
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+
+	resp := srv.postJSON(t, "/api/eval/jobs/"+jobID+"/cancel", nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — a member must not be able to cancel a job", resp.Code)
+	}
+}
+
+func TestCancelRoute_CancelsAQueuedJob(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+
+	resp := srv.postJSON(t, "/api/eval/jobs/"+jobID+"/cancel", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	job := srv.getJob(t, jobID)
+	if job.Status != "cancelled" {
+		t.Fatalf("job status = %q, want cancelled", job.Status)
+	}
+}
+
+func TestCancelRoute_409OnAFinishedJob(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 50))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("setup: report failed: %d: %s", resp.Code, resp.Body)
+	}
+
+	cancel := srv.postJSON(t, "/api/eval/jobs/"+jobID+"/cancel", nil)
+	if cancel.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 — a done job is not cancellable: %s", cancel.Code, cancel.Body)
 	}
 }
 

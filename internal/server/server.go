@@ -137,6 +137,44 @@ type Server struct {
 	Handler http.Handler
 
 	listenAddr string
+
+	// stopReaper, if non-nil, cancels the eval-job lease reaper goroutine
+	// Build started. nil when there was no evalPool to reap (e.g. a nil
+	// pool passed for spec-generation-only use).
+	stopReaper context.CancelFunc
+}
+
+// reapInterval is how often the eval queue is swept for jobs whose lease
+// lapsed with no attempts remaining. A worker's lease is usually minutes
+// long (WORKER_LEASE, default 5m), so sweeping much faster than that buys
+// nothing; this just needs to run more often than leases expire.
+const reapInterval = time.Minute
+
+// runReaper sweeps evalqueue.PoolExecutor.ReapExpired on a ticker until ctx
+// is cancelled. Without this, a worker that claims a job on its final
+// attempt and then dies leaves that job "running" with a lapsed lease
+// forever: Claim requires attempts < max_attempts so it can never be
+// reclaimed, and nothing else moves running -> failed. It must not block
+// startup (it runs in its own goroutine) and must stop cleanly on shutdown
+// (ctx is cancelled from ListenAndServe's shutdown path).
+func runReaper(ctx context.Context, q *evalqueue.PoolExecutor) {
+	ticker := time.NewTicker(reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := q.ReapExpired(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("eval queue lease reap failed")
+				continue
+			}
+			if n > 0 {
+				log.Info().Int("reaped", n).Msg("eval queue: reaped jobs with lapsed leases and no attempts remaining")
+			}
+		}
+	}
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -210,7 +248,7 @@ func (b *Builder) Build() (*Server, error) {
 	// uses, so the generated spec cannot drift from what the real server
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
-	RegisterAPIRoutes(api, router, RegisterAPIDeps{
+	evalPool := RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
 		SessionManager: sessionManager,
@@ -220,6 +258,16 @@ func (b *Builder) Build() (*Server, error) {
 		Caps:           b.caps,
 		AnalyticsStore: analyticsStore,
 	})
+
+	// 10a-2. Start the eval queue's lease reaper. It runs for the life of
+	// the process; stopReaper cancels it during ListenAndServe's graceful
+	// shutdown.
+	var reaperCancel context.CancelFunc
+	if evalPool != nil {
+		var reaperCtx context.Context
+		reaperCtx, reaperCancel = context.WithCancel(context.Background())
+		go runReaper(reaperCtx, evalPool)
+	}
 
 	// 10a. Run event retention cleanup on startup.
 	if cfg.EventRetentionDays > 0 {
@@ -239,6 +287,9 @@ func (b *Builder) Build() (*Server, error) {
 	// 17. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
+		if reaperCancel != nil {
+			reaperCancel()
+		}
 		return nil, fmt.Errorf("server.Build: embedded SPA: %w", err)
 	}
 	fileServer := http.FileServer(http.FS(spaFS))
@@ -263,6 +314,7 @@ func (b *Builder) Build() (*Server, error) {
 	return &Server{
 		Handler:    router,
 		listenAddr: cfg.ListenAddr,
+		stopReaper: reaperCancel,
 	}, nil
 }
 
@@ -291,6 +343,10 @@ func (s *Server) ListenAndServe() error {
 	log.Info().Str("addr", s.listenAddr).Msg("skael-server listening")
 	<-sigCtx.Done()
 	log.Info().Msg("shutting down...")
+
+	if s.stopReaper != nil {
+		s.stopReaper()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
