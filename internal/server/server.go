@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -24,13 +24,57 @@ import (
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
-	skillimport "github.com/skael-dev/skael/internal/import"
+	"github.com/skael-dev/skael/internal/evalqueue"
+	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/platform"
-	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
-	gosync "github.com/skael-dev/skael/internal/sync"
 	skweb "github.com/skael-dev/skael/web"
 )
+
+// evalQueueAdapter adapts an evalqueue.Executor to skill.QueueSubmitter.
+// internal/skill cannot import internal/evalqueue directly — evalqueue
+// imports internal/skill for its own route wiring, and Go does not allow the
+// reverse — so the server, which already imports both, bridges the two.
+type evalQueueAdapter struct {
+	q evalqueue.Executor
+}
+
+func (a evalQueueAdapter) Submit(ctx context.Context, j skill.EvalJobRequest) (string, error) {
+	id, err := a.q.Submit(ctx, evalqueue.Job{
+		SkillID:     j.SkillID,
+		SkillName:   j.SkillName,
+		Version:     j.Version,
+		SuiteRef:    j.SuiteRef,
+		Tier:        j.Tier,
+		RequestedBy: j.RequestedBy,
+	})
+	return string(id), err
+}
+
+// evalSuiteAdapter adapts an *evalsuite.Registry to skill.SuiteLookup, for
+// the same import-cycle reason as evalQueueAdapter above.
+type evalSuiteAdapter struct {
+	r *evalsuite.Registry
+}
+
+func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.LatestForSkill(ctx, name)
+	if err != nil {
+		// evalsuite.LatestForSkill reports "no suite registered" as an error
+		// wrapping ErrNotFound, not as (nil, nil) — skill.SuiteLookup's
+		// contract expects the latter for that case. Translate here so an
+		// infrastructure failure (pool exhausted, timeout) still surfaces as
+		// an error instead of being indistinguishable from "no suite".
+		if errors.Is(err, evalsuite.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
 
 // InstallEdgeMiddleware registers every middleware a request passes through
 // before it reaches session handling, authentication, or any route: security
@@ -75,6 +119,7 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 		Events: cfg.RateLimitEvents,
 		Read:   cfg.RateLimitRead,
 		Write:  cfg.RateLimitWrite,
+		Suites: cfg.RateLimitSuites,
 	}))
 
 	if os.Getenv("METRICS_ENABLED") != "false" {
@@ -92,6 +137,44 @@ type Server struct {
 	Handler http.Handler
 
 	listenAddr string
+
+	// stopReaper, if non-nil, cancels the eval-job lease reaper goroutine
+	// Build started. nil when there was no evalPool to reap (e.g. a nil
+	// pool passed for spec-generation-only use).
+	stopReaper context.CancelFunc
+}
+
+// reapInterval is how often the eval queue is swept for jobs whose lease
+// lapsed with no attempts remaining. A worker's lease is usually minutes
+// long (WORKER_LEASE, default 5m), so sweeping much faster than that buys
+// nothing; this just needs to run more often than leases expire.
+const reapInterval = time.Minute
+
+// runReaper sweeps evalqueue.PoolExecutor.ReapExpired on a ticker until ctx
+// is cancelled. Without this, a worker that claims a job on its final
+// attempt and then dies leaves that job "running" with a lapsed lease
+// forever: Claim requires attempts < max_attempts so it can never be
+// reclaimed, and nothing else moves running -> failed. It must not block
+// startup (it runs in its own goroutine) and must stop cleanly on shutdown
+// (ctx is cancelled from ListenAndServe's shutdown path).
+func runReaper(ctx context.Context, q *evalqueue.PoolExecutor) {
+	ticker := time.NewTicker(reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := q.ReapExpired(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("eval queue lease reap failed")
+				continue
+			}
+			if n > 0 {
+				log.Info().Int("reaped", n).Msg("eval queue: reaped jobs with lapsed leases and no attempts remaining")
+			}
+		}
+	}
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -159,88 +242,34 @@ func (b *Builder) Build() (*Server, error) {
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
-	// 10. Register health endpoint (auth middleware skips /api/health).
-	huma.Register(api, huma.Operation{
-		OperationID: "health",
-		Method:      http.MethodGet,
-		Path:        "/api/health",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct {
-			Status string `json:"status"`
-		}
-	}, error) {
-		out := &struct {
-			Body struct {
-				Status string `json:"status"`
-			}
-		}{}
-		out.Body.Status = "ok"
-		return out, nil
-	})
-
-	// 10a. Register capabilities endpoint.
-	b.caps.Register(api)
-
-	// 10b. Readiness: verifies DB and storage connectivity. Liveness stays on
-	// /api/health (static) so orchestrators don't restart pods on DB blips.
-	type readyBody struct {
-		Status string      `json:"status"`
-		Checks ReadyChecks `json:"checks"`
-	}
-	huma.Register(api, huma.Operation{
-		OperationID: "health-ready",
-		Method:      http.MethodGet,
-		Path:        "/api/health/ready",
-	}, func(ctx context.Context, _ *struct{}) (*struct{ Body readyBody }, error) {
-		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		checks, ready := readinessChecks(checkCtx, b.pool, storage)
-		if !ready {
-			detail, _ := json.Marshal(checks)
-			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
-		}
-		out := &struct{ Body readyBody }{}
-		out.Body.Status = "ready"
-		out.Body.Checks = checks
-		return out, nil
-	})
-
-	// 11. Register auth routes.
-	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
-
-	// 12. Register skill routes. An opt-in external scanner (EXTERNAL_SCAN_CMD)
-	// is merged into the publish/import security scan when configured.
-	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
-	if externalScanner != nil {
-		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
-	}
-	skillStore := skill.NewStore(b.pool)
-	skill.RegisterRoutes(api, router, skillStore, storage, externalScanner)
-
-	// 13. Register sync manifest route.
-	syncStore := gosync.NewStore(b.pool)
-	huma.Register(api, huma.Operation{
-		OperationID: "get-manifest",
-		Method:      http.MethodGet,
-		Path:        "/api/sync/manifest",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body []gosync.ManifestEntry
-	}, error) {
-		entries, err := syncStore.GetManifest(ctx)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("", err)
-		}
-		return &struct {
-			Body []gosync.ManifestEntry
-		}{Body: entries}, nil
-	})
-
-	// 14. Register analytics routes.
+	// 10. Register all /api/* routes (health, capabilities, readiness, auth,
+	// skills, sync manifest, analytics, import, eval suites, eval queue,
+	// quality). This is the same registration path `skael-server --openapi`
+	// uses, so the generated spec cannot drift from what the real server
+	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
-	analytics.RegisterRoutes(api, analyticsStore)
+	evalPool := RegisterAPIRoutes(api, router, RegisterAPIDeps{
+		Pool:           b.pool,
+		Config:         cfg,
+		SessionManager: sessionManager,
+		UserStore:      userStore,
+		KeyStore:       keyStore,
+		Storage:        storage,
+		Caps:           b.caps,
+		AnalyticsStore: analyticsStore,
+	})
 
-	// 14a. Run event retention cleanup on startup.
+	// 10a-2. Start the eval queue's lease reaper. It runs for the life of
+	// the process; stopReaper cancels it during ListenAndServe's graceful
+	// shutdown.
+	var reaperCancel context.CancelFunc
+	if evalPool != nil {
+		var reaperCtx context.Context
+		reaperCtx, reaperCancel = context.WithCancel(context.Background())
+		go runReaper(reaperCtx, evalPool)
+	}
+
+	// 10a. Run event retention cleanup on startup.
 	if cfg.EventRetentionDays > 0 {
 		deleted, err := analyticsStore.CleanupOldEvents(context.Background(), cfg.EventRetentionDays)
 		if err != nil {
@@ -250,12 +279,7 @@ func (b *Builder) Build() (*Server, error) {
 		}
 	}
 
-	// 15. Register import routes.
-	importStore := skillimport.NewStore(b.pool)
-	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
-	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, externalScanner)
-
-	// 16. Register extra routes from enterprise plugins.
+	// 11. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {
 		reg(api, router, b.pool)
 	}
@@ -263,6 +287,9 @@ func (b *Builder) Build() (*Server, error) {
 	// 17. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
+		if reaperCancel != nil {
+			reaperCancel()
+		}
 		return nil, fmt.Errorf("server.Build: embedded SPA: %w", err)
 	}
 	fileServer := http.FileServer(http.FS(spaFS))
@@ -287,6 +314,7 @@ func (b *Builder) Build() (*Server, error) {
 	return &Server{
 		Handler:    router,
 		listenAddr: cfg.ListenAddr,
+		stopReaper: reaperCancel,
 	}, nil
 }
 
@@ -315,6 +343,10 @@ func (s *Server) ListenAndServe() error {
 	log.Info().Str("addr", s.listenAddr).Msg("skael-server listening")
 	<-sigCtx.Done()
 	log.Info().Msg("shutting down...")
+
+	if s.stopReaper != nil {
+		s.stopReaper()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

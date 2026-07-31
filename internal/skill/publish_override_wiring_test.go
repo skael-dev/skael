@@ -42,7 +42,7 @@ func setupTestAPIAsUser(t *testing.T, caller **auth.User) http.Handler {
 		})
 	})
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	skill.RegisterRoutes(api, r, store, storage)
+	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{})
 
 	return r
 }

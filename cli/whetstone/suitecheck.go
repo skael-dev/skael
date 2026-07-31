@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -61,6 +62,16 @@ func RunSuiteCheck(ctx context.Context, skill string, allowVoid bool) error {
 	if err != nil {
 		return fmt.Errorf("loading suite for %s: %w (run `whetstone suite gen %s` first)", skill, err, skill)
 	}
+
+	// A task-declared fragment needs a per-task image, which the runner's single
+	// prepared image cannot provide. Refuse rather than ignore it: an ignored
+	// fragment means the task runs without its dependency and fails as though the
+	// skill were at fault.
+	if ids := tasksWithEnvFrag(s); len(ids) > 0 {
+		return fmt.Errorf("whetstone: tasks %s declare environment/Dockerfile.frag, which this engine does not apply; "+
+			"move the dependency into the skill spec's deps, or delete the fragment", strings.Join(ids, ", "))
+	}
+
 	suiteRef, err := suite.Ref(suiteDir)
 	if err != nil {
 		return err

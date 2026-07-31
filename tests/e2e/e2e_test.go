@@ -108,7 +108,7 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 
 	// 8. Register skill routes.
 	skillStore := skill.NewStore(pool)
-	skill.RegisterRoutes(api, router, skillStore, storage)
+	skill.RegisterRoutes(api, router, skillStore, storage, skill.RouteOptions{})
 
 	// 9. Register sync manifest route.
 	syncStore := gosync.NewStore(pool)

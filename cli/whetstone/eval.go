@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -78,6 +79,21 @@ type baseEnsurer interface {
 	EnsureBase(ctx context.Context, slim bool) error
 }
 
+// tasksWithEnvFrag returns a sorted slice of task IDs whose EnvFrag is non-empty.
+// A task-declared fragment needs a per-task image, which the runner's single
+// prepared image cannot provide; this function identifies tasks that declared
+// one so they can be rejected loudly rather than silently ignored.
+func tasksWithEnvFrag(s *suite.Suite) []string {
+	var ids []string
+	for _, task := range s.Tasks {
+		if strings.TrimSpace(task.EnvFrag) != "" {
+			ids = append(ids, task.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // RunEvalWith runs one evaluation end to end: load the approved spec and
 // suite, refuse an eval against unchecked or void tasks, plan and execute the
 // panel, score the result, and persist and write the report. See the package
@@ -113,6 +129,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err != nil {
 		return nil, fmt.Errorf("whetstone eval: loading suite for %s: %w (run `whetstone new %s` first)", req.Skill, err, req.Skill)
 	}
+
 	suiteRef, err := suite.Ref(suiteDir)
 	if err != nil {
 		return nil, err
@@ -129,6 +146,18 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			}
 		}
 		s.Tasks = filtered
+	}
+
+	// A task-declared fragment needs a per-task image, which the runner's single
+	// prepared image cannot provide. Refuse rather than ignore it: an ignored
+	// fragment means the task runs without its dependency and fails as though the
+	// skill were at fault. The check runs after TaskFilter trimming so that a
+	// legitimate selective re-run that excludes the broken task is not blocked:
+	// a filtered-out task's fragment is never at risk of being silently ignored
+	// because that task never runs.
+	if ids := tasksWithEnvFrag(s); len(ids) > 0 {
+		return nil, fmt.Errorf("whetstone: tasks %s declare environment/Dockerfile.frag, which this engine does not apply; "+
+			"move the dependency into the skill spec's deps, or delete the fragment", strings.Join(ids, ", "))
 	}
 
 	// 2. The suite must have been gated, and cleanly.

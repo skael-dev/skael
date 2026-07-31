@@ -11,6 +11,7 @@ build: generate web-build
     CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server
     CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
     CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone
+    CGO_ENABLED=0 go build -o bin/skael-worker ./cmd/skael-worker
 
 # Build server only
 build-server:
@@ -23,6 +24,10 @@ build-cli:
 # Build the whetstone eval CLI
 build-whetstone:
     CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone
+
+# Build the eval queue worker
+build-worker:
+    CGO_ENABLED=0 go build -o bin/skael-worker ./cmd/skael-worker
 
 # --- Web / Frontend ---
 

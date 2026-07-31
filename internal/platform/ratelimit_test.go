@@ -25,6 +25,8 @@ func TestClassifyRequest(t *testing.T) {
 		{http.MethodGet, "/api/sync/manifest", classRead},
 		{http.MethodPost, "/api/skills/demo/versions", classWrite},
 		{http.MethodDelete, "/api/skills/demo", classWrite},
+		{http.MethodPost, "/api/eval/suites", classSuites},
+		{http.MethodGet, "/api/eval/suites/some-ref", classRead},
 	}
 
 	for _, tc := range cases {
@@ -105,6 +107,28 @@ func TestClassifiedRateLimiter_KeysAreIndependent(t *testing.T) {
 		return r
 	})
 	assert.Equal(t, 3, allowedB, "a second key behind the same IP keeps its own budget")
+}
+
+// TestClassifiedRateLimiter_SuitesClassIsIndependentOfWrite proves POST
+// /api/eval/suites is bound to its own budget rather than falling into the
+// generic write class: exhausting a tight suites budget must not affect a
+// generous write budget, and vice versa.
+func TestClassifiedRateLimiter_SuitesClassIsIndependentOfWrite(t *testing.T) {
+	mw := ClassifiedRateLimiter(RateLimitConfig{Auth: 20, Events: 20, Read: 20, Write: 20, Suites: 2})
+
+	allowedSuites := send(t, mw, 10, func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/eval/suites", nil)
+		r.RemoteAddr = "10.0.0.1:5000"
+		return r
+	})
+	require.Equal(t, 2, allowedSuites, "the suites budget must be its own, tighter class")
+
+	allowedWrite := send(t, mw, 10, func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/skills/demo/versions", nil)
+		r.RemoteAddr = "10.0.0.1:5000"
+		return r
+	})
+	assert.Equal(t, 10, allowedWrite, "exhausting the suites budget must not touch the generic write budget")
 }
 
 // TestClassifiedRateLimiter_AuthClassIgnoresAPIKeyHeader is the regression

@@ -46,6 +46,7 @@ type Config struct {
 	RateLimitEvents int
 	RateLimitRead   int
 	RateLimitWrite  int
+	RateLimitSuites int
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -79,6 +80,7 @@ func LoadConfig() (*Config, error) {
 		RateLimitEvents:     envInt("RATE_LIMIT_EVENTS", 600),
 		RateLimitRead:       envInt("RATE_LIMIT_READ", 300),
 		RateLimitWrite:      envInt("RATE_LIMIT_WRITE", 60),
+		RateLimitSuites:     envInt("RATE_LIMIT_SUITES", 20),
 	}, nil
 }
 

@@ -42,7 +42,7 @@ func setupTestAPI(t *testing.T) (http.Handler, *skill.Store, platform.Storage) {
 
 	r := chi.NewMux()
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	skill.RegisterRoutes(api, r, store, storage)
+	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{})
 
 	return r, store, storage
 }
