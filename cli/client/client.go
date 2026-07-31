@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/scan"
 )
 
@@ -47,6 +48,10 @@ type Version struct {
 	ScanResult json.RawMessage `json:"scan_result,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 	Created    bool            `json:"created"`
+	// Decision is the publish gate's verdict for this version. Always
+	// present on a response from a gate-aware server; zero-value on an
+	// older one (Outcome "" is treated the same as Allow by callers).
+	Decision gate.Decision `json:"decision,omitempty"`
 }
 
 // ManifestEntry holds the sync metadata for a single skill.
@@ -309,11 +314,12 @@ func (c *Client) CreateSkill(name, description string) (*Skill, error) {
 // scan findings; the server accepts it only from an owner or admin and
 // records it.
 //
-// On success it returns the new Version record. When the server rejects the
-// archive on its own scan it returns the parsed scan report alongside the
-// error, so the caller can show the findings that actually blocked the publish
-// instead of guessing.
-func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Version, *scan.Report, error) {
+// On success it returns the new Version record, which carries its own
+// Decision. When the server rejects the archive outright (a Block outcome,
+// always 422) it returns the parsed scan report and decision alongside the
+// error, so the caller can show the findings that actually blocked the
+// publish instead of guessing.
+func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Version, *scan.Report, *gate.Decision, error) {
 	path := "/api/skills/" + url.PathEscape(name) + "/versions"
 	if override {
 		path += "?override=true"
@@ -322,17 +328,47 @@ func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Ve
 	resp, err := c.do(http.MethodPost, path, bytes.NewReader(archive), "application/gzip")
 	if err != nil {
 		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
-			return nil, parseScanReport(apiErr.Raw), err
+			report, decision := parseGateDetail(apiErr.Raw)
+			return nil, report, decision, err
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	var ver Version
 	if err := json.NewDecoder(resp.Body).Decode(&ver); err != nil {
-		return nil, nil, fmt.Errorf("decode publish version response: %w", err)
+		return nil, nil, nil, fmt.Errorf("decode publish version response: %w", err)
 	}
-	return &ver, nil, nil
+	return &ver, nil, &ver.Decision, nil
+}
+
+// Review calls POST /api/skills/{name}/versions/{version}/review to approve
+// or reject a version held by the publish gate. action must be "approve" or
+// "reject"; the server enforces owner/admin privilege and rejects any other
+// action. Returns the updated Version record.
+func (c *Client) Review(name string, version int, action, reason string) (*Version, error) {
+	payload, err := json.Marshal(struct {
+		Action string `json:"action"`
+		Reason string `json:"reason"`
+	}{Action: action, Reason: reason})
+	if err != nil {
+		return nil, fmt.Errorf("marshal review request: %w", err)
+	}
+
+	path := "/api/skills/" + url.PathEscape(name) + "/versions/" +
+		url.PathEscape(strconv.Itoa(version)) + "/review"
+
+	resp, err := c.do(http.MethodPost, path, bytes.NewReader(payload), "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var ver Version
+	if err := json.NewDecoder(resp.Body).Decode(&ver); err != nil {
+		return nil, fmt.Errorf("decode review response: %w", err)
+	}
+	return &ver, nil
 }
 
 // EvalSuiteCheck is one task's oracle-gate result, as the eval suite upload
@@ -391,35 +427,35 @@ func (c *Client) UploadEvalSuite(skill string, specVersion int, checks []EvalSui
 	return &out, nil
 }
 
-// parseScanReport digs the scan report out of a Huma error envelope. The
-// publish endpoint marshals the report into the error's detail list, so it
-// arrives as a JSON string inside errors[].message. Returns nil when the body
-// carries no report.
-func parseScanReport(raw []byte) *scan.Report {
+// parseGateDetail digs the scan report and gate decision out of a Huma error
+// envelope. On a Block outcome the publish endpoint marshals
+// {"scan": ..., "decision": ...} into the error's detail list, so it arrives
+// as a JSON string inside errors[].message. Older servers (pre-gate) put the
+// bare report there instead, so both shapes are accepted; the decision is nil
+// in that case. Returns (nil, nil) when the body carries neither.
+func parseGateDetail(raw []byte) (*scan.Report, *gate.Decision) {
 	var envelope struct {
 		Errors []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil {
-		return nil
+		return nil, nil
 	}
 	for _, e := range envelope.Errors {
-		// Since the publish gate went live the detail carries the report
-		// wrapped alongside the gate decision. Older servers put the bare
-		// report there, so both shapes are accepted.
 		var wrapped struct {
-			Scan *scan.Report `json:"scan"`
+			Scan     *scan.Report   `json:"scan"`
+			Decision *gate.Decision `json:"decision"`
 		}
 		if json.Unmarshal([]byte(e.Message), &wrapped) == nil && wrapped.Scan != nil && wrapped.Scan.Status != "" {
-			return wrapped.Scan
+			return wrapped.Scan, wrapped.Decision
 		}
 		var report scan.Report
 		if json.Unmarshal([]byte(e.Message), &report) == nil && report.Status != "" {
-			return &report
+			return &report, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // SearchSkills calls GET /api/search?q=&limit= and returns the matching skills.

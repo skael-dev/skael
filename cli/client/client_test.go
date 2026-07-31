@@ -125,7 +125,7 @@ func TestClient_PublishVersion_Success(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ver, report, err := c.PublishVersion("my-skill", []byte("fake-archive"), false)
+	ver, report, _, err := c.PublishVersion("my-skill", []byte("fake-archive"), false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestClient_PublishVersion_ScanBlocked(t *testing.T) {
 	})
 	defer srv.Close()
 
-	ver, report, err := c.PublishVersion("bad-skill", []byte("malicious-archive"), false)
+	ver, report, _, err := c.PublishVersion("bad-skill", []byte("malicious-archive"), false)
 	if err == nil {
 		t.Fatal("expected error for 422")
 	}
@@ -191,7 +191,7 @@ func TestPublishVersion_ReturnsServerScanReport(t *testing.T) {
 
 	c := New(srv.URL, "sk-test")
 
-	ver, report, err := c.PublishVersion("demo", []byte("archive"), true)
+	ver, report, _, err := c.PublishVersion("demo", []byte("archive"), true)
 	require.Error(t, err)
 	assert.Nil(t, ver)
 

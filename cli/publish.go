@@ -9,6 +9,7 @@ import (
 
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/ui"
@@ -192,10 +193,33 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	// Publish the new version
-	ver, serverReport, pubErr := c.PublishVersion(name, archive, publishOverride)
+	ver, serverReport, decision, pubErr := c.PublishVersion(name, archive, publishOverride)
 	sp.Stop()
 	if pubErr != nil {
 		if apiErr, ok := pubErr.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			// A Block outcome is unappealable: no evaluation, no admin
+			// override, clears it. Suggesting --override here would send the
+			// operator after a permission that cannot help.
+			if decision != nil && decision.Outcome == gate.Block {
+				if ui.JSONMode {
+					out := struct {
+						Decision gate.Decision `json:"decision"`
+					}{Decision: *decision}
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(out)
+				}
+				fmt.Fprintln(os.Stdout, "\n  Blocked — unappealable findings:")
+				for _, r := range decision.Reasons {
+					fmt.Fprintf(os.Stdout, "  %s:%d\t%s (%s, %s)\n    %s\n    Clears: %s\n",
+						r.File, r.Line, r.Rule, r.Class, r.Severity, r.Message, r.Clears)
+				}
+				ui.Error(ui.ErrorDetail{
+					Message: "publish blocked: archive contains unappealable findings",
+				})
+				return nil
+			}
+
 			if ui.JSONMode {
 				ui.PrintJSONError("publish blocked by server-side security scan", "scan_blocked", blockedSuggestion)
 				return nil
@@ -228,13 +252,15 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	if ui.JSONMode {
 		out := struct {
-			Name    string `json:"name"`
-			Version int    `json:"version"`
-			Created bool   `json:"created"`
+			Name     string        `json:"name"`
+			Version  int           `json:"version"`
+			Created  bool          `json:"created"`
+			Decision gate.Decision `json:"decision"`
 		}{
-			Name:    name,
-			Version: ver.Version,
-			Created: ver.Created,
+			Name:     name,
+			Version:  ver.Version,
+			Created:  ver.Created,
+			Decision: ver.Decision,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -242,11 +268,42 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	if !ver.Created {
+		// An unchanged-checksum republish returns a freshly computed decision
+		// beside an already-live version. That version was already served
+		// before this call, so "held for review" would be false — this
+		// upload changed nothing, and whatever is being served has not
+		// changed either. Say so without alarming the caller into thinking
+		// something new just got held.
+		if ver.Decision.Held() {
+			ui.Info("No changes detected — v%d is unchanged (still held for review from an earlier publish)", ver.Version)
+			return nil
+		}
 		ui.Info("No changes detected — v%d is already up to date", ver.Version)
 		return nil
 	}
 
-	fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)
-	fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	switch ver.Decision.Outcome {
+	case gate.NeedsReview:
+		fmt.Fprintf(os.Stdout, "  ⏸ %s v%d created and held for review\n", name, ver.Version)
+		fmt.Fprintln(os.Stdout, "  It is not served to any client until it is cleared.")
+		fmt.Fprintln(os.Stdout)
+		for _, r := range ver.Decision.Reasons {
+			fmt.Fprintf(os.Stdout, "  %s:%d  %s (%s, %s)\n", r.File, r.Line, r.Rule, r.Class, r.Severity)
+			fmt.Fprintf(os.Stdout, "    %s\n", r.Message)
+			fmt.Fprintf(os.Stdout, "    Clears: %s\n", r.Clears)
+		}
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand:")
+		fmt.Fprintf(os.Stdout, "    skael review %s %d --approve --reason \"...\"\n", name, ver.Version)
+	case gate.AllowWithWarning:
+		fmt.Fprintf(os.Stdout, "  ⚠ %s v%d published with warnings\n", name, ver.Version)
+		for _, r := range ver.Decision.Reasons {
+			fmt.Fprintf(os.Stdout, "  %s:%d  %s  %s\n", r.File, r.Line, r.Rule, r.Message)
+		}
+		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	default:
+		fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)
+		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	}
 	return nil
 }
