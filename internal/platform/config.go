@@ -47,6 +47,12 @@ type Config struct {
 	RateLimitRead   int
 	RateLimitWrite  int
 	RateLimitSuites int
+
+	// QualityFloor is the minimum headline quality score (0-100) a verified
+	// evaluation must reach to release a version held for review. 0 (the
+	// default) accepts any verified report with a complete panel and no
+	// critical contract violations.
+	QualityFloor float64
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -57,6 +63,11 @@ func LoadConfig() (*Config, error) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return nil, errors.New("DATABASE_URL is required")
+	}
+
+	qualityFloor, err := envFloatRanged("QUALITY_FLOOR", 0, 0, 100)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Config{
@@ -81,6 +92,7 @@ func LoadConfig() (*Config, error) {
 		RateLimitRead:       envInt("RATE_LIMIT_READ", 300),
 		RateLimitWrite:      envInt("RATE_LIMIT_WRITE", 60),
 		RateLimitSuites:     envInt("RATE_LIMIT_SUITES", 20),
+		QualityFloor:        qualityFloor,
 	}, nil
 }
 
@@ -111,6 +123,26 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// envFloatRanged parses a float from key, range-checked to [min, max].
+// An unset key returns fallback. A set-but-invalid or out-of-range value is a
+// boot error rather than a silent fallback, since a floor that silently
+// reads as unset is a security control that looks configured and does
+// nothing.
+func envFloatRanged(key string, fallback, min, max float64) (float64, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, errors.New(key + " must be a number")
+	}
+	if n < min || n > max {
+		return 0, errors.New(key + " must be between " + strconv.FormatFloat(min, 'g', -1, 64) + " and " + strconv.FormatFloat(max, 'g', -1, 64))
+	}
+	return n, nil
 }
 
 func envDefault(key, fallback string) string {
