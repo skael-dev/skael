@@ -247,21 +247,26 @@ func (p *PoolExecutor) Fail(ctx context.Context, id JobID, workerID, cause strin
 }
 
 // VerifyClaim compares in constant time: the claim token is a bearer
-// credential and a byte-at-a-time comparison leaks it. A claim is live only
-// while the job is still running and its lease has not expired — a lapsed
-// lease or a cancelled job (Cancel clears claim_token_hash) must not verify,
-// even if nobody has polled to notice yet.
+// credential and a byte-at-a-time comparison leaks it. Status and lease
+// liveness are checked in the same query as the hash, against the
+// database's clock — the same one Claim, Heartbeat, and ReapExpired use —
+// so a lapsed lease or a cancelled job (Cancel clears claim_token_hash) can
+// never verify due to skew between the app server's clock and the
+// database's, even if nobody has polled to notice yet.
 func (p *PoolExecutor) VerifyClaim(ctx context.Context, id JobID, token string) (*Job, bool, error) {
 	j, err := p.Get(ctx, id)
 	if err != nil || j == nil {
 		return nil, false, err
 	}
-	if j.Status != StatusRunning || j.LeaseExpiresAt == nil || !j.LeaseExpiresAt.After(time.Now()) {
+	var stored string
+	err = p.db.QueryRow(ctx,
+		`SELECT claim_token_hash FROM eval_jobs
+		 WHERE id = $1 AND status = 'running' AND lease_expires_at > now()`,
+		string(id)).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
-	var stored string
-	if err := p.db.QueryRow(ctx,
-		`SELECT claim_token_hash FROM eval_jobs WHERE id = $1`, string(id)).Scan(&stored); err != nil {
+	if err != nil {
 		return nil, false, err
 	}
 	want, err := hex.DecodeString(stored)
