@@ -70,6 +70,17 @@ func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 	return auth.UserFromContext(ctx).IsPrivileged()
 }
 
+// DecidePublish is the one definition of "what does this scan report mean for
+// this version" shared by every route that creates a version — publish and
+// import alike. A version has no quality state yet by definition: the
+// evaluation that could produce one runs against the bundle this call is
+// creating, so q is always nil here. floor and override are the resolved
+// gate.Policy inputs; import has no interactive override and must always
+// pass false.
+func DecidePublish(rep *scan.Report, floor float64, override bool) gate.Decision {
+	return gate.Decide(*rep, nil, gate.Policy{Floor: floor, AdminOverride: override})
+}
+
 // EvalJobRequest is what publish needs to enqueue an evaluation. It mirrors
 // the fields of evalqueue.Job that publish sets, but is declared in this
 // package rather than imported: internal/evalqueue imports internal/skill
@@ -365,14 +376,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		}
 		scan.MergeExternal(ctx, external, tmpDir, report)
 
-		// A publish has no quality state yet by definition: the evaluation
-		// that could produce one runs against the bundle this call is
-		// creating. nil is that absence stated honestly — a zero-valued
-		// QualityState would read as "measured, scored nothing".
-		decision := gate.Decide(*report, nil, gate.Policy{
-			Floor:         opts.QualityFloor,
-			AdminOverride: publishOverrideAllowed(ctx, input.Override),
-		})
+		decision := DecidePublish(report, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
 
 		if decision.Outcome == gate.Block {
 			payload, _ := json.Marshal(struct {

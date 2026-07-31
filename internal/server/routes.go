@@ -173,9 +173,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	importStore := skillimport.NewStore(d.Pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
 	skillimport.RegisterRoutes(api, router, importStore, skillStore, d.Storage, importFetcher, skillimport.RouteOptions{
-		External: externalScanner,
-		Queue:    evalPool,
-		Suites:   suiteRegistry,
+		External:     externalScanner,
+		Queue:        evalPool,
+		Suites:       suiteRegistry,
+		QualityFloor: cfg.QualityFloor,
 	})
 
 	// Eval suite registry. suiteRegistry was constructed above, alongside
