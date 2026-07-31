@@ -167,7 +167,26 @@ func TestWhetstone_SuiteCheckRunsRealOraclesInTheSandbox(t *testing.T) {
 	}
 }
 
-func TestWhetstone_EvalWithNoGatewaySaysWhatToDo(t *testing.T) {
+// Eval run by someone who has installed nothing: no docker on PATH, no agent
+// CLI, no API key. The point is the shape of the message — an actionable
+// pointer at `whetstone doctor` rather than a stack trace or a bare "not
+// found", which is the difference between a user fixing their setup and
+// filing a bug.
+//
+// PATH is emptied rather than narrowed to a plausible-looking "/usr/bin:/bin".
+// That earlier form made this test mean two different things on two
+// platforms: on macOS it hid docker too (Docker Desktop installs to
+// /usr/local/bin) and the run died at driver construction, which is the
+// assertion below; on Linux docker IS /usr/bin/docker, so the run got further
+// and stopped at an entirely different gate, and the test failed on CI while
+// passing locally. An empty directory is the only PATH that means the same
+// thing everywhere.
+//
+// Note that a missing gateway alone cannot be what fails a run here: eval
+// treats the gateway as optional (see newGateway's swallowed error — scoring
+// degrades to no judge rather than refusing), so the absent docker binary is
+// what this actually pins.
+func TestWhetstone_EvalWithNoUsableSetupSaysWhatToDo(t *testing.T) {
 	bin := binary(t)
 	root := t.TempDir()
 	if _, code := run(t, bin, root, "init"); code != 0 {
@@ -177,13 +196,11 @@ func TestWhetstone_EvalWithNoGatewaySaysWhatToDo(t *testing.T) {
 
 	cmd := exec.Command(bin, "eval", skill, "--tier", "smoke")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin", "ANTHROPIC_API_KEY=")
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "ANTHROPIC_API_KEY=")
 	b, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("eval succeeded with no gateway and no agent CLI:\n%s", b)
+		t.Fatalf("eval succeeded with no docker, no agent CLI and no API key:\n%s", b)
 	}
-	// A stack trace or a bare "not found" here is the difference between a user
-	// fixing their setup and filing a bug.
 	if !strings.Contains(string(b), "doctor") {
 		t.Errorf("the failure does not point at `whetstone doctor`:\n%s", b)
 	}
