@@ -19,6 +19,12 @@ type Rule struct {
 	// does not share its category's appealability — an RCE cradle sits in
 	// exfiltration.go but is a guess a sandbox run can overturn, while a
 	// reverse shell in the same file is the exfiltration channel itself.
+	//
+	// Every override carries a comment saying why that rule's appealability
+	// differs from its category's. An override without a stated reason is a
+	// review defect: nothing in the code verifies that an override is
+	// correct, only that it names a class the gate recognises, so the
+	// justification in the comment is the only check there is.
 	Class Class
 }
 

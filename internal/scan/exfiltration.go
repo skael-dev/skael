@@ -49,8 +49,9 @@ var exfiltrationRules = []Rule{
 		// curl|bash or wget|bash — remote code execution pattern
 		Pattern: regexp.MustCompile(`(?i)(curl|wget)\s+[^\s]+\s*\|\s*(ba)?sh\b`),
 		Message: "Dangerous shell: pipe remote content to shell (RCE pattern)",
-		// An RCE cradle: code arriving, not data leaving. The scanner is
-		// guessing from shape, which a network-off sandbox run can overturn.
+		// Reads a remote script and runs it: code arriving, not data leaving.
+		// Whether it is an install step or an attack is a guess from shape,
+		// and a network-off sandbox run settles it.
 		Class: ClassExecution,
 	},
 	{
@@ -80,8 +81,9 @@ var exfiltrationRules = []Rule{
 		// "fetch and execute" remote script instructions
 		Pattern: regexp.MustCompile(`(?i)\bfetch\s+and\s+(execute|run)\b`),
 		Message: "Instruction to fetch and execute remote code",
-		// An RCE cradle: code arriving, not data leaving. The scanner is
-		// guessing from shape, which a network-off sandbox run can overturn.
+		// Prose telling the agent to fetch and run remote code. Same shape as
+		// the shell cradle and no more certain — medium confidence, on a
+		// natural-language phrase — so a sandbox run, not the regex, decides.
 		Class: ClassExecution,
 	},
 	{
@@ -92,8 +94,8 @@ var exfiltrationRules = []Rule{
 		// PowerShell download-and-execute cradle: IEX (New-Object ...).DownloadString
 		Pattern: regexp.MustCompile(`(?i)(iex|invoke-expression).{0,40}downloadstring`),
 		Message: "PowerShell download-and-execute cradle (RCE pattern)",
-		// An RCE cradle: code arriving, not data leaving. The scanner is
-		// guessing from shape, which a network-off sandbox run can overturn.
+		// The PowerShell equivalent of curl|bash: DownloadString feeding IEX
+		// is code arriving, not data leaving.
 		Class: ClassExecution,
 	},
 	{
@@ -104,8 +106,8 @@ var exfiltrationRules = []Rule{
 		// Anything piped into Invoke-Expression (e.g. iwr ... | iex).
 		Pattern: regexp.MustCompile(`(?i)\|\s*iex\b`),
 		Message: "Remote content piped to Invoke-Expression (RCE pattern)",
-		// An RCE cradle: code arriving, not data leaving. The scanner is
-		// guessing from shape, which a network-off sandbox run can overturn.
+		// Anything piped into Invoke-Expression is executing fetched content.
+		// Data flows in, not out.
 		Class: ClassExecution,
 	},
 	{
@@ -117,5 +119,9 @@ var exfiltrationRules = []Rule{
 		// where <run> is ./file, a shell, an interpreter, or chmod +x.
 		Pattern: regexp.MustCompile(`(?i)(curl|wget)\s+.*https?://.*\s-(o|O|-output)\s+\S+\s*(&&|;)\s*(\./|sh\b|bash\b|zsh\b|source\b|chmod|python[0-9.]*\b|node\b|ruby\b|perl\b|php\b)`),
 		Message: "Download remote file then execute it (RCE pattern)",
+		// Downloads a file and then runs it — the same cradle as curl|bash
+		// with a temp file in the middle. The bytes move inbound; a sandbox
+		// run observes what they do.
+		Class: ClassExecution,
 	},
 }
