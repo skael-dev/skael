@@ -381,31 +381,6 @@ func TestCreateVersionNumbersFromMaxNotFromPointer(t *testing.T) {
 	require.Equal(t, 3, got.LatestVersion, "a released publish after two held ones advances the pointer to itself")
 }
 
-// A held v4 released after a clean v5 already shipped must not pull clients
-// back to v4 — hence GREATEST rather than a bare assignment.
-func TestCreateVersionLatestNeverGoesBackwards(t *testing.T) {
-	if testing.Short() {
-		t.Skip("requires database")
-	}
-	pool := testutil.SetupTestDB(t)
-	s := skill.NewStore(pool)
-	ctx := context.Background()
-	sk := mustSkill(t, s, "monotonic-skill")
-
-	_, err := s.CreateVersion(ctx, sk.ID, "p1", "c1", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", allowDecision())
-	require.NoError(t, err)
-	_, err = s.CreateVersion(ctx, sk.ID, "p2", "c2", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", allowDecision())
-	require.NoError(t, err)
-
-	// Simulate an older held version being released later.
-	_, err = pool.Exec(ctx, `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`, sk.ID, 1)
-	require.NoError(t, err)
-
-	got, err := s.GetByName(ctx, "monotonic-skill")
-	require.NoError(t, err)
-	require.Equal(t, 2, got.LatestVersion)
-}
-
 // The UPDATE skills statement in CreateVersion looks vestigial now that it no
 // longer returns the version number. It is not: it takes the row lock that
 // serialises concurrent publishes of the same skill. Delete it and this test

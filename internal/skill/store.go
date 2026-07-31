@@ -214,9 +214,14 @@ func (s *Store) CreateVersion(
 		return nil, fmt.Errorf("skill.Store.CreateVersion insert: %w", err)
 	}
 
-	// latest_version advances only for a released version. GREATEST guards the
-	// case where a held v4 is released after a clean v5 already shipped — a
-	// bare assignment there would regress every client to the older skill.
+	// latest_version advances only for a released version.
+	//
+	// GREATEST is defensive here and cannot be exercised from this function:
+	// newVersion is MAX(version)+1, so it is always the new maximum and always
+	// greater than latest_version. The case it guards — a held v4 released
+	// after a clean v5 already shipped, where a bare assignment would regress
+	// every client to the older skill — arises on the release path, not on
+	// publish. The live behaviour belongs to ReleaseVersion.
 	if state == "released" {
 		const advance = `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`
 		if _, err := tx.Exec(ctx, advance, skillID, newVersion); err != nil {
