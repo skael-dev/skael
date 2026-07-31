@@ -12,6 +12,12 @@ var exfiltrationRules = []Rule{
 		// Direct .env file read instructions
 		Pattern: regexp.MustCompile(`(?i)\bread\s+(the\s+)?\.env\s+(file\b|and\b)|cat\s+\.env\b|open\s+\.env\b`),
 		Message: "Attempts to read .env credentials file",
+		// Reading a credential path is access, not data leaving the machine —
+		// the distinction this split turns on. A sandbox run observes both
+		// whether the skill touches the path at all and whether anything
+		// leaves, so this is a guess evidence can overturn. It still blocks
+		// by default; it is just no longer permanent.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "SENSITIVE_FILE_ACCESS",
@@ -21,6 +27,12 @@ var exfiltrationRules = []Rule{
 		// SSH key directory access
 		Pattern: regexp.MustCompile(`~/\.ssh/|~\/\.ssh\b|\$HOME/\.ssh/`),
 		Message: "Attempts to access SSH key directory",
+		// Reading a credential path is access, not data leaving the machine —
+		// the distinction this split turns on. A sandbox run observes both
+		// whether the skill touches the path at all and whether anything
+		// leaves, so this is a guess evidence can overturn. It still blocks
+		// by default; it is just no longer permanent.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "SENSITIVE_FILE_ACCESS",
@@ -30,6 +42,12 @@ var exfiltrationRules = []Rule{
 		// AWS credentials file access
 		Pattern: regexp.MustCompile(`~/\.aws/credentials|~\/\.aws\b|\$HOME/\.aws/`),
 		Message: "Attempts to access AWS credentials",
+		// Reading a credential path is access, not data leaving the machine —
+		// the distinction this split turns on. A sandbox run observes both
+		// whether the skill touches the path at all and whether anything
+		// leaves, so this is a guess evidence can overturn. It still blocks
+		// by default; it is just no longer permanent.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "SENSITIVE_FILE_ACCESS",
@@ -40,6 +58,12 @@ var exfiltrationRules = []Rule{
 		// medium so it surfaces for review without blocking publish.
 		Pattern: regexp.MustCompile(`~/\.config/|\$HOME/\.config/`),
 		Message: "Attempts to access ~/.config (may contain credentials)",
+		// Reading a credential path is access, not data leaving the machine —
+		// the distinction this split turns on. A sandbox run observes both
+		// whether the skill touches the path at all and whether anything
+		// leaves, so this is a guess evidence can overturn. It still blocks
+		// by default; it is just no longer permanent.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DATA_EXFILTRATION",
