@@ -106,7 +106,7 @@ func scanLine(filename, line string, lineNum int, report *Report) {
 			// Never echo a credential verbatim in the report.
 			shown = maskSecret(match)
 		}
-		class, _ := ClassOf(rule.Category)
+		class, _ := rule.ResolvedClass()
 		report.Findings = append(report.Findings, Finding{
 			Rule:       rule.Name,
 			Severity:   rule.Severity,

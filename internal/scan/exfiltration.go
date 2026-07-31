@@ -49,6 +49,9 @@ var exfiltrationRules = []Rule{
 		// curl|bash or wget|bash — remote code execution pattern
 		Pattern: regexp.MustCompile(`(?i)(curl|wget)\s+[^\s]+\s*\|\s*(ba)?sh\b`),
 		Message: "Dangerous shell: pipe remote content to shell (RCE pattern)",
+		// An RCE cradle: code arriving, not data leaving. The scanner is
+		// guessing from shape, which a network-off sandbox run can overturn.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DANGEROUS_SHELL",
@@ -77,6 +80,9 @@ var exfiltrationRules = []Rule{
 		// "fetch and execute" remote script instructions
 		Pattern: regexp.MustCompile(`(?i)\bfetch\s+and\s+(execute|run)\b`),
 		Message: "Instruction to fetch and execute remote code",
+		// An RCE cradle: code arriving, not data leaving. The scanner is
+		// guessing from shape, which a network-off sandbox run can overturn.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DATA_EXFILTRATION",
@@ -86,6 +92,9 @@ var exfiltrationRules = []Rule{
 		// PowerShell download-and-execute cradle: IEX (New-Object ...).DownloadString
 		Pattern: regexp.MustCompile(`(?i)(iex|invoke-expression).{0,40}downloadstring`),
 		Message: "PowerShell download-and-execute cradle (RCE pattern)",
+		// An RCE cradle: code arriving, not data leaving. The scanner is
+		// guessing from shape, which a network-off sandbox run can overturn.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DATA_EXFILTRATION",
@@ -95,6 +104,9 @@ var exfiltrationRules = []Rule{
 		// Anything piped into Invoke-Expression (e.g. iwr ... | iex).
 		Pattern: regexp.MustCompile(`(?i)\|\s*iex\b`),
 		Message: "Remote content piped to Invoke-Expression (RCE pattern)",
+		// An RCE cradle: code arriving, not data leaving. The scanner is
+		// guessing from shape, which a network-off sandbox run can overturn.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DATA_EXFILTRATION",

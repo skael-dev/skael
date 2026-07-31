@@ -131,10 +131,9 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			analyzeCall(n, add)
 		case *syntax.Redirect:
 			if n.Word != nil && strings.Contains(n.Word.Lit(), "/dev/tcp/") {
-				// A pipe-to-shell RCE pattern is structurally identical to
-				// what a network-off sandbox measures directly, so it takes
-				// the same appealable class as its regex counterpart.
-				add("DANGEROUS_SHELL", "critical", string(ClassExecution),
+				// A reverse shell is the outbound channel itself, not a
+				// guess about one: unappealable.
+				add("DANGEROUS_SHELL", "critical", string(ClassExfiltration),
 					"Shell AST: /dev/tcp reverse shell", n.OpPos)
 			}
 		}
@@ -169,10 +168,10 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, class, msg s
 	}
 	switch {
 	case sawFetch:
-		// Unappealable, deliberately: remote content piped straight into a
-		// shell is the exfiltration/RCE pattern itself, not a shape that a
-		// sandbox run could exonerate.
-		add("DATA_EXFILTRATION", "critical", string(ClassExfiltration),
+		// An RCE cradle: code arriving, not data leaving. It takes the same
+		// appealable class as its regex counterpart, because a network-off
+		// sandbox run measures directly what this rule only guesses.
+		add("DATA_EXFILTRATION", "critical", string(ClassExecution),
 			"Shell AST: remote content piped to a shell (RCE pattern)", last.Pos())
 	case sawDecode:
 		add("OBFUSCATION", "critical", string(ClassHeuristic),

@@ -15,6 +15,22 @@ type Rule struct {
 	// placeholders/references (e.g. `password = "your-password-here"`) that would
 	// otherwise be false positives.
 	Reject *regexp.Regexp
+	// Class overrides the class derived from Category. Set it only where a rule
+	// does not share its category's appealability — an RCE cradle sits in
+	// exfiltration.go but is a guess a sandbox run can overturn, while a
+	// reverse shell in the same file is the exfiltration channel itself.
+	Class Class
+}
+
+// ResolvedClass is the class a finding from this rule carries: the explicit
+// override when the rule sets one, otherwise the class its category implies.
+// The bool is false only when neither is available, which
+// TestEveryRuleHasAClass keeps unreachable.
+func (r Rule) ResolvedClass() (Class, bool) {
+	if r.Class != "" {
+		return r.Class, true
+	}
+	return ClassOf(r.Category)
 }
 
 // AllRules returns the concatenation of every native detection rule slice.

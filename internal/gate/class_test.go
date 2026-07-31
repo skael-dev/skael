@@ -36,7 +36,25 @@ func TestEveryRuleHasAClass(t *testing.T) {
 	rules := scan.AllRules()
 	require.NotEmpty(t, rules, "AllRules must not be empty; an empty registry would make this test vacuous")
 	for _, r := range rules {
-		_, ok := gate.ClassOf(r.Category)
+		// ResolvedClass, not ClassOf: a rule may override the class its
+		// category implies, and the guard has to cover that path too or an
+		// override typo'd to a nonsense value slips past.
+		c, ok := r.ResolvedClass()
 		assert.Truef(t, ok, "rule %q has category %q with no class mapping", r.Name, r.Category)
+		if ok {
+			_, known := gate.ClassOf(string(c))
+			assert.Truef(t, known || isKnownClass(c),
+				"rule %q resolves to class %q, which is not one the gate recognises", r.Name, c)
+		}
 	}
+}
+
+// isKnownClass reports whether c is one of the five classes Decide branches on.
+func isKnownClass(c gate.Class) bool {
+	switch c {
+	case gate.ClassExfiltration, gate.ClassSecret, gate.ClassExecution,
+		gate.ClassInjection, gate.ClassHeuristic:
+		return true
+	}
+	return false
 }
