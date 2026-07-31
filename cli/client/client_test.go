@@ -593,7 +593,7 @@ func TestUploadEvalSuite_SendsExpectedBody(t *testing.T) {
 	defer srv.Close()
 
 	checks := []EvalSuiteCheck{{TaskID: "t00", OK: false, Void: true, Reason: "oracle failed"}}
-	resp, err := c.UploadEvalSuite("deploy-helper", 3, checks, []byte("archive-bytes"))
+	resp, err := c.UploadEvalSuite("deploy-helper", 3, checks, nil, []byte("archive-bytes"))
 	if err != nil {
 		t.Fatalf("UploadEvalSuite: %v", err)
 	}
@@ -636,7 +636,7 @@ func TestUploadEvalSuite_RespectsClientTimeout(t *testing.T) {
 	c.httpClient.Timeout = 200 * time.Millisecond
 
 	start := time.Now()
-	_, err := c.UploadEvalSuite("deploy-helper", 1, []EvalSuiteCheck{{TaskID: "t00", OK: true}}, []byte("x"))
+	_, err := c.UploadEvalSuite("deploy-helper", 1, []EvalSuiteCheck{{TaskID: "t00", OK: true}}, nil, []byte("x"))
 	elapsed := time.Since(start)
 
 	if err == nil {

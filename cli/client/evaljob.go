@@ -12,18 +12,24 @@ import (
 // EvalJob is the client-side representation of an eval queue job, as the
 // claim/status endpoints return it.
 type EvalJob struct {
-	ID          string `json:"id"`
-	SkillID     string `json:"skill_id"`
-	SkillName   string `json:"skill_name"`
-	Version     int    `json:"version"`
-	SuiteRef    string `json:"suite_ref"`
-	Tier        string `json:"tier"`
-	Status      string `json:"status"`
-	Attempts    int    `json:"attempts"`
-	MaxAttempts int    `json:"max_attempts"`
-	WorkerID    string `json:"worker_id,omitempty"`
-	LastError   string `json:"last_error,omitempty"`
-	RequestedBy string `json:"requested_by,omitempty"`
+	ID        string `json:"id"`
+	SkillID   string `json:"skill_id"`
+	SkillName string `json:"skill_name"`
+	Version   int    `json:"version"`
+	SuiteRef  string `json:"suite_ref"`
+	Tier      string `json:"tier"`
+	// Agents and Models are the requested panel — see evalqueue.Panel. The
+	// whole point of the re-run endpoint is choosing a panel, so a wire
+	// format that could not carry it back to the worker would silently
+	// evaluate every job against the worker's default instead.
+	Agents      []string `json:"agents,omitempty"`
+	Models      []string `json:"models,omitempty"`
+	Status      string   `json:"status"`
+	Attempts    int      `json:"attempts"`
+	MaxAttempts int      `json:"max_attempts"`
+	WorkerID    string   `json:"worker_id,omitempty"`
+	LastError   string   `json:"last_error,omitempty"`
+	RequestedBy string   `json:"requested_by,omitempty"`
 }
 
 // ClaimEvalJob calls POST /api/eval/jobs/claim. It returns (nil, "", false,
@@ -116,20 +122,30 @@ func (c *Client) FetchEvalSuite(ref string) ([]byte, error) {
 	return data, nil
 }
 
-// FetchEvalSuiteChecks calls GET /api/eval/suites/{ref}/checks and returns
-// the oracle-gate checks recorded for the suite.
-func (c *Client) FetchEvalSuiteChecks(ref string) ([]EvalSuiteCheck, error) {
-	resp, err := c.do(http.MethodGet, "/api/eval/suites/"+url.PathEscape(ref)+"/checks", nil, "")
+// EvalSuiteMeta is the response to GET /api/eval/suites/{ref}/meta: the
+// oracle-gate checks recorded for a suite, and the spec it was checked
+// against (nil if the pusher didn't send one).
+type EvalSuiteMeta struct {
+	Checks      []EvalSuiteCheck `json:"checks"`
+	SpecVersion int              `json:"spec_version"`
+	Spec        json.RawMessage  `json:"spec,omitempty"`
+}
+
+// FetchEvalSuiteMeta calls GET /api/eval/suites/{ref}/meta and returns the
+// oracle-gate checks and spec recorded for the suite. Both live on one call
+// because every consumer of one needs the other: an eval cannot run without
+// the checks, and a worker rebuilding a workspace from a downloaded bundle
+// has no other source for the spec.
+func (c *Client) FetchEvalSuiteMeta(ref string) (*EvalSuiteMeta, error) {
+	resp, err := c.do(http.MethodGet, "/api/eval/suites/"+url.PathEscape(ref)+"/meta", nil, "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var out struct {
-		Checks []EvalSuiteCheck `json:"checks"`
-	}
+	var out EvalSuiteMeta
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode eval suite checks response: %w", err)
+		return nil, fmt.Errorf("decode eval suite meta response: %w", err)
 	}
-	return out.Checks, nil
+	return &out, nil
 }

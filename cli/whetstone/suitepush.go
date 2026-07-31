@@ -2,6 +2,7 @@ package whetstone
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -109,9 +110,19 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	// back to some default here would tag the suite against the wrong (or an
 	// unknown) spec version and quietly corrupt that comparison, so a failed
 	// load fails the push instead.
-	_, specVersion, err := req.Store.LoadSpec(req.Skill)
+	//
+	// The full spec travels with the suite, not just its version: a
+	// published bundle never carries spec.yaml (lint.Excluded strips the
+	// whole eval sidecar before packing), so this push is the only chance a
+	// worker rebuilding a workspace from a downloaded bundle ever gets to
+	// recover the skill's real deps and purpose instead of a placeholder.
+	sp, specVersion, err := req.Store.LoadSpec(req.Skill)
 	if err != nil {
 		return fmt.Errorf("suite push: could not load the spec for %s, so the suite cannot be tagged with a spec version: %w", req.Skill, err)
+	}
+	specJSON, err := json.Marshal(sp)
+	if err != nil {
+		return fmt.Errorf("suite push: marshal spec for %s: %w", req.Skill, err)
 	}
 
 	archive, err := evalsuite.PackDir(suiteDir)
@@ -124,7 +135,7 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	}
 
 	c := client.New(req.Endpoint, req.APIKey)
-	resp, err := c.UploadEvalSuite(req.Skill, specVersion, checks, archive)
+	resp, err := c.UploadEvalSuite(req.Skill, specVersion, checks, specJSON, archive)
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}

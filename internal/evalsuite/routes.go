@@ -3,6 +3,7 @@ package evalsuite
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,10 +27,14 @@ type suiteCheck struct {
 }
 
 type suiteBody struct {
-	Skill         string       `json:"skill" minLength:"1"`
-	SpecVersion   int          `json:"spec_version"`
-	Checks        []suiteCheck `json:"checks"`
-	ArchiveBase64 string       `json:"archive_base64" minLength:"1"`
+	Skill       string       `json:"skill" minLength:"1"`
+	SpecVersion int          `json:"spec_version"`
+	Checks      []suiteCheck `json:"checks"`
+	// Spec is the pusher's spec.yaml as JSON. Optional so an older client
+	// can still push, but a worker materializing this suite later has no
+	// other way to recover it — see evalsuite.Record.Spec.
+	Spec          json.RawMessage `json:"spec,omitempty"`
+	ArchiveBase64 string          `json:"archive_base64" minLength:"1"`
 }
 
 type suiteInput struct {
@@ -84,7 +89,7 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			uploadedBy = u.Email
 		}
 
-		rec, err := reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy)
+		rec, err := reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy, input.Body.Spec)
 		if err != nil {
 			if errors.Is(err, ErrInvalidArchive) {
 				return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
@@ -102,25 +107,36 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}, nil
 	})
 
+	// get-eval-suite-meta serves everything a worker needs to materialize a
+	// suite besides the archive bytes themselves: the oracle-gate checks
+	// (without which RunEvalWith's gate refuses to run at all) and the
+	// authored spec (without which a worker rebuilding a workspace from a
+	// downloaded bundle has no source for the skill's deps or purpose — see
+	// evalsuite.Record.Spec). Both live on one route rather than two because
+	// every caller that needs one needs the other.
 	huma.Register(api, huma.Operation{
-		OperationID: "get-eval-suite-checks",
+		OperationID: "get-eval-suite-meta",
 		Method:      http.MethodGet,
-		Path:        "/api/eval/suites/{ref}/checks",
-		Summary:     "Get the oracle-gate checks recorded for a suite",
-	}, func(ctx context.Context, input *getSuiteChecksInput) (*getSuiteChecksOutput, error) {
+		Path:        "/api/eval/suites/{ref}/meta",
+		Summary:     "Get the oracle-gate checks and spec recorded for a suite",
+	}, func(ctx context.Context, input *getSuiteMetaInput) (*getSuiteMetaOutput, error) {
 		rec, err := reg.Get(ctx, input.Ref)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return nil, huma.Error404NotFound(fmt.Sprintf("suite %q not found", input.Ref))
 			}
 			log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: lookup suite failed")
-			return nil, huma.Error500InternalServerError("get eval suite checks: internal error")
+			return nil, huma.Error500InternalServerError("get eval suite meta: internal error")
 		}
 		checks := make([]suiteCheck, len(rec.Checks))
 		for i, c := range rec.Checks {
 			checks[i] = suiteCheck(c)
 		}
-		return &getSuiteChecksOutput{Body: getSuiteChecksBody{Checks: checks}}, nil
+		return &getSuiteMetaOutput{Body: getSuiteMetaBody{
+			Checks:      checks,
+			SpecVersion: rec.SpecVersion,
+			Spec:        rec.Spec,
+		}}, nil
 	})
 
 	if router != nil {
@@ -128,16 +144,18 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 	}
 }
 
-type getSuiteChecksInput struct {
+type getSuiteMetaInput struct {
 	Ref string `path:"ref"`
 }
 
-type getSuiteChecksBody struct {
-	Checks []suiteCheck `json:"checks"`
+type getSuiteMetaBody struct {
+	Checks      []suiteCheck    `json:"checks"`
+	SpecVersion int             `json:"spec_version"`
+	Spec        json.RawMessage `json:"spec,omitempty"`
 }
 
-type getSuiteChecksOutput struct {
-	Body getSuiteChecksBody
+type getSuiteMetaOutput struct {
+	Body getSuiteMetaBody
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a suite

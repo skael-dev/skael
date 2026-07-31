@@ -95,11 +95,11 @@ func TestRegistry_PutIsIdempotentOnRef(t *testing.T) {
 	archive := fixtureSuiteArchive(t) // packs testdata/suite
 	checks := []evalsuite.Check{{TaskID: "t1", OK: true}}
 
-	a, err := reg.Put(ctx, "deploy-helper", archive, checks, 1, "nate@example.com")
+	a, err := reg.Put(ctx, "deploy-helper", archive, checks, 1, "nate@example.com", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := reg.Put(ctx, "deploy-helper", archive, checks, 1, "nate@example.com")
+	b, err := reg.Put(ctx, "deploy-helper", archive, checks, 1, "nate@example.com", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestRegistry_RefMatchesSuiteRefOfTheExtractedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := reg.Put(ctx, "deploy-helper", archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "nate")
+	rec, err := reg.Put(ctx, "deploy-helper", archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "nate", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestRegistry_RefMatchesSuiteRefOfTheExtractedTree(t *testing.T) {
 
 func TestRegistry_RejectsASuiteWithNoChecks(t *testing.T) {
 	reg := evalsuite.NewRegistry(testutil.SetupTestDB(t), newTempStorage(t))
-	_, err := reg.Put(ctx, "deploy-helper", fixtureSuiteArchive(t), nil, 1, "nate")
+	_, err := reg.Put(ctx, "deploy-helper", fixtureSuiteArchive(t), nil, 1, "nate", nil)
 	if err == nil {
 		t.Fatal("a suite with no oracle-gate results was accepted")
 	}
@@ -154,7 +154,7 @@ func TestRegistry_RoundTripsThroughFetchAndUnpack(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureSuite(t, dir)
 	archive, _ := evalsuite.PackDir(dir)
-	rec, err := reg.Put(ctx, "deploy-helper", archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "nate")
+	rec, err := reg.Put(ctx, "deploy-helper", archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "nate", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

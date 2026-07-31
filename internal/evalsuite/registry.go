@@ -46,8 +46,15 @@ type Record struct {
 	TaskCount   int
 	Checks      []Check
 	SpecVersion int
-	UploadedBy  string
-	CreatedAt   time.Time
+	// Spec is the authored spec.SkillSpec, as JSON, that this suite was
+	// checked against. A published bundle never carries spec.yaml — it is
+	// authoring scaffolding, stripped before packing — so this is the only
+	// channel a worker rebuilding a workspace from a downloaded bundle has to
+	// recover it. Nil when the caller that pushed this suite predates this
+	// field, or genuinely has no spec to send.
+	Spec       json.RawMessage
+	UploadedBy string
+	CreatedAt  time.Time
 }
 
 // ErrInvalidArchive is wrapped into any Put error caused by the caller's
@@ -83,8 +90,9 @@ func archiveKey(ref string) string {
 //
 // checks must not be empty — a suite with no oracle-gate results cannot tell
 // a broken task from a broken skill, so the check travels with the suite by
-// construction rather than by convention.
-func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string) (*Record, error) {
+// construction rather than by convention. specJSON is the pusher's spec.yaml
+// as JSON (may be nil/empty — see Record.Spec).
+func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
@@ -120,12 +128,17 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 		return nil, fmt.Errorf("evalsuite: Put marshal checks: %w", err)
 	}
 
+	var specParam any
+	if len(specJSON) > 0 {
+		specParam = specJSON
+	} // else left nil -> NULL
+
 	const insert = `
-		INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, spec)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (ref) DO NOTHING
 	`
-	if _, err := r.db.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy); err != nil {
+	if _, err := r.db.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
 		return nil, fmt.Errorf("evalsuite: Put insert: %w", err)
 	}
 
@@ -135,7 +148,7 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -172,7 +185,7 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 // skillName.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec
 		FROM eval_suites
 		WHERE skill_name = $1
 		ORDER BY created_at DESC
@@ -192,11 +205,15 @@ func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Recor
 func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt); err != nil {
+	var specJSON []byte
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {
 		return nil, fmt.Errorf("evalsuite: unmarshal checks: %w", err)
+	}
+	if len(specJSON) > 0 {
+		rec.Spec = specJSON
 	}
 	return &rec, nil
 }

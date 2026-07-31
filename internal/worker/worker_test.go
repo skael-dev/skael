@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
@@ -45,6 +46,23 @@ func fixtureSuiteArchive(t *testing.T) []byte {
 		t.Fatalf("fixtureSuiteArchive: %v", err)
 	}
 	return archive
+}
+
+// fixtureSuiteRef is suite.Ref of the tree fixtureSuiteArchive packs. Tests
+// enqueue jobs with this as SuiteRef, so it matches what Materialize
+// actually computes from the fetched archive — since Materialize fails fast
+// on a mismatch (see TestMaterialize_FailsFastWhenSuiteRefDoesNotMatchWantSuiteRef),
+// a job whose SuiteRef doesn't describe the real fixture content would never
+// get past materialization.
+func fixtureSuiteRef(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeFixtureSuite(t, dir)
+	ref, err := suite.Ref(dir)
+	if err != nil {
+		t.Fatalf("fixtureSuiteRef: %v", err)
+	}
+	return ref
 }
 
 // writeFixtureSuite writes a minimal suite tree to dir that suite.Load
@@ -102,6 +120,10 @@ type fakeAPI struct {
 	bundle       []byte
 	suiteArchive []byte
 	checks       []evalsuite.Check
+	// spec is nil by default: SuiteMeta returns SuiteMeta{Spec: nil}, which
+	// exercises Materialize's frontmatter-reconstruction fallback, same as
+	// before this field existed.
+	spec *spec.SkillSpec
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -160,8 +182,8 @@ func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error
 	return f.bundle, nil
 }
 
-func (f *fakeAPI) SuiteChecks(_ context.Context, _ string) ([]evalsuite.Check, error) {
-	return f.checks, nil
+func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, error) {
+	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec}, nil
 }
 
 // fakeRunner is a test double for worker.Runner: no Docker, just a canned
@@ -202,8 +224,9 @@ func (f *fakeRunner) input() worker.RunInput {
 
 func TestWorker_RunOnce_ClaimsRunsAndPostsAReport(t *testing.T) {
 	api := newFakeAPI(t)
-	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: "sha256:abc", Tier: "smoke"})
-	runner := &fakeRunner{report: reportFixture("deploy-helper", "sha256:abc", 71)}
+	ref := fixtureSuiteRef(t)
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: ref, Tier: "smoke"})
+	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 71)}
 
 	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
 	if err != nil {
@@ -228,7 +251,7 @@ func TestWorker_RunOnce_ClaimsRunsAndPostsAReport(t *testing.T) {
 // worker that fails loudly returns it now, with the reason recorded.
 func TestWorker_RunOnce_ReportsAFailureInsteadOfSwallowingIt(t *testing.T) {
 	api := newFakeAPI(t)
-	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: "sha256:abc"})
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: fixtureSuiteRef(t)})
 	runner := &fakeRunner{err: errors.New("sandbox unavailable")}
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
 
@@ -254,9 +277,10 @@ func TestWorker_RunOnce_EmptyQueueIsNotAnError(t *testing.T) {
 
 func TestWorker_HeartbeatsWhileTheRunIsInFlight(t *testing.T) {
 	api := newFakeAPI(t)
-	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: "sha256:abc"})
+	ref := fixtureSuiteRef(t)
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: ref})
 	release := make(chan struct{})
-	runner := &fakeRunner{report: reportFixture("deploy-helper", "sha256:abc", 60), block: release}
+	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 60), block: release}
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1",
 		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 50 * time.Millisecond}, api, runner)
 
@@ -279,10 +303,11 @@ func TestWorker_HeartbeatsWhileTheRunIsInFlight(t *testing.T) {
 // against a claim that is no longer ours.
 func TestWorker_AbandonsTheRunWhenTheLeaseIsLost(t *testing.T) {
 	api := newFakeAPI(t)
-	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: "sha256:abc"})
+	ref := fixtureSuiteRef(t)
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: ref})
 	api.heartbeatErr = evalqueue.ErrLeaseLost
 	release := make(chan struct{})
-	runner := &fakeRunner{report: reportFixture("deploy-helper", "sha256:abc", 60), block: release}
+	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 60), block: release}
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1",
 		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 30 * time.Millisecond}, api, runner)
 
@@ -300,5 +325,60 @@ func TestWorker_AbandonsTheRunWhenTheLeaseIsLost(t *testing.T) {
 	api.mu.Unlock()
 	if posted != nil {
 		t.Fatal("a report was posted after the lease was lost")
+	}
+}
+
+// A Runner's report must describe the job it was run for. Posting a mismatch
+// would score the job under a different suite ref than the one it names —
+// the server checks this too, but a worker that catches it locally can fail
+// with a clear cause instead of a rejected POST.
+func TestWorker_RunOnce_RefusesAReportWithMismatchedSuiteRef(t *testing.T) {
+	api := newFakeAPI(t)
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: fixtureSuiteRef(t)})
+	// The report names a suite ref the job never asked for.
+	runner := &fakeRunner{report: reportFixture("deploy-helper", "sha256:different", 60)}
+	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+
+	if _, err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce accepted a report whose suite_ref did not match the job")
+	}
+	api.mu.Lock()
+	posted := api.posted
+	api.mu.Unlock()
+	if posted != nil {
+		t.Fatal("a report was posted despite a suite_ref mismatch")
+	}
+}
+
+// A Runner returning (nil, nil) — the zero value of fakeRunner itself — must
+// not panic the loop; it must be reported as a failure like any other.
+func TestWorker_RunOnce_ANilReportWithNoErrorIsAFailureNotAPanic(t *testing.T) {
+	api := newFakeAPI(t)
+	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: fixtureSuiteRef(t)})
+	runner := &fakeRunner{} // report == nil, err == nil
+	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+
+	worked, err := w.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce accepted a nil report as success")
+	}
+	if !worked {
+		t.Fatalf("RunOnce = (%v, %v), want worked=true (a job was claimed and attempted)", worked, err)
+	}
+}
+
+// New must fail fast on a WorkRoot that cannot be created, rather than every
+// subsequent RunOnce failing the same way one job at a time.
+func TestNew_FailsFastOnAnUnusableWorkRoot(t *testing.T) {
+	// A file, not a directory: MkdirAll under it must fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badRoot := filepath.Join(blocker, "workroot")
+
+	_, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: badRoot}, newFakeAPI(t), &fakeRunner{})
+	if err == nil {
+		t.Fatal("New accepted a WorkRoot that cannot be created")
 	}
 }

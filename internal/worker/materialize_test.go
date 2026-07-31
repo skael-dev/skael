@@ -1,8 +1,10 @@
 package worker_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/worker"
@@ -10,8 +12,10 @@ import (
 
 func TestMaterialize_ProducesAWorkspaceThatSatisfiesTheOracleGate(t *testing.T) {
 	dir := t.TempDir()
-	st, err := worker.Materialize(dir, "deploy-helper", fixtureBundle(t), fixtureSuiteArchive(t),
-		[]evalsuite.Check{{TaskID: "t1", OK: true}})
+	st, err := worker.Materialize(dir, worker.MaterializeInput{
+		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
+		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +54,10 @@ func TestMaterialize_RefMatchesTheRequestedRef(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	st, err := worker.Materialize(dir, "deploy-helper", fixtureBundle(t), archive,
-		[]evalsuite.Check{{TaskID: "t1", OK: true}})
+	st, err := worker.Materialize(dir, worker.MaterializeInput{
+		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: archive,
+		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,5 +71,56 @@ func TestMaterialize_RefMatchesTheRequestedRef(t *testing.T) {
 	}
 	if gotRef != wantRef {
 		t.Fatalf("materialized suite ref = %s, want %s (the ref the archive was built from)", gotRef, wantRef)
+	}
+}
+
+// A WantSuiteRef that does not match the materialized tree must fail fast,
+// before an eval runs against tasks that are not the ones the job named.
+func TestMaterialize_FailsFastWhenSuiteRefDoesNotMatchWantSuiteRef(t *testing.T) {
+	dir := t.TempDir()
+	_, err := worker.Materialize(dir, worker.MaterializeInput{
+		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
+		Checks:       []evalsuite.Check{{TaskID: "t1", OK: true}},
+		WantSuiteRef: "sha256:not-the-real-ref",
+	})
+	if err == nil {
+		t.Fatal("Materialize accepted a suite whose ref did not match WantSuiteRef")
+	}
+	if !strings.Contains(err.Error(), "sha256:not-the-real-ref") {
+		t.Fatalf("error does not name the mismatched ref: %v", err)
+	}
+}
+
+// When a spec is provided, Materialize must use it rather than falling back
+// to a placeholder reconstructed from SKILL.md frontmatter — the fallback
+// loses the skill's real deps and purpose.
+func TestMaterialize_UsesTheProvidedSpecInsteadOfReconstructing(t *testing.T) {
+	dir := t.TempDir()
+	sp := &spec.SkillSpec{
+		Name:        "deploy-helper",
+		Purpose:     "deploy things to production, carefully",
+		Description: "Deploys the thing.",
+		Triggers:    []spec.TriggerPhrase{{Text: "deploy the thing"}},
+		Steps:       []spec.Step{{ID: "s1", Action: "deploy", Postcondition: "deployed"}},
+		Deps:        spec.DepsDecl{Apt: []string{"curl"}},
+		TargetTier:  spec.TierMid,
+	}
+
+	st, err := worker.Materialize(dir, worker.MaterializeInput{
+		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
+		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}}, Spec: sp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := st.LoadSpec("deploy-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Purpose != sp.Purpose {
+		t.Fatalf("stored spec purpose = %q, want the provided spec's %q (fell back to reconstruction instead of using it)", loaded.Purpose, sp.Purpose)
+	}
+	if len(loaded.Deps.Apt) != 1 || loaded.Deps.Apt[0] != "curl" {
+		t.Fatalf("stored spec deps = %+v, want the provided spec's apt:[curl]", loaded.Deps)
 	}
 }

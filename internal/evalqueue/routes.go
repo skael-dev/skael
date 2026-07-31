@@ -30,18 +30,24 @@ type claimInput struct {
 // jobOutput is the wire shape for a Job, exposed to workers and status
 // pollers.
 type jobOutput struct {
-	ID          string `json:"id"`
-	SkillID     string `json:"skill_id"`
-	SkillName   string `json:"skill_name"`
-	Version     int    `json:"version"`
-	SuiteRef    string `json:"suite_ref"`
-	Tier        string `json:"tier"`
-	Status      string `json:"status"`
-	Attempts    int    `json:"attempts"`
-	MaxAttempts int    `json:"max_attempts"`
-	WorkerID    string `json:"worker_id,omitempty"`
-	LastError   string `json:"last_error,omitempty"`
-	RequestedBy string `json:"requested_by,omitempty"`
+	ID        string `json:"id"`
+	SkillID   string `json:"skill_id"`
+	SkillName string `json:"skill_name"`
+	Version   int    `json:"version"`
+	SuiteRef  string `json:"suite_ref"`
+	Tier      string `json:"tier"`
+	// Agents and Models carry the requested panel (see Panel). Without them
+	// a worker claiming this job over HTTP has no way to learn which panel
+	// was asked for and silently falls back to its own default — defeating
+	// the point of the re-run endpoint's agents/models parameters.
+	Agents      []string `json:"agents,omitempty"`
+	Models      []string `json:"models,omitempty"`
+	Status      string   `json:"status"`
+	Attempts    int      `json:"attempts"`
+	MaxAttempts int      `json:"max_attempts"`
+	WorkerID    string   `json:"worker_id,omitempty"`
+	LastError   string   `json:"last_error,omitempty"`
+	RequestedBy string   `json:"requested_by,omitempty"`
 }
 
 func toJobOutput(j *Job) jobOutput {
@@ -52,6 +58,8 @@ func toJobOutput(j *Job) jobOutput {
 		Version:     j.Version,
 		SuiteRef:    j.SuiteRef,
 		Tier:        j.Tier,
+		Agents:      j.Panel.Agents,
+		Models:      j.Panel.Models,
 		Status:      string(j.Status),
 		Attempts:    j.Attempts,
 		MaxAttempts: j.MaxAttempts,

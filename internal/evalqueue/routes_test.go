@@ -199,6 +199,45 @@ func TestClaimRoute_EmptyQueueIs204(t *testing.T) {
 	}
 }
 
+// The whole point of the re-run endpoint's agents/models parameters is
+// choosing a panel; if the wire format a worker claims a job through cannot
+// carry it back, every job silently runs against the worker's default panel
+// instead of the one that was asked for.
+func TestClaimRoute_CarriesThePanelTheJobWasSubmittedWith(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	_, err := srv.queue.Submit(context.Background(), evalqueue.Job{
+		SkillID:   skillID,
+		SkillName: "deploy-helper",
+		Version:   1,
+		SuiteRef:  "sha256:abc",
+		Panel:     evalqueue.Panel{Agents: []string{"claude-code"}, Models: []string{"opus"}},
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	resp := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 60})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", resp.Code, resp.Body)
+	}
+	var claimed struct {
+		Job struct {
+			Agents []string `json:"agents"`
+			Models []string `json:"models"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &claimed); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, resp.Body)
+	}
+	if len(claimed.Job.Agents) != 1 || claimed.Job.Agents[0] != "claude-code" {
+		t.Fatalf("claimed job agents = %v, want [claude-code]", claimed.Job.Agents)
+	}
+	if len(claimed.Job.Models) != 1 || claimed.Job.Models[0] != "opus" {
+		t.Fatalf("claimed job models = %v, want [opus]", claimed.Job.Models)
+	}
+}
+
 func TestReportRoute_WritesAVerifiedScore(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")

@@ -71,7 +71,7 @@ func registerFixtureSuite(t *testing.T, reg *evalsuite.Registry, skillName strin
 	writeFixtureSuite(t, dir, skillName)
 	archive, err := evalsuite.PackDir(dir)
 	require.NoError(t, err)
-	_, err = reg.Put(context.Background(), skillName, archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "test")
+	_, err = reg.Put(context.Background(), skillName, archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "test", nil)
 	require.NoError(t, err)
 }
 

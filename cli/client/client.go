@@ -351,21 +351,27 @@ type EvalSuiteUpload struct {
 }
 
 // UploadEvalSuite uploads an evaluation suite archive, together with the
-// oracle-gate check results recorded for it, to POST /api/eval/suites. archive
-// is a gzip-compressed tar (see internal/evalsuite.PackDir); it is
-// base64-encoded here because the endpoint's body is JSON, not raw bytes —
-// unlike PublishVersion's skill archives, which travel as the request body
-// itself.
-func (c *Client) UploadEvalSuite(skill string, specVersion int, checks []EvalSuiteCheck, archive []byte) (*EvalSuiteUpload, error) {
+// oracle-gate check results recorded for it and the spec it was checked
+// against, to POST /api/eval/suites. archive is a gzip-compressed tar (see
+// internal/evalsuite.PackDir); it is base64-encoded here because the
+// endpoint's body is JSON, not raw bytes — unlike PublishVersion's skill
+// archives, which travel as the request body itself. specJSON is the
+// spec.SkillSpec that was checked, marshaled to JSON by the caller (may be
+// nil) — a published bundle never carries spec.yaml, so this is the only
+// channel a worker rebuilding a workspace from a downloaded bundle has to
+// recover it.
+func (c *Client) UploadEvalSuite(skill string, specVersion int, checks []EvalSuiteCheck, specJSON json.RawMessage, archive []byte) (*EvalSuiteUpload, error) {
 	payload, err := json.Marshal(struct {
 		Skill         string           `json:"skill"`
 		SpecVersion   int              `json:"spec_version"`
 		Checks        []EvalSuiteCheck `json:"checks"`
+		Spec          json.RawMessage  `json:"spec,omitempty"`
 		ArchiveBase64 string           `json:"archive_base64"`
 	}{
 		Skill:         skill,
 		SpecVersion:   specVersion,
 		Checks:        checks,
+		Spec:          specJSON,
 		ArchiveBase64: base64.StdEncoding.EncodeToString(archive),
 	})
 	if err != nil {

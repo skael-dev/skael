@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 )
@@ -74,6 +75,15 @@ type Runner interface {
 	Run(ctx context.Context, in RunInput) (*report.Report, error)
 }
 
+// SuiteMeta is everything about a stored suite the worker needs besides the
+// archive bytes themselves: the oracle-gate checks (without which
+// RunEvalWith's gate refuses to run at all) and the spec it was checked
+// against (nil if none was recorded — see MaterializeInput.Spec).
+type SuiteMeta struct {
+	Checks []evalsuite.Check
+	Spec   *spec.SkillSpec
+}
+
 // API is the server surface the worker needs, so a test can fake it.
 type API interface {
 	Claim(ctx context.Context, workerID string, lease time.Duration) (*evalqueue.Job, string, bool, error)
@@ -82,7 +92,7 @@ type API interface {
 	FailJob(ctx context.Context, id evalqueue.JobID, token, cause string) error
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
-	SuiteChecks(ctx context.Context, ref string) ([]evalsuite.Check, error)
+	SuiteMeta(ctx context.Context, ref string) (SuiteMeta, error)
 }
 
 // Worker runs the claim/materialise/evaluate/report loop.
@@ -93,6 +103,8 @@ type Worker struct {
 }
 
 // New builds a Worker. cfg's zero-value fields are filled with defaults.
+// WorkRoot is created here (if missing) so a bad path fails at startup
+// rather than on every subsequent job.
 func New(cfg Config, api API, r Runner) (*Worker, error) {
 	if api == nil {
 		return nil, errors.New("worker: New requires a non-nil API")
@@ -100,7 +112,11 @@ func New(cfg Config, api API, r Runner) (*Worker, error) {
 	if r == nil {
 		return nil, errors.New("worker: New requires a non-nil Runner")
 	}
-	return &Worker{cfg: cfg.withDefaults(), api: api, runner: r}, nil
+	cfg = cfg.withDefaults()
+	if err := os.MkdirAll(cfg.WorkRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("worker: New: WorkRoot %q: %w", cfg.WorkRoot, err)
+	}
+	return &Worker{cfg: cfg, api: api, runner: r}, nil
 }
 
 // Loop calls RunOnce until ctx is cancelled, sleeping PollInterval when idle.
@@ -163,12 +179,15 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	if err != nil {
 		return fmt.Errorf("worker: fetch suite: %w", err)
 	}
-	checks, err := w.api.SuiteChecks(ctx, job.SuiteRef)
+	meta, err := w.api.SuiteMeta(ctx, job.SuiteRef)
 	if err != nil {
-		return fmt.Errorf("worker: fetch suite checks: %w", err)
+		return fmt.Errorf("worker: fetch suite meta: %w", err)
 	}
 
-	st, err := Materialize(workDir, job.SkillName, bundle, suiteArchive, checks)
+	st, err := Materialize(workDir, MaterializeInput{
+		Skill: job.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
+		Checks: meta.Checks, Spec: meta.Spec, WantSuiteRef: job.SuiteRef,
+	})
 	if err != nil {
 		return fmt.Errorf("worker: materialize workspace: %w", err)
 	}
@@ -210,6 +229,9 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 
 	if runErr != nil {
 		return fmt.Errorf("worker: run: %w", runErr)
+	}
+	if rep == nil {
+		return fmt.Errorf("worker: run returned no report and no error")
 	}
 	if rep.SuiteRef != job.SuiteRef {
 		return fmt.Errorf("worker: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, job.SuiteRef)

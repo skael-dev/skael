@@ -43,6 +43,7 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 		Version:     j.Version,
 		SuiteRef:    j.SuiteRef,
 		Tier:        j.Tier,
+		Panel:       evalqueue.Panel{Agents: j.Agents, Models: j.Models},
 		Status:      evalqueue.Status(j.Status),
 		Attempts:    j.Attempts,
 		MaxAttempts: j.MaxAttempts,
@@ -53,12 +54,30 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 }
 
 // Heartbeat calls POST /api/eval/jobs/{id}/heartbeat. A 409 response — the
-// claim no longer verifies — is surfaced as evalqueue.ErrLeaseLost, exactly
-// as the in-process queue's own Heartbeat does, so the worker's lease-lost
-// handling does not need to know whether it is talking to Postgres directly
-// or through HTTP.
+// job is no longer running, or its lease already lapsed — is surfaced as
+// evalqueue.ErrLeaseLost, exactly as the in-process queue's own Heartbeat
+// does, so the worker's lease-lost handling does not need to know whether it
+// is talking to Postgres directly or through HTTP.
+//
+// A 403 is treated the same way here, specifically for Heartbeat: the
+// server's heartbeat handler (internal/evalqueue/routes.go) returns 403 for
+// "the claim just doesn't verify", which covers both a forged token and the
+// case where the job is still `running` with a technically-live lease but
+// this worker's claim_token_hash no longer matches — the lapse-and-reclaim
+// race. Treating only 409 as lease-lost left that branch heartbeating (and
+// eventually trying to post a report) for a job this worker no longer owns;
+// the server would reject the post, but the abandon-promptly property this
+// package exists for would have silently failed in the meantime. FailJob and
+// PostReport keep the narrower 409-only mapping: a 403 there is far more
+// likely a genuinely invalid claim than a live reclaim race, and treating it
+// as lease-lost buys nothing once the run has already finished.
 func (h *HTTPAPI) Heartbeat(_ context.Context, id evalqueue.JobID, token string) error {
-	return asLeaseLost(h.c.HeartbeatEvalJob(string(id), token))
+	err := h.c.HeartbeatEvalJob(string(id), token)
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusConflict || apiErr.StatusCode == http.StatusForbidden) {
+		return evalqueue.ErrLeaseLost
+	}
+	return err
 }
 
 // FailJob calls POST /api/eval/jobs/{id}/fail.
@@ -85,17 +104,21 @@ func (h *HTTPAPI) FetchBundle(_ context.Context, skill string, version int) ([]b
 	return h.c.DownloadVersion(skill, version)
 }
 
-// SuiteChecks calls GET /api/eval/suites/{ref}/checks.
-func (h *HTTPAPI) SuiteChecks(_ context.Context, ref string) ([]evalsuite.Check, error) {
-	checks, err := h.c.FetchEvalSuiteChecks(ref)
+// SuiteMeta calls GET /api/eval/suites/{ref}/meta.
+func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
+	meta, err := h.c.FetchEvalSuiteMeta(ref)
 	if err != nil {
-		return nil, err
+		return SuiteMeta{}, err
 	}
-	out := make([]evalsuite.Check, len(checks))
-	for i, c := range checks {
-		out[i] = evalsuite.Check{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
+	checks := make([]evalsuite.Check, len(meta.Checks))
+	for i, c := range meta.Checks {
+		checks[i] = evalsuite.Check{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
 	}
-	return out, nil
+	sp, err := unmarshalSuiteSpec(meta.Spec)
+	if err != nil {
+		return SuiteMeta{}, err
+	}
+	return SuiteMeta{Checks: checks, Spec: sp}, nil
 }
 
 // asLeaseLost converts a 409 Conflict — the server's signal that a claim no
