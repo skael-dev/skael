@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/quality"
 )
 
@@ -97,5 +99,39 @@ func TestFromReport_EmptyMembersAndPanelMarshalAsEmptyArrays(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.ModelPanel, &arr); err != nil {
 		t.Fatalf("model_panel did not unmarshal as an array: %v", err)
+	}
+}
+
+func TestFromReport_CountsCriticalForbidViolations(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
+	r.Tasks = []report.TaskReport{{
+		TaskID: "t1",
+		Drift: []report.RunDrift{{
+			Agent: "claude-code", Model: "opus", Attempt: 1,
+			Violations: []drift.Violation{
+				{ID: "no-network", Severity: spec.SeverityCritical, Hits: 2},
+				{ID: "no-network", Severity: spec.SeverityCritical, Hits: 1},
+				{ID: "tidy", Severity: spec.SeverityMinor, Hits: 5},
+			},
+		}},
+	}}
+
+	rec, err := quality.FromReport(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.CriticalForbidViolations != 2 {
+		t.Fatalf("critical forbid violations = %d, want 2 — count distinct critical violation records, not hits, and never count non-critical ones", rec.CriticalForbidViolations)
+	}
+}
+
+func TestFromReport_ZeroCriticalForbidViolationsWhenNoneObserved(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
+	rec, err := quality.FromReport(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.CriticalForbidViolations != 0 {
+		t.Fatalf("critical forbid violations = %d, want 0 — a report with no violations must count zero, and zero here genuinely means none, unlike an absent measurement, which is what the gate treats a nil QualityState as", rec.CriticalForbidViolations)
 	}
 }

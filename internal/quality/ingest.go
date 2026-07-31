@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
 // Record is one scored measurement of a skill version, as stored in
@@ -46,6 +47,17 @@ type Record struct {
 	UpliftSource string
 	JobID        string
 	ScoredAt     time.Time
+
+	// CriticalForbidViolations counts critical-severity forbid-rule
+	// violations observed across every run in the report. It is the one
+	// signal in which the evaluation is evidence against the skill rather
+	// than for it: a version whose runs violated its own contract does not
+	// clear a held publish however high its headline score.
+	//
+	// Zero here means none were observed, which is a real measurement. The
+	// gate expresses "not measured at all" as a nil *QualityState, never as
+	// a zero.
+	CriticalForbidViolations int
 }
 
 // FromReport maps a report onto a record. It is pure: no database, no clock,
@@ -117,22 +129,38 @@ func FromReport(r *report.Report) (Record, error) {
 		}
 	}
 
+	criticalViolations := 0
+	for _, task := range r.Tasks {
+		for _, rd := range task.Drift {
+			for _, v := range rd.Violations {
+				if v.Severity == spec.SeverityCritical {
+					// Count violation records, not Hits: three hits of one
+					// forbid rule in one run is one violated rule, and
+					// summing hits would make a chatty rule look like a
+					// worse breach than a quiet one.
+					criticalViolations++
+				}
+			}
+		}
+	}
+
 	return Record{
-		Headline:       r.Headline,
-		HeadlineCILow:  r.HeadlineCI[0],
-		HeadlineCIHigh: r.HeadlineCI[1],
-		Pillars:        pillarsJSON,
-		PanelMatrix:    panelMatrix,
-		RobustnessGap:  r.RobustnessGap,
-		DriftGrade:     driftGrade,
-		DriftBreakdown: driftJSON,
-		PanelComplete:  r.PanelComplete,
-		SuiteRef:       r.SuiteRef,
-		EngineVersion:  r.EngineVersion,
-		ModelPanel:     modelPanelJSON,
-		Tier:           r.Tier,
-		UpliftSource:   string(r.UpliftSource),
-		ScoredAt:       r.FinishedAt,
+		Headline:                 r.Headline,
+		HeadlineCILow:            r.HeadlineCI[0],
+		HeadlineCIHigh:           r.HeadlineCI[1],
+		Pillars:                  pillarsJSON,
+		PanelMatrix:              panelMatrix,
+		RobustnessGap:            r.RobustnessGap,
+		DriftGrade:               driftGrade,
+		DriftBreakdown:           driftJSON,
+		PanelComplete:            r.PanelComplete,
+		SuiteRef:                 r.SuiteRef,
+		EngineVersion:            r.EngineVersion,
+		ModelPanel:               modelPanelJSON,
+		Tier:                     r.Tier,
+		UpliftSource:             string(r.UpliftSource),
+		ScoredAt:                 r.FinishedAt,
+		CriticalForbidViolations: criticalViolations,
 	}, nil
 }
 

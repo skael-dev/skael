@@ -14,25 +14,26 @@ import (
 
 // recordOutput is the wire shape for a Record.
 type recordOutput struct {
-	SkillID        string          `json:"skill_id"`
-	Version        int             `json:"version"`
-	Headline       float64         `json:"headline_score"`
-	HeadlineCILow  float64         `json:"headline_ci_low"`
-	HeadlineCIHigh float64         `json:"headline_ci_high"`
-	Pillars        json.RawMessage `json:"pillar_breakdown"`
-	PanelMatrix    json.RawMessage `json:"panel_matrix"`
-	RobustnessGap  *float64        `json:"robustness_gap,omitempty"`
-	DriftGrade     string          `json:"drift_grade,omitempty"`
-	DriftBreakdown json.RawMessage `json:"drift_breakdown"`
-	Verified       bool            `json:"verified"`
-	PanelComplete  bool            `json:"panel_complete"`
-	SuiteRef       string          `json:"suite_ref"`
-	EngineVersion  string          `json:"engine_version"`
-	ModelPanel     json.RawMessage `json:"model_panel"`
-	Tier           string          `json:"tier"`
-	UpliftSource   string          `json:"uplift_source,omitempty"`
-	JobID          string          `json:"job_id,omitempty"`
-	ScoredAt       time.Time       `json:"scored_at"`
+	SkillID                  string          `json:"skill_id"`
+	Version                  int             `json:"version"`
+	Headline                 float64         `json:"headline_score"`
+	HeadlineCILow            float64         `json:"headline_ci_low"`
+	HeadlineCIHigh           float64         `json:"headline_ci_high"`
+	Pillars                  json.RawMessage `json:"pillar_breakdown"`
+	PanelMatrix              json.RawMessage `json:"panel_matrix"`
+	RobustnessGap            *float64        `json:"robustness_gap,omitempty"`
+	DriftGrade               string          `json:"drift_grade,omitempty"`
+	DriftBreakdown           json.RawMessage `json:"drift_breakdown"`
+	Verified                 bool            `json:"verified"`
+	PanelComplete            bool            `json:"panel_complete"`
+	SuiteRef                 string          `json:"suite_ref"`
+	EngineVersion            string          `json:"engine_version"`
+	ModelPanel               json.RawMessage `json:"model_panel"`
+	Tier                     string          `json:"tier"`
+	UpliftSource             string          `json:"uplift_source,omitempty"`
+	JobID                    string          `json:"job_id,omitempty"`
+	ScoredAt                 time.Time       `json:"scored_at"`
+	CriticalForbidViolations int             `json:"critical_forbid_violations"`
 }
 
 // toRecordOutput converts a Record to its wire shape. recordOutput's fields
