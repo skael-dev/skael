@@ -99,6 +99,19 @@ func blocking(severity string) bool {
 	return severity == "critical" || severity == "high"
 }
 
+// appealableClears is the single definition of the sentence a held version
+// shows its publisher. A zero floor is special-cased because it is the default
+// configuration: QUALITY_FLOOR defaults to 0, so the unconditional phrasing
+// makes the headline message of the whole feature read "scoring at least 0",
+// which states a threshold that is not one.
+func appealableClears(floor float64) string {
+	const tail = "with a complete panel and no critical contract violations, or an admin approval"
+	if floor <= 0 {
+		return "a verified evaluation " + tail
+	}
+	return fmt.Sprintf("a verified evaluation scoring at least %.0f %s", floor, tail)
+}
+
 // Decide maps a scan report and an optional quality state onto an outcome.
 // It is pure: no database, no HTTP, no clock, no context.
 func Decide(rep scan.Report, q *QualityState, p Policy) Decision {
@@ -129,9 +142,7 @@ func Decide(rep scan.Report, q *QualityState, p Policy) Decision {
 				"Remove the finding from the bundle; no evaluation and no override clears it."
 		case ClassExecution, ClassInjection, ClassHeuristic:
 			appealable++
-			r.Clears = fmt.Sprintf(
-				"a verified evaluation scoring at least %.0f with a complete panel and no critical contract violations, "+
-					"or an admin approval", p.Floor)
+			r.Clears = appealableClears(p.Floor)
 		default:
 			// Unreachable from the native rule set — TestEveryRuleHasAClass
 			// keeps it so. Fail closed if it happens anyway: an unclassified

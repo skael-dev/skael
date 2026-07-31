@@ -49,6 +49,11 @@ type Finding struct {
 	// overturn it. Derived from the matched rule's Category via
 	// gate.ClassOf. Empty on findings deserialized from a scan_result
 	// written before this field existed.
+	//
+	// "class" is a persisted wire name, not just a response field: it is
+	// stored in the scan_result JSONB column. Renaming it would make
+	// Reconsider read an empty class off every existing row, hit Decide's
+	// fail-closed default, and hold those versions permanently.
 	Class string `json:"class,omitempty"`
 }
 

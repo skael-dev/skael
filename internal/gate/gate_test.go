@@ -37,6 +37,10 @@ var qualityCases = []qualityCase{
 	{"unverified", &gate.QualityState{Verified: false, PanelComplete: true, Headline: 90}},
 	{"incomplete-panel", &gate.QualityState{Verified: true, PanelComplete: false, Headline: 90}},
 	{"below-floor", &gate.QualityState{Verified: true, PanelComplete: true, Headline: 10}},
+	// A hair under the floor. below-floor at 10 against a floor of 50 leaves a
+	// 40-point hole: the comparison could drift by ten points in either
+	// direction and the table would stay green.
+	{"just-below-floor", &gate.QualityState{Verified: true, PanelComplete: true, Headline: 49}},
 	{"at-floor", &gate.QualityState{Verified: true, PanelComplete: true, Headline: 50}},
 	{"forbid-violations", &gate.QualityState{Verified: true, PanelComplete: true, Headline: 90, CriticalForbidViolations: 1}},
 }
@@ -97,7 +101,7 @@ func report(class string) scan.Report {
 }
 
 func TestDecideTable(t *testing.T) {
-	const wantCases = 7 * 6 * 4
+	const wantCases = 7 * 7 * 4
 	seen := 0
 
 	for _, f := range findingCases {
@@ -182,4 +186,19 @@ func TestDecideReasonsEmptyNotNil(t *testing.T) {
 	d := gate.Decide(scan.Report{Status: "clean"}, nil, gate.Policy{})
 	assert.NotNil(t, d.Reasons, "Reasons must marshal as [] rather than null")
 	assert.Empty(t, d.Reasons)
+}
+
+// TestClearsSentenceOmitsAZeroFloor. QUALITY_FLOOR defaults to 0, so this is
+// the sentence most deployments actually show: "scoring at least 0" states a
+// threshold that isn't one.
+func TestClearsSentenceOmitsAZeroFloor(t *testing.T) {
+	d := gate.Decide(report(string(gate.ClassExecution)), nil, gate.Policy{Floor: 0})
+	require.Len(t, d.Reasons, 1)
+	assert.NotContains(t, d.Reasons[0].Clears, "at least",
+		"a zero floor is no threshold; naming it reads as nonsense")
+	assert.Contains(t, d.Reasons[0].Clears, "a verified evaluation with a complete panel")
+
+	withFloor := gate.Decide(report(string(gate.ClassExecution)), nil, gate.Policy{Floor: 70})
+	require.Len(t, withFloor.Reasons, 1)
+	assert.Contains(t, withFloor.Reasons[0].Clears, "at least 70")
 }
