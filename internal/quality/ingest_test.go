@@ -1,6 +1,7 @@
 package quality_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/report"
@@ -63,5 +64,38 @@ func TestFromReport_IncompletePanelIsRecordedNotFlattened(t *testing.T) {
 	}
 	if rec.Headline != 40 {
 		t.Fatal("headline was silently rewritten")
+	}
+}
+
+// A nil report must be rejected with an error, not dereferenced. Mirrors the
+// precedent report.Comparable already sets for a nil report.
+func TestFromReport_NilReportReturnsError(t *testing.T) {
+	if _, err := quality.FromReport(nil); err == nil {
+		t.Fatal("FromReport(nil) did not error")
+	}
+}
+
+// A memberless, panel-less report must marshal PanelMatrix and ModelPanel as
+// JSON arrays, not the null a nil-slice json.Marshal produces — the columns
+// are JSONB NOT NULL DEFAULT '[]', array-shaped by contract, and "no data"
+// must be distinguishable from "explicitly empty".
+func TestFromReport_EmptyMembersAndPanelMarshalAsEmptyArrays(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
+	rec, err := quality.FromReport(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rec.PanelMatrix) != "[]" {
+		t.Fatalf("panel_matrix = %s, want []", rec.PanelMatrix)
+	}
+	if string(rec.ModelPanel) != "[]" {
+		t.Fatalf("model_panel = %s, want []", rec.ModelPanel)
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(rec.PanelMatrix, &arr); err != nil {
+		t.Fatalf("panel_matrix did not unmarshal as an array: %v", err)
+	}
+	if err := json.Unmarshal(rec.ModelPanel, &arr); err != nil {
+		t.Fatalf("model_panel did not unmarshal as an array: %v", err)
 	}
 }

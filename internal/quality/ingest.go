@@ -38,14 +38,23 @@ type Record struct {
 	EngineVersion string
 	ModelPanel    json.RawMessage
 	Tier          string
-	JobID         string
-	ScoredAt      time.Time
+	// UpliftSource is one of the facts report.Comparable checks before
+	// treating two reports' scores as a fair comparison — preserved here
+	// alongside the other Comparable fields (SuiteRef, EngineVersion, Tier,
+	// ModelPanel, PanelComplete) so a version-over-version trend can tell
+	// whether its own comparison is valid without re-fetching every report.
+	UpliftSource string
+	JobID        string
+	ScoredAt     time.Time
 }
 
 // FromReport maps a report onto a record. It is pure: no database, no clock,
 // no I/O — that is what makes it testable, and what lets a later ingestion
 // endpoint call it before deciding whether to write anything.
 func FromReport(r *report.Report) (Record, error) {
+	if r == nil {
+		return Record{}, fmt.Errorf("quality.FromReport: report is nil")
+	}
 	if r.SchemaVersion > report.SchemaVersion {
 		return Record{}, fmt.Errorf("quality.FromReport: schema version %d is newer than this binary understands (%d)", r.SchemaVersion, report.SchemaVersion)
 	}
@@ -53,7 +62,11 @@ func FromReport(r *report.Report) (Record, error) {
 		return Record{}, fmt.Errorf("quality.FromReport: report has no suite ref")
 	}
 
-	panelMatrix, err := json.Marshal(r.Members)
+	members := r.Members
+	if members == nil {
+		members = []report.MemberReport{}
+	}
+	panelMatrix, err := json.Marshal(members)
 	if err != nil {
 		return Record{}, fmt.Errorf("quality.FromReport: marshal members: %w", err)
 	}
@@ -85,7 +98,11 @@ func FromReport(r *report.Report) (Record, error) {
 		return Record{}, fmt.Errorf("quality.FromReport: marshal drift breakdown: %w", err)
 	}
 
-	modelPanelJSON, err := json.Marshal(r.ModelPanel)
+	modelPanel := r.ModelPanel
+	if modelPanel == nil {
+		modelPanel = []report.PanelMember{}
+	}
+	modelPanelJSON, err := json.Marshal(modelPanel)
 	if err != nil {
 		return Record{}, fmt.Errorf("quality.FromReport: marshal model panel: %w", err)
 	}
@@ -114,6 +131,7 @@ func FromReport(r *report.Report) (Record, error) {
 		EngineVersion:  r.EngineVersion,
 		ModelPanel:     modelPanelJSON,
 		Tier:           r.Tier,
+		UpliftSource:   string(r.UpliftSource),
 		ScoredAt:       r.FinishedAt,
 	}, nil
 }
