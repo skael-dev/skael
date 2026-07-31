@@ -161,7 +161,7 @@ tests/e2e/      → End-to-end integration tests
 
 | Command | What it does |
 |---|---|
-| `just build` | Build both binaries to `bin/` |
+| `just build` | Build all four binaries (skael-server, skael, whetstone, skael-worker) to `bin/` |
 | `just dev` | Run server (reads `.env`) |
 | `just db` | Start Postgres 17 in Docker |
 | `just test` | All tests (needs Docker for testcontainers) |

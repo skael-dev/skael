@@ -35,7 +35,11 @@ import (
 // safe for registration-only use.
 //
 // This is the single place both paths register routes from, specifically so
-// they cannot drift apart — see cmd/server/main.go's printOpenAPISpec.
+// they should not drift apart — see cmd/server/main.go's printOpenAPISpec.
+// The guard test (routes_test.go) only checks routes registered inside this
+// function; a new route group must be added here, not via a direct
+// huma.Register call in Build() after RegisterAPIRoutes returns, or the
+// guard cannot see it and the spec can silently drift again.
 type RegisterAPIDeps struct {
 	Pool           *pgxpool.Pool
 	Config         *platform.Config
@@ -44,6 +48,11 @@ type RegisterAPIDeps struct {
 	KeyStore       *auth.KeyStore
 	Storage        platform.Storage
 	Caps           *Capabilities
+	// AnalyticsStore is optional; if nil, RegisterAPIRoutes constructs one
+	// from Pool. Build() passes its own instance so the same store can be
+	// reused for startup event-retention cleanup instead of constructing a
+	// second one.
+	AnalyticsStore *analytics.Store
 }
 
 // RegisterAPIRoutes registers every /api/* route: health, readiness,
@@ -146,7 +155,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) {
 	})
 
 	// Analytics.
-	analyticsStore := analytics.NewStore(d.Pool)
+	analyticsStore := d.AnalyticsStore
+	if analyticsStore == nil {
+		analyticsStore = analytics.NewStore(d.Pool)
+	}
 	analytics.RegisterRoutes(api, analyticsStore)
 
 	// Import.

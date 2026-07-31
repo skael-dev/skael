@@ -209,6 +209,7 @@ func (b *Builder) Build() (*Server, error) {
 	// quality). This is the same registration path `skael-server --openapi`
 	// uses, so the generated spec cannot drift from what the real server
 	// serves — see internal/server/routes.go.
+	analyticsStore := analytics.NewStore(b.pool)
 	RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
@@ -217,10 +218,10 @@ func (b *Builder) Build() (*Server, error) {
 		KeyStore:       keyStore,
 		Storage:        storage,
 		Caps:           b.caps,
+		AnalyticsStore: analyticsStore,
 	})
 
 	// 10a. Run event retention cleanup on startup.
-	analyticsStore := analytics.NewStore(b.pool)
 	if cfg.EventRetentionDays > 0 {
 		deleted, err := analyticsStore.CleanupOldEvents(context.Background(), cfg.EventRetentionDays)
 		if err != nil {
