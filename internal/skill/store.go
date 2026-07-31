@@ -210,15 +210,18 @@ func (s *Store) CreateVersion(
 	const insertVersion = `
 		INSERT INTO skill_versions
 			(skill_id, version, archive_path, checksum, changelog, frontmatter,
-			 file_manifest, scan_result, published_by, gate_state, gate_decision)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 file_manifest, scan_result, published_by, gate_state, gate_decision,
+			 description, content)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter,
 		          file_manifest, scan_result, published_by, created_at,
-		          gate_state, gate_decision, gated_by, gated_at, gate_note
+		          gate_state, gate_decision, gated_by, gated_at, gate_note,
+		          description, content
 	`
 	row := tx.QueryRow(ctx, insertVersion,
 		skillID, newVersion, archivePath, checksum, changelog,
 		frontmatter, manifestJSON, scanResult, publishedBy, state, decisionJSON,
+		description, content,
 	)
 	ver, err := scanVersion(row)
 	if err != nil {
@@ -252,7 +255,8 @@ func (s *Store) ListVersions(ctx context.Context, skillName string) ([]Version, 
 		SELECT sv.id, sv.skill_id, sv.version, sv.archive_path, sv.checksum,
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
-		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note
+		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
+		       sv.description, sv.content
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1
@@ -284,7 +288,8 @@ func (s *Store) GetVersion(ctx context.Context, skillName string, version int) (
 		SELECT sv.id, sv.skill_id, sv.version, sv.archive_path, sv.checksum,
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
-		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note
+		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
+		       sv.description, sv.content
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1 AND sv.version = $2
@@ -375,13 +380,20 @@ func (s *Store) BulkSetReview(ctx context.Context, names []string, reviewedBy st
 
 // UpdateSpecFields updates the spec-derived metadata columns on a skill row.
 func (s *Store) UpdateSpecFields(ctx context.Context, name, author, license, compat, compliance, displayName string, tags []string) error {
+	return updateSpecFieldsExec(ctx, s.pool, name, author, license, compat, compliance, displayName, tags)
+}
+
+// updateSpecFieldsExec is UpdateSpecFields against an arbitrary executor, so a
+// release running inside the caller's transaction writes these columns in the
+// same transaction that advanced the pointer.
+func updateSpecFieldsExec(ctx context.Context, e Executor, name, author, license, compat, compliance, displayName string, tags []string) error {
 	const q = `
 		UPDATE skills
 		SET author = $2, license = $3, compatibility = $4,
 		    spec_compliance = $5, display_name = $6, tags = $7
 		WHERE name = $1
 	`
-	tag, err := s.pool.Exec(ctx, q, name, author, license, compat, compliance, displayName, tags)
+	tag, err := e.Exec(ctx, q, name, author, license, compat, compliance, displayName, tags)
 	if err != nil {
 		return fmt.Errorf("skill.Store.UpdateSpecFields: %w", err)
 	}
@@ -411,6 +423,8 @@ func scanVersion(row scanner) (*Version, error) {
 		&ver.GatedBy,
 		&ver.GatedAt,
 		&ver.GateNote,
+		&ver.Description,
+		&ver.Content,
 	)
 	if err != nil {
 		return nil, err

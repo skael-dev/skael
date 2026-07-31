@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -64,6 +65,58 @@ func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, ver
 	if _, err := e.Exec(ctx, advance, name, version); err != nil {
 		return fmt.Errorf("skill.Store.ReleaseVersion advance latest: %w", err)
 	}
+
+	// Advancing the pointer is not the whole release. A held version wrote
+	// nothing to the skills row on publish — that is what stopped the gate
+	// from shipping its prose while withholding its archive — so without this
+	// the skill would serve the previous release's description and content
+	// beside the new version's checksum, and its tags/author/license/
+	// spec_compliance would stay empty forever (UpdateSpecFields is their only
+	// writer, so the skill is invisible to tag filtering).
+	//
+	// The backfill is keyed on skills.latest_version, not on $2. The pointer
+	// moved by GREATEST and may not have moved at all: releasing a held v4
+	// after a clean v5 shipped leaves it on v5. The prose served must match
+	// the version the pointer actually ends up at, so v4's release must not
+	// pull v5's text back to v4's. Reading the pointer back is the only
+	// formulation where those two can't disagree.
+	const backfill = `
+		UPDATE skills s
+		SET description = sv.description,
+		    content     = sv.content,
+		    frontmatter = sv.frontmatter,
+		    updated_at  = now()
+		FROM skill_versions sv
+		WHERE sv.skill_id = s.id AND sv.version = s.latest_version AND s.name = $1
+	`
+	if _, err := e.Exec(ctx, backfill, name); err != nil {
+		return fmt.Errorf("skill.Store.ReleaseVersion backfill prose: %w", err)
+	}
+
+	// The spec-derived columns are computed from frontmatter rather than
+	// stored, so they cannot be copied in SQL. Same rule as above: derive them
+	// from whatever version the pointer now names.
+	const pointedFrontmatter = `
+		SELECT sv.frontmatter
+		FROM skill_versions sv
+		JOIN skills s ON s.id = sv.skill_id AND s.latest_version = sv.version
+		WHERE s.name = $1
+	`
+	var rawFM []byte
+	if err := e.QueryRow(ctx, pointedFrontmatter, name).Scan(&rawFM); err != nil {
+		return fmt.Errorf("skill.Store.ReleaseVersion read pointed frontmatter: %w", err)
+	}
+	var fm map[string]interface{}
+	if len(rawFM) > 0 {
+		if err := json.Unmarshal(rawFM, &fm); err != nil {
+			return fmt.Errorf("skill.Store.ReleaseVersion unmarshal frontmatter: %w", err)
+		}
+	}
+	spec := ValidateSpec(fm, name)
+	if err := updateSpecFieldsExec(ctx, e, name,
+		spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags); err != nil {
+		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
+	}
 	return nil
 }
 
@@ -85,20 +138,4 @@ func (s *Store) RejectVersion(ctx context.Context, name string, version int, by,
 		return fmt.Errorf("skill.Store.RejectVersion: %s v%d is not awaiting review", name, version)
 	}
 	return nil
-}
-
-// HeldVersion returns a version only when it is actually awaiting review, so a
-// review endpoint cannot act on a version that is already released or rejected.
-func (s *Store) HeldVersion(ctx context.Context, name string, version int) (*Version, error) {
-	ver, err := s.GetVersion(ctx, name, version)
-	if err != nil {
-		return nil, err
-	}
-	if ver == nil {
-		return nil, fmt.Errorf("skill.Store.HeldVersion: %s v%d not found", name, version)
-	}
-	if ver.GateState != "needs_review" {
-		return nil, fmt.Errorf("skill.Store.HeldVersion: %s v%d is %s, not awaiting review", name, version, ver.GateState)
-	}
-	return ver, nil
 }

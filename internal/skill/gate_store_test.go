@@ -102,23 +102,6 @@ func TestReleaseVersionOnAlreadyReleasedIsANoOpNotAnError(t *testing.T) {
 	assert.NoError(t, store.ReleaseVersion(ctx, store.Pool(), "already-out", v.Version, "eval", "score 90"))
 }
 
-func TestHeldVersionReturnsOnlyVersionsAwaitingReview(t *testing.T) {
-	_, store, ctx := gateFixture(t)
-	sk := newGateSkill(t, store, ctx, "held-lookup")
-	held := newGateVersion(t, store, ctx, sk.ID, "c1", gate.NeedsReview)
-	out := newGateVersion(t, store, ctx, sk.ID, "c2", gate.Allow)
-
-	got, err := store.HeldVersion(ctx, "held-lookup", held.Version)
-	require.NoError(t, err)
-	assert.Equal(t, "needs_review", got.GateState)
-
-	_, err = store.HeldVersion(ctx, "held-lookup", out.Version)
-	require.Error(t, err, "a released version is not awaiting review")
-
-	_, err = store.HeldVersion(ctx, "held-lookup", 99)
-	require.Error(t, err, "a version that does not exist is not awaiting review")
-}
-
 // TestHeldVersionIsInvisibleToEveryLatestResolvingPath is the invariant of the
 // whole phase. Each of these paths resolves "the current version of this
 // skill"; a held version must appear in none of them.
@@ -157,4 +140,66 @@ func TestHeldVersionIsInvisibleToEveryLatestResolvingPath(t *testing.T) {
 			assert.NotEqual(t, "invisible", e.Name, "a held version must never reach a sync manifest")
 		}
 	})
+}
+
+// newProseVersion creates a version carrying its own rendered prose and
+// frontmatter, which is what a release has to move onto the skill row.
+func newProseVersion(t *testing.T, s *skill.Store, ctx context.Context, skillID, checksum, desc, body, fm string, outcome gate.Outcome) *skill.Version {
+	t.Helper()
+	v, err := s.CreateVersion(ctx, skillID, "p/"+checksum, checksum, "", desc, body,
+		json.RawMessage(fm), nil, json.RawMessage(`{}`), "t",
+		gate.Decision{Outcome: outcome, Reasons: []gate.Reason{}})
+	require.NoError(t, err)
+	return v
+}
+
+// TestReleaseVersionBackfillsProseAndSpecFields pins the other half of a
+// release. Advancing the pointer without this leaves the skill serving the
+// placeholder description the held publish deliberately did not overwrite,
+// with empty tags — invisible to tag filtering forever.
+func TestReleaseVersionBackfillsProseAndSpecFields(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+	sk, err := store.Create(ctx, "backfill-me", "", "placeholder", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	fm := `{"name":"backfill-me","description":"the real one","license":"MIT","author":"ada","tags":["alpha","beta"]}`
+	v := newProseVersion(t, store, ctx, sk.ID, "c1", "the real one", "the real body", fm, gate.NeedsReview)
+
+	held, err := store.GetByName(ctx, "backfill-me")
+	require.NoError(t, err)
+	require.Equal(t, "placeholder", held.Description, "a held version must not write the skill row")
+
+	require.NoError(t, store.ReleaseVersion(ctx, store.Pool(), "backfill-me", v.Version, "admin", "read it, fine"))
+
+	got, err := store.GetByName(ctx, "backfill-me")
+	require.NoError(t, err)
+	assert.Equal(t, "the real one", got.Description)
+	assert.Equal(t, "the real body", got.Content)
+	assert.JSONEq(t, fm, string(got.Frontmatter))
+	assert.Equal(t, []string{"alpha", "beta"}, got.Tags)
+	assert.Equal(t, "MIT", got.License)
+	assert.Equal(t, "ada", got.Author)
+}
+
+// TestReleaseOfOlderHeldVersionLeavesProseOnTheNewer is the pointer rule and
+// the prose rule agreeing. GREATEST keeps the pointer on v2; the served text
+// must stay on v2 too, or the skill describes one version and serves another.
+func TestReleaseOfOlderHeldVersionLeavesProseOnTheNewer(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+	sk, err := store.Create(ctx, "older-release", "", "placeholder", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	held := newProseVersion(t, store, ctx, sk.ID, "c1", "old desc", "old body",
+		`{"name":"older-release","tags":["old"]}`, gate.NeedsReview)
+	newer := newProseVersion(t, store, ctx, sk.ID, "c2", "new desc", "new body",
+		`{"name":"older-release","tags":["new"]}`, gate.Allow)
+
+	require.NoError(t, store.ReleaseVersion(ctx, store.Pool(), "older-release", held.Version, "admin", "approved late"))
+
+	got, err := store.GetByName(ctx, "older-release")
+	require.NoError(t, err)
+	assert.Equal(t, newer.Version, got.LatestVersion)
+	assert.Equal(t, "new desc", got.Description, "the served prose must match the version the pointer names")
+	assert.Equal(t, "new body", got.Content)
+	assert.Equal(t, []string{"new"}, got.Tags)
 }

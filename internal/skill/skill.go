@@ -35,9 +35,21 @@ type Version struct {
 	Changelog    string          `json:"changelog"`
 	Frontmatter  json.RawMessage `json:"frontmatter"`
 	FileManifest []FileEntry     `json:"file_manifest"`
-	ScanResult   json.RawMessage `json:"scan_result,omitempty"`
-	PublishedBy  string          `json:"published_by"`
-	CreatedAt    time.Time       `json:"created_at"`
+
+	// Description and Content are the rendered prose this version would
+	// serve. They are carried on the version, not only on the skill row,
+	// because a held version writes nothing to the skill row: releasing it
+	// later has to get the prose from somewhere, and re-reading the archive
+	// to recover text the database already saw would be the wrong place.
+	//
+	// Both are json:"-" on purpose. The wire shape of a version is unchanged,
+	// and a version endpoint is not a second way to read a held version's
+	// body — the gate withholds exactly that.
+	Description string          `json:"-"`
+	Content     string          `json:"-"`
+	ScanResult  json.RawMessage `json:"scan_result,omitempty"`
+	PublishedBy string          `json:"published_by"`
+	CreatedAt   time.Time       `json:"created_at"`
 
 	// GateState is one of "released", "needs_review", "rejected". Only a
 	// released version is pointed at by skills.latest_version.
