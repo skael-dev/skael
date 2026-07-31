@@ -55,6 +55,19 @@ func TestPool_CancelQueuedJob(t *testing.T) {
 	}
 }
 
+func TestPool_GetUnknownID_ReturnsNilNil(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+
+	got, err := q.Get(context.Background(), evalqueue.JobID("00000000-0000-0000-0000-000000000000"))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if got != nil {
+		t.Fatalf("job = %+v, want nil", got)
+	}
+}
+
 // insertSkill creates the skills row the foreign key needs.
 func insertSkill(t *testing.T, pool *pgxpool.Pool, name string) string {
 	t.Helper()

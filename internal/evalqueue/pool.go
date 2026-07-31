@@ -95,12 +95,13 @@ func (p *PoolExecutor) Cancel(ctx context.Context, id JobID) error {
 	return nil
 }
 
-// Get fetches a job by ID.
+// Get fetches a job by ID. A missing row is not an error: it returns
+// (nil, nil), matching the repo convention (see auth.UserStore.GetByEmail).
 func (p *PoolExecutor) Get(ctx context.Context, id JobID) (*Job, error) {
 	row := p.db.QueryRow(ctx, `SELECT `+jobColumns+` FROM eval_jobs WHERE id = $1`, string(id))
 	j, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("evalqueue: get %s: %w", id, err)
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("evalqueue: get: %w", err)
