@@ -13,6 +13,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
 )
@@ -103,12 +104,39 @@ type getJobOutput struct {
 	Body jobOutput
 }
 
+// rerunBody is the request to re-run an evaluation for a skill. Every field
+// is optional: omitting version re-runs the latest, omitting suite_ref uses
+// the skill's stored suite (never a freshly generated one — that would be a
+// different measurement), omitting tier defaults to "full", and omitting
+// agents/models keeps the worker's default panel.
+type rerunBody struct {
+	Version  int      `json:"version,omitempty"`
+	Tier     string   `json:"tier,omitempty"`
+	Agents   []string `json:"agents,omitempty"`
+	Models   []string `json:"models,omitempty"`
+	SuiteRef string   `json:"suite_ref,omitempty"`
+}
+
+type rerunInput struct {
+	Name string `path:"name"`
+	Body rerunBody
+}
+
+type rerunOutputBody struct {
+	JobID string `json:"job_id"`
+}
+
+type rerunOutput struct {
+	Status int
+	Body   rerunOutputBody
+}
+
 // defaultLeaseSeconds is used when a claim request omits lease_seconds.
 const defaultLeaseSeconds = 60
 
 // RegisterRoutes wires up the eval job queue HTTP endpoints: claim,
-// heartbeat, report ingestion, fail, and status lookup.
-func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *skill.Store) {
+// heartbeat, report ingestion, fail, status lookup, and re-run.
+func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *skill.Store, suites *evalsuite.Registry) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "claim-eval-job",
 		Method:        http.MethodPost,
@@ -326,5 +354,78 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		}
 
 		return &emptyOutput{Status: http.StatusOK}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "rerun-eval",
+		Method:        http.MethodPost,
+		Path:          "/api/skills/{name}/evals",
+		Summary:       "Re-run an evaluation against a different model panel",
+		DefaultStatus: http.StatusAccepted,
+	}, func(ctx context.Context, input *rerunInput) (*rerunOutput, error) {
+		u := auth.UserFromContext(ctx)
+		if !u.IsPrivileged() {
+			return nil, huma.Error403Forbidden("rerun eval: privileged callers only")
+		}
+
+		sk, err := skills.GetByName(ctx, input.Name)
+		if err != nil {
+			log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: get skill failed")
+			return nil, huma.Error500InternalServerError("rerun eval: internal error")
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
+
+		version := input.Body.Version
+		if version <= 0 {
+			version = sk.LatestVersion
+		}
+
+		suiteRef := input.Body.SuiteRef
+		if suiteRef == "" {
+			// The whole point of storage: re-run against the skill's *stored*
+			// suite, never a freshly generated one — a new suite is a
+			// different measurement and the two scores would not be
+			// comparable.
+			rec, err := suites.LatestForSkill(ctx, input.Name)
+			if err != nil {
+				if errors.Is(err, evalsuite.ErrNotFound) {
+					return nil, huma.Error404NotFound(fmt.Sprintf("no eval suite registered for skill %q", input.Name))
+				}
+				log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: suite lookup failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+			suiteRef = rec.Ref
+		}
+
+		tier := input.Body.Tier
+		if tier == "" {
+			tier = "full"
+		}
+
+		requestedBy := ""
+		if u != nil {
+			requestedBy = u.Email
+		}
+
+		id, err := q.Submit(ctx, Job{
+			SkillID:     sk.ID,
+			SkillName:   sk.Name,
+			Version:     version,
+			SuiteRef:    suiteRef,
+			Tier:        tier,
+			Panel:       Panel{Agents: input.Body.Agents, Models: input.Body.Models},
+			RequestedBy: requestedBy,
+		})
+		if err != nil {
+			log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: rerun submit failed")
+			return nil, huma.Error500InternalServerError("rerun eval: internal error")
+		}
+
+		return &rerunOutput{
+			Status: http.StatusAccepted,
+			Body:   rerunOutputBody{JobID: string(id)},
+		}, nil
 	})
 }

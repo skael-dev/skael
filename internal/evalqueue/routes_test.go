@@ -17,6 +17,8 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/evalqueue"
+	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
@@ -54,7 +56,12 @@ func newTestServerWithRole(t *testing.T, role string) *testServer {
 		})
 	})
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	evalqueue.RegisterRoutes(api, q, qual, skillStore)
+	suiteStorage, err := platform.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorage: %v", err)
+	}
+	suiteRegistry := evalsuite.NewRegistry(pool, suiteStorage)
+	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry)
 
 	return &testServer{handler: r, skills: skillStore, queue: q, pool: pool}
 }

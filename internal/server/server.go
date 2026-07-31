@@ -325,7 +325,7 @@ func (b *Builder) Build() (*Server, error) {
 
 	// 15b. Register the eval job queue. The server enqueues and ingests; it
 	// never holds a Docker socket or an LLM key — those live on the worker.
-	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore)
+	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry)
 
 	// 15c. Register read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)
