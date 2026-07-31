@@ -24,9 +24,11 @@ import (
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
@@ -260,6 +262,12 @@ func (b *Builder) Build() (*Server, error) {
 	// 15a. Register eval suite registry routes.
 	suiteRegistry := evalsuite.NewRegistry(b.pool, storage)
 	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
+
+	// 15b. Register the eval job queue. The server enqueues and ingests; it
+	// never holds a Docker socket or an LLM key — those live on the worker.
+	evalPool := evalqueue.NewPool(b.pool)
+	qualityStore := quality.NewStore(b.pool)
+	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore)
 
 	// 16. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {
