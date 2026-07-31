@@ -16,6 +16,12 @@ type Finding struct {
 	Line       int    `json:"line"`
 	Match      string `json:"match"`
 	Message    string `json:"message"`
+
+	// Class groups the finding by whether an empirical measurement could
+	// overturn it. Derived from the matched rule's Category via
+	// gate.ClassOf. Empty on findings deserialized from a scan_result
+	// written before this field existed.
+	Class string `json:"class,omitempty"`
 }
 
 // Summary aggregates finding counts by severity.
