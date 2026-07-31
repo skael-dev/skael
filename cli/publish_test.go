@@ -226,22 +226,67 @@ func TestPublishExitCodeHeld(t *testing.T) {
 	})
 }
 
-func TestPublishUnchangedChecksumHeldNotAlarming(t *testing.T) {
+// unchangedBody builds the response an unchanged-checksum republish gets:
+// created=false, plus the version's persisted gate_state and the decision
+// snapshot recorded when it was originally decided. The two are allowed to
+// disagree — a version's Decision.Outcome from when it was first held stays
+// needs_review forever even after an admin releases it, since it is a
+// snapshot, not a live field — and that disagreement is exactly what
+// TestPublishUnchangedRepublish_ApprovedAfterHeld exercises.
+func unchangedBody(version int, gateState string, decision gate.Decision) []byte {
 	body := struct {
-		Version  int           `json:"version"`
-		Checksum string        `json:"checksum"`
-		Created  bool          `json:"created"`
-		Decision gate.Decision `json:"decision"`
+		Version   int           `json:"version"`
+		Checksum  string        `json:"checksum"`
+		Created   bool          `json:"created"`
+		Decision  gate.Decision `json:"decision"`
+		GateState string        `json:"gate_state"`
 	}{
-		Version:  3,
-		Checksum: "abc123",
-		Created:  false,
-		Decision: gate.Decision{
-			Outcome: gate.NeedsReview,
-			Reasons: []gate.Reason{{Rule: "curl-pipe-sh", Class: "execution", Severity: "high"}},
-		},
+		Version:   version,
+		Checksum:  "abc123",
+		Created:   false,
+		Decision:  decision,
+		GateState: gateState,
 	}
 	b, _ := json.Marshal(body)
+	return b
+}
+
+// TestPublishUnchangedRepublish_ApprovedAfterHeld covers the case the
+// original test missed: a version held on first publish, then approved by an
+// admin (gate_state -> "released"), then republished byte-identical. The
+// server's decision snapshot for that version still records the original
+// needs_review verdict — decisions are never rewritten after the fact — but
+// gate_state is the persisted truth and says released. The CLI must report
+// this as live, not as held, or it is telling the operator a served version
+// is being withheld.
+func TestPublishUnchangedRepublish_ApprovedAfterHeld(t *testing.T) {
+	b := unchangedBody(3, "released", gate.Decision{
+		Outcome: gate.NeedsReview,
+		Reasons: []gate.Reason{{Rule: "curl-pipe-sh", Class: "execution", Severity: "high"}},
+	})
+
+	srv := stubPublishServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write(b)
+	})
+	defer srv.Close()
+
+	out := runPublishAgainst(t, srv, skillDir(t))
+
+	assert.NotContains(t, strings.ToLower(out), "held",
+		"gate_state is released — this version is live and must not be reported as held")
+	assert.Contains(t, out, "No changes detected")
+	assert.Contains(t, out, "already up to date")
+}
+
+// TestPublishUnchangedRepublish_StillHeld covers a version that genuinely
+// remains needs_review (never reviewed) at the time of an unchanged
+// republish: the CLI must still say held.
+func TestPublishUnchangedRepublish_StillHeld(t *testing.T) {
+	b := unchangedBody(3, "needs_review", gate.Decision{
+		Outcome: gate.NeedsReview,
+		Reasons: []gate.Reason{{Rule: "curl-pipe-sh", Class: "execution", Severity: "high"}},
+	})
 
 	srv := stubPublishServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -254,4 +299,5 @@ func TestPublishUnchangedChecksumHeldNotAlarming(t *testing.T) {
 	assert.NotContains(t, strings.ToLower(out), "created and held for review",
 		"an unchanged republish did not just newly hold anything")
 	assert.Contains(t, out, "No changes detected")
+	assert.Contains(t, out, "held for review")
 }

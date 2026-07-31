@@ -252,15 +252,17 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	if ui.JSONMode {
 		out := struct {
-			Name     string        `json:"name"`
-			Version  int           `json:"version"`
-			Created  bool          `json:"created"`
-			Decision gate.Decision `json:"decision"`
+			Name      string        `json:"name"`
+			Version   int           `json:"version"`
+			Created   bool          `json:"created"`
+			Decision  gate.Decision `json:"decision"`
+			GateState string        `json:"gate_state"`
 		}{
-			Name:     name,
-			Version:  ver.Version,
-			Created:  ver.Created,
-			Decision: ver.Decision,
+			Name:      name,
+			Version:   ver.Version,
+			Created:   ver.Created,
+			Decision:  ver.Decision,
+			GateState: ver.GateState,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -268,14 +270,19 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	if !ver.Created {
-		// An unchanged-checksum republish returns a freshly computed decision
-		// beside an already-live version. That version was already served
-		// before this call, so "held for review" would be false — this
-		// upload changed nothing, and whatever is being served has not
-		// changed either. Say so without alarming the caller into thinking
-		// something new just got held.
-		if ver.Decision.Held() {
-			ui.Info("No changes detected — v%d is unchanged (still held for review from an earlier publish)", ver.Version)
+		// An unchanged-checksum republish returns the version's *persisted*
+		// gate state, not a fresh recompute — GateState is read back from
+		// the row, so it cannot be stale the way a recomputed Decision could
+		// be (e.g. a version held on first publish, then approved by an
+		// admin: GateState is "released" even though re-deciding from
+		// scratch with no quality evidence would say needs_review again).
+		// Branch on GateState, not on Decision.Held().
+		switch ver.GateState {
+		case "needs_review":
+			ui.Info("No changes detected — v%d is unchanged (still held for review)", ver.Version)
+			return nil
+		case "rejected":
+			ui.Info("No changes detected — v%d is unchanged (rejected, not served)", ver.Version)
 			return nil
 		}
 		ui.Info("No changes detected — v%d is already up to date", ver.Version)

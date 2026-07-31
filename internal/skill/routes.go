@@ -418,16 +418,28 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if sk.LatestVersion > 0 {
 			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
 			if err == nil && latest != nil && latest.Checksum == checksum {
-				// Unchanged content, nothing new to score: "none" is accurate
-				// here, not a third undocumented state. A zero-value
-				// qualityState would serialize as {} — no state field at all
-				// — which a client switching on state has no branch for.
-				// Decision describes this bundle, which is byte-identical to
-				// the version already being served; created is false, so a
-				// client knows nothing new was gated.
+				// Unchanged content: report the version's persisted gate
+				// state, not a fresh recompute. `decision` above was
+				// computed with nil quality evidence and no admin override
+				// in play for *this* request — it is a hypothetical ("what
+				// would this bundle decide right now"), not the version's
+				// actual status. latest may have been approved or rejected
+				// since it was first decided, and that stored outcome —
+				// gate_decision, snapshotted at the time it was made — is
+				// the only truth for a bundle nobody is re-deciding.
+				// Nothing new was scored, so quality state is "none"; created
+				// is false, so a client knows nothing new was gated either.
+				persisted := decision
+				if len(latest.GateDecision) > 0 {
+					var stored gate.Decision
+					if err := json.Unmarshal(latest.GateDecision, &stored); err != nil {
+						return nil, fmt.Errorf("publish: unmarshal persisted gate decision: %w", err)
+					}
+					persisted = stored
+				}
 				return &publishOutput{Body: &publishBody{
 					Version: *latest, Created: false,
-					Quality: qualityState{State: "none"}, Decision: decision,
+					Quality: qualityState{State: "none"}, Decision: persisted,
 				}}, nil
 			}
 		}

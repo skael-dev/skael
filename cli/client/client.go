@@ -51,7 +51,18 @@ type Version struct {
 	// Decision is the publish gate's verdict for this version. Always
 	// present on a response from a gate-aware server; zero-value on an
 	// older one (Outcome "" is treated the same as Allow by callers).
+	//
+	// Decision is a fresh recomputation on a new publish, but on an
+	// unchanged-checksum republish it is the version's persisted snapshot —
+	// GateState is the only field that tells the two apart from the
+	// outside, which is why the unchanged-checksum message below branches
+	// on GateState, not on Decision.Held().
 	Decision gate.Decision `json:"decision,omitempty"`
+	// GateState is the version's persisted state: "released", "needs_review",
+	// or "rejected". Unlike Decision, it cannot go stale — it is read back
+	// from the row itself, not recomputed — so it is the source of truth
+	// for whether a version is actually being served.
+	GateState string `json:"gate_state,omitempty"`
 }
 
 // ManifestEntry holds the sync metadata for a single skill.
