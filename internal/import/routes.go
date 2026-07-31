@@ -345,7 +345,19 @@ func importSingleSkill(
 		return nil, false, importQualityState{}, decision, fmt.Errorf("get skill: %w", err)
 	}
 	if sk == nil {
-		sk, err = skillStore.Create(ctx, ds.Name, "", description, body, fmJSON)
+		// A first version that the gate is holding must create the skill row
+		// empty. Create writes description/content/frontmatter unconditionally,
+		// which routes straight around the CASE WHEN in CreateVersion that
+		// stops a held publish from serving its own prose: without this, the
+		// full held body — cradle and all — is served by GET /api/skills/{name}
+		// while the archive is withheld. ReleaseVersion backfills all three
+		// from the version row if the hold is ever cleared.
+		createDesc, createBody := description, body
+		createFM := fmJSON
+		if decision.Held() {
+			createDesc, createBody, createFM = "", "", json.RawMessage(`{}`)
+		}
+		sk, err = skillStore.Create(ctx, ds.Name, "", createDesc, createBody, createFM)
 		if err != nil {
 			return nil, false, importQualityState{}, decision, fmt.Errorf("create skill: %w", err)
 		}

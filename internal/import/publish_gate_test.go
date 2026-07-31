@@ -241,3 +241,34 @@ func TestImportResponseCarriesQualityAndDecision(t *testing.T) {
 		assert.NotEmpty(t, s.Quality.State, "import enqueues evals, so a pending eval must be visible to the caller")
 	}
 }
+
+// TestHeldImportServesNoProse closes the hole publish already covers. The
+// CASE WHEN in skill.Store.CreateVersion stops a held publish writing the
+// skills row, but import creates the row itself for a first version, which
+// routes around it: the full held body — cradle included — was served by
+// GET /api/skills/{name} while the archive stayed withheld.
+func TestHeldImportServesNoProse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+
+	riskyDir := t.TempDir()
+	writeFile(t, filepath.Join(riskyDir, "SKILL.md"), skillMD("held-prose", "a risky skill", riskyBody))
+	assertScanClass(t, riskyDir, scan.ClassExecution, "critical")
+
+	tarball := makeRepoTarball(t, "acme-skills-abc1234", map[string]string{
+		"held-prose": skillMD("held-prose", "a risky skill", riskyBody),
+	})
+	handler := setupImportTestAPI(t, tarball)
+
+	rr := doImportPost(t, handler, []string{"held-prose"})
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	var sk skill.Skill
+	getSkillJSON(t, handler, "held-prose", &sk)
+	assert.Equal(t, 0, sk.LatestVersion)
+	assert.Empty(t, sk.Content, "a held import must not serve its body")
+	assert.Empty(t, sk.Description, "a held import must not serve its description")
+	assert.NotContains(t, sk.Content, "curl")
+	assert.JSONEq(t, `{}`, string(sk.Frontmatter), "a held import must not serve its frontmatter")
+}
