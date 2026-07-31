@@ -869,6 +869,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// GET /api/skills/{name}/scan — scan results for the latest version
 		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
 	}
+
+	// POST /api/skills/{name}/versions/{version}/review — owner/admin
+	// approval or rejection of a version held for review.
+	registerReviewRoutes(api, store)
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a specific
