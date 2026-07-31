@@ -24,6 +24,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
@@ -254,6 +255,10 @@ func (b *Builder) Build() (*Server, error) {
 	importStore := skillimport.NewStore(b.pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
 	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, externalScanner)
+
+	// 15a. Register eval suite registry routes.
+	suiteRegistry := evalsuite.NewRegistry(b.pool, storage)
+	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
 
 	// 16. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {
