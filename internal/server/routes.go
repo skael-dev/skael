@@ -140,6 +140,8 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		External: externalScanner,
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
+
+		QualityFloor: cfg.QualityFloor,
 	})
 
 	// Sync manifest.

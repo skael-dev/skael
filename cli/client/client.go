@@ -405,6 +405,15 @@ func parseScanReport(raw []byte) *scan.Report {
 		return nil
 	}
 	for _, e := range envelope.Errors {
+		// Since the publish gate went live the detail carries the report
+		// wrapped alongside the gate decision. Older servers put the bare
+		// report there, so both shapes are accepted.
+		var wrapped struct {
+			Scan *scan.Report `json:"scan"`
+		}
+		if json.Unmarshal([]byte(e.Message), &wrapped) == nil && wrapped.Scan != nil && wrapped.Scan.Status != "" {
+			return wrapped.Scan
+		}
 		var report scan.Report
 		if json.Unmarshal([]byte(e.Message), &report) == nil && report.Status != "" {
 			return &report

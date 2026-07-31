@@ -47,9 +47,10 @@ func setupTestAPIAsUser(t *testing.T, caller **auth.User) http.Handler {
 	return r
 }
 
-// buildBlockingArchive packs a skill whose SKILL.md trips a blocking scan rule
-// (remote content piped to a shell), so publishing it requires an override.
-func buildBlockingArchive(t *testing.T, skillName string) []byte {
+// buildUnappealableArchive packs a skill whose SKILL.md trips an unappealable
+// scan rule (remote content piped to a shell, classed as exfiltration). No
+// override clears it.
+func buildUnappealableArchive(t *testing.T, skillName string) []byte {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -87,6 +88,10 @@ func postArchive(t *testing.T, handler http.Handler, path string, archiveBytes [
 // passed a constant true would silently grant every privileged caller a
 // permanent override while staying green. The no-query-parameter cases below
 // fail under exactly that mutation.
+//
+// Since the gate went live, an appealable finding no longer refuses the
+// publish: it holds the version. So the observable difference an override makes
+// is whether latest_version advances, not whether the request succeeds.
 func TestPublishOverride_Wiring(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
@@ -99,68 +104,75 @@ func TestPublishOverride_Wiring(t *testing.T) {
 	admin := &auth.User{ID: "00000000-0000-0000-0000-000000000002", Email: "admin@example.com", Role: auth.RoleAdmin}
 	member := &auth.User{ID: "00000000-0000-0000-0000-000000000003", Email: "member@example.com", Role: auth.RoleMember}
 
-	t.Run("admin without the query parameter is rejected", func(t *testing.T) {
+	// held asserts the publish was created but is not being served.
+	held := func(t *testing.T, name, query string) {
+		t.Helper()
+		createSkill(t, handler, name, "appealable")
+		rr := postArchive(t, handler, "/api/skills/"+name+"/versions"+query, appealableBundle(t, name))
+		require.Equal(t, http.StatusCreated, rr.Code, "publish %s: %s", name, rr.Body.String())
+		require.Equal(t, 0, getSkill(t, handler, name).LatestVersion,
+			"without a valid override the version must be held, not served")
+	}
+
+	// released asserts the override took effect.
+	released := func(t *testing.T, name, query string) {
+		t.Helper()
+		createSkill(t, handler, name, "appealable")
+		rr := postArchive(t, handler, "/api/skills/"+name+"/versions"+query, appealableBundle(t, name))
+		require.Equal(t, http.StatusCreated, rr.Code, "publish %s: %s", name, rr.Body.String())
+		require.Equal(t, 1, getSkill(t, handler, name).LatestVersion,
+			"an accepted override must release the version")
+	}
+
+	t.Run("admin without the query parameter is held", func(t *testing.T) {
 		caller = admin
-		createSkill(t, handler, "wiring-admin-no-flag", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-admin-no-flag/versions",
-			buildBlockingArchive(t, "wiring-admin-no-flag"))
-		require.Equal(t, http.StatusUnprocessableEntity, rr.Code,
-			"a privileged caller who did not ask for an override must still be blocked: %s", rr.Body.String())
+		held(t, "wiring-admin-no-flag", "")
 	})
 
-	t.Run("owner without the query parameter is rejected", func(t *testing.T) {
+	t.Run("owner without the query parameter is held", func(t *testing.T) {
 		caller = owner
-		createSkill(t, handler, "wiring-owner-no-flag", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-owner-no-flag/versions",
-			buildBlockingArchive(t, "wiring-owner-no-flag"))
-		require.Equal(t, http.StatusUnprocessableEntity, rr.Code,
-			"a privileged caller who did not ask for an override must still be blocked: %s", rr.Body.String())
+		held(t, "wiring-owner-no-flag", "")
 	})
 
-	t.Run("override=false is rejected", func(t *testing.T) {
+	t.Run("override=false is held", func(t *testing.T) {
 		caller = admin
-		createSkill(t, handler, "wiring-admin-false", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-admin-false/versions?override=false",
-			buildBlockingArchive(t, "wiring-admin-false"))
-		require.Equal(t, http.StatusUnprocessableEntity, rr.Code,
-			"override=false must be honoured: %s", rr.Body.String())
+		held(t, "wiring-admin-false", "?override=false")
 	})
 
-	t.Run("admin with override=true publishes", func(t *testing.T) {
+	t.Run("admin with override=true releases", func(t *testing.T) {
 		caller = admin
-		createSkill(t, handler, "wiring-admin-true", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-admin-true/versions?override=true",
-			buildBlockingArchive(t, "wiring-admin-true"))
-		require.Equal(t, http.StatusCreated, rr.Code,
-			"an admin who asked for an override may publish: %s", rr.Body.String())
+		released(t, "wiring-admin-true", "?override=true")
 	})
 
-	t.Run("owner with override=true publishes", func(t *testing.T) {
+	t.Run("owner with override=true releases", func(t *testing.T) {
 		caller = owner
-		createSkill(t, handler, "wiring-owner-true", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-owner-true/versions?override=true",
-			buildBlockingArchive(t, "wiring-owner-true"))
-		require.Equal(t, http.StatusCreated, rr.Code,
-			"the owner who asked for an override may publish: %s", rr.Body.String())
+		released(t, "wiring-owner-true", "?override=true")
 	})
 
-	t.Run("member with override=true is rejected", func(t *testing.T) {
+	t.Run("member with override=true is held", func(t *testing.T) {
 		caller = member
-		createSkill(t, handler, "wiring-member-true", "blocking")
-		rr := postArchive(t, handler, "/api/skills/wiring-member-true/versions?override=true",
-			buildBlockingArchive(t, "wiring-member-true"))
-		require.Equal(t, http.StatusUnprocessableEntity, rr.Code,
-			"a member may not override however loudly they ask: %s", rr.Body.String())
+		held(t, "wiring-member-true", "?override=true")
 	})
 
-	t.Run("anonymous with override=true is rejected", func(t *testing.T) {
+	t.Run("anonymous with override=true is held", func(t *testing.T) {
 		caller = admin
-		createSkill(t, handler, "wiring-anon-true", "blocking")
+		createSkill(t, handler, "wiring-anon-true", "appealable")
+		archive := appealableBundle(t, "wiring-anon-true")
 		caller = nil
-		rr := postArchive(t, handler, "/api/skills/wiring-anon-true/versions?override=true",
-			buildBlockingArchive(t, "wiring-anon-true"))
+		rr := postArchive(t, handler, "/api/skills/wiring-anon-true/versions?override=true", archive)
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+		caller = admin
+		require.Equal(t, 0, getSkill(t, handler, "wiring-anon-true").LatestVersion,
+			"an unauthenticated caller may not override")
+	})
+
+	t.Run("an unappealable finding is refused whoever asks", func(t *testing.T) {
+		caller = owner
+		createSkill(t, handler, "wiring-unappealable", "blocking")
+		rr := postArchive(t, handler, "/api/skills/wiring-unappealable/versions?override=true",
+			buildUnappealableArchive(t, "wiring-unappealable"))
 		require.Equal(t, http.StatusUnprocessableEntity, rr.Code,
-			"an unauthenticated caller may not override: %s", rr.Body.String())
+			"credential-theft findings are unappealable: %s", rr.Body.String())
 	})
 
 	t.Run("a clean archive publishes without any override", func(t *testing.T) {

@@ -163,20 +163,31 @@ func (s *Store) CreateVersion(
 		state = "needs_review"
 	}
 
+	released := state == "released"
+
 	// The UPDATE runs whatever the decision is, and not only for the columns
 	// it writes: it takes the row lock that serialises two concurrent
 	// publishes of the same skill. Without it, both would compute the same
 	// MAX(version)+1 below and collide on UNIQUE(skill_id, version).
 	// TestCreateVersionConcurrentPublishesDoNotCollide is what keeps this
 	// honest — remove the statement and it goes red.
+	//
+	// The rendered body and metadata columns, though, are conditional: they
+	// are what GET /api/skills/{name} serves. Writing them for a held version
+	// would publish its prose beside a latest_version that still points at
+	// the previous release — the gate withholding the archive while shipping
+	// the text. The held version's own row keeps its frontmatter, so a review
+	// screen loses nothing.
 	const updateSkill = `
 		UPDATE skills
 		SET updated_at = now(),
 		    reviewed_at = NULL, reviewed_by = '',
-		    description = $2, content = $3, frontmatter = $4
+		    description = CASE WHEN $5 THEN $2 ELSE description END,
+		    content     = CASE WHEN $5 THEN $3 ELSE content END,
+		    frontmatter = CASE WHEN $5 THEN $4 ELSE frontmatter END
 		WHERE id = $1
 	`
-	if _, err := tx.Exec(ctx, updateSkill, skillID, description, content, frontmatter); err != nil {
+	if _, err := tx.Exec(ctx, updateSkill, skillID, description, content, frontmatter, released); err != nil {
 		return nil, fmt.Errorf("skill.Store.CreateVersion update skill: %w", err)
 	}
 
@@ -222,7 +233,7 @@ func (s *Store) CreateVersion(
 	// after a clean v5 already shipped, where a bare assignment would regress
 	// every client to the older skill — arises on the release path, not on
 	// publish. The live behaviour belongs to ReleaseVersion.
-	if state == "released" {
+	if released {
 		const advance = `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`
 		if _, err := tx.Exec(ctx, advance, skillID, newVersion); err != nil {
 			return nil, fmt.Errorf("skill.Store.CreateVersion advance latest: %w", err)
