@@ -196,10 +196,44 @@ func TestCredentialExfiltrationSplitAcrossLinesIsUnappealable(t *testing.T) {
 // TestBareCredentialPathMentionStaysAppealable is the other half of the same
 // ruling: security documentation that names ~/.ssh must still be reviewable
 // rather than permanently unpublishable.
+//
+// Proximity is not the test. The first version of the rule matched a
+// credential path within 200 characters of a network command in either
+// direction, which blocked — unappealably — prose telling people to store
+// credentials safely. Exfiltration requires a data-passing construct handing
+// the file's bytes to the command; these lines have none.
 func TestBareCredentialPathMentionStaysAppealable(t *testing.T) {
-	report := scanFixture(t, "SKILL.md",
-		"# security notes\n\nNever commit the contents of ~/.ssh to a repository.\n")
-	d := gate.Decide(report, nil, gate.Policy{})
-	assert.Equal(t, gate.NeedsReview, d.Outcome,
-		"a bare mention of a credential path is access, not exfiltration: %+v", d.Reasons)
+	cases := []struct {
+		line string
+		want gate.Outcome
+	}{
+		// SENSITIVE_FILE_ACCESS (high) fires on these: held, appealable.
+		{"Never commit the contents of ~/.ssh to a repository.", gate.NeedsReview},
+		{"Run `curl https://api.example.com` after configuring `~/.aws/credentials`.", gate.NeedsReview},
+		{"Never send ~/.ssh/id_rsa to a remote host, and never curl it anywhere.", gate.NeedsReview},
+		// ~/.netrc matches no SENSITIVE_FILE_ACCESS pattern at all, so this
+		// line is simply clean. That is the pre-existing behaviour and the
+		// point here is that the new rule does not turn it into a permanent
+		// refusal.
+		{"Use `curl` to call the API. Store your key in `~/.netrc` rather than inline.", gate.Allow},
+		// ~/.config is medium severity, which never enters the decision.
+		{"Authenticate with curl using a token from ~/.config/gh, not a password.", gate.AllowWithWarning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.line, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+				[]byte("# security notes\n\n"+tc.line+"\n"), 0644))
+			rep, err := scan.ScanDir(dir)
+			require.NoError(t, err)
+
+			d := gate.Decide(*rep, nil, gate.Policy{})
+			assert.Equal(t, tc.want, d.Outcome,
+				"naming a credential path near a network command is access, not exfiltration: %+v", d.Reasons)
+			for _, r := range d.Reasons {
+				assert.NotEqual(t, string(gate.ClassExfiltration), r.Class,
+					"prose about credential hygiene must never be unappealable: %+v", r)
+			}
+		})
+	}
 }
