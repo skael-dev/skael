@@ -29,6 +29,7 @@ import (
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
+	gosync "github.com/skael-dev/skael/internal/sync"
 	"github.com/skael-dev/skael/internal/testutil"
 	"github.com/skael-dev/skael/internal/worker"
 )
@@ -91,6 +92,17 @@ func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*ski
 // testcontainers). The API key belongs to the instance owner, since claiming
 // a job and re-running an eval are both privileged operations.
 func startServer(t *testing.T) *evalEnv {
+	t.Helper()
+	return startServerWithFloor(t, 0)
+}
+
+// startServerWithFloor is startServer with an explicit QUALITY_FLOOR. The
+// floor is threaded into both places platform.Config.QualityFloor reaches in
+// the real server — skill.RouteOptions (the publish decision) and
+// evalqueue.RouteOptions (the re-decision a landed score triggers) — because
+// a floor applied in only one of them is exactly the seam these tests exist
+// to cover.
+func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
@@ -159,15 +171,36 @@ func startServer(t *testing.T) *evalEnv {
 	suiteRegistry := evalsuite.NewRegistry(pool, storage)
 
 	skill.RegisterRoutes(api, router, skillStore, storage, skill.RouteOptions{
-		Queue:  evalQueueAdapter{q: evalPool},
-		Suites: evalSuiteAdapter{r: suiteRegistry},
+		Queue:        evalQueueAdapter{q: evalPool},
+		Suites:       evalSuiteAdapter{r: suiteRegistry},
+		QualityFloor: floor,
 	})
 
 	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
-		Releaser: skill.NewReleaser(skillStore),
+		Releaser:     skill.NewReleaser(skillStore),
+		QualityFloor: floor,
 	})
 	quality.RegisterRoutes(api, qualityStore, skillStore)
+
+	// The sync manifest is one of the latest-resolving paths a held version
+	// must stay out of, so it is wired here exactly as internal/server does.
+	syncStore := gosync.NewStore(pool)
+	huma.Register(api, huma.Operation{
+		OperationID: "get-manifest",
+		Method:      http.MethodGet,
+		Path:        "/api/sync/manifest",
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body []gosync.ManifestEntry
+	}, error) {
+		entries, err := syncStore.GetManifest(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("", err)
+		}
+		return &struct {
+			Body []gosync.ManifestEntry
+		}{Body: entries}, nil
+	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
