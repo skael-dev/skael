@@ -1,0 +1,19 @@
+# Rendered per run. The filter is default-deny: a domain absent from the
+# allowlist is refused, so a skill's outbound attempt is a refusal to observe
+# rather than a connection to discover afterwards.
+User nobody
+Group nogroup
+Port 8888
+Listen 0.0.0.0
+Timeout 600
+LogLevel Warning
+MaxClients 32
+Filter "/etc/tinyproxy/filter"
+FilterDefaultDeny Yes
+# The filter entries are extended regexps (they use "(", ")" and "|" for
+# grouping and alternation); under basic regex those are literal characters
+# and every anchored entry would match nothing, which combined with
+# FilterDefaultDeny Yes is a silent total egress block, not a working allowlist.
+FilterExtended On
+FilterCaseSensitive Off
+ConnectPort 443

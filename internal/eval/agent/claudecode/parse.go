@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"path"
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -34,6 +35,23 @@ type streamLine struct {
 	NumTurns         int      `json:"num_turns"`
 	IsError          bool     `json:"is_error"`
 	PermissionDenied []denial `json:"permission_denials"`
+
+	// rate_limit_event
+	RateLimitInfo *rateLimitInfo `json:"rate_limit_info"`
+}
+
+// rateLimitInfo is the payload of a rate_limit_event line. A session emits
+// one of these routinely as telemetry — "status":"allowed" means the account
+// is nowhere near its limit — so only a non-"allowed" status is an actual
+// throttle. Treating every rate_limit_event as a hit (as an earlier version
+// of this parser did) makes a normal session indistinguishable from one that
+// is actually being rate limited, and the runner backs off and eventually
+// fails it after exhausting its retries for a limit that was never hit. See
+// tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag for the same defect
+// caught against a real recorded transcript, and TestParse_RateLimitEventOnlyFlagsAnActualLimit
+// in parse_test.go for the regression test.
+type rateLimitInfo struct {
+	Status string `json:"status"`
 }
 
 type apiMessage struct {
@@ -157,7 +175,9 @@ func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
 			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "system/" + sl.Subtype})
 
 		case "rate_limit_event":
-			res.Meta.RateLimited = true
+			if sl.RateLimitInfo == nil || (sl.RateLimitInfo.Status != "" && sl.RateLimitInfo.Status != "allowed") {
+				res.Meta.RateLimited = true
+			}
 			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "rate_limit_event"})
 
 		case "result":
@@ -243,10 +263,14 @@ func mapToolUse(b block) trajectory.Event {
 		e.Type = trajectory.TypeShell
 		e.ArgsDigest = trajectory.Digest(in.Command)
 	case "Skill":
-		// The native skill-invocation event. Name carries the invoked skill so
-		// trigger measurement can match it without path heuristics.
-		e.Type = trajectory.TypeSkillRead
-		e.Name = in.Skill
+		// The native skill-invocation event: an explicit "used this skill" signal,
+		// not a mere read of its SKILL.md. Keep it a tool_call named "Skill" so
+		// score.DetectFiring's explicit branch can see it, and also record the
+		// invoked skill as a synthetic path so eventNamesSkill's path heuristic
+		// (parent-directory match) can find it without depending on Name, the
+		// same way a Read of SKILL.md would be matched.
+		e.Type = trajectory.TypeToolCall
+		e.Paths = []string{path.Join(in.Skill, "SKILL.md")}
 	case "AskUserQuestion":
 		e.Type = trajectory.TypeAskUser
 	default:

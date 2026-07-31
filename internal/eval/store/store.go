@@ -13,6 +13,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
@@ -117,14 +118,15 @@ func (s *Store) SpecPath(skill string) (string, error) {
 	return filepath.Join(dir, "spec.yaml"), nil
 }
 
-// EvalDir is the sidecar directory. `pack` removes exactly this path, so
-// everything eval-only must live under it.
+// EvalDir is the sidecar directory. lint.Excluded is the one definition of
+// what does not ship as bundle content; everything eval-only must live under
+// this path so pack's exclusion of it stays correct.
 func (s *Store) EvalDir(skill string) (string, error) {
 	dir, err := s.SkillDir(skill)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "eval"), nil
+	return filepath.Join(dir, lint.SidecarDir), nil
 }
 
 // ContractPath is the compiled drift contract.

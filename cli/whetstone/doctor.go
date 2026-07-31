@@ -15,6 +15,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
+	"github.com/skael-dev/skael/internal/eval/score"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
@@ -78,6 +80,11 @@ type DoctorReport struct {
 	// Adapters names every registered agent adapter, so a missing blank
 	// import shows up here rather than as an unexplained gap in a panel.
 	Adapters []string `json:"adapters"`
+	// Judge is the calibration result, present only when --judge was passed.
+	Judge *score.CalResult `json:"judge,omitempty"`
+	// JudgeError explains why calibration was not run, when --judge was
+	// passed but no gateway is available. doctor diagnoses; it does not fail.
+	JudgeError string `json:"judge_error,omitempty"`
 }
 
 // gatewayChoice is the decision doctor reports and newGateway acts on.
@@ -134,12 +141,14 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 	}
 }
 
+var doctorJudge bool
+
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check the agent CLI, the LLM gateway, and the sandbox runtime",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		rep, err := RunDoctor()
+		rep, err := RunDoctor(cmd.Context(), doctorJudge)
 		if err != nil {
 			return err
 		}
@@ -155,7 +164,7 @@ var doctorCmd = &cobra.Command{
 // the report itself could not be produced — a missing CLI, a missing docker,
 // and an unusable gateway are all reported in the report, because the command
 // exists to be run when something is already broken.
-func RunDoctor() (*DoctorReport, error) {
+func RunDoctor(ctx context.Context, withJudge bool) (*DoctorReport, error) {
 	rep := &DoctorReport{}
 
 	if bin, err := agentcli.Detect(); err == nil {
@@ -178,7 +187,44 @@ func RunDoctor() (*DoctorReport, error) {
 		rep.Adapters = append(rep.Adapters, a.Name())
 	}
 
+	if withJudge {
+		runJudgeCalibration(ctx, rep)
+	}
+
 	return rep, nil
+}
+
+// runJudgeCalibration fills in rep.Judge or rep.JudgeError. doctor diagnoses
+// rather than fails, so no gateway means a reported reason, not an error
+// returned from RunDoctor.
+func runJudgeCalibration(ctx context.Context, rep *DoctorReport) {
+	gw, err := newGateway(nil)
+	if err != nil {
+		rep.JudgeError = fmt.Sprintf("not run — no gateway (%s)", err)
+		return
+	}
+
+	set, err := score.Calibration()
+	if err != nil {
+		rep.JudgeError = fmt.Sprintf("not run — %s", err)
+		return
+	}
+
+	j, err := score.NewJudge(score.JudgeOptions{
+		Gateway: gw,
+		Spec:    &spec.SkillSpec{Name: "calibration", Purpose: "judge calibration"},
+	})
+	if err != nil {
+		rep.JudgeError = fmt.Sprintf("not run — %s", err)
+		return
+	}
+
+	result, err := score.Calibrate(ctx, j, set)
+	if err != nil {
+		rep.JudgeError = fmt.Sprintf("not run — %s", err)
+		return
+	}
+	rep.Judge = &result
 }
 
 // probeVersion asks a CLI for its version, returning "" rather than failing:
@@ -220,8 +266,20 @@ func (r *DoctorReport) render() {
 	}
 
 	ui.Info("agent adapters: %s", strings.Join(r.Adapters, ", "))
+
+	if r.Judge != nil {
+		j := r.Judge
+		if j.JudgeTrusted() {
+			ui.Success("judge: κ=%.2f over %d %s-labelled items — trusted", j.Kappa, j.N, j.LabeledBy)
+		} else {
+			ui.Warn("judge: κ=%.2f over %d %s-labelled items — advisory only, Uplift falls back to the pass-rate delta", j.Kappa, j.N, j.LabeledBy)
+		}
+	} else if r.JudgeError != "" {
+		ui.Warn("judge: %s", r.JudgeError)
+	}
 }
 
 func init() {
+	doctorCmd.Flags().BoolVar(&doctorJudge, "judge", false, "run judge calibration against the labelled set and report Cohen's κ")
 	rootCmd.AddCommand(doctorCmd)
 }

@@ -29,6 +29,114 @@ var migrations = []string{
 		value      TEXT NOT NULL,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
+
+	`CREATE TABLE evals (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		skill_name     TEXT    NOT NULL,
+		spec_version   INTEGER NOT NULL DEFAULT 0,
+		tier           TEXT    NOT NULL,
+		suite_ref      TEXT    NOT NULL DEFAULT '',
+		engine_version TEXT    NOT NULL DEFAULT '',
+		model_panel    TEXT    NOT NULL DEFAULT '[]',
+		seed           INTEGER NOT NULL DEFAULT 0,
+		started_at     TEXT    NOT NULL,
+		finished_at    TEXT,
+		status         TEXT    NOT NULL
+	);
+	CREATE INDEX idx_evals_skill ON evals (skill_name, id DESC);
+
+	CREATE TABLE runs (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		eval_id       INTEGER NOT NULL REFERENCES evals(id),
+		task_id       TEXT    NOT NULL,
+		agent         TEXT    NOT NULL,
+		model         TEXT    NOT NULL,
+		condition     TEXT    NOT NULL,
+		attempt       INTEGER NOT NULL,
+		artifact_dir  TEXT    NOT NULL DEFAULT '',
+		verifier_exit INTEGER,
+		input_tokens  INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		duration_ms   INTEGER NOT NULL DEFAULT 0,
+		agent_version TEXT    NOT NULL DEFAULT '',
+		rate_limited  INTEGER NOT NULL DEFAULT 0,
+		status        TEXT    NOT NULL DEFAULT 'claimed',
+		error         TEXT    NOT NULL DEFAULT '',
+		created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+		-- The resume mechanism. A key that already has a finished row is
+		-- skipped; one with a claimed-but-unfinished row is retried, because a
+		-- process killed mid-run must not silently drop a session from a
+		-- denominator.
+		UNIQUE (eval_id, task_id, agent, model, condition, attempt)
+	);
+	CREATE INDEX idx_runs_eval ON runs (eval_id);
+
+	CREATE TABLE judgments (
+		id       INTEGER PRIMARY KEY AUTOINCREMENT,
+		eval_id  INTEGER NOT NULL REFERENCES evals(id),
+		task_id  TEXT    NOT NULL DEFAULT '',
+		model    TEXT    NOT NULL DEFAULT '',
+		kind     TEXT    NOT NULL,
+		rule_id  TEXT    NOT NULL DEFAULT '',
+		winner   TEXT    NOT NULL DEFAULT '',
+		margin   REAL    NOT NULL DEFAULT 0,
+		evidence TEXT    NOT NULL DEFAULT '',
+		votes    INTEGER NOT NULL DEFAULT 1,
+		swapped  INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT  NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX idx_judgments_eval ON judgments (eval_id);
+
+	CREATE TABLE scores (
+		eval_id       INTEGER NOT NULL REFERENCES evals(id),
+		agent         TEXT    NOT NULL,
+		model         TEXT    NOT NULL,
+		trigger_f1    REAL    NOT NULL DEFAULT 0,
+		reliability   REAL    NOT NULL DEFAULT 0,
+		uplift        REAL    NOT NULL DEFAULT 0,
+		efficiency    REAL    NOT NULL DEFAULT 0,
+		effectiveness REAL    NOT NULL DEFAULT 0,
+		adherence     REAL    NOT NULL DEFAULT 0,
+		drift         REAL    NOT NULL DEFAULT 0,
+		grade         TEXT    NOT NULL DEFAULT '',
+		PRIMARY KEY (eval_id, agent, model)
+	);
+
+	CREATE TABLE reports (
+		eval_id        INTEGER PRIMARY KEY REFERENCES evals(id),
+		doc            TEXT    NOT NULL,
+		headline       REAL    NOT NULL DEFAULT 0,
+		panel_complete INTEGER NOT NULL DEFAULT 0,
+		robustness_gap REAL    NOT NULL DEFAULT 0,
+		created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE suite_checks (
+		skill_name TEXT NOT NULL,
+		suite_ref  TEXT NOT NULL,
+		task_id    TEXT NOT NULL,
+		void       INTEGER NOT NULL DEFAULT 0,
+		reason     TEXT NOT NULL DEFAULT '',
+		checked_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (skill_name, suite_ref, task_id)
+	);`,
+
+	// Migration 9: reports.robustness_gap becomes nullable, so a gap that was
+	// never computed (an ambiguous strong/floor class) no longer collapses to
+	// the same 0 a genuinely-zero gap would store — report.ReportMeta already
+	// carries this distinction as a *float64, but the NOT NULL DEFAULT 0
+	// column threw it away at the store seam. SQLite has no ALTER COLUMN, so
+	// the column is dropped and re-added nullable; existing rows' gaps are
+	// necessarily lost (they were already unrecoverably 0-or-real at that
+	// point), which is acceptable for an indexed convenience column backed by
+	// the opaque report doc.
+	//
+	// scores gains a health flag: ScoreRow previously had no way to record
+	// that a row belongs to an unhealthy or otherwise excluded member, the
+	// same gap RobustnessGap's ByClass fix closed above it.
+	`ALTER TABLE reports DROP COLUMN robustness_gap;
+	ALTER TABLE reports ADD COLUMN robustness_gap REAL;
+	ALTER TABLE scores ADD COLUMN healthy INTEGER NOT NULL DEFAULT 1;`,
 }
 
 func migrate(db *sql.DB) error {

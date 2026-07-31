@@ -11,14 +11,14 @@ steps:
     action: Run scripts/build.py to assemble the report bundle.
     postcondition: the script exits 0 and bundle/ exists.
   - id: validate-bundle
-    action: Validate the bundle contents against manifest.json.
+    action: Run scripts/validate.py to validate the bundle contents against manifest.json.
     postcondition: validation exits 0.
     validation: true
   - id: package-bundle
-    action: Package the bundle into out/report.zip.
+    action: Run scripts/package.py to package the bundle into out/report.zip.
     postcondition: out/report.zip exists.
   - id: validate-package
-    action: Validate out/report.zip against the manifest checksum.
+    action: Run scripts/verify.py to validate out/report.zip against the manifest checksum.
     postcondition: checksum validation exits 0.
     validation: true
 constraints:

@@ -106,6 +106,12 @@ func Conformance(bundleDir string) ([]Finding, error) {
 	}
 	findings = append(findings, symlinkFindings...)
 
+	archiveFindings, err := checkRootArchives(bundleDir)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, archiveFindings...)
+
 	utf8Findings, err := checkUTF8(bundleDir)
 	if err != nil {
 		return nil, err

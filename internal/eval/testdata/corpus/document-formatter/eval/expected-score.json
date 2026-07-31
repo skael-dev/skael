@@ -1,0 +1,10 @@
+{
+  "headline_min": 84.5,
+  "headline_max": 87.5,
+  "drift_grade": "B",
+  "min_violations": 1,
+  "violation_ids": ["no-writes-outside-out"],
+  "unevaluable": 0,
+  "robustness_gap_min": 7.0,
+  "robustness_gap_max": 10.0
+}

@@ -1,0 +1,26 @@
+{
+  "Key": {
+    "TaskID": "format-document",
+    "Agent": "claude-code",
+    "Model": "model-strong",
+    "Condition": "skill",
+    "Attempt": 2
+  },
+  "VerifierExit": 0,
+  "Meta": {
+    "AgentVersion": "",
+    "Model": "model-strong",
+    "InputTokens": 500,
+    "OutputTokens": 500,
+    "DurationMS": 0,
+    "NumTurns": 3,
+    "VisibleSkills": null,
+    "PermissionDenials": null,
+    "RateLimited": false,
+    "IsError": false
+  },
+  "Status": "ok",
+  "Error": "",
+  "StartedAt": "2026-07-01T12:00:00Z",
+  "FinishedAt": "2026-07-01T12:05:00Z"
+}

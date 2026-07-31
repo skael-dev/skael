@@ -1,0 +1,26 @@
+{
+  "Key": {
+    "TaskID": "transform-data",
+    "Agent": "claude-code",
+    "Model": "model-floor",
+    "Condition": "baseline",
+    "Attempt": 1
+  },
+  "VerifierExit": 1,
+  "Meta": {
+    "AgentVersion": "",
+    "Model": "model-floor",
+    "InputTokens": 650,
+    "OutputTokens": 650,
+    "DurationMS": 0,
+    "NumTurns": 3,
+    "VisibleSkills": null,
+    "PermissionDenials": null,
+    "RateLimited": false,
+    "IsError": false
+  },
+  "Status": "ok",
+  "Error": "",
+  "StartedAt": "2026-07-01T12:00:00Z",
+  "FinishedAt": "2026-07-01T12:05:00Z"
+}

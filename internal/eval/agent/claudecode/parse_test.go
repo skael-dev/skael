@@ -1,14 +1,15 @@
 package claudecode_test
 
 import (
-	"context"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
+	"github.com/skael-dev/skael/internal/eval/score"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
@@ -121,20 +122,99 @@ func TestParse_NoTimestampAnywhereStaysZeroNotFabricated(t *testing.T) {
 	}
 }
 
-func TestParse_SkillInvocationBecomesSkillRead(t *testing.T) {
+// TestParse_RateLimitEventOnlyFlagsAnActualLimit pins the fix for a real
+// defect: a Claude Code session emits rate_limit_event lines routinely as
+// telemetry, most carrying status "allowed", and an earlier version of the
+// parser set Meta.RateLimited on the event's mere presence. That made an
+// ordinary session indistinguishable from one actually being throttled, so
+// the runner burned its retries and failed sessions that were never rate
+// limited — see internal/eval/agent/claudecode/parse.go's rateLimitInfo
+// comment, and tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag, which
+// hit this same defect against a real recorded transcript and had to strip
+// the line to work around it before this fix landed.
+func TestParse_RateLimitEventOnlyFlagsAnActualLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{
+			name: "status allowed is not a hit",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`,
+			want: false,
+		},
+		{
+			name: "a non-allowed status is a hit",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}`,
+			want: true,
+		},
+		{
+			name: "no payload at all stays the conservative default",
+			line: `{"type":"rate_limit_event"}`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := claudecode.New().Parse(stringReader(tc.line + "\n"))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if res.Meta.RateLimited != tc.want {
+				t.Errorf("RateLimited = %v, want %v", res.Meta.RateLimited, tc.want)
+			}
+		})
+	}
+}
+
+func TestParse_SkillInvocationBecomesAnExplicitToolCall(t *testing.T) {
 	res := parseFixture(t, "skill-invocation.jsonl")
 
-	var got []string
+	var got []trajectory.Event
 	for _, e := range res.Events {
-		if e.Type == trajectory.TypeSkillRead {
-			got = append(got, e.Name)
+		if e.Type == trajectory.TypeToolCall && e.Name == "Skill" {
+			got = append(got, e)
 		}
 	}
 	if len(got) == 0 {
-		t.Fatalf("no skill_read event parsed; TriggerF1 is the highest-weighted pillar and depends on this: %v", typesOf(res.Events))
+		t.Fatalf("no explicit Skill tool_call event parsed; TriggerF1 is the highest-weighted pillar and depends on this: %v", typesOf(res.Events))
 	}
-	if got[0] != "find-skills" {
-		t.Errorf("skill_read Name = %q, want the invoked skill name %q", got[0], "find-skills")
+	found := false
+	for _, p := range got[0].Paths {
+		if path.Base(path.Dir(p)) == "find-skills" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Skill tool_call Paths = %v, want a path whose parent directory is the invoked skill %q", got[0].Paths, "find-skills")
+	}
+	// The native Skill invocation is an explicit "used this skill" signal, not a
+	// mere read of its SKILL.md — it must never be reported as skill_read, or
+	// score.DetectFiring's inferred branch becomes reachable from a real
+	// invocation and Probe.Inferred stops meaning what it claims.
+	for _, e := range res.Events {
+		if e.Type == trajectory.TypeSkillRead {
+			t.Errorf("skill invocation reported as skill_read: %+v", e)
+		}
+	}
+}
+
+func TestParse_SkillInvocationDetectedAsNonInferred(t *testing.T) {
+	// Pins the fix for the previously-unreachable explicit branch of
+	// score.DetectFiring: a real Claude Code Skill invocation, run through the
+	// full parse, must be detected as fired and NOT inferred on an adapter that
+	// supports native skill invocation. Collapsing the tool_call/skill_read
+	// distinction back together (e.g. reverting the "Skill" case in mapToolUse
+	// to emit TypeSkillRead) makes this fail.
+	res := parseFixture(t, "skill-invocation.jsonl")
+	caps := agent.Caps{SupportsSkillInvocation: true}
+
+	fired, inferred := score.DetectFiring("find-skills", caps, res.Events)
+	if !fired {
+		t.Fatal("DetectFiring did not see the skill fire")
+	}
+	if inferred {
+		t.Error("DetectFiring reported an explicit invocation as inferred")
 	}
 }
 
@@ -235,13 +315,6 @@ func TestCaps(t *testing.T) {
 	}
 	if c.ModelFlag == "" {
 		t.Error("ModelFlag empty; the panel varies models via this flag")
-	}
-}
-
-func TestInvokeIsNotImplementedYet(t *testing.T) {
-	_, err := claudecode.New().Invoke(context.TODO(), agent.InvokeSpec{})
-	if err != agent.ErrInvokeNotImplemented {
-		t.Errorf("Invoke err = %v, want ErrInvokeNotImplemented", err)
 	}
 }
 

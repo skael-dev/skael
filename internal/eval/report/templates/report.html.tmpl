@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{.Skill}} — eval report</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --border: #d8d8d8;
+    --panel: #f6f6f7;
+    --accent: #f59e0b;
+    --bad: #b3261e;
+    --good: #1e6e3c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --fg: #e8e8e8;
+      --muted: #a0a0a0;
+      --border: #3a3b3f;
+      --panel: #1f2023;
+      --accent: #f59e0b;
+      --bad: #ff8a80;
+      --good: #7fd99a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1, h2, h3 { font-weight: 600; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { font-size: 1rem; margin-bottom: 0.25rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  .meta { color: var(--muted); font-size: 0.9rem; }
+  .banner {
+    border: 1px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+  }
+  .banner.bad {
+    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 12%, var(--bg));
+  }
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  tr.unhealthy td { color: var(--bad); }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1rem;
+    background: var(--panel);
+  }
+  .headline-value { font-size: 2rem; font-weight: 700; }
+  .headline-ci { color: var(--muted); }
+  .pill {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.05rem 0.6rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .quote {
+    border-left: 3px solid var(--accent);
+    padding: 0.3rem 0.7rem;
+    margin: 0.3rem 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+  }
+  ul { padding-left: 1.2rem; }
+  .empty { color: var(--muted); font-style: italic; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>{{.Skill}}</h1>
+    <p class="meta">
+      spec v{{.SpecVersion}} &middot; tier <strong>{{.Tier}}</strong>
+      &middot; suite {{shortref .SuiteRef}}
+      &middot; engine {{.EngineVersion}}
+      &middot; started {{if .StartedAt.IsZero}}<span class="empty">not recorded</span>{{else}}{{.StartedAt.Format "2006-01-02 15:04 MST"}}{{end}}
+      {{if not .FinishedAt.IsZero}}&middot; finished {{.FinishedAt.Format "2006-01-02 15:04 MST"}}{{end}}
+    </p>
+  </header>
+
+  {{if not .PanelComplete}}
+  <div class="banner bad">
+    <strong>Panel incomplete.</strong> Not every planned model panel member contributed to this run.
+    Scores below were computed over fewer members than planned; treat the headline and any
+    minimum-over-panel figure as a lower bound rather than the full picture.
+  </div>
+  {{end}}
+
+  <h2>Score matrix</h2>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Member</th>
+        <th>Class</th>
+        <th>Trigger F1 (%)<br><span style="font-weight:normal;color:var(--muted)">measured on {{.TriggerSource.Agent}}/{{.TriggerSource.Model}} only</span></th>
+        <th>Reliability (%)</th>
+        <th>Uplift (%)</th>
+        <th>Efficiency (%)</th>
+        <th>Effectiveness (0&ndash;100)</th>
+        <th>Drift mean (0&ndash;100)</th>
+        <th>Drift worst (0&ndash;100)</th>
+        <th>Drift σ (pp)</th>
+        <th>Grade</th>
+        <th>Health</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Members}}
+      <tr{{if not .Healthy}} class="unhealthy"{{end}}>
+        <td>{{.Member.Agent}} / {{.Member.Model}}{{if .MetaPartial}} <span class="pill" title="{{.MetaPartialReason}}">partial meta</span>{{end}}</td>
+        <td>{{.Member.Class}}</td>
+        {{if .Healthy}}
+        <td>{{pct .Pillars.TriggerF1}}</td>
+        <td>{{pct .Pillars.Reliability}}</td>
+        <td>{{pct .Pillars.Uplift}}</td>
+        <td>{{pct .Pillars.Efficiency}}</td>
+        <td>{{round1 .Effectiveness}}</td>
+        <td>{{round1 .Drift.Mean}}</td>
+        <td>{{round1 .Drift.Worst}}</td>
+        <td>{{round1 .Drift.Sigma}}</td>
+        <td>{{.DriftGrade}}</td>
+        <td>healthy</td>
+        {{else}}
+        <td colspan="9">not measured &mdash; {{if .Detail}}{{.Detail}}{{else}}no reason recorded{{end}}</td>
+        <td>unhealthy</td>
+        {{end}}
+      </tr>
+      {{else}}
+      <tr><td colspan="12" class="empty">no panel members reported a result</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Headline</h2>
+  <div class="card">
+    <div class="headline-value">{{round1 .Headline}}</div>
+    <div class="headline-ci">95% CI [{{round1 (index .HeadlineCI 0)}}, {{round1 (index .HeadlineCI 1)}}]</div>
+    <p>
+      <span class="pill">Uplift source: {{.UpliftSource}}</span>
+      {{if .JudgeKappa}}
+        <span class="pill">judge &kappa; = {{deref .JudgeKappa}}{{if .JudgeLabeledBy}} (labeled by {{.JudgeLabeledBy}}){{end}}</span>
+      {{else}}
+        <span class="pill">judge &kappa;: not calibrated for this run</span>
+      {{end}}
+      {{if .TriggerUnknown}}
+        <span class="pill">{{.TriggerUnknown}} trigger probe(s) unmeasured</span>
+      {{end}}
+    </p>
+    <p>
+      Robustness gap (strong vs. floor):
+      {{if .RobustnessGap}}
+        {{deref .RobustnessGap}} points
+      {{else}}
+        <span class="empty">not computed &mdash; the strong/floor comparison was not well defined for this panel (zero or more than one member in a class, or one member has no drift runs)</span>
+      {{end}}
+    </p>
+  </div>
+
+  <h2>Void tasks</h2>
+  {{if .VoidTasks}}
+  <ul>
+    {{range .VoidTasks}}
+    <li><code>{{.TaskID}}</code> &mdash; {{.Reason}}</li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">no tasks were voided</p>
+  {{end}}
+
+  <h2>Unevaluable checks</h2>
+  {{if or .Unevaluable .UnevaluableDetail}}
+  <p>{{.Unevaluable}} check(s) could not be evaluated.</p>
+  <ul>
+    {{range .UnevaluableDetail}}
+    <li>{{.}}</li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">every check could be evaluated</p>
+  {{end}}
+
+  <h2>Tasks</h2>
+  {{if .Tasks}}
+  {{range .Tasks}}
+  <div class="card">
+    <h3>{{.TaskID}} <span class="pill">{{.Kind}}</span> <span class="pill">{{.Split}}</span></h3>
+
+    {{if .Conditions}}
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th></tr></thead>
+      <tbody>
+        {{range .Conditions}}
+        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+    {{end}}
+
+    {{if .Drift}}
+    <h4>Drift per run</h4>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage (%)</th><th>Order (%)</th><th>Violation (%)</th><th>Checkpoint (%)</th><th>Semantic (%)</th><th>Focus (%)</th><th>Adherence (0&ndash;100)</th><th>Unevaluable</th></tr></thead>
+      <tbody>
+        {{range .Drift}}
+        <tr>
+          <td>{{.Model}}</td>
+          <td>{{.Attempt}}</td>
+          <td>{{pct .Components.StepCoverage}}</td>
+          <td>{{pct .Components.Order}}</td>
+          <td>{{pct .Components.Violation}}</td>
+          <td>{{pct .Components.Checkpoint}}</td>
+          <td>{{pct .Components.Semantic}}</td>
+          <td>{{pct .Components.Focus}}</td>
+          <td>{{round1 .Adherence}}</td>
+          <td>{{if .Unevaluable}}{{.Unevaluable}}{{else}}0{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+    {{range .Drift}}
+      {{if .Violations}}
+      <h4>Violations &mdash; {{.Model}} attempt {{.Attempt}}</h4>
+      {{range .Violations}}
+      <p><strong>{{.ID}}</strong> <span class="pill">{{.Severity}}</span> &times;{{.Hits}}</p>
+      {{range .Evidence}}
+      <div class="quote">{{.}}</div>
+      {{end}}
+      {{end}}
+      {{end}}
+    {{end}}
+    {{end}}
+
+    {{if .Judge}}
+    <h4>Judge notes</h4>
+    {{range .Judge}}
+    <p><strong>{{.Model}}</strong> winner: {{.Winner}}, margin {{gfmt .Margin}}, votes {{.Votes}}</p>
+    {{range .Evidence}}
+    <div class="quote">{{.}}</div>
+    {{end}}
+    {{end}}
+    {{end}}
+  </div>
+  {{end}}
+  {{else}}
+  <p class="empty">no tasks were scored</p>
+  {{end}}
+
+  {{if .Iterations}}
+  <h2>Iteration history</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>#</th><th>Dev effectiveness</th><th>Applied</th><th>Pruned</th><th>Notes</th></tr></thead>
+    <tbody>
+      {{range .Iterations}}
+      <tr>
+        <td>{{.N}}</td>
+        <td>{{round1 .DevEffectiveness}}</td>
+        <td>{{.Applied}}</td>
+        <td>{{range .Pruned}}{{.}} {{end}}</td>
+        <td>{{range .Notes}}{{.}} {{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{end}}
+
+  <footer>
+    Report schema v{{.SchemaVersion}}. Generated by skael eval.
+  </footer>
+
+</div>
+</body>
+</html>

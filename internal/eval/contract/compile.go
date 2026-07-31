@@ -37,8 +37,15 @@ var pathScopePattern = regexp.MustCompile(`(?i)\b(?:outside|only in|within)\s+([
 // a bare alternation turns routine commands into violations — and a "no
 // network" constraint is typically authored at critical severity, the heaviest
 // penalty there is. The leading class is the set of characters that can precede
-// a command: whitespace, a shell operator, or an opening quote.
-const networkCommandPattern = "(?:^|[\\s;|&(<>'\"`])(?:curl|wget|nc)\\b"
+// a command: whitespace, a shell operator, an opening quote, or a "/".
+//
+// "/" is in the class because a path-qualified invocation is still an
+// invocation: "/usr/bin/curl" and "./nc" are what a skill writes when PATH is
+// not to be trusted, and without "/" the rule was inert for exactly those. The
+// cost is a file whose own name is a tool name — a write to "out/nc" reads as
+// an invocation. That direction is deliberate: a false violation gets
+// investigated, a missed one looks like a clean run.
+const networkCommandPattern = "(?:^|[\\s;|&(<>'\"`/])(?:curl|wget|nc)\\b"
 
 var writeKeywords = []string{"write", "save", "output to", "create"}
 

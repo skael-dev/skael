@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skael-dev/skael/internal/eval/bundlepath"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"gopkg.in/yaml.v3"
 )
@@ -30,20 +31,14 @@ type frontmatter struct {
 // safeJoin resolves rel inside dir, refusing anything that escapes. Resource
 // paths come from the model, so they are untrusted input: an absolute path or a
 // traversal must be an error rather than something quietly cleaned up.
+//
+// The containment check itself lives in bundlepath, shared with the repair
+// package's proposal paths, so there is exactly one implementation of the
+// rule; this wrapper only adds gen's error context.
 func safeJoin(dir, rel string) (string, error) {
-	if rel == "" {
-		return "", fmt.Errorf("gen: empty resource path")
-	}
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("gen: absolute resource path %q", rel)
-	}
-	target := filepath.Join(dir, rel)
-	within, err := filepath.Rel(dir, target)
+	target, err := bundlepath.SafeJoin(dir, rel)
 	if err != nil {
-		return "", fmt.Errorf("gen: resolving %q: %w", rel, err)
-	}
-	if within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("gen: resource path %q escapes the bundle", rel)
+		return "", fmt.Errorf("gen: resource %w", err)
 	}
 	return target, nil
 }

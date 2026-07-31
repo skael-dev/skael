@@ -1,11 +1,25 @@
 package contract
 
 import (
+	"errors"
 	"fmt"
 	stdpath "path"
 	"path/filepath"
 	"strings"
 )
+
+// ErrBadPattern wraps every error MatchPath returns because pattern itself is
+// malformed — a compiler defect. A caller must stop scoring rather than
+// continue around it: the compiled contract cannot be trusted for any
+// candidate once one of its patterns is invalid.
+var ErrBadPattern = errors.New("contract: malformed pattern")
+
+// ErrBadCandidate wraps every error MatchPath returns because candidate is
+// unusable — an absolute path, a backslash-separated one — while pattern
+// itself is fine. This is a recording defect, not a compiler defect: a
+// caller should count the check as unevaluable and keep scoring the rest of
+// the trajectory.
+var ErrBadCandidate = errors.New("contract: unusable candidate")
 
 // MatchPath reports whether candidate satisfies pattern, under the small glob
 // dialect every Matcher.PathGlob and Matcher.PathNotGlob value in this
@@ -103,34 +117,34 @@ func MatchPath(pattern, candidate string) (bool, error) {
 	segments := strings.Split(pattern, "/")
 	for i, seg := range segments {
 		if seg == ".." {
-			return false, fmt.Errorf("contract: malformed pattern %q: a %q segment is not allowed; the pattern side is matched as written, without \"..\" normalization", pattern, "..")
+			return false, fmt.Errorf("%w %q: a %q segment is not allowed; the pattern side is matched as written, without \"..\" normalization", ErrBadPattern, pattern, "..")
 		}
 		if !strings.Contains(seg, "**") {
 			continue
 		}
 		if seg != "**" {
-			return false, fmt.Errorf("contract: malformed pattern %q: %q must be a whole path segment, not part of one", pattern, "**")
+			return false, fmt.Errorf("%w %q: %q must be a whole path segment, not part of one", ErrBadPattern, pattern, "**")
 		}
 		if i != len(segments)-1 {
-			return false, fmt.Errorf("contract: malformed pattern %q: %q is only meaningful as the final segment", pattern, "**")
+			return false, fmt.Errorf("%w %q: %q is only meaningful as the final segment", ErrBadPattern, pattern, "**")
 		}
 		if len(segments) == 1 {
-			return false, fmt.Errorf("contract: malformed pattern %q: %q needs a preceding path", pattern, "**")
+			return false, fmt.Errorf("%w %q: %q needs a preceding path", ErrBadPattern, pattern, "**")
 		}
 	}
 
 	if strings.HasPrefix(pattern, "/") {
-		return false, fmt.Errorf("contract: malformed pattern %q: an absolute pattern is not allowed; MatchPath compares workspace-relative paths only", pattern)
+		return false, fmt.Errorf("%w %q: an absolute pattern is not allowed; MatchPath compares workspace-relative paths only", ErrBadPattern, pattern)
 	}
 
 	if strings.Contains(pattern, `\`) {
-		return false, fmt.Errorf("contract: pattern %q contains a backslash; this package's patterns are POSIX-style (\"/\"-separated) only", pattern)
+		return false, fmt.Errorf("%w: pattern %q contains a backslash; this package's patterns are POSIX-style (\"/\"-separated) only", ErrBadPattern, pattern)
 	}
 	if strings.Contains(candidate, `\`) {
-		return false, fmt.Errorf("contract: path %q contains a backslash; this package compares POSIX-style (\"/\"-separated) paths only", candidate)
+		return false, fmt.Errorf("%w: path %q contains a backslash; this package compares POSIX-style (\"/\"-separated) paths only", ErrBadCandidate, candidate)
 	}
 	if strings.HasPrefix(candidate, "/") {
-		return false, fmt.Errorf("contract: path %q is absolute; MatchPath compares workspace-relative paths only", candidate)
+		return false, fmt.Errorf("%w: path %q is absolute; MatchPath compares workspace-relative paths only", ErrBadCandidate, candidate)
 	}
 
 	// Resolve "." and ".." lexically before matching, so a traversal like
@@ -155,7 +169,7 @@ func MatchPath(pattern, candidate string) (bool, error) {
 		for i, seg := range prefix {
 			ok, err := filepath.Match(seg, cleanSegments[i])
 			if err != nil {
-				return false, fmt.Errorf("contract: pattern %q: %w", pattern, err)
+				return false, fmt.Errorf("%w %q: %v", ErrBadPattern, pattern, err)
 			}
 			if !ok {
 				return false, nil
@@ -166,7 +180,7 @@ func MatchPath(pattern, candidate string) (bool, error) {
 
 	ok, err := filepath.Match(pattern, clean)
 	if err != nil {
-		return false, fmt.Errorf("contract: pattern %q: %w", pattern, err)
+		return false, fmt.Errorf("%w %q: %v", ErrBadPattern, pattern, err)
 	}
 	return ok, nil
 }

@@ -8,11 +8,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 )
 
-func open(t *testing.T) *store.Store {
+func openStore(t *testing.T) *store.Store {
 	t.Helper()
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -57,7 +58,7 @@ func TestOpen_CreatesLayoutAndIsIdempotent(t *testing.T) {
 }
 
 func TestPaths_EvalSidecarIsOneDirectory(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 
 	// pack strips the sidecar with a single RemoveAll, so contract and suite
 	// must both live under the eval directory.
@@ -88,8 +89,22 @@ func TestPaths_EvalSidecarIsOneDirectory(t *testing.T) {
 	}
 }
 
+func TestEvalDir_UsesTheOneSidecarDefinition(t *testing.T) {
+	s := openStore(t)
+	dir, err := s.EvalDir("demo")
+	if err != nil {
+		t.Fatalf("EvalDir: %v", err)
+	}
+	// The store must not carry its own copy of the sidecar name. lint owns the
+	// one definition of what is not shipped bundle content; a second literal
+	// here can drift, and a bundle that ships eval scaffolding is the result.
+	if filepath.Base(dir) != lint.SidecarDir {
+		t.Errorf("EvalDir = %q, want its last element to be lint.SidecarDir (%q)", dir, lint.SidecarDir)
+	}
+}
+
 func TestPaths_NamespacedNameUsesStrippedDir(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 	got, err := s.SkillDir("superpowers:brainstorming")
 	if err != nil {
 		t.Fatalf("SkillDir: %v", err)
@@ -103,7 +118,7 @@ func TestPaths_RejectUnsafeNames(t *testing.T) {
 	// Names reaching this package may come from a GitHub import or an
 	// unpacked archive, not always a validated spec, so every path helper
 	// must refuse a bad name itself rather than trust its caller.
-	s := open(t)
+	s := openStore(t)
 	cases := []string{
 		"../../../../../../../../tmp/evalcheck-escape-poc", // path traversal out of the workspace
 		"",   // collapses to the shared "skills" parent directory
@@ -130,7 +145,7 @@ func TestPaths_RejectUnsafeNames(t *testing.T) {
 }
 
 func TestSaveSpec_RejectsInvalidName(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 	bad := sampleSpec()
 	bad.Name = "../../../../../../../../tmp/evalcheck-escape-poc"
 	if _, err := s.SaveSpec(bad); err == nil {
@@ -144,7 +159,7 @@ func TestSaveSpec_RejectsInvalidName(t *testing.T) {
 }
 
 func TestSaveSpec_VersionsMonotonically(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 
 	v1, err := s.SaveSpec(sampleSpec())
 	if err != nil {
@@ -183,7 +198,7 @@ func TestSaveSpec_ConcurrentWritersGetUniqueContiguousVersions(t *testing.T) {
 	// of letting busy_timeout retry it, because there is no lock to wait
 	// out — only a stale snapshot. SaveSpec reads MAX(version) before it
 	// writes, so it hits exactly that shape without _txlock=immediate.
-	s := open(t)
+	s := openStore(t)
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -221,7 +236,7 @@ func TestSaveSpec_ConcurrentWritersGetUniqueContiguousVersions(t *testing.T) {
 func TestSaveSpec_AlsoWritesReadableYAML(t *testing.T) {
 	// The approval gate shows a file a human can edit. Storing the spec only as
 	// a database blob would make `whetstone spec edit` impossible.
-	s := open(t)
+	s := openStore(t)
 	if _, err := s.SaveSpec(sampleSpec()); err != nil {
 		t.Fatalf("SaveSpec: %v", err)
 	}
@@ -240,14 +255,14 @@ func TestSaveSpec_AlsoWritesReadableYAML(t *testing.T) {
 }
 
 func TestLoadSpec_MissingIsAnError(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 	if _, _, err := s.LoadSpec("nope"); err == nil {
 		t.Error("LoadSpec succeeded for a skill that was never saved")
 	}
 }
 
 func TestApproveSpec_IsRecordedPerVersion(t *testing.T) {
-	s := open(t)
+	s := openStore(t)
 	if _, err := s.SaveSpec(sampleSpec()); err != nil {
 		t.Fatalf("SaveSpec: %v", err)
 	}
@@ -312,7 +327,7 @@ func TestSpecHistory_MalformedTimestampIsAnError(t *testing.T) {
 }
 
 func TestCache_RoundTripsAndMisses(t *testing.T) {
-	c := open(t).Cache()
+	c := openStore(t).Cache()
 
 	if _, ok, err := c.Get("absent"); err != nil || ok {
 		t.Errorf("Get(absent) = ok %v, err %v; want false, nil", ok, err)
@@ -332,7 +347,7 @@ func TestCache_RoundTripsAndMisses(t *testing.T) {
 func TestCache_PutIsIdempotent(t *testing.T) {
 	// A re-run recomputes the same key. An INSERT without upsert would fail on
 	// the unique constraint and abort the run.
-	c := open(t).Cache()
+	c := openStore(t).Cache()
 	if err := c.Put("k", "v1"); err != nil {
 		t.Fatalf("first Put: %v", err)
 	}

@@ -45,12 +45,42 @@ func RunInit(root string) (string, error) {
 		root = wd
 	}
 
+	if found, err := ancestorWorkspace(root); err != nil {
+		return "", fmt.Errorf("whetstone init: %w", err)
+	} else if found != "" {
+		return "", fmt.Errorf("whetstone init: %s is inside the workspace at %s; a nested workspace shadows it for every later command — run from %s, or move this directory out", root, found, found)
+	}
+
 	s, err := store.Open(root)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = s.Close() }()
 	return s.Root(), nil
+}
+
+// ancestorWorkspace walks up from root's parent looking for an existing
+// .whetstone workspace, so RunInit can refuse to create a nested one: every
+// later command run from inside root would find the nested workspace first
+// and silently shadow the outer one. It returns "" (with a nil error) when no
+// ancestor holds one. root itself is not checked — re-running init on an
+// existing workspace is the idempotent case store.Open already handles.
+func ancestorWorkspace(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(abs)
+	for {
+		if info, err := os.Stat(filepath.Join(dir, workspaceDirName)); err == nil && info.IsDir() {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
 }
 
 // findWorkspace walks up from the working directory to the nearest ancestor

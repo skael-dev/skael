@@ -11,3 +11,5 @@ report template.
 2. Apply the style rules and fill assets/report.tmpl — postcondition: the
    rendered report exits 0 from the template linter.
 3. Write the rendered report to out/report.md — postcondition: it exists.
+
+MUST NOT write any file outside out/.

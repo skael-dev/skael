@@ -30,16 +30,8 @@ var packCmd = &cobra.Command{
 			return err
 		}
 
-		out := packOutput
-		if out == "" {
-			abs, err := filepath.Abs(dir)
-			if err != nil {
-				return err
-			}
-			out = filepath.Base(abs) + ".tar.gz"
-		}
-
-		if err := RunPack(dir, out); err != nil {
+		out, err := RunPack(dir, packOutput)
+		if err != nil {
 			return err
 		}
 		if ui.JSONMode {
@@ -51,28 +43,37 @@ var packCmd = &cobra.Command{
 }
 
 // RunPack lints bundleDir and, if it has no errors, writes a tar.gz of it to
-// outPath with the eval sidecar and the spec removed.
+// outPath with the eval sidecar and the spec removed, and returns the
+// archive's resolved path. When outPath is empty, the archive is written
+// beside the bundle — in its parent directory, as "<bundle>.tar.gz" — rather
+// than inside it: an archive inside the directory being packed is content the
+// next pack has to exclude (lint.Excluded's root-tarball case) purely because
+// it exists.
 //
 // Linting first is not a convenience: an archive built from a bundle that
 // fails lint installs and then fails at use time, a long way from the cause.
-func RunPack(bundleDir, outPath string) error {
+func RunPack(bundleDir, outPath string) (string, error) {
 	root, err := bundleRoot(bundleDir)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	res, _, err := lintBundle(bundleDir, false)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if res.HasErrors() {
-		return fmt.Errorf("%s fails lint with %d error(s); run `whetstone lint %s` and fix them before packing",
+		return "", fmt.Errorf("%s fails lint with %d error(s); run `whetstone lint %s` and fix them before packing",
 			bundleDir, res.Errors(), bundleDir)
+	}
+
+	if outPath == "" {
+		outPath = filepath.Join(filepath.Dir(root), filepath.Base(root)+".tar.gz")
 	}
 
 	out, err := filepath.Abs(outPath)
 	if err != nil {
-		return fmt.Errorf("whetstone pack: resolving %q: %w", outPath, err)
+		return "", fmt.Errorf("whetstone pack: resolving %q: %w", outPath, err)
 	}
 
 	// The archive is built in a temp file beside its destination and renamed
@@ -83,7 +84,7 @@ func RunPack(bundleDir, outPath string) error {
 	// directory, so the rename is within one filesystem and therefore atomic.
 	tmp, err := os.CreateTemp(filepath.Dir(out), ".whetstone-pack-*.tar.gz")
 	if err != nil {
-		return fmt.Errorf("whetstone pack: %w", err)
+		return "", fmt.Errorf("whetstone pack: %w", err)
 	}
 	tmpName := tmp.Name()
 	// Removing the temp file is a no-op once the rename has moved it away.
@@ -102,16 +103,16 @@ func RunPack(bundleDir, outPath string) error {
 	tw := tar.NewWriter(gzw)
 
 	if err := writeBundleEntries(tw, root, skip); err != nil {
-		return err
+		return "", err
 	}
 	if err := tw.Close(); err != nil {
-		return fmt.Errorf("whetstone pack: closing tar: %w", err)
+		return "", fmt.Errorf("whetstone pack: closing tar: %w", err)
 	}
 	if err := gzw.Close(); err != nil {
-		return fmt.Errorf("whetstone pack: closing gzip: %w", err)
+		return "", fmt.Errorf("whetstone pack: closing gzip: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("whetstone pack: closing %s: %w", tmpName, err)
+		return "", fmt.Errorf("whetstone pack: closing %s: %w", tmpName, err)
 	}
 
 	// os.CreateTemp opens at 0600 and the rename preserves that, so without
@@ -119,13 +120,13 @@ func RunPack(bundleDir, outPath string) error {
 	// the 0666-and-umask an ordinary create would have produced, and an
 	// archive exists to be handed to someone else.
 	if err := os.Chmod(tmpName, archiveMode); err != nil {
-		return fmt.Errorf("whetstone pack: %w", err)
+		return "", fmt.Errorf("whetstone pack: %w", err)
 	}
 
 	if err := os.Rename(tmpName, out); err != nil {
-		return fmt.Errorf("whetstone pack: writing %s: %w", outPath, err)
+		return "", fmt.Errorf("whetstone pack: writing %s: %w", outPath, err)
 	}
-	return nil
+	return out, nil
 }
 
 // writeBundleEntries walks bundleDir and writes every regular file that ships

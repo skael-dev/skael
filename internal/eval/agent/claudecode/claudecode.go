@@ -4,7 +4,6 @@
 package claudecode
 
 import (
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -49,11 +48,6 @@ func (a *Adapter) InstallSkill(workspace, bundlePath string) error {
 		return fmt.Errorf("claudecode.InstallSkill copy: %w", err)
 	}
 	return nil
-}
-
-// Invoke runs a headless session. Implemented with the sandbox.
-func (a *Adapter) Invoke(context.Context, agent.InvokeSpec) (agent.RawStream, error) {
-	return nil, agent.ErrInvokeNotImplemented
 }
 
 // copyTree copies a directory tree, refusing symlinks. A skill bundle is

@@ -1,0 +1,2 @@
+{"seq":1,"ts":"2026-07-01T12:00:01Z","type":"message","name":"assemble and package the bundle by hand","args_digest":"digest-1"}
+{"seq":2,"ts":"2026-07-01T12:00:02Z","type":"tool_result","name":"bundle assembly failed","args_digest":"digest-2","exit_code":1}

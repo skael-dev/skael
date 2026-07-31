@@ -1,14 +1,14 @@
-package gen
+package bundlepath_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/skael-dev/skael/internal/eval/bundlepath"
 )
 
-// TestSafeJoin_RefusesNestedTraversal exercises safeJoin directly (this file
-// is package gen, not gen_test, precisely so it can reach the unexported
-// function) against traversal forms where ".." is not the first path
-// segment.
+// TestSafeJoin_RefusesNestedTraversal exercises SafeJoin against traversal
+// forms where ".." is not the first path segment.
 func TestSafeJoin_RefusesNestedTraversal(t *testing.T) {
 	dir := t.TempDir()
 	for _, rel := range []string{
@@ -16,8 +16,8 @@ func TestSafeJoin_RefusesNestedTraversal(t *testing.T) {
 		"./../escape.sh",
 		"a/b/../../../escape.sh",
 	} {
-		if _, err := safeJoin(dir, rel); err == nil {
-			t.Errorf("safeJoin(%q) = nil error, want an escape error", rel)
+		if _, err := bundlepath.SafeJoin(dir, rel); err == nil {
+			t.Errorf("SafeJoin(%q) = nil error, want an escape error", rel)
 		}
 	}
 }
@@ -32,7 +32,7 @@ func naivePrefixCheck(rel string) (safe bool) {
 // TestNaivePrefixCheck_WouldMissNestedTraversal proves the easy mistake: a
 // check that only inspects a path's prefix accepts "scripts/../../escape.sh"
 // because the string does not start with "..", even though it resolves
-// outside the bundle. safeJoin does not make this mistake — it resolves the
+// outside the bundle. SafeJoin does not make this mistake — it resolves the
 // path with filepath.Join and re-derives it against dir with filepath.Rel,
 // so a ".." buried after the first segment is still caught.
 func TestNaivePrefixCheck_WouldMissNestedTraversal(t *testing.T) {
@@ -43,8 +43,18 @@ func TestNaivePrefixCheck_WouldMissNestedTraversal(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if _, err := safeJoin(dir, evil); err == nil {
-		t.Errorf("safeJoin(%q) = nil error, want an escape error — the naive prefix check "+
-			"above wrongly allows this path, which is exactly what safeJoin must catch instead", evil)
+	if _, err := bundlepath.SafeJoin(dir, evil); err == nil {
+		t.Errorf("SafeJoin(%q) = nil error, want an escape error — the naive prefix check "+
+			"above wrongly allows this path, which is exactly what SafeJoin must catch instead", evil)
+	}
+}
+
+func TestSafeJoin_RefusesAbsoluteAndEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := bundlepath.SafeJoin(dir, "/etc/passwd"); err == nil {
+		t.Error("SafeJoin accepted an absolute path")
+	}
+	if _, err := bundlepath.SafeJoin(dir, ""); err == nil {
+		t.Error("SafeJoin accepted an empty path")
 	}
 }

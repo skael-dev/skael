@@ -116,6 +116,20 @@ test-fast:
 test-eval:
     go test ./internal/eval/... ./cli/whetstone/... -count=1
 
+# Sandbox + execution tests (needs a Docker daemon). Safe to run at default
+# parallelism against any other docker-tagged package: every whetstone
+# container and network is labeled with its creating process's pid
+# (internal/eval/sandbox/docker/labels.go), and Sweep only removes a resource
+# once that pid is confirmed dead (see sweep.go's pidAlive) — a still-running
+# process's containers are never touched, regardless of test-induced age
+# zeroing elsewhere on the daemon.
+test-docker:
+    go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
+
+# Sandbox tests against the slim CI base image
+test-docker-ci:
+    WHETSTONE_BASE_TAG=whetstone-base-ci:1 go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
+
 # --- Lint / Check ---
 
 # Run go vet

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +22,7 @@ func TestRunPack_StripsTheEvalSidecar(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "spec.yaml"), "name: pdf-extract\n")
 
 	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
-	if err := whetstone.RunPack(dir, out); err != nil {
+	if _, err := whetstone.RunPack(dir, out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 
@@ -57,7 +58,7 @@ func TestRunPack_RefusesABundleThatFailsLint(t *testing.T) {
 	// far from the cause.
 	dir := writeSkill(t, "pdf-extract", "---\nname: wrong-name\n---\n\n# x\n")
 	out := filepath.Join(t.TempDir(), "x.tar.gz")
-	if err := whetstone.RunPack(dir, out); err == nil {
+	if _, err := whetstone.RunPack(dir, out); err == nil {
 		t.Error("RunPack accepted a bundle that fails lint")
 	}
 }
@@ -71,7 +72,7 @@ func TestRunPack_KeepsEverythingElse(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
 
 	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
-	if err := whetstone.RunPack(dir, out); err != nil {
+	if _, err := whetstone.RunPack(dir, out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 
@@ -96,7 +97,7 @@ func TestRunPack_DoesNotArchiveItsOwnOutput(t *testing.T) {
 	t.Chdir(dir)
 
 	out := "pdf-extract.tar.gz"
-	if err := whetstone.RunPack(".", out); err != nil {
+	if _, err := whetstone.RunPack(".", out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 
@@ -144,6 +145,34 @@ func TestRunPack_LintsTheBundleUnderItsRealName(t *testing.T) {
 	}
 	if code != 0 {
 		t.Errorf("linting the current directory exit code = %d, want 0", code)
+	}
+}
+
+// writeBundle writes a minimal spec-compliant SKILL.md for name into dir,
+// which must already exist.
+func writeBundle(t *testing.T, dir, name string) {
+	t.Helper()
+	body := fmt.Sprintf("---\nname: %s\ndescription: Use when demoing a bundle in a pack test.\n---\n\n# Demo\n\n1. Do the thing. Postcondition: it is done.\n", name)
+	mustWrite(t, filepath.Join(dir, "SKILL.md"), body)
+}
+
+func TestRunPack_WritesOutsideTheBundleByDefault(t *testing.T) {
+	parent := t.TempDir()
+	bundle := filepath.Join(parent, "demo")
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBundle(t, bundle, "demo")
+
+	out, err := whetstone.RunPack(bundle, "")
+	if err != nil {
+		t.Fatalf("RunPack: %v", err)
+	}
+	// An archive inside the bundle is content the next pack would have to
+	// exclude. Excluding it is what made pack idempotent; not writing it there
+	// is what makes the exclusion unnecessary.
+	if filepath.Dir(out) != parent {
+		t.Errorf("archive at %q, want it in the bundle's parent %q", out, parent)
 	}
 }
 
@@ -206,7 +235,7 @@ func TestRunPack_SidecarAndArchivesDoNotFailLint(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
-	if err := whetstone.RunPack(dir, out); err != nil {
+	if _, err := whetstone.RunPack(dir, out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 	for _, name := range namesIn(t, out) {
@@ -224,7 +253,7 @@ func TestRunPack_PackingInPlaceTwiceSucceeds(t *testing.T) {
 	t.Chdir(dir)
 
 	for i := 1; i <= 2; i++ {
-		if err := whetstone.RunPack(".", "pdf-extract.tar.gz"); err != nil {
+		if _, err := whetstone.RunPack(".", "pdf-extract.tar.gz"); err != nil {
 			t.Fatalf("RunPack run %d: %v", i, err)
 		}
 	}
@@ -240,7 +269,7 @@ func TestRunPack_KeepsANestedEvalDirectory(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
 
 	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
-	if err := whetstone.RunPack(dir, out); err != nil {
+	if _, err := whetstone.RunPack(dir, out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 
@@ -270,7 +299,7 @@ func TestRunPack_OutputInstallsThroughTheRegistrysUnpack(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "eval", "contract.yaml"), "version: 1\n")
 
 	out := filepath.Join(t.TempDir(), "pdf-extract.tar.gz")
-	if err := whetstone.RunPack(dir, out); err != nil {
+	if _, err := whetstone.RunPack(dir, out); err != nil {
 		t.Fatalf("RunPack: %v", err)
 	}
 
