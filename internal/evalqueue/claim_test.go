@@ -69,11 +69,55 @@ func TestHeartbeat_LostAfterAnotherWorkerReclaims(t *testing.T) {
 	_, _, _, _ = q.Claim(ctx, "worker-a", 0)
 	_, _, _, _ = q.Claim(ctx, "worker-b", time.Minute)
 
-	if err := q.Heartbeat(ctx, id, "worker-a", time.Minute); !errors.Is(err, evalqueue.ErrLeaseLost) {
+	if err := q.Heartbeat(ctx, id, "worker-a"); !errors.Is(err, evalqueue.ErrLeaseLost) {
 		t.Fatalf("heartbeat err = %v, want ErrLeaseLost", err)
 	}
-	if err := q.Heartbeat(ctx, id, "worker-b", time.Minute); err != nil {
+	if err := q.Heartbeat(ctx, id, "worker-b"); err != nil {
 		t.Fatalf("current owner's heartbeat failed: %v", err)
+	}
+}
+
+func TestHeartbeat_ReappliesTheClaimedLeaseNotAFixedDefault(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+
+	j, _, ok, err := q.Claim(ctx, "worker-a", 10*time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if j.LeaseSeconds != 600 {
+		t.Fatalf("claimed lease_seconds = %d, want 600", j.LeaseSeconds)
+	}
+
+	if err := q.Heartbeat(ctx, id, "worker-a"); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	after, err := q.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LeaseExpiresAt == nil {
+		t.Fatal("lease_expires_at is nil after heartbeat")
+	}
+	// A heartbeat that truncated the lease to a fixed 60s default would put
+	// lease_expires_at well under a minute out. The claimed 10-minute lease
+	// should still be in force.
+	if time.Until(*after.LeaseExpiresAt) < 5*time.Minute {
+		t.Fatalf("lease_expires_at = %v (in %s), want close to 10 minutes out — the heartbeat truncated the lease",
+			after.LeaseExpiresAt, time.Until(*after.LeaseExpiresAt))
+	}
+
+	// Because the lease is still live, a second worker must not be able to
+	// claim the job out from under the first.
+	_, _, claimedAgain, err := q.Claim(ctx, "worker-b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimedAgain {
+		t.Fatal("a second worker claimed a job whose heartbeated lease is still live")
 	}
 }
 

@@ -110,10 +110,14 @@ const defaultLeaseSeconds = 60
 // heartbeat, report ingestion, fail, and status lookup.
 func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *skill.Store) {
 	huma.Register(api, huma.Operation{
-		OperationID: "claim-eval-job",
-		Method:      http.MethodPost,
-		Path:        "/api/eval/jobs/claim",
-		Summary:     "Claim the next eval job",
+		OperationID:   "claim-eval-job",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/claim",
+		Summary:       "Claim the next eval job",
+		DefaultStatus: http.StatusOK,
+		Responses: map[string]*huma.Response{
+			"204": {Description: "no job is currently claimable"},
+		},
 	}, func(ctx context.Context, input *claimInput) (*claimOutput, error) {
 		u := auth.UserFromContext(ctx)
 		if !u.IsPrivileged() {
@@ -144,10 +148,11 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "heartbeat-eval-job",
-		Method:      http.MethodPost,
-		Path:        "/api/eval/jobs/{id}/heartbeat",
-		Summary:     "Extend an eval job's lease",
+		OperationID:   "heartbeat-eval-job",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/{id}/heartbeat",
+		Summary:       "Extend an eval job's lease",
+		DefaultStatus: http.StatusOK,
 	}, func(ctx context.Context, input *heartbeatInput) (*emptyOutput, error) {
 		jobID := JobID(input.ID)
 		j, ok, err := q.VerifyClaim(ctx, jobID, input.ClaimToken)
@@ -160,21 +165,28 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			// that was legitimately right, on a job that has since moved on
 			// — Cancel clears claim_token_hash along with the status, so a
 			// cancelled job never re-verifies regardless of the token. Look
-			// the job up directly: if it exists and is no longer running,
-			// that is the lease-lost case the worker needs to hear about as
-			// 409, distinct from an outright forged/unknown token (403).
+			// the job up directly: if it exists and is either no longer
+			// running, or still "running" but its lease has already lapsed
+			// (VerifyClaim requires lease_expires_at > now(), so a lapsed
+			// lease fails verification even though the row's status column
+			// hasn't caught up yet) — either way that is the lease-lost case
+			// the worker needs to hear about as 409, distinct from an
+			// outright forged/unknown token (403).
 			job, getErr := q.Get(ctx, jobID)
 			if getErr != nil {
 				log.Error().Err(getErr).Str("job_id", input.ID).Msg("evalqueue: get job failed")
 				return nil, huma.Error500InternalServerError("heartbeat eval job: internal error")
 			}
-			if job != nil && job.Status != StatusRunning {
-				return nil, huma.Error409Conflict("heartbeat eval job: lease lost")
+			if job != nil {
+				leaseLapsed := job.LeaseExpiresAt != nil && job.LeaseExpiresAt.Before(time.Now())
+				if job.Status != StatusRunning || leaseLapsed {
+					return nil, huma.Error409Conflict("heartbeat eval job: lease lost")
+				}
 			}
 			return nil, huma.Error403Forbidden("heartbeat eval job: invalid claim")
 		}
 
-		if err := q.Heartbeat(ctx, j.ID, j.WorkerID, defaultLeaseSeconds*time.Second); err != nil {
+		if err := q.Heartbeat(ctx, j.ID, j.WorkerID); err != nil {
 			if errors.Is(err, ErrLeaseLost) {
 				return nil, huma.Error409Conflict("heartbeat eval job: lease lost")
 			}
@@ -185,10 +197,11 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "fail-eval-job",
-		Method:      http.MethodPost,
-		Path:        "/api/eval/jobs/{id}/fail",
-		Summary:     "Report an eval job as failed",
+		OperationID:   "fail-eval-job",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/{id}/fail",
+		Summary:       "Report an eval job as failed",
+		DefaultStatus: http.StatusOK,
 	}, func(ctx context.Context, input *failInput) (*emptyOutput, error) {
 		j, ok, err := q.VerifyClaim(ctx, JobID(input.ID), input.ClaimToken)
 		if err != nil {
@@ -227,10 +240,11 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "report-eval-job",
-		Method:      http.MethodPost,
-		Path:        "/api/eval/jobs/{id}/report",
-		Summary:     "Ingest an eval report and complete the job",
+		OperationID:   "report-eval-job",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/{id}/report",
+		Summary:       "Ingest an eval report and complete the job",
+		DefaultStatus: http.StatusOK,
 	}, func(ctx context.Context, input *reportInput) (*emptyOutput, error) {
 		jobID := JobID(input.ID)
 
@@ -280,15 +294,34 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		rec.Version = j.Version
 		rec.JobID = string(j.ID)
 
-		// f. Persist.
-		if err := qual.Upsert(ctx, rec); err != nil {
+		// f/g. Persist the quality record and mark the job done in a single
+		// transaction. Without this, a transient failure between the two
+		// writes (Upsert succeeds, Complete fails) leaves the claim valid
+		// and the job still "running" — a well-behaved worker's retry would
+		// then Upsert a second verified row for the same job. A shared
+		// transaction makes the pair atomic: either both land, or neither
+		// does and the worker's retry is a clean first attempt. This was
+		// chosen over a conflict-aware (ON CONFLICT) write because Upsert is
+		// deliberately insert-only — it keeps score history across re-scores
+		// — so there is no natural per-job uniqueness to key a conflict
+		// clause on without changing that contract.
+		tx, err := q.Pool().Begin(ctx)
+		if err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: begin transaction failed")
+			return nil, huma.Error500InternalServerError("report eval job: internal error")
+		}
+		defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+		if err := qual.WithExecutor(tx).Upsert(ctx, rec); err != nil {
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: upsert quality record failed")
 			return nil, huma.Error500InternalServerError("report eval job: internal error")
 		}
-
-		// g. Mark the job done.
-		if err := q.Complete(ctx, j.ID, j.WorkerID); err != nil {
+		if err := q.WithExecutor(tx).Complete(ctx, j.ID, j.WorkerID); err != nil {
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: complete job failed")
+			return nil, huma.Error500InternalServerError("report eval job: internal error")
+		}
+		if err := tx.Commit(ctx); err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: commit transaction failed")
 			return nil, huma.Error500InternalServerError("report eval job: internal error")
 		}
 

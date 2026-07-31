@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,21 +20,45 @@ import (
 // longer this worker's — a cancelled job, or one another worker reclaimed.
 var ErrLeaseLost = errors.New("evalqueue: lease lost")
 
+// Executor is the subset of *pgxpool.Pool that PoolExecutor's queries need.
+// It is satisfied by both *pgxpool.Pool and pgx.Tx, so a caller can run
+// queue writes inside a transaction shared with another store (see
+// WithExecutor) instead of each store committing its own write independently.
+type DBExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // PoolExecutor is a Postgres-backed Executor. The table itself is the queue.
 type PoolExecutor struct {
-	db *pgxpool.Pool
+	pool *pgxpool.Pool // kept for Begin(); db may be a tx wrapping the same pool
+	db   DBExecutor
 }
 
 // NewPool builds a PoolExecutor over db.
 func NewPool(db *pgxpool.Pool) *PoolExecutor {
-	return &PoolExecutor{db: db}
+	return &PoolExecutor{pool: db, db: db}
+}
+
+// Pool returns the underlying connection pool, so a caller can Begin a
+// transaction shared with another store (see WithExecutor).
+func (p *PoolExecutor) Pool() *pgxpool.Pool {
+	return p.pool
+}
+
+// WithExecutor returns a PoolExecutor whose queries run against e (typically
+// a pgx.Tx) instead of the pool directly, so a caller can compose a write
+// with another store's write in one transaction.
+func (p *PoolExecutor) WithExecutor(e DBExecutor) *PoolExecutor {
+	return &PoolExecutor{pool: p.pool, db: e}
 }
 
 // jobColumns is the single definition of the column list scanJob expects, in
 // order. Claim's UPDATE ... RETURNING (a later task) returns the same list.
 const jobColumns = `id, skill_id, skill_name, version, suite_ref, tier, panel,
-	status, attempts, max_attempts, worker_id, lease_expires_at, last_error,
-	requested_by, created_at`
+	status, attempts, max_attempts, worker_id, lease_expires_at, lease_seconds,
+	last_error, requested_by, created_at`
 
 // row is the subset of pgx.Row/pgx.Rows that Scan needs.
 type row interface {
@@ -47,8 +72,8 @@ func scanJob(r row) (*Job, error) {
 	var panelJSON []byte
 	err := r.Scan(
 		&id, &skillID, &j.SkillName, &j.Version, &j.SuiteRef, &j.Tier, &panelJSON,
-		&j.Status, &j.Attempts, &j.MaxAttempts, &j.WorkerID, &j.LeaseExpiresAt, &j.LastError,
-		&j.RequestedBy, &j.CreatedAt,
+		&j.Status, &j.Attempts, &j.MaxAttempts, &j.WorkerID, &j.LeaseExpiresAt, &j.LeaseSeconds,
+		&j.LastError, &j.RequestedBy, &j.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -170,11 +195,12 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		    attempts = j.attempts + 1,
 		    worker_id = $1,
 		    lease_expires_at = now() + make_interval(secs => $2),
+		    lease_seconds = $2,
 		    claim_token_hash = $3,
 		    updated_at = now()
 		FROM claimable c
 		WHERE j.id = c.claim_id
-		RETURNING `+jobColumns, workerID, lease.Seconds(), hex.EncodeToString(hash[:]))
+		RETURNING `+jobColumns, workerID, int(lease.Seconds()), hex.EncodeToString(hash[:]))
 
 	j, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -186,14 +212,19 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 	return j, token, true, nil
 }
 
-// Heartbeat extends the lease only while this worker still owns the job and it
-// is still running. A cancelled job therefore stops a worker at its next beat.
-func (p *PoolExecutor) Heartbeat(ctx context.Context, id JobID, workerID string, lease time.Duration) error {
+// Heartbeat extends the lease only while this worker still owns the job and
+// it is still running. It re-applies the lease duration persisted at claim
+// time (lease_seconds) rather than a fixed default — otherwise a worker that
+// claimed a long lease would have it truncated on every beat, making the
+// lease expire (and the job become reclaimable by a second worker) long
+// before the original grant runs out. A cancelled job stops a worker at its
+// next beat.
+func (p *PoolExecutor) Heartbeat(ctx context.Context, id JobID, workerID string) error {
 	tag, err := p.db.Exec(ctx, `
 		UPDATE eval_jobs
-		SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+		SET lease_expires_at = now() + make_interval(secs => lease_seconds), updated_at = now()
 		WHERE id = $1 AND worker_id = $2 AND status = 'running'`,
-		string(id), workerID, lease.Seconds())
+		string(id), workerID)
 	if err != nil {
 		return fmt.Errorf("evalqueue: heartbeat: %w", err)
 	}

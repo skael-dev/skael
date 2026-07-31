@@ -6,17 +6,34 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Executor is the subset of *pgxpool.Pool that Store's queries need. It is
+// satisfied by both *pgxpool.Pool and pgx.Tx, so a caller can run a Store
+// write inside a transaction shared with another store (see WithExecutor).
+type Executor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // Store persists Records to skill_quality.
 type Store struct {
-	db *pgxpool.Pool
+	db Executor
 }
 
 // NewStore builds a Store over db.
 func NewStore(db *pgxpool.Pool) *Store {
 	return &Store{db: db}
+}
+
+// WithExecutor returns a Store whose queries run against e (typically a
+// pgx.Tx) instead of the pool directly, so a caller can compose a write with
+// another store's write in one transaction.
+func (s *Store) WithExecutor(e Executor) *Store {
+	return &Store{db: e}
 }
 
 // recordColumns is the single definition of the column list scanRecord

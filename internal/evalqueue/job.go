@@ -45,9 +45,13 @@ type Job struct {
 	MaxAttempts    int
 	WorkerID       string
 	LeaseExpiresAt *time.Time
-	LastError      string
-	RequestedBy    string
-	CreatedAt      time.Time
+	// LeaseSeconds is the lease duration granted at claim time, persisted so
+	// a heartbeat can re-apply it without the worker resending it and
+	// without the server guessing at a fixed value.
+	LeaseSeconds int
+	LastError    string
+	RequestedBy  string
+	CreatedAt    time.Time
 }
 
 // Executor submits and cancels eval jobs.

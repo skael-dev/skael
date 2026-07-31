@@ -275,6 +275,67 @@ func TestReportRoute_RejectsAReportForAnotherSkill(t *testing.T) {
 	}
 }
 
+func TestFailRoute_RequeuesWithRetriesRemaining(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+jobID+"/fail", bytes.NewReader([]byte(`{"error":"sandbox unavailable"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Claim-Token", token)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+
+	job := srv.getJob(t, jobID)
+	if job.Status != "queued" {
+		t.Fatalf("job status = %q, want queued (retries remain)", job.Status)
+	}
+}
+
+func TestFailRoute_RejectsAForgedClaimToken(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	_ = srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+jobID+"/fail", bytes.NewReader([]byte(`{"error":"x"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Claim-Token", "0000000000000000")
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
+
+func TestGetJobRoute_UnknownIDIs404(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/eval/jobs/00000000-0000-0000-0000-000000000000", nil)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rr.Code, rr.Body)
+	}
+}
+
+func TestReportRoute_MalformedBodyIs400(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	resp := srv.postReport(t, jobID, token, []byte(`{not-json`))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body)
+	}
+}
+
 func TestHeartbeatRoute_409AfterCancel(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
@@ -284,6 +345,35 @@ func TestHeartbeatRoute_409AfterCancel(t *testing.T) {
 
 	if err := srv.queue.Cancel(context.Background(), evalqueue.JobID(jobID)); err != nil {
 		t.Fatalf("Cancel: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+jobID+"/heartbeat", nil)
+	req.Header.Set("X-Claim-Token", token)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+}
+
+// A lapsed lease is the lease being lost: the job row is still "running"
+// (nobody has reclaimed it yet) but VerifyClaim already refuses it because
+// lease_expires_at has passed. The worker needs 409, not 403, so it knows to
+// abandon cleanly rather than treating this as an auth failure.
+func TestHeartbeatRoute_409OnLapsedLeaseStillMarkedRunning(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+
+	// Claim directly against the queue with a zero-second lease: it is
+	// "running" but already lapsed the instant it is granted, and nobody
+	// has reclaimed it yet.
+	j, token, ok, err := srv.queue.Claim(context.Background(), "w1", 0)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if string(j.ID) != jobID {
+		t.Fatalf("claimed job = %s, want %s", j.ID, jobID)
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+jobID+"/heartbeat", nil)
