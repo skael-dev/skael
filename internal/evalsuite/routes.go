@@ -102,9 +102,42 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}, nil
 	})
 
+	huma.Register(api, huma.Operation{
+		OperationID: "get-eval-suite-checks",
+		Method:      http.MethodGet,
+		Path:        "/api/eval/suites/{ref}/checks",
+		Summary:     "Get the oracle-gate checks recorded for a suite",
+	}, func(ctx context.Context, input *getSuiteChecksInput) (*getSuiteChecksOutput, error) {
+		rec, err := reg.Get(ctx, input.Ref)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, huma.Error404NotFound(fmt.Sprintf("suite %q not found", input.Ref))
+			}
+			log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: lookup suite failed")
+			return nil, huma.Error500InternalServerError("get eval suite checks: internal error")
+		}
+		checks := make([]suiteCheck, len(rec.Checks))
+		for i, c := range rec.Checks {
+			checks[i] = suiteCheck(c)
+		}
+		return &getSuiteChecksOutput{Body: getSuiteChecksBody{Checks: checks}}, nil
+	})
+
 	if router != nil {
 		router.Get("/api/eval/suites/{ref}", makeDownloadHandler(reg))
 	}
+}
+
+type getSuiteChecksInput struct {
+	Ref string `path:"ref"`
+}
+
+type getSuiteChecksBody struct {
+	Checks []suiteCheck `json:"checks"`
+}
+
+type getSuiteChecksOutput struct {
+	Body getSuiteChecksBody
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a suite
