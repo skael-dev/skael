@@ -193,6 +193,28 @@ var exfiltrationRules = []Rule{
 		// Exfiltration of well-known secret env vars via curl/wget/nc
 		Pattern: regexp.MustCompile(`(?i)(curl|wget|nc|ncat)\s+.*\$(\{)?(ANTHROPIC_API_KEY|OPENAI_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|DATABASE_URL|SECRET_KEY|PRIVATE_KEY)(\})?`),
 		Message: "Attempts to exfiltrate secret environment variable",
+		// This rule cannot tell a skill using an API key for its intended
+		// purpose from one stealing it. Both are a secret variable next to a
+		// network command, and
+		//
+		//	curl -X POST https://api.anthropic.com/v1/messages \
+		//	  -H "x-api-key: $ANTHROPIC_API_KEY"
+		//
+		// is passing the secret to the command entirely legitimately — it is
+		// how every authenticated API call is written. That makes the rule a
+		// guess, and by this gate's own logic a guess is appealable: a sandbox
+		// run observes where the request actually goes, which is precisely the
+		// distinction the regex cannot make.
+		//
+		// Narrowing the pattern to a data-passing construct, the fix applied to
+		// CREDENTIAL_EXFILTRATION, does not help here, because the legitimate
+		// form *is* a data-passing construct.
+		//
+		// The asymmetry with CREDENTIAL_EXFILTRATION is deliberate, not an
+		// inconsistency: handing a credential *file* to a network sink has no
+		// legitimate reading, while handing a credential *value* to one is how
+		// authenticated HTTP works.
+		Class: ClassExecution,
 	},
 	{
 		Name:       "DATA_EXFILTRATION",

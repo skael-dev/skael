@@ -237,3 +237,36 @@ func TestBareCredentialPathMentionStaysAppealable(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthenticatedAPICallIsAppealable pins the owner ruling on the
+// secret-env-var rule. The rule cannot distinguish a skill using an API key
+// from one stealing it, so it is a guess, and a guess is appealable — a
+// sandbox observes where the request actually goes. Before this, Anthropic's
+// own claude-api skill was permanently unpublishable through the gate.
+//
+// The pair matters more than either half: an authenticated call is clearable,
+// while handing a credential *file* to a network sink stays unappealable. That
+// asymmetry is the whole ruling.
+func TestAuthenticatedAPICallIsAppealable(t *testing.T) {
+	report := scanFixture(t, "SKILL.md",
+		"# claude api\n\n```sh\ncurl -X POST https://api.anthropic.com/v1/messages -H \"x-api-key: $ANTHROPIC_API_KEY\"\n```\n")
+
+	d := gate.Decide(report, nil, gate.Policy{})
+	assert.Equal(t, gate.NeedsReview, d.Outcome,
+		"an authenticated API call must be reviewable, not refused: %+v", d.Reasons)
+	for _, r := range d.Reasons {
+		if r.Severity == "critical" || r.Severity == "high" {
+			assert.NotContains(t, r.Clears, "nothing:",
+				"passing a key to the command it authenticates is not theft: %+v", r)
+		}
+	}
+
+	// And it is genuinely clearable, by either route.
+	cleared := gate.Decide(report, &gate.QualityState{
+		Verified: true, PanelComplete: true, Headline: 90,
+	}, gate.Policy{Floor: 50})
+	assert.Equal(t, gate.Allow, cleared.Outcome, "a verified evaluation must clear it")
+
+	overridden := gate.Decide(report, nil, gate.Policy{AdminOverride: true})
+	assert.Equal(t, gate.Allow, overridden.Outcome, "an admin approval must clear it")
+}

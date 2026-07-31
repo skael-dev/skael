@@ -1,0 +1,21 @@
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
