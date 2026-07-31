@@ -1,17 +1,13 @@
 package whetstone
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -57,26 +53,20 @@ type SuitePushRequest struct {
 	APIKey   string
 }
 
-// pushCheck mirrors internal/evalsuite's wire shape for one task's oracle-gate
-// result.
-type pushCheck struct {
-	TaskID string `json:"task_id"`
-	OK     bool   `json:"ok"`
-	Void   bool   `json:"void,omitempty"`
-	Reason string `json:"reason,omitempty"`
-}
+// maxRequestBodyBytes mirrors internal/server/server.go's
+// http.MaxBytesReader(w, r.Body, 10<<20) cap on the whole request body.
+const maxRequestBodyBytes = 10 << 20 // 10MB, matches the server's MaxBytesReader limit
 
-type pushBody struct {
-	Skill         string      `json:"skill"`
-	SpecVersion   int         `json:"spec_version"`
-	Checks        []pushCheck `json:"checks"`
-	ArchiveBase64 string      `json:"archive_base64"`
-}
-
-type pushResponse struct {
-	Ref       string `json:"ref"`
-	TaskCount int    `json:"task_count"`
-}
+// maxArchiveBytes is the largest suite archive that can still fit inside
+// maxRequestBodyBytes once base64-encoded into the archive_base64 field:
+// base64 inflates size by 4/3, and the rest of the JSON body (skill name,
+// checks) is negligible next to it. Checked client-side so an oversized suite
+// fails with a plain message instead of an opaque connection/413 error partway
+// through the upload.
+//
+// A var, not a const, so suitepush_internal_test.go can shrink it to exercise
+// the guard without generating a multi-megabyte fixture.
+var maxArchiveBytes = maxRequestBodyBytes * 3 / 4
 
 // RunSuitePush uploads a skill's written suite, together with the oracle-gate
 // results `whetstone suite check` last recorded for it, to a Skael server. It
@@ -105,9 +95,9 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 		return fmt.Errorf("suite push: no suite check recorded for %s; run `whetstone suite check %s` first", req.Skill, req.Skill)
 	}
 
-	checks := make([]pushCheck, len(rows))
+	checks := make([]client.EvalSuiteCheck, len(rows))
 	for i, r := range rows {
-		checks[i] = pushCheck{
+		checks[i] = client.EvalSuiteCheck{
 			TaskID: r.TaskID,
 			OK:     !r.Void,
 			Void:   r.Void,
@@ -115,24 +105,26 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 		}
 	}
 
-	specVersion := 0
-	if _, v, err := req.Store.LoadSpec(req.Skill); err == nil {
-		specVersion = v
+	// LoadSpec's version is what a later score gets compared against. Falling
+	// back to some default here would tag the suite against the wrong (or an
+	// unknown) spec version and quietly corrupt that comparison, so a failed
+	// load fails the push instead.
+	_, specVersion, err := req.Store.LoadSpec(req.Skill)
+	if err != nil {
+		return fmt.Errorf("suite push: could not load the spec for %s, so the suite cannot be tagged with a spec version: %w", req.Skill, err)
 	}
 
 	archive, err := evalsuite.PackDir(suiteDir)
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}
-
-	body := pushBody{
-		Skill:         req.Skill,
-		SpecVersion:   specVersion,
-		Checks:        checks,
-		ArchiveBase64: base64.StdEncoding.EncodeToString(archive),
+	if len(archive) > maxArchiveBytes {
+		return fmt.Errorf("suite push: suite for %s is too large: archive is %d bytes (%d once base64-encoded), exceeding the %d byte limit the server accepts (%d byte request cap); trim tasks or split the suite",
+			req.Skill, len(archive), base64EncodedLen(len(archive)), maxArchiveBytes, maxRequestBodyBytes)
 	}
 
-	resp, err := postSuite(ctx, req.Endpoint, req.APIKey, body)
+	c := client.New(req.Endpoint, req.APIKey)
+	resp, err := c.UploadEvalSuite(req.Skill, specVersion, checks, archive)
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}
@@ -148,46 +140,10 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	return nil
 }
 
-// postSuite POSTs body to {endpoint}/api/eval/suites. cli/client's Client does
-// not expose a method for this request shape (its methods are all built
-// around form/multipart or fixed JSON shapes for other endpoints), so this
-// makes the call directly rather than extend that client for a single new
-// body shape.
-func postSuite(ctx context.Context, endpoint, apiKey string, body pushBody) (*pushResponse, error) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("encoding request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/api/eval/suites", bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("X-API-Key", apiKey)
-	}
-
-	httpResp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer func() { _ = httpResp.Body.Close() }()
-
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
-	if httpResp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("server returned %d: %s", httpResp.StatusCode, string(respBody))
-	}
-
-	var out pushResponse
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-	return &out, nil
+// base64EncodedLen returns the length of n bytes once base64-encoded
+// (standard encoding, no padding shortcuts assumed).
+func base64EncodedLen(n int) int {
+	return ((n + 2) / 3) * 4
 }
 
 // resolveRegistry resolves the endpoint and API key to push to: explicit

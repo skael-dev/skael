@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -322,6 +323,56 @@ func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Ve
 		return nil, nil, fmt.Errorf("decode publish version response: %w", err)
 	}
 	return &ver, nil, nil
+}
+
+// EvalSuiteCheck is one task's oracle-gate result, as the eval suite upload
+// endpoint expects it.
+type EvalSuiteCheck struct {
+	TaskID string `json:"task_id"`
+	OK     bool   `json:"ok"`
+	Void   bool   `json:"void,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// EvalSuiteUpload is the response to a successful eval suite upload.
+type EvalSuiteUpload struct {
+	Ref       string `json:"ref"`
+	TaskCount int    `json:"task_count"`
+}
+
+// UploadEvalSuite uploads an evaluation suite archive, together with the
+// oracle-gate check results recorded for it, to POST /api/eval/suites. archive
+// is a gzip-compressed tar (see internal/evalsuite.PackDir); it is
+// base64-encoded here because the endpoint's body is JSON, not raw bytes —
+// unlike PublishVersion's skill archives, which travel as the request body
+// itself.
+func (c *Client) UploadEvalSuite(skill string, specVersion int, checks []EvalSuiteCheck, archive []byte) (*EvalSuiteUpload, error) {
+	payload, err := json.Marshal(struct {
+		Skill         string           `json:"skill"`
+		SpecVersion   int              `json:"spec_version"`
+		Checks        []EvalSuiteCheck `json:"checks"`
+		ArchiveBase64 string           `json:"archive_base64"`
+	}{
+		Skill:         skill,
+		SpecVersion:   specVersion,
+		Checks:        checks,
+		ArchiveBase64: base64.StdEncoding.EncodeToString(archive),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal upload eval suite request: %w", err)
+	}
+
+	resp, err := c.do(http.MethodPost, "/api/eval/suites", bytes.NewReader(payload), "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var out EvalSuiteUpload
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode upload eval suite response: %w", err)
+	}
+	return &out, nil
 }
 
 // parseScanReport digs the scan report out of a Huma error envelope. The

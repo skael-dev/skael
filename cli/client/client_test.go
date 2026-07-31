@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -563,5 +564,90 @@ func TestDownloadVersion_GivesUpAfterPersistent429(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "429") {
 		t.Errorf("expected error to mention 429, got: %v", err)
+	}
+}
+
+// TestUploadEvalSuite_SendsExpectedBody verifies that UploadEvalSuite encodes
+// the archive as base64 and carries the skill, spec version, and per-task
+// check fields the /api/eval/suites endpoint expects.
+func TestUploadEvalSuite_SendsExpectedBody(t *testing.T) {
+	var got struct {
+		Skill       string `json:"skill"`
+		SpecVersion int    `json:"spec_version"`
+		Checks      []struct {
+			TaskID string `json:"task_id"`
+			OK     bool   `json:"ok"`
+			Void   bool   `json:"void"`
+			Reason string `json:"reason"`
+		} `json:"checks"`
+		ArchiveBase64 string `json:"archive_base64"`
+	}
+	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/eval/suites" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ref":"sha256:deadbeef","task_count":1}`))
+	})
+	defer srv.Close()
+
+	checks := []EvalSuiteCheck{{TaskID: "t00", OK: false, Void: true, Reason: "oracle failed"}}
+	resp, err := c.UploadEvalSuite("deploy-helper", 3, checks, []byte("archive-bytes"))
+	if err != nil {
+		t.Fatalf("UploadEvalSuite: %v", err)
+	}
+	if resp.Ref != "sha256:deadbeef" || resp.TaskCount != 1 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+
+	if got.Skill != "deploy-helper" || got.SpecVersion != 3 {
+		t.Fatalf("request body missing skill/spec_version: %+v", got)
+	}
+	if len(got.Checks) != 1 || got.Checks[0].TaskID != "t00" || got.Checks[0].OK || !got.Checks[0].Void || got.Checks[0].Reason != "oracle failed" {
+		t.Fatalf("checks did not round-trip: %+v", got.Checks)
+	}
+	wantArchive := base64.StdEncoding.EncodeToString([]byte("archive-bytes"))
+	if got.ArchiveBase64 != wantArchive {
+		t.Errorf("archive_base64 = %q, want %q", got.ArchiveBase64, wantArchive)
+	}
+}
+
+// TestUploadEvalSuite_RespectsClientTimeout verifies that UploadEvalSuite is
+// bound by the Client's own http.Client — and therefore its Timeout — rather
+// than going around it (e.g. through http.DefaultClient, whose Timeout is the
+// zero value and never expires). A server that never responds must still
+// return an error once the client's Timeout elapses.
+func TestUploadEvalSuite_RespectsClientTimeout(t *testing.T) {
+	block := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never respond until the test unblocks it
+	}))
+	// srv.Close waits for in-flight handlers to return, so the blocked
+	// handler above must be released before Close is called — otherwise this
+	// cleanup itself hangs forever, which is exactly the failure mode the
+	// test exists to catch, just relocated into the test's own teardown.
+	// Closing block first (LIFO Cleanup order) avoids that.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(block) })
+
+	c := New(srv.URL, "test-key")
+	c.httpClient.Timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	_, err := c.UploadEvalSuite("deploy-helper", 1, []EvalSuiteCheck{{TaskID: "t00", OK: true}}, []byte("x"))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a timeout error from a server that never responds")
+	}
+	// doWithRetry retries a timed-out request up to maxAttempts with
+	// exponential backoff (1s + 2s + 4s between the 4 attempts), so a bound
+	// close to 200ms would be a flaky test, not a real assertion. What matters
+	// is that this returns at all within a bounded time instead of hanging
+	// forever the way http.DefaultClient's zero Timeout would.
+	if elapsed > 15*time.Second {
+		t.Fatalf("UploadEvalSuite took %s to fail; the client Timeout did not bound it", elapsed)
 	}
 }

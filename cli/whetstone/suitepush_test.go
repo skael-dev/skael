@@ -54,6 +54,64 @@ func TestSuitePush_RefusesWhenNoCheckIsRecorded(t *testing.T) {
 	}
 }
 
+func TestSuitePush_RefusesWhenSpecCannotBeLoaded(t *testing.T) {
+	ws := newWorkspaceWithCheckedSuiteNoSpec(t)
+	err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
+		Store: ws, Skill: "deploy-helper", Endpoint: "http://unused", APIKey: "k",
+	})
+	if err == nil {
+		t.Fatal("pushed a suite whose spec could not be loaded")
+	}
+	if !strings.Contains(err.Error(), "deploy-helper") {
+		t.Fatalf("error does not name the skill: %v", err)
+	}
+	if !strings.Contains(err.Error(), "spec") {
+		t.Fatalf("error does not say the spec could not be loaded: %v", err)
+	}
+}
+
+// newWorkspaceWithCheckedSuiteNoSpec writes a checked suite for
+// "deploy-helper" the way newWorkspaceWithCheckedSuite does, but never saves a
+// spec for it — the state store.LoadSpec sees if a suite/check pair somehow
+// outlives its spec (e.g. a workspace copied without the specs table, or a
+// spec later purged).
+func newWorkspaceWithCheckedSuiteNoSpec(t *testing.T) *store.Store {
+	t.Helper()
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	s := &suite.Suite{
+		Tasks: []suite.TaskPkg{
+			{
+				ID:       "t00",
+				Kind:     "happy",
+				PromptMD: "Do the thing.",
+				Oracle:   "#!/bin/sh\ntrue\n",
+				Verifier: "#!/bin/sh\nexit 0\n",
+			},
+		},
+	}
+	suiteDir, err := st.SuiteDir("deploy-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(suiteDir); err != nil {
+		t.Fatalf("writing suite fixture: %v", err)
+	}
+	ref, err := suite.Ref(suiteDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "t00"}}); err != nil {
+		t.Fatalf("SaveSuiteCheck: %v", err)
+	}
+	return st
+}
+
 // newWorkspaceWithCheckedSuite writes a one-task suite for "deploy-helper"
 // into a fresh workspace and records a passing suite check for it, mirroring
 // what `whetstone suite gen` followed by `whetstone suite check` leaves
