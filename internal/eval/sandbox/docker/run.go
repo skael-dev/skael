@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,40 @@ import (
 // private network. It is a name rather than an address because the address is
 // assigned per network.
 const proxyHost = "proxy"
+
+// openWorkspace makes the workspace directory traversable and writable by the
+// container's user before it is bind-mounted.
+//
+// A bind mount carries the host directory's ownership and mode into the
+// container unchanged — the image's "chown runner:runner /workspace" applies
+// to the image layer the mount then covers up, so it decides nothing. Every
+// run executes as uid 1000 ("runner", see imagespec.ContainerHome), while
+// workspaces are created by os.MkdirTemp and testing.T.TempDir, which are
+// 0700 and owned by whoever runs whetstone. When those two uids differ the
+// container cannot even enter its own working directory, and the failure is
+// silent and misattributed: "bash oracle/solve.sh" exits 126, which reads as
+// "the oracle is broken" rather than "the oracle was never readable", so
+// every task in a suite is declared void.
+//
+// The uids differ on Linux whenever the invoking user is not uid 1000 — a
+// GitHub Actions runner is uid 1001 — but not on macOS, where Docker
+// Desktop's filesystem remaps ownership and hides the whole problem. That
+// asymmetry is why this has to be enforced here rather than left to callers:
+// it cannot be reproduced on the machine most of this is written on.
+//
+// 0777 rather than a chown, because chowning to another uid needs root the
+// caller does not have. Widening the mode is safe for what this directory is:
+// a per-run scratch copy holding a task fixture, created fresh and deleted
+// after, never a path a caller supplies from somewhere durable.
+func openWorkspace(ws string) error {
+	if ws == "" {
+		return nil // RunSpec.Validate rejects this; nothing to open.
+	}
+	if err := os.Chmod(ws, 0o777); err != nil {
+		return fmt.Errorf("docker: opening workspace %s to the container user: %w", ws, err)
+	}
+	return nil
+}
 
 // runArgs builds the flags shared by "docker create" and, historically,
 // "docker run" — everything except the subcommand itself. Splitting Run into
@@ -130,6 +165,10 @@ func CreateArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, 
 func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult, error) {
 	name, err := containerName()
 	if err != nil {
+		return sandbox.RunResult{}, err
+	}
+
+	if err := openWorkspace(rs.Workspace); err != nil {
 		return sandbox.RunResult{}, err
 	}
 

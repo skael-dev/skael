@@ -94,6 +94,43 @@ func TestPrepare_BakesDeclaredDeps(t *testing.T) {
 	}
 }
 
+// A workspace is 0700 as created — os.MkdirTemp and t.TempDir both make it so
+// — and owned by whoever runs whetstone, while the container is uid 1000. On
+// Linux a bind mount carries that mode and ownership straight through, so
+// unless the driver opens the directory first, the container cannot enter its
+// own working directory: reads exit 126 and writes exit non-zero, and a suite
+// check reports every task as void with the oracle blamed for it.
+//
+// This is invisible on macOS, where Docker Desktop remaps ownership. The
+// explicit 0700 here is what makes the test mean something on Linux CI; it is
+// the state the driver has to cope with, not an unusual one.
+func TestRun_WorksWhenTheWorkspaceIsPrivateToAnotherUser(t *testing.T) {
+	d := driver(t)
+	ref := prepare(t, d)
+	ws := t.TempDir()
+
+	if err := os.Chmod(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(ws, "solve.sh")
+	if err := os.WriteFile(script, []byte("echo solved > out.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// "bash <script>", exactly as suite.Check invokes an oracle: an
+	// unreadable script exits 126 there, which is the symptom this guards.
+	res, out := run(t, d, sandbox.RunSpec{
+		Image: ref, Workspace: ws, Network: sandbox.NetNone, Timeout: time.Minute,
+		Argv: []string{"bash", "solve.sh"},
+	})
+	if res.ExitCode != 0 {
+		t.Fatalf("oracle-style run exit = %d, want 0 (126 means the workspace was never readable):\n%s", res.ExitCode, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "out.txt")); err != nil || strings.TrimSpace(string(b)) != "solved" {
+		t.Errorf("workspace file = %q, %v", b, err)
+	}
+}
+
 func TestRun_ReportsExitCodesAndWritesToTheWorkspace(t *testing.T) {
 	d := driver(t)
 	ref := prepare(t, d)
