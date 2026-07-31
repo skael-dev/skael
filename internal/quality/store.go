@@ -108,6 +108,27 @@ func (s *Store) Latest(ctx context.Context, skillID string, version int) (*Recor
 	return rec, nil
 }
 
+// LatestAcrossVersions returns the newest scored row for a skill, across all
+// of its versions, ordered by scored_at with id as a deterministic tiebreak
+// (see Latest). Unlike Latest, it is not pinned to a specific version — a
+// skill's quality badge should keep showing its most recent score even while
+// a newer, not-yet-scored version is the current one; otherwise every
+// publish makes the badge vanish until the next eval lands. A missing row is
+// not an error: it returns (nil, nil).
+func (s *Store) LatestAcrossVersions(ctx context.Context, skillID string) (*Record, error) {
+	r := s.db.QueryRow(ctx, `SELECT `+recordColumns+`
+		FROM skill_quality WHERE skill_id = $1
+		ORDER BY scored_at DESC, id DESC LIMIT 1`, skillID)
+	rec, err := scanRecord(r)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("quality.Store.LatestAcrossVersions: %w", err)
+	}
+	return rec, nil
+}
+
 // History returns every scored row for a skill, across all versions, newest
 // first.
 func (s *Store) History(ctx context.Context, skillID string) ([]Record, error) {

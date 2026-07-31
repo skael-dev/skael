@@ -384,7 +384,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if sk.LatestVersion > 0 {
 			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
 			if err == nil && latest != nil && latest.Checksum == checksum {
-				return &publishOutput{Body: &publishBody{Version: *latest, Created: false}}, nil
+				// Unchanged content, nothing new to score: "none" is accurate
+				// here, not a third undocumented state. A zero-value
+				// qualityState would serialize as {} — no state field at all
+				// — which a client switching on state has no branch for.
+				return &publishOutput{Body: &publishBody{Version: *latest, Created: false, Quality: qualityState{State: "none"}}}, nil
 			}
 		}
 
@@ -496,7 +500,15 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// an unscored version is a state the product already models.
 		quality := qualityState{State: "none"}
 		if opts.Queue != nil && opts.Suites != nil {
-			if rec, err := opts.Suites.LatestForSkill(ctx, input.Name); err == nil && rec != nil {
+			rec, err := opts.Suites.LatestForSkill(ctx, input.Name)
+			if err != nil {
+				// SuiteLookup's contract is (nil, nil) for "no suite
+				// registered" — any non-nil error here is an infrastructure
+				// failure (lookup, not absence), and reporting "none" without
+				// a trace would leave a skill that genuinely has a suite
+				// permanently unscored with no operator signal.
+				log.Warn().Err(err).Str("skill", input.Name).Msg("publish: suite lookup failed, skipping enqueue")
+			} else if rec != nil {
 				id, err := opts.Queue.Submit(ctx, EvalJobRequest{
 					SkillID: sk.ID, SkillName: input.Name, Version: ver.Version,
 					SuiteRef: rec.Ref, Tier: "full", RequestedBy: publishedBy,

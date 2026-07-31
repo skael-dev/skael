@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,19 +45,42 @@ func (f queueSubmitterFunc) Submit(ctx context.Context, j skill.EvalJobRequest) 
 }
 
 // suiteLookupAdapter adapts a real *evalsuite.Registry to skill.SuiteLookup.
+// It mirrors internal/server's evalSuiteAdapter: evalsuite.LatestForSkill
+// reports "no suite" as an error wrapping evalsuite.ErrNotFound rather than
+// (nil, nil), so that case must be translated — anything else is a genuine
+// lookup failure and must be reported as an error, not swallowed as absence.
 type suiteLookupAdapter struct {
 	r *evalsuite.Registry
 }
 
 func (a suiteLookupAdapter) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
 	rec, err := a.r.LatestForSkill(ctx, name)
-	if err != nil || rec == nil {
+	if err != nil {
+		if errors.Is(err, evalsuite.ErrNotFound) {
+			return nil, nil
+		}
 		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
 	}
 	return &skill.SuiteRecord{Ref: rec.Ref}, nil
 }
 
-func newEnqueueTestServer(t *testing.T, queue skill.QueueSubmitter) *enqueueTestServer {
+// suiteLookupFunc adapts a func to skill.SuiteLookup, for tests that need to
+// simulate an infrastructure failure without a real registry.
+type suiteLookupFunc func(ctx context.Context, name string) (*skill.SuiteRecord, error)
+
+func (f suiteLookupFunc) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
+	return f(ctx, name)
+}
+
+// newEnqueueTestServer wires a real router with skill and eval-suite routes
+// registered over a fresh database, with a caller-supplied queue and an
+// optional suite lookup override. When suites is nil, the real
+// suiteLookupAdapter over this server's own evalsuite.Registry is used, so
+// registerSuite's uploads are visible to publish exactly as in production.
+func newEnqueueTestServer(t *testing.T, queue skill.QueueSubmitter, suites skill.SuiteLookup) *enqueueTestServer {
 	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
@@ -67,34 +91,31 @@ func newEnqueueTestServer(t *testing.T, queue skill.QueueSubmitter) *enqueueTest
 
 	suiteStorage, err := platform.NewLocalStorage(t.TempDir())
 	require.NoError(t, err)
-	suites := evalsuite.NewRegistry(pool, suiteStorage)
+	suiteRegistry := evalsuite.NewRegistry(pool, suiteStorage)
+
+	if suites == nil {
+		suites = suiteLookupAdapter{r: suiteRegistry}
+	}
 
 	r := chi.NewMux()
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{
 		Queue:  queue,
-		Suites: suiteLookupAdapter{r: suites},
+		Suites: suites,
 	})
-	evalsuite.RegisterRoutes(api, r, suites, store)
+	evalsuite.RegisterRoutes(api, r, suiteRegistry, store)
 
-	return &enqueueTestServer{handler: r, skills: store, suites: suites, pool: pool}
+	return &enqueueTestServer{handler: r, skills: store, suites: suiteRegistry, pool: pool}
 }
 
-// newTestServer wires a real evalqueue.PoolExecutor as the queue, sharing the
-// same database the skill/suite stores use.
+// newTestServer wires a real evalqueue.PoolExecutor as the queue and the real
+// suite registry lookup — the production wiring, minus the HTTP layer.
 func newTestServer(t *testing.T) *enqueueTestServer {
 	t.Helper()
 
-	pool := testutil.SetupTestDB(t)
-	store := skill.NewStore(pool)
-
-	storage, err := platform.NewLocalStorage(t.TempDir())
-	require.NoError(t, err)
-	suiteStorage, err := platform.NewLocalStorage(t.TempDir())
-	require.NoError(t, err)
-	suites := evalsuite.NewRegistry(pool, suiteStorage)
-	q := evalqueue.NewPool(pool)
-
+	// Submit needs a pool shared with the server's own database, so build
+	// the queue after the server so it can reuse srv.pool.
+	var q *evalqueue.PoolExecutor
 	queue := queueSubmitterFunc(func(ctx context.Context, j skill.EvalJobRequest) (string, error) {
 		id, err := q.Submit(ctx, evalqueue.Job{
 			SkillID: j.SkillID, SkillName: j.SkillName, Version: j.Version,
@@ -103,24 +124,40 @@ func newTestServer(t *testing.T) *enqueueTestServer {
 		return string(id), err
 	})
 
-	r := chi.NewMux()
-	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{
-		Queue:  queue,
-		Suites: suiteLookupAdapter{r: suites},
-	})
-	evalsuite.RegisterRoutes(api, r, suites, store)
-
-	return &enqueueTestServer{handler: r, skills: store, suites: suites, pool: pool}
+	srv := newEnqueueTestServer(t, queue, nil)
+	q = evalqueue.NewPool(srv.pool)
+	return srv
 }
 
-// newTestServerWithFailingQueue wires a queue whose Submit always errors, to
-// prove an enqueue failure never fails a publish.
+// newTestServerWithFailingQueue wires a real suite lookup but a queue whose
+// Submit always errors, to prove an enqueue failure never fails a publish.
 func newTestServerWithFailingQueue(t *testing.T) *enqueueTestServer {
 	t.Helper()
 	return newEnqueueTestServer(t, queueSubmitterFunc(func(ctx context.Context, j skill.EvalJobRequest) (string, error) {
 		return "", context.DeadlineExceeded
-	}))
+	}), nil)
+}
+
+// newTestServerWithFailingSuiteLookup wires a suite lookup that always
+// returns a generic (non-ErrNotFound) error, to prove an infrastructure
+// failure in the suite lookup is reported and degrades publish to "none"
+// rather than being silently indistinguishable from "no suite registered".
+func newTestServerWithFailingSuiteLookup(t *testing.T) *enqueueTestServer {
+	t.Helper()
+	failing := suiteLookupFunc(func(ctx context.Context, name string) (*skill.SuiteRecord, error) {
+		return nil, errors.New("suite lookup: connection reset")
+	})
+	submitCalled := false
+	srv := newEnqueueTestServer(t, queueSubmitterFunc(func(ctx context.Context, j skill.EvalJobRequest) (string, error) {
+		submitCalled = true
+		return "job-should-not-be-submitted", nil
+	}), failing)
+	t.Cleanup(func() {
+		if submitCalled {
+			t.Error("Submit must not be called when the suite lookup itself failed")
+		}
+	})
+	return srv
 }
 
 func (s *enqueueTestServer) createSkill(t *testing.T, name string) {
@@ -255,7 +292,8 @@ func TestPublish_NoSuiteMeansNoJob(t *testing.T) {
 }
 
 // Enqueue failure must never fail a publish: the archive is stored and the
-// version is created before the queue is touched.
+// version is created before the queue is touched, and the response degrades
+// to "none" rather than claiming a job that was never actually created.
 func TestPublish_SucceedsWhenEnqueueFails(t *testing.T) {
 	srv := newTestServerWithFailingQueue(t)
 	srv.createSkill(t, "deploy-helper")
@@ -263,5 +301,92 @@ func TestPublish_SucceedsWhenEnqueueFails(t *testing.T) {
 	resp := srv.publish(t, "deploy-helper", fixtureBundle(t))
 	if resp.Code != http.StatusCreated {
 		t.Fatalf("a queue outage broke publishing: %d %s", resp.Code, resp.Body)
+	}
+
+	var out struct {
+		Version int `json:"version"`
+		Quality struct {
+			State string `json:"state"`
+			JobID string `json:"job_id"`
+		} `json:"quality"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	if out.Quality.State != "none" || out.Quality.JobID != "" {
+		t.Fatalf("quality = %+v, want none with no job id — the queue outage must not be reported as a real job", out.Quality)
+	}
+
+	// The version and archive must have actually survived the enqueue
+	// failure, not merely the HTTP status code.
+	sk, err := srv.skills.GetByName(context.Background(), "deploy-helper")
+	require.NoError(t, err)
+	require.NotNil(t, sk)
+	if sk.LatestVersion != out.Version {
+		t.Fatalf("skill latest_version = %d, want %d — the version row did not survive the enqueue failure", sk.LatestVersion, out.Version)
+	}
+	ver, err := srv.skills.GetVersion(context.Background(), "deploy-helper", out.Version)
+	require.NoError(t, err)
+	require.NotNil(t, ver, "published version must be persisted even when enqueue fails")
+	if ver.ArchivePath == "" {
+		t.Fatal("published version has no archive path — the archive did not survive the enqueue failure")
+	}
+}
+
+// A suite-lookup failure is an infrastructure problem, not "this skill has
+// no suite" — evalsuite.LatestForSkill reports absence as an error wrapping
+// ErrNotFound, so any other error must not be silently treated the same way.
+// The publish must still succeed (never fail on this), degrading to "none",
+// and must never reach Submit with a suite ref it never actually confirmed.
+func TestPublish_SuiteLookupFailureDoesNotBlockPublish(t *testing.T) {
+	srv := newTestServerWithFailingSuiteLookup(t)
+	srv.createSkill(t, "deploy-helper")
+
+	resp := srv.publish(t, "deploy-helper", fixtureBundle(t))
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("a suite lookup failure broke publishing: %d %s", resp.Code, resp.Body)
+	}
+
+	var out struct {
+		Quality struct {
+			State string `json:"state"`
+			JobID string `json:"job_id"`
+		} `json:"quality"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	if out.Quality.State != "none" || out.Quality.JobID != "" {
+		t.Fatalf("quality = %+v, want none with no job", out.Quality)
+	}
+}
+
+// Republishing byte-identical content is a checksum short-circuit that
+// returns before the enqueue step even runs — but the response must still
+// report a valid quality state. A zero-value qualityState serializes as
+// {"quality":{}}, a third, undocumented state indistinguishable from a
+// client's zero-value parsing of "pending" or "none"; a CI job that
+// republishes an unchanged skill on every green build would hit this on
+// every run.
+func TestPublish_IdempotentRepublishReportsQualityNone(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	bundle := fixtureBundle(t)
+
+	first := srv.publish(t, "deploy-helper", bundle)
+	require.Equal(t, http.StatusCreated, first.Code, first.Body.String())
+
+	second := srv.publish(t, "deploy-helper", bundle)
+	require.Equal(t, http.StatusCreated, second.Code, second.Body.String())
+
+	var out struct {
+		Created bool `json:"created"`
+		Quality struct {
+			State string `json:"state"`
+			JobID string `json:"job_id"`
+		} `json:"quality"`
+	}
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &out))
+	if out.Created {
+		t.Fatal("expected the checksum short-circuit (created=false) for a byte-identical republish")
+	}
+	if out.Quality.State != "none" || out.Quality.JobID != "" {
+		t.Fatalf("quality = %+v, want none with no job on an idempotent republish", out.Quality)
 	}
 }

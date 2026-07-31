@@ -58,30 +58,36 @@ type qualityHistoryOutput struct {
 	Body qualityHistoryBody
 }
 
-// RegisterRoutes wires up the read-only quality endpoints: the latest scored
-// record for a skill's current version, and its full history newest-first
-// for the version-over-version trend.
+// RegisterRoutes wires up the read-only quality endpoints: the skill's most
+// recent scored record across all versions, and its full history
+// newest-first for the version-over-version trend.
 func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-skill-quality",
 		Method:      http.MethodGet,
 		Path:        "/api/skills/{name}/quality",
-		Summary:     "Get the latest quality score for a skill",
+		Summary:     "Get the most recent quality score for a skill",
 	}, func(ctx context.Context, input *qualityInput) (*qualityOutput, error) {
 		sk, err := skills.GetByName(ctx, input.Name)
 		if err != nil {
-			return nil, fmt.Errorf("get skill quality: lookup skill: %w", err)
+			return nil, huma.Error500InternalServerError("get skill quality: internal error", err)
 		}
 		if sk == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
 		}
 
-		rec, err := store.Latest(ctx, sk.ID, sk.LatestVersion)
+		// Deliberately not pinned to sk.LatestVersion: a skill scored at an
+		// earlier version should keep showing that score while a newer,
+		// not-yet-scored version is current — pinning to LatestVersion would
+		// make the badge vanish on every publish until the next eval lands.
+		// The wire shape carries `version`, so a caller can compare it
+		// against the skill's own latest_version and render staleness.
+		rec, err := store.LatestAcrossVersions(ctx, sk.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get skill quality: internal error", err)
 		}
 		if rec == nil {
-			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q has no quality score yet", input.Name))
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q has never been scored", input.Name))
 		}
 
 		return &qualityOutput{Body: toRecordOutput(*rec)}, nil
@@ -95,7 +101,7 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 	}, func(ctx context.Context, input *qualityInput) (*qualityHistoryOutput, error) {
 		sk, err := skills.GetByName(ctx, input.Name)
 		if err != nil {
-			return nil, fmt.Errorf("get skill quality history: lookup skill: %w", err)
+			return nil, huma.Error500InternalServerError("get skill quality history: internal error", err)
 		}
 		if sk == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))

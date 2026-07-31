@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -345,7 +346,14 @@ func importSingleSkill(
 	// publish's step 10. A queue outage must not fail an import: the version
 	// is already durable by this point.
 	if queue != nil && suites != nil {
-		if rec, err := suites.LatestForSkill(ctx, ds.Name); err == nil && rec != nil {
+		rec, err := suites.LatestForSkill(ctx, ds.Name)
+		if err != nil && !errors.Is(err, evalsuite.ErrNotFound) {
+			// LatestForSkill reports "no suite registered" as an error
+			// wrapping ErrNotFound — anything else is an infrastructure
+			// failure (lookup, not absence) and must not be silently
+			// swallowed as "this skill has no suite".
+			log.Warn().Err(err).Str("skill", ds.Name).Msg("import: suite lookup failed, skipping enqueue")
+		} else if rec != nil {
 			if _, err := queue.Submit(ctx, evalqueue.Job{
 				SkillID: sk.ID, SkillName: ds.Name, Version: ver.Version,
 				SuiteRef: rec.Ref, Tier: "full", RequestedBy: "import",

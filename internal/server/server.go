@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -63,8 +64,19 @@ type evalSuiteAdapter struct {
 
 func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
 	rec, err := a.r.LatestForSkill(ctx, name)
-	if err != nil || rec == nil {
+	if err != nil {
+		// evalsuite.LatestForSkill reports "no suite registered" as an error
+		// wrapping ErrNotFound, not as (nil, nil) — skill.SuiteLookup's
+		// contract expects the latter for that case. Translate here so an
+		// infrastructure failure (pool exhausted, timeout) still surfaces as
+		// an error instead of being indistinguishable from "no suite".
+		if errors.Is(err, evalsuite.ErrNotFound) {
+			return nil, nil
+		}
 		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
 	}
 	return &skill.SuiteRecord{Ref: rec.Ref}, nil
 }
