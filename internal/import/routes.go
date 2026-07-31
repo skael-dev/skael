@@ -16,17 +16,29 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 
+	"github.com/skael-dev/skael/internal/evalqueue"
+	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
-func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher, ext ...*scan.ExternalScanner) {
-	// external is the optional opt-in external scanner (Phase 2); nil disables it.
-	var external *scan.ExternalScanner
-	if len(ext) > 0 {
-		external = ext[0]
-	}
+// RouteOptions carries the optional collaborators RegisterRoutes wires into
+// the import handlers. Each is independently optional (nil disables the
+// behavior it powers).
+type RouteOptions struct {
+	// External is the opt-in external scanner (Phase 2); nil disables it.
+	External *scan.ExternalScanner
+	// Queue, when set together with Suites, lets an import enqueue an
+	// evaluation for a skill that has a registered suite. A queue outage
+	// must never fail an import — mirrors the publish path.
+	Queue evalqueue.Executor
+	// Suites looks up the latest registered eval suite for a skill by name.
+	Suites *evalsuite.Registry
+}
+
+func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher, opts RouteOptions) {
+	external := opts.External
 
 	// Rate limit: 10 requests per minute for the resolve endpoint.
 	resolveLimiter := rate.NewLimiter(rate.Every(time.Minute/10), 1)
@@ -160,7 +172,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				ds.Name = input.Body.Namespace + ":" + ds.Name
 			}
 
-			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external)
+			ver, created, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external, opts.Queue, opts.Suites)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -226,7 +238,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	})
 
 	// POST /api/import/upload — local upload for CLI
-	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external))
+	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites))
 }
 
 func importSingleSkill(
@@ -238,6 +250,8 @@ func importSingleSkill(
 	importStore *Store,
 	storage platform.Storage,
 	external *scan.ExternalScanner,
+	queue evalqueue.Executor,
+	suites *evalsuite.Registry,
 ) (*skill.Version, bool, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
@@ -327,6 +341,20 @@ func importSingleSkill(
 		return nil, false, fmt.Errorf("create version: %w", err)
 	}
 
+	// Enqueue an evaluation when a suite exists for this skill, mirroring
+	// publish's step 10. A queue outage must not fail an import: the version
+	// is already durable by this point.
+	if queue != nil && suites != nil {
+		if rec, err := suites.LatestForSkill(ctx, ds.Name); err == nil && rec != nil {
+			if _, err := queue.Submit(ctx, evalqueue.Job{
+				SkillID: sk.ID, SkillName: ds.Name, Version: ver.Version,
+				SuiteRef: rec.Ref, Tier: "full", RequestedBy: "import",
+			}); err != nil {
+				log.Warn().Err(err).Str("skill", ds.Name).Msg("import: could not enqueue evaluation")
+			}
+		}
+	}
+
 	// Record provenance.
 	if err := importStore.Upsert(ctx, ImportSource{
 		SkillID:    sk.ID,
@@ -342,7 +370,7 @@ func importSingleSkill(
 	return ver, true, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
@@ -391,7 +419,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 		}
 
 		for _, ds := range discovered {
-			ver, created, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external)
+			ver, created, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external, queue, suites)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue

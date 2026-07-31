@@ -69,15 +69,58 @@ func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 	return auth.UserFromContext(ctx).IsPrivileged()
 }
 
+// EvalJobRequest is what publish needs to enqueue an evaluation. It mirrors
+// the fields of evalqueue.Job that publish sets, but is declared in this
+// package rather than imported: internal/evalqueue imports internal/skill
+// (for route wiring), so importing evalqueue back here would cycle. Callers
+// adapt a real evalqueue.Executor to QueueSubmitter (see internal/server).
+type EvalJobRequest struct {
+	SkillID     string
+	SkillName   string
+	Version     int
+	SuiteRef    string
+	Tier        string
+	RequestedBy string
+}
+
+// QueueSubmitter is the subset of evalqueue.Executor that publish needs.
+type QueueSubmitter interface {
+	Submit(ctx context.Context, job EvalJobRequest) (string, error)
+}
+
+// SuiteRecord is the subset of evalsuite.Record that publish needs to build
+// an EvalJobRequest.
+type SuiteRecord struct {
+	Ref string
+}
+
+// SuiteLookup is the subset of evalsuite.Registry that publish needs. It
+// mirrors LatestForSkill's (nil, nil) contract: no error, nil record means no
+// suite is registered for the skill.
+type SuiteLookup interface {
+	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
+}
+
+// RouteOptions carries the optional collaborators RegisterRoutes wires into
+// the publish (and related) handlers. Each is independently optional (nil
+// disables the behavior it powers) so a caller — including tests — can opt
+// into only what it needs.
+type RouteOptions struct {
+	// External is the opt-in external scanner (Phase 2); nil disables it.
+	External *scan.ExternalScanner
+	// Queue, when set together with Suites, lets publish enqueue an
+	// evaluation for a skill that has a registered suite. A queue outage
+	// must never fail a publish — see the enqueue step below.
+	Queue QueueSubmitter
+	// Suites looks up the latest registered eval suite for a skill by name.
+	Suites SuiteLookup
+}
+
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
 // Huma API and Chi router. The router is needed for the two raw-response
 // routes (download + scan) that stream bytes rather than returning JSON.
-func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage, ext ...*scan.ExternalScanner) {
-	// external is the optional opt-in external scanner (Phase 2); nil disables it.
-	var external *scan.ExternalScanner
-	if len(ext) > 0 {
-		external = ext[0]
-	}
+func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage, opts RouteOptions) {
+	external := opts.External
 
 	// -----------------------------------------------------------------
 	// POST /api/skills — create a skill
@@ -267,9 +310,14 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		Override bool   `query:"override" doc:"Publish despite blocking scan findings. Owner or admin only; recorded server-side."`
 		RawBody  []byte `contentType:"application/gzip,application/octet-stream"`
 	}
+	type qualityState struct {
+		State string `json:"state,omitempty"`
+		JobID string `json:"job_id,omitempty"`
+	}
 	type publishBody struct {
 		Version
-		Created bool `json:"created"`
+		Created bool         `json:"created"`
+		Quality qualityState `json:"quality"`
 	}
 	type publishOutput struct {
 		Body *publishBody
@@ -443,7 +491,25 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		spec := ValidateSpec(fm, sk.Name)
 		_ = store.UpdateSpecFields(ctx, sk.Name, spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
 
-		return &publishOutput{Body: &publishBody{Version: *ver, Created: true}}, nil
+		// 10. Enqueue an evaluation when a suite exists for this skill. A queue
+		// outage must not fail a publish: the version is already durable, and
+		// an unscored version is a state the product already models.
+		quality := qualityState{State: "none"}
+		if opts.Queue != nil && opts.Suites != nil {
+			if rec, err := opts.Suites.LatestForSkill(ctx, input.Name); err == nil && rec != nil {
+				id, err := opts.Queue.Submit(ctx, EvalJobRequest{
+					SkillID: sk.ID, SkillName: input.Name, Version: ver.Version,
+					SuiteRef: rec.Ref, Tier: "full", RequestedBy: publishedBy,
+				})
+				if err != nil {
+					log.Warn().Err(err).Str("skill", input.Name).Msg("publish: could not enqueue evaluation")
+				} else {
+					quality = qualityState{State: "pending", JobID: id}
+				}
+			}
+		}
+
+		return &publishOutput{Body: &publishBody{Version: *ver, Created: true, Quality: quality}}, nil
 	})
 
 	// -----------------------------------------------------------------

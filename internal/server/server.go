@@ -35,6 +35,40 @@ import (
 	skweb "github.com/skael-dev/skael/web"
 )
 
+// evalQueueAdapter adapts an evalqueue.Executor to skill.QueueSubmitter.
+// internal/skill cannot import internal/evalqueue directly — evalqueue
+// imports internal/skill for its own route wiring, and Go does not allow the
+// reverse — so the server, which already imports both, bridges the two.
+type evalQueueAdapter struct {
+	q evalqueue.Executor
+}
+
+func (a evalQueueAdapter) Submit(ctx context.Context, j skill.EvalJobRequest) (string, error) {
+	id, err := a.q.Submit(ctx, evalqueue.Job{
+		SkillID:     j.SkillID,
+		SkillName:   j.SkillName,
+		Version:     j.Version,
+		SuiteRef:    j.SuiteRef,
+		Tier:        j.Tier,
+		RequestedBy: j.RequestedBy,
+	})
+	return string(id), err
+}
+
+// evalSuiteAdapter adapts an *evalsuite.Registry to skill.SuiteLookup, for
+// the same import-cycle reason as evalQueueAdapter above.
+type evalSuiteAdapter struct {
+	r *evalsuite.Registry
+}
+
+func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.LatestForSkill(ctx, name)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
 // InstallEdgeMiddleware registers every middleware a request passes through
 // before it reaches session handling, authentication, or any route: security
 // headers, request ID, CORS, panic recovery, request logging, and rate
@@ -214,13 +248,23 @@ func (b *Builder) Build() (*Server, error) {
 	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
 
 	// 12. Register skill routes. An opt-in external scanner (EXTERNAL_SCAN_CMD)
-	// is merged into the publish/import security scan when configured.
+	// is merged into the publish/import security scan when configured. The
+	// eval queue and suite registry are constructed here (ahead of their own
+	// route registration below) because publish needs them to enqueue an
+	// evaluation for a skill that has a registered suite.
 	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
 	if externalScanner != nil {
 		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
 	}
 	skillStore := skill.NewStore(b.pool)
-	skill.RegisterRoutes(api, router, skillStore, storage, externalScanner)
+	evalPool := evalqueue.NewPool(b.pool)
+	qualityStore := quality.NewStore(b.pool)
+	suiteRegistry := evalsuite.NewRegistry(b.pool, storage)
+	skill.RegisterRoutes(api, router, skillStore, storage, skill.RouteOptions{
+		External: externalScanner,
+		Queue:    evalQueueAdapter{q: evalPool},
+		Suites:   evalSuiteAdapter{r: suiteRegistry},
+	})
 
 	// 13. Register sync manifest route.
 	syncStore := gosync.NewStore(b.pool)
@@ -257,17 +301,22 @@ func (b *Builder) Build() (*Server, error) {
 	// 15. Register import routes.
 	importStore := skillimport.NewStore(b.pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
-	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, externalScanner)
+	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, skillimport.RouteOptions{
+		External: externalScanner,
+		Queue:    evalPool,
+		Suites:   suiteRegistry,
+	})
 
-	// 15a. Register eval suite registry routes.
-	suiteRegistry := evalsuite.NewRegistry(b.pool, storage)
+	// 15a. Register eval suite registry routes. suiteRegistry was constructed
+	// above, alongside evalPool, so skill.RegisterRoutes could enqueue.
 	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
 
 	// 15b. Register the eval job queue. The server enqueues and ingests; it
 	// never holds a Docker socket or an LLM key — those live on the worker.
-	evalPool := evalqueue.NewPool(b.pool)
-	qualityStore := quality.NewStore(b.pool)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore)
+
+	// 15c. Register read-only quality endpoints: latest score and history.
+	quality.RegisterRoutes(api, qualityStore, skillStore)
 
 	// 16. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {

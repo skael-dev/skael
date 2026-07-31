@@ -150,9 +150,9 @@ func printOpenAPISpec() {
 	api := humachi.New(router, config)
 
 	auth.RegisterRoutes(api, nil, nil, nil, false)
-	skill.RegisterRoutes(api, router, nil, nil)
+	skill.RegisterRoutes(api, router, nil, nil, skill.RouteOptions{})
 	analytics.RegisterRoutes(api, nil)
-	skillimport.RegisterRoutes(api, router, nil, nil, nil, nil)
+	skillimport.RegisterRoutes(api, router, nil, nil, nil, nil, skillimport.RouteOptions{})
 
 	huma.Register(api, huma.Operation{
 		OperationID: "get-manifest",
