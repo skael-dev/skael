@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/skael-dev/skael/internal/gate"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -107,7 +106,7 @@ func scanLine(filename, line string, lineNum int, report *Report) {
 			// Never echo a credential verbatim in the report.
 			shown = maskSecret(match)
 		}
-		class, _ := gate.ClassOf(rule.Category)
+		class, _ := ClassOf(rule.Category)
 		report.Findings = append(report.Findings, Finding{
 			Rule:       rule.Name,
 			Severity:   rule.Severity,

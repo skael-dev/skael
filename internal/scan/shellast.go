@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/skael-dev/skael/internal/gate"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -135,7 +134,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 				// A pipe-to-shell RCE pattern is structurally identical to
 				// what a network-off sandbox measures directly, so it takes
 				// the same appealable class as its regex counterpart.
-				add("DANGEROUS_SHELL", "critical", string(gate.ClassExecution),
+				add("DANGEROUS_SHELL", "critical", string(ClassExecution),
 					"Shell AST: /dev/tcp reverse shell", n.OpPos)
 			}
 		}
@@ -173,10 +172,10 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, class, msg s
 		// Unappealable, deliberately: remote content piped straight into a
 		// shell is the exfiltration/RCE pattern itself, not a shape that a
 		// sandbox run could exonerate.
-		add("DATA_EXFILTRATION", "critical", string(gate.ClassExfiltration),
+		add("DATA_EXFILTRATION", "critical", string(ClassExfiltration),
 			"Shell AST: remote content piped to a shell (RCE pattern)", last.Pos())
 	case sawDecode:
-		add("OBFUSCATION", "critical", string(gate.ClassHeuristic),
+		add("OBFUSCATION", "critical", string(ClassHeuristic),
 			"Shell AST: decoded content piped to a shell", last.Pos())
 	}
 }
@@ -216,7 +215,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, class, msg string
 	if name == "eval" {
 		for _, arg := range ce.Args[1:] {
 			if wordHasExpansion(arg) {
-				add("CODE_EXECUTION", "high", string(gate.ClassExecution),
+				add("CODE_EXECUTION", "high", string(ClassExecution),
 					"Shell AST: eval of dynamic (expanded/substituted) content", ce.Pos())
 				break
 			}
@@ -226,7 +225,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, class, msg string
 	if shellInterpreters[name] {
 		for i := 1; i < len(ce.Args)-1; i++ {
 			if ce.Args[i].Lit() == "-c" && wordHasExpansion(ce.Args[i+1]) {
-				add("CODE_EXECUTION", "high", string(gate.ClassExecution),
+				add("CODE_EXECUTION", "high", string(ClassExecution),
 					"Shell AST: shell -c executes a dynamic command string", ce.Pos())
 				break
 			}

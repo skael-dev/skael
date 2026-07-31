@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skael-dev/skael/internal/gate"
-
 	"github.com/rs/zerolog/log"
 )
 
@@ -182,7 +180,7 @@ func parseSARIF(data []byte, name string) ([]Finding, error) {
 				// findings as secrets. If a non-secret external ruleset ever
 				// needs a different class, add an EXTERNAL_SCAN_CLASS env
 				// var rather than guessing from the tool name here.
-				Class: string(gate.ClassSecret),
+				Class: string(ClassSecret),
 			})
 		}
 	}

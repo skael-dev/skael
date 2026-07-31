@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/skael-dev/skael/internal/gate"
 )
 
 // TestBlockingFindingsAllHaveAClass is the guard TestEveryRuleHasAClass cannot
@@ -62,15 +60,15 @@ func TestBlockingFindingsAllHaveAClass(t *testing.T) {
 		"OBFUSCATION":       false,
 	}
 
-	// knownClasses is every value gate.Class can hold. A finding's Class must
+	// knownClasses is every value Class can hold. A finding's Class must
 	// be one of these — not merely non-empty — since a typo'd class string
 	// would pass an empty-check but still be meaningless to Decide.
-	knownClasses := map[gate.Class]bool{
-		gate.ClassExfiltration: true,
-		gate.ClassSecret:       true,
-		gate.ClassExecution:    true,
-		gate.ClassInjection:    true,
-		gate.ClassHeuristic:    true,
+	knownClasses := map[Class]bool{
+		ClassExfiltration: true,
+		ClassSecret:       true,
+		ClassExecution:    true,
+		ClassInjection:    true,
+		ClassHeuristic:    true,
 	}
 
 	sawBlocking := false
@@ -86,8 +84,8 @@ func TestBlockingFindingsAllHaveAClass(t *testing.T) {
 			t.Errorf("blocking finding %q (severity %s, file %s:%d) has no Class", f.Rule, f.Severity, f.File, f.Line)
 			continue
 		}
-		if !knownClasses[gate.Class(f.Class)] {
-			t.Errorf("blocking finding %q has Class %q that is not a recognised gate.Class", f.Rule, f.Class)
+		if !knownClasses[Class(f.Class)] {
+			t.Errorf("blocking finding %q has Class %q that is not a recognised Class", f.Rule, f.Class)
 		}
 	}
 
