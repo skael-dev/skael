@@ -93,7 +93,12 @@ func (p *PoolExecutor) Submit(ctx context.Context, j Job) (JobID, error) {
 // the worker sees the status on its next heartbeat and abandons the run.
 func (p *PoolExecutor) Cancel(ctx context.Context, id JobID) error {
 	tag, err := p.db.Exec(ctx, `
-		UPDATE eval_jobs SET status = 'cancelled', updated_at = now()
+		UPDATE eval_jobs
+		SET status = 'cancelled',
+		    worker_id = '',
+		    claim_token_hash = '',
+		    lease_expires_at = NULL,
+		    updated_at = now()
 		WHERE id = $1 AND status IN ('queued', 'running')`, string(id))
 	if err != nil {
 		return fmt.Errorf("evalqueue: cancel: %w", err)
@@ -242,11 +247,17 @@ func (p *PoolExecutor) Fail(ctx context.Context, id JobID, workerID, cause strin
 }
 
 // VerifyClaim compares in constant time: the claim token is a bearer
-// credential and a byte-at-a-time comparison leaks it.
+// credential and a byte-at-a-time comparison leaks it. A claim is live only
+// while the job is still running and its lease has not expired — a lapsed
+// lease or a cancelled job (Cancel clears claim_token_hash) must not verify,
+// even if nobody has polled to notice yet.
 func (p *PoolExecutor) VerifyClaim(ctx context.Context, id JobID, token string) (*Job, bool, error) {
 	j, err := p.Get(ctx, id)
 	if err != nil || j == nil {
 		return nil, false, err
+	}
+	if j.Status != StatusRunning || j.LeaseExpiresAt == nil || !j.LeaseExpiresAt.After(time.Now()) {
+		return nil, false, nil
 	}
 	var stored string
 	if err := p.db.QueryRow(ctx,
@@ -262,6 +273,26 @@ func (p *PoolExecutor) VerifyClaim(ctx context.Context, id JobID, token string) 
 		return nil, false, nil
 	}
 	return j, true, nil
+}
+
+// ReapExpired marks jobs whose lease lapsed and whose attempts are exhausted
+// as failed. Claim recovers a lapsed lease while retries remain; without this
+// sweep a worker that dies on its final attempt leaves the job running
+// forever, neither retried nor reported. Returns the number reaped.
+func (p *PoolExecutor) ReapExpired(ctx context.Context) (int, error) {
+	tag, err := p.db.Exec(ctx, `
+		UPDATE eval_jobs
+		SET status = 'failed',
+		    last_error = 'lease lapsed with attempts exhausted',
+		    worker_id = '',
+		    claim_token_hash = '',
+		    lease_expires_at = NULL,
+		    updated_at = now()
+		WHERE status = 'running' AND lease_expires_at < now() AND attempts >= max_attempts`)
+	if err != nil {
+		return 0, fmt.Errorf("evalqueue: reap expired: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func newToken() (string, error) {

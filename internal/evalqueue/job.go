@@ -58,4 +58,4 @@ type Executor interface {
 
 // ErrNotCancellable is returned when Cancel targets a job that has already
 // finished (done, failed, or cancelled) or does not exist.
-var ErrNotCancellable = errors.New("evalqueue: job not cancellable")
+var ErrNotCancellable = errors.New("evalqueue: job is not queued or running")

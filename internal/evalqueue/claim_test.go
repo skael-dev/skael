@@ -119,6 +119,139 @@ func TestVerifyClaim_RejectsAStaleToken(t *testing.T) {
 	}
 }
 
+func TestVerifyClaim_AcceptsTheLiveToken(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+	_, tok, ok, err := q.Claim(ctx, "worker-a", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+
+	j, ok, err := q.VerifyClaim(ctx, id, tok)
+	if err != nil || !ok {
+		t.Fatalf("live token rejected (ok=%v err=%v)", ok, err)
+	}
+	if j.ID != id {
+		t.Fatalf("verified job = %s, want %s", j.ID, id)
+	}
+}
+
+func TestVerifyClaim_RejectsAfterCompleteBlanksTheHash(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+	_, tok, _, _ := q.Claim(ctx, "worker-a", time.Minute)
+	if err := q.Complete(ctx, id, "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, _ := q.VerifyClaim(ctx, id, tok); ok {
+		t.Fatal("a token for a completed (blanked-hash) job was accepted")
+	}
+	if _, ok, _ := q.VerifyClaim(ctx, id, ""); ok {
+		t.Fatal("an empty token matched the blanked hash")
+	}
+}
+
+func TestVerifyClaim_RejectsALapsedLease(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+	// A zero lease is already expired the moment it is taken, but nobody has
+	// reclaimed it yet — the hash is still in the row.
+	_, tok, ok, err := q.Claim(ctx, "worker-a", 0)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+
+	if _, ok, err := q.VerifyClaim(ctx, id, tok); err != nil || ok {
+		t.Fatalf("a lapsed-lease token was accepted (ok=%v err=%v)", ok, err)
+	}
+}
+
+func TestVerifyClaim_RejectsACancelledJob(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+	_, tok, ok, err := q.Claim(ctx, "worker-a", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if err := q.Cancel(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, err := q.VerifyClaim(ctx, id, tok); err != nil || ok {
+		t.Fatalf("a cancelled job's token was accepted (ok=%v err=%v)", ok, err)
+	}
+}
+
+func TestReapExpired_FailsAJobThatExhaustedAttemptsAndLapsed(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+
+	// Claim to exhaustion (default max_attempts=3), leaving the job running
+	// with a lapsed lease after the final attempt — as if the worker died.
+	for i := 1; i <= 3; i++ {
+		if _, _, ok, _ := q.Claim(ctx, "worker-a", 0); !ok {
+			t.Fatalf("claim %d failed", i)
+		}
+	}
+
+	n, err := q.ReapExpired(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("reaped %d jobs, want 1", n)
+	}
+	got, _ := q.Get(ctx, id)
+	if got.Status != evalqueue.StatusFailed {
+		t.Fatalf("status = %q, want failed", got.Status)
+	}
+	if got.LastError == "" {
+		t.Fatal("last_error is empty; the reap reason was lost")
+	}
+}
+
+func TestReapExpired_DoesNotTouchAJobWithRetriesRemaining(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+
+	// One claim with a lapsed lease; two attempts remain.
+	if _, _, ok, _ := q.Claim(ctx, "worker-a", 0); !ok {
+		t.Fatal("claim failed")
+	}
+
+	n, err := q.ReapExpired(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("reaped %d jobs, want 0 — retries remained", n)
+	}
+
+	j, _, ok, err := q.Claim(ctx, "worker-b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("a job with retries remaining was not claimable after ReapExpired")
+	}
+	if j.ID != id {
+		t.Fatalf("claimed job = %s, want %s", j.ID, id)
+	}
+}
+
 func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	q := evalqueue.NewPool(pool)
@@ -129,13 +262,22 @@ func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 	}
 	var mu sync.Mutex
 	seen := map[evalqueue.JobID]int{}
+	var claimErrs []error
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for w := 0; w < jobs; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
+			<-start
 			j, _, ok, err := q.Claim(context.Background(), fmt.Sprintf("worker-%d", w), time.Minute)
-			if err != nil || !ok {
+			if err != nil {
+				mu.Lock()
+				claimErrs = append(claimErrs, err)
+				mu.Unlock()
+				return
+			}
+			if !ok {
 				return
 			}
 			mu.Lock()
@@ -143,7 +285,11 @@ func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 			mu.Unlock()
 		}(w)
 	}
+	close(start)
 	wg.Wait()
+	if len(claimErrs) > 0 {
+		t.Fatalf("claim returned %d errors, want 0: %v", len(claimErrs), claimErrs)
+	}
 	if len(seen) != jobs {
 		t.Fatalf("claimed %d distinct jobs, want %d", len(seen), jobs)
 	}
