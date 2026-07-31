@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
@@ -19,10 +20,10 @@ func TestMerge(t *testing.T) {
 	source, _ := store.Create(ctx, "superpowers:brainstorming", "", "source", "", json.RawMessage(`{}`))
 	target, _ := store.Create(ctx, "brainstorming", "", "target", "", json.RawMessage(`{}`))
 
-	if _, err := store.CreateVersion(ctx, source.ID, "s/archive.tar.gz", "checksum1", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "test@example.com"); err != nil {
+	if _, err := store.CreateVersion(ctx, source.ID, "s/archive.tar.gz", "checksum1", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "test@example.com", allowDecision()); err != nil {
 		t.Fatalf("CreateVersion: %v", err)
 	}
-	if _, err := store.CreateVersion(ctx, target.ID, "t/archive.tar.gz", "checksum2", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "test@example.com"); err != nil {
+	if _, err := store.CreateVersion(ctx, target.ID, "t/archive.tar.gz", "checksum2", "", "", "", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "test@example.com", allowDecision()); err != nil {
 		t.Fatalf("CreateVersion: %v", err)
 	}
 
@@ -49,4 +50,9 @@ func TestMerge(t *testing.T) {
 	if len(versions) != 2 {
 		t.Fatalf("got %d versions, want 2", len(versions))
 	}
+}
+
+// allowDecision is the clean-scan gate decision: nothing to hold on.
+func allowDecision() gate.Decision {
+	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
 }

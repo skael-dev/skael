@@ -3,8 +3,13 @@ package skill_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 
+	"golang.org/x/sync/errgroup"
+
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
 	"github.com/stretchr/testify/require"
@@ -110,7 +115,7 @@ func TestStore_CreateVersion(t *testing.T) {
 		{Path: "README.md", Size: 256},
 	}
 	scanResult := json.RawMessage(`{"clean":true}`)
-	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com")
+	ver, err := s.CreateVersion(ctx, sk.ID, "/archives/versioned-skill-v1.tar.gz", "abc123checksum", "initial release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com", allowDecision())
 	require.NoError(t, err)
 	require.NotNil(t, ver)
 	require.Equal(t, 1, ver.Version)
@@ -138,7 +143,7 @@ func TestStore_GetVersion(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
 	scanResult := json.RawMessage(`{"status":"clean"}`)
-	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com")
+	created, err := s.CreateVersion(ctx, sk.ID, "/archives/getver-v1.tar.gz", "deadbeef1234", "first release", "", "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com", allowDecision())
 	require.NoError(t, err)
 	require.Equal(t, 1, created.Version)
 
@@ -167,7 +172,7 @@ func TestStore_CreateVersion_UpdatesSkillMetadata(t *testing.T) {
 
 	_, err = store.CreateVersion(ctx, sk.ID, "meta-skill/abc.tar.gz", "abc", "",
 		"new desc", "new content",
-		json.RawMessage(`{"description":"new desc"}`), nil, json.RawMessage(`{}`), "test@example.com")
+		json.RawMessage(`{"description":"new desc"}`), nil, json.RawMessage(`{}`), "test@example.com", allowDecision())
 	require.NoError(t, err)
 
 	got, err := store.GetByName(ctx, "meta-skill")
@@ -254,10 +259,10 @@ func TestStore_ListVersions(t *testing.T) {
 
 	manifest := []skill.FileEntry{{Path: "skill.md", Size: 512}}
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com")
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v1.tar.gz", "checksum1", "version 1", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com", allowDecision())
 	require.NoError(t, err)
 
-	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com")
+	_, err = s.CreateVersion(ctx, sk.ID, "/archives/v2.tar.gz", "checksum2", "version 2", "", "", json.RawMessage(`{}`), manifest, json.RawMessage(`{}`), "test@example.com", allowDecision())
 	require.NoError(t, err)
 
 	versions, err := s.ListVersions(ctx, "multi-version-skill")
@@ -267,4 +272,184 @@ func TestStore_ListVersions(t *testing.T) {
 	// Results should be ordered by version DESC: v2 first, v1 second.
 	require.Equal(t, 2, versions[0].Version)
 	require.Equal(t, 1, versions[1].Version)
+}
+
+// allowDecision is the clean-scan gate decision: nothing to hold on.
+func allowDecision() gate.Decision {
+	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
+}
+
+func heldDecision(reasons ...gate.Reason) gate.Decision {
+	if reasons == nil {
+		reasons = []gate.Reason{}
+	}
+	return gate.Decision{Outcome: gate.NeedsReview, Reasons: reasons}
+}
+
+// mustSkill creates a skill row and fails the test if it cannot.
+func mustSkill(t *testing.T, s *skill.Store, name string) *skill.Skill {
+	t.Helper()
+	sk, err := s.Create(context.Background(), name, name, "", "", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	return sk
+}
+
+// A held version exists and is numbered, but skills.latest_version must not
+// point at it — that pointer is what every reader serves from.
+func TestCreateVersionHeldDoesNotAdvanceLatest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+	sk := mustSkill(t, s, "held-skill")
+
+	v1, err := s.CreateVersion(ctx, sk.ID, "p1", "c1", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision())
+	require.NoError(t, err)
+	require.Equal(t, 1, v1.Version)
+	require.Equal(t, "released", v1.GateState)
+
+	v2, err := s.CreateVersion(ctx, sk.ID, "p2", "c2", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester",
+		heldDecision(gate.Reason{Rule: "x", Class: "execution"}))
+	require.NoError(t, err)
+	require.Equal(t, 2, v2.Version, "a held version still gets the next version number")
+	require.Equal(t, "needs_review", v2.GateState)
+
+	got, err := s.GetByName(ctx, "held-skill")
+	require.NoError(t, err)
+	require.Equal(t, 1, got.LatestVersion,
+		"the latest pointer must not advance to a held version; this is the whole invariant")
+}
+
+func TestCreateVersionRecordsTheDecision(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+	sk := mustSkill(t, s, "decision-skill")
+
+	d := heldDecision(gate.Reason{
+		Rule: "curl-pipe-sh", Class: "execution", Severity: "high",
+		File: "install.sh", Line: 4, Clears: "an evaluation",
+	})
+	v, err := s.CreateVersion(ctx, sk.ID, "p", "c", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", d)
+	require.NoError(t, err)
+
+	var back gate.Decision
+	require.NoError(t, json.Unmarshal(v.GateDecision, &back))
+	require.Equal(t, d, back, "the decision must survive the round trip intact; the review screen renders it")
+
+	// And again after a read, not only from the INSERT ... RETURNING row.
+	read, err := s.GetVersion(ctx, "decision-skill", 1)
+	require.NoError(t, err)
+	require.Equal(t, "needs_review", read.GateState)
+	var reread gate.Decision
+	require.NoError(t, json.Unmarshal(read.GateDecision, &reread))
+	require.Equal(t, d, reread)
+}
+
+// The version number comes from MAX(version), not from the latest pointer:
+// two consecutive held publishes must not both try to be version 1.
+func TestCreateVersionNumbersFromMaxNotFromPointer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+	sk := mustSkill(t, s, "numbering-skill")
+	held := heldDecision()
+
+	_, err := s.CreateVersion(ctx, sk.ID, "p1", "c1", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", held)
+	require.NoError(t, err)
+	v2, err := s.CreateVersion(ctx, sk.ID, "p2", "c2", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", held)
+	require.NoError(t, err)
+	require.Equal(t, 2, v2.Version, "two consecutive held publishes must not collide on version 1")
+
+	v3, err := s.CreateVersion(ctx, sk.ID, "p3", "c3", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", allowDecision())
+	require.NoError(t, err)
+	require.Equal(t, 3, v3.Version)
+
+	got, err := s.GetByName(ctx, "numbering-skill")
+	require.NoError(t, err)
+	require.Equal(t, 3, got.LatestVersion, "a released publish after two held ones advances the pointer to itself")
+}
+
+// A held v4 released after a clean v5 already shipped must not pull clients
+// back to v4 — hence GREATEST rather than a bare assignment.
+func TestCreateVersionLatestNeverGoesBackwards(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+	sk := mustSkill(t, s, "monotonic-skill")
+
+	_, err := s.CreateVersion(ctx, sk.ID, "p1", "c1", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", allowDecision())
+	require.NoError(t, err)
+	_, err = s.CreateVersion(ctx, sk.ID, "p2", "c2", "", "d", "c", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", allowDecision())
+	require.NoError(t, err)
+
+	// Simulate an older held version being released later.
+	_, err = pool.Exec(ctx, `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`, sk.ID, 1)
+	require.NoError(t, err)
+
+	got, err := s.GetByName(ctx, "monotonic-skill")
+	require.NoError(t, err)
+	require.Equal(t, 2, got.LatestVersion)
+}
+
+// The UPDATE skills statement in CreateVersion looks vestigial now that it no
+// longer returns the version number. It is not: it takes the row lock that
+// serialises concurrent publishes of the same skill. Delete it and this test
+// goes red on UNIQUE(skill_id, version).
+func TestCreateVersionConcurrentPublishesDoNotCollide(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	s := skill.NewStore(pool)
+	ctx := context.Background()
+	sk := mustSkill(t, s, "concurrent-skill")
+
+	const n = 8
+	var mu sync.Mutex
+	seen := map[int]bool{}
+	g, gctx := errgroup.WithContext(ctx)
+	for i := 0; i < n; i++ {
+		i := i
+		g.Go(func() error {
+			v, err := s.CreateVersion(gctx, sk.ID,
+				fmt.Sprintf("p%d", i), fmt.Sprintf("c%d", i), "", "d", "c",
+				json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t", heldDecision())
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if seen[v.Version] {
+				return fmt.Errorf("duplicate version %d", v.Version)
+			}
+			seen[v.Version] = true
+			return nil
+		})
+	}
+	require.NoError(t, g.Wait())
+
+	for want := 1; want <= n; want++ {
+		require.True(t, seen[want], "version %d missing; got %v", want, seen)
+	}
+	require.Len(t, seen, n)
+
+	// All eight were held, so the pointer stayed put.
+	got, err := s.GetByName(ctx, "concurrent-skill")
+	require.NoError(t, err)
+	require.Equal(t, 0, got.LatestVersion)
 }

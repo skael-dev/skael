@@ -19,6 +19,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
@@ -336,7 +337,8 @@ func importSingleSkill(
 	}
 
 	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog,
-		description, body, fmJSON, manifest, scanJSON, "import")
+		description, body, fmJSON, manifest, scanJSON, "import",
+		gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}})
 	if err != nil {
 		_ = storage.Delete(ctx, archiveName)
 		return nil, false, fmt.Errorf("create version: %w", err)

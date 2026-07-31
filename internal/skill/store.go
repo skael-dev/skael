@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/skael-dev/skael/internal/gate"
 )
 
 // Store handles Postgres persistence for skills and their versions.
@@ -131,9 +133,10 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// CreateVersion increments latest_version on the parent skill, updates its
-// description/content/frontmatter, and inserts a new skill_versions row, all
-// within a single transaction.
+// CreateVersion inserts a new skill_versions row, updates the parent skill's
+// description/content/frontmatter, and advances skills.latest_version to the
+// new version only when the gate decision releases it — all within a single
+// transaction. A held version exists and is stored, but is not served.
 func (s *Store) CreateVersion(
 	ctx context.Context,
 	skillID, archivePath, checksum, changelog string,
@@ -142,6 +145,7 @@ func (s *Store) CreateVersion(
 	manifest []FileEntry,
 	scanResult json.RawMessage,
 	publishedBy string,
+	decision gate.Decision,
 ) (*Version, error) {
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
@@ -154,33 +158,70 @@ func (s *Store) CreateVersion(
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Increment latest_version, reset review columns, update metadata, and return the new value.
+	state := "released"
+	if decision.Outcome == gate.NeedsReview {
+		state = "needs_review"
+	}
+
+	// The UPDATE runs whatever the decision is, and not only for the columns
+	// it writes: it takes the row lock that serialises two concurrent
+	// publishes of the same skill. Without it, both would compute the same
+	// MAX(version)+1 below and collide on UNIQUE(skill_id, version).
+	// TestCreateVersionConcurrentPublishesDoNotCollide is what keeps this
+	// honest — remove the statement and it goes red.
 	const updateSkill = `
 		UPDATE skills
-		SET latest_version = latest_version + 1, updated_at = now(),
+		SET updated_at = now(),
 		    reviewed_at = NULL, reviewed_by = '',
 		    description = $2, content = $3, frontmatter = $4
 		WHERE id = $1
-		RETURNING latest_version
+	`
+	if _, err := tx.Exec(ctx, updateSkill, skillID, description, content, frontmatter); err != nil {
+		return nil, fmt.Errorf("skill.Store.CreateVersion update skill: %w", err)
+	}
+
+	// The version number is the sequence of versions that exist, which is no
+	// longer the same thing as the pointer to the newest servable one.
+	const nextVersion = `
+		SELECT COALESCE(MAX(version), 0) + 1 FROM skill_versions WHERE skill_id = $1
 	`
 	var newVersion int
-	if err := tx.QueryRow(ctx, updateSkill, skillID, description, content, frontmatter).Scan(&newVersion); err != nil {
-		return nil, fmt.Errorf("skill.Store.CreateVersion update skill: %w", err)
+	if err := tx.QueryRow(ctx, nextVersion, skillID).Scan(&newVersion); err != nil {
+		return nil, fmt.Errorf("skill.Store.CreateVersion next version: %w", err)
+	}
+
+	decisionJSON, err := json.Marshal(decision)
+	if err != nil {
+		return nil, fmt.Errorf("skill.Store.CreateVersion marshal decision: %w", err)
 	}
 
 	// Insert the version row.
 	const insertVersion = `
-		INSERT INTO skill_versions (skill_id, version, archive_path, checksum, changelog, frontmatter, file_manifest, scan_result, published_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter, file_manifest, scan_result, published_by, created_at
+		INSERT INTO skill_versions
+			(skill_id, version, archive_path, checksum, changelog, frontmatter,
+			 file_manifest, scan_result, published_by, gate_state, gate_decision)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter,
+		          file_manifest, scan_result, published_by, created_at,
+		          gate_state, gate_decision, gated_by, gated_at, gate_note
 	`
 	row := tx.QueryRow(ctx, insertVersion,
 		skillID, newVersion, archivePath, checksum, changelog,
-		frontmatter, manifestJSON, scanResult, publishedBy,
+		frontmatter, manifestJSON, scanResult, publishedBy, state, decisionJSON,
 	)
 	ver, err := scanVersion(row)
 	if err != nil {
 		return nil, fmt.Errorf("skill.Store.CreateVersion insert: %w", err)
+	}
+
+	// latest_version advances only for a released version. GREATEST guards the
+	// case where a held v4 is released after a clean v5 already shipped — a
+	// bare assignment there would regress every client to the older skill.
+	if state == "released" {
+		const advance = `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`
+		if _, err := tx.Exec(ctx, advance, skillID, newVersion); err != nil {
+			return nil, fmt.Errorf("skill.Store.CreateVersion advance latest: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -194,7 +235,8 @@ func (s *Store) ListVersions(ctx context.Context, skillName string) ([]Version, 
 	const q = `
 		SELECT sv.id, sv.skill_id, sv.version, sv.archive_path, sv.checksum,
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
-		       sv.published_by, sv.created_at
+		       sv.published_by, sv.created_at,
+		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1
@@ -225,7 +267,8 @@ func (s *Store) GetVersion(ctx context.Context, skillName string, version int) (
 	const q = `
 		SELECT sv.id, sv.skill_id, sv.version, sv.archive_path, sv.checksum,
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
-		       sv.published_by, sv.created_at
+		       sv.published_by, sv.created_at,
+		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1 AND sv.version = $2
@@ -334,7 +377,7 @@ func (s *Store) UpdateSpecFields(ctx context.Context, name, author, license, com
 
 func scanVersion(row scanner) (*Version, error) {
 	var ver Version
-	var rawFrontmatter, rawFileManifest, rawScanResult []byte
+	var rawFrontmatter, rawFileManifest, rawScanResult, rawGateDecision []byte
 	err := row.Scan(
 		&ver.ID,
 		&ver.SkillID,
@@ -347,12 +390,18 @@ func scanVersion(row scanner) (*Version, error) {
 		&rawScanResult,
 		&ver.PublishedBy,
 		&ver.CreatedAt,
+		&ver.GateState,
+		&rawGateDecision,
+		&ver.GatedBy,
+		&ver.GatedAt,
+		&ver.GateNote,
 	)
 	if err != nil {
 		return nil, err
 	}
 	ver.Frontmatter = json.RawMessage(rawFrontmatter)
 	ver.ScanResult = json.RawMessage(rawScanResult)
+	ver.GateDecision = json.RawMessage(rawGateDecision)
 	if err := json.Unmarshal(rawFileManifest, &ver.FileManifest); err != nil {
 		return nil, fmt.Errorf("unmarshal file_manifest: %w", err)
 	}

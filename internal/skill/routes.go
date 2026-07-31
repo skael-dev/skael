@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
 )
@@ -485,6 +486,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			manifest,
 			scanJSON,
 			publishedBy,
+			gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}},
 		)
 		if err != nil {
 			_ = storage.Delete(ctx, archiveName)
