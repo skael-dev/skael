@@ -24,7 +24,7 @@ import (
 	// Adapters register themselves via init() with agent.Register. A
 	// forgotten import here makes agent.Get(name) return (nil, false) with
 	// no compile error — the adapter is just silently absent from the panel.
-	// startAdapterCount below asserts against this at startup.
+	// checkAdapters below asserts against this at startup.
 	_ "github.com/skael-dev/skael/internal/eval/agent/claudecode"
 	_ "github.com/skael-dev/skael/internal/eval/agent/codex"
 	_ "github.com/skael-dev/skael/internal/eval/agent/cursor"
@@ -42,8 +42,8 @@ import (
 )
 
 // wantAdapters is the set of adapters this binary expects to have linked in.
-// startAdapterCount checks the registry against it so a forgotten blank
-// import fails loudly at startup instead of silently thinning the panel.
+// checkAdapters checks the registry against it so a forgotten blank import
+// is logged loudly at startup instead of silently thinning the panel.
 var wantAdapters = []string{"claude-code", "codex", "cursor", "opencode"}
 
 var (
@@ -283,6 +283,7 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 	defer func() { _ = st.Close() }()
 
 	log.Info().
+		Str("job_id", string(in.JobID)).
 		Str("skill", in.Skill).
 		Int("version", in.Version).
 		Str("suite_ref", in.SuiteRef).
@@ -299,22 +300,12 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		EngineVersion: version,
 	}
 
-	concurrency := r.concurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-
-	req := whetstone.EvalRequest{
-		Skill:       in.Skill,
-		Tier:        runner.Tier(in.Tier),
-		Agents:      in.Panel.Agents,
-		Models:      in.Panel.Models,
-		Concurrency: concurrency,
-	}
+	req := evalRequestFrom(in, r.concurrency)
 
 	rep, err := whetstone.RunEvalWith(ctx, deps, req)
 	if err != nil {
 		log.Error().
+			Str("job_id", string(in.JobID)).
 			Str("skill", in.Skill).
 			Str("suite_ref", in.SuiteRef).
 			Err(err).
@@ -323,6 +314,7 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 	}
 
 	log.Info().
+		Str("job_id", string(in.JobID)).
 		Str("skill", in.Skill).
 		Int("version", in.Version).
 		Str("suite_ref", in.SuiteRef).
@@ -331,4 +323,21 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Msg("skael-worker: job completed")
 
 	return rep, nil
+}
+
+// evalRequestFrom maps a worker.RunInput — what the queue handed the worker
+// — onto the whetstone.EvalRequest RunEvalWith actually consumes. This hop
+// is the exact seam a prior task's fix round found broken (Panel silently
+// dropped on the wire); TestEvalRequestFrom_CarriesTierAndPanel guards it.
+func evalRequestFrom(in worker.RunInput, concurrency int) whetstone.EvalRequest {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	return whetstone.EvalRequest{
+		Skill:       in.Skill,
+		Tier:        runner.Tier(in.Tier),
+		Agents:      in.Panel.Agents,
+		Models:      in.Panel.Models,
+		Concurrency: concurrency,
+	}
 }

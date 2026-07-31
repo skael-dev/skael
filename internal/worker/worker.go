@@ -59,6 +59,7 @@ func (c Config) withDefaults() Config {
 
 // RunInput is what a Runner needs to execute one job's evaluation.
 type RunInput struct {
+	JobID    evalqueue.JobID
 	Skill    string
 	Version  int
 	SuiteRef string
@@ -214,6 +215,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	}()
 
 	rep, runErr := w.runner.Run(runCtx, RunInput{
+		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: job.SuiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
 	})
