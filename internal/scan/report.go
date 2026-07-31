@@ -1,5 +1,33 @@
 package scan
 
+import (
+	"path/filepath"
+	"strings"
+)
+
+// Relativize rewrites every finding's File to a path relative to root.
+//
+// A server-side scan runs against a throwaway unpack directory, so the raw
+// paths are meaningless to the publisher and disclose the server's filesystem
+// layout to anyone who can publish. Findings are also persisted in
+// scan_result and rendered by the CLI and the review UI, so the rewrite has
+// to happen once, at the scan site, before anything reads them.
+//
+// A path that is not under root is left alone: it is not the scanner's job to
+// invent a relationship that isn't there.
+func Relativize(report *Report, root string) {
+	if report == nil {
+		return
+	}
+	for i := range report.Findings {
+		rel, err := filepath.Rel(root, report.Findings[i].File)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		report.Findings[i].File = filepath.ToSlash(rel)
+	}
+}
+
 // Report is the result of scanning a skill archive or content for security issues.
 type Report struct {
 	Status   string    `json:"status"` // clean, info, warn, critical

@@ -118,7 +118,16 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	// --skip-local-scan only skips this check; the server scans again and can
 	// still reject. --override is what actually gets past a blocking finding.
 	skipLocalScan := publishSkipLocalScan || publishForce
-	const blockedSuggestion = "fix the findings above, or ask an owner or admin to publish with --override"
+	blockedSuggestion := "fix the findings above, publish with --skip-local-scan to send it to the review gate, " +
+		"or ask an owner or admin to publish with --override"
+	// Deciding locally costs nothing and keeps the advice honest: an
+	// unappealable finding is cleared by removing it and by nothing else, so
+	// pointing the publisher at --override would send them after a
+	// permission that cannot help them.
+	if gate.Decide(*report, nil, gate.Policy{}).Outcome == gate.Block {
+		blockedSuggestion = "remove the findings above: credential-theft and data-exfiltration " +
+			"findings are unappealable, and no override clears them"
+	}
 
 	if (report.Status == "critical" || report.Status == "warn") && !skipLocalScan && !publishOverride {
 		if ui.JSONMode {
@@ -300,7 +309,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stdout, "    Clears: %s\n", r.Clears)
 		}
 		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand:")
+		if ver.Quality.State == "pending" {
+			fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand instead:")
+		} else {
+			fmt.Fprintln(os.Stdout, "  No evaluation suite is registered for this skill, so nothing will")
+			fmt.Fprintln(os.Stdout, "  clear it automatically. An owner or admin can approve it:")
+		}
 		fmt.Fprintf(os.Stdout, "    skael review %s %d --approve --reason \"...\"\n", name, ver.Version)
 	case gate.AllowWithWarning:
 		fmt.Fprintf(os.Stdout, "  ⚠ %s v%d published with warnings\n", name, ver.Version)

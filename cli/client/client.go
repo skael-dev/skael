@@ -63,6 +63,20 @@ type Version struct {
 	// from the row itself, not recomputed — so it is the source of truth
 	// for whether a version is actually being served.
 	GateState string `json:"gate_state,omitempty"`
+	// Quality reports whether publishing this version enqueued an
+	// evaluation. State is "pending" when a job was queued and "none" when
+	// no suite is registered for the skill — in which case an admin
+	// approval is the only thing that can clear a held version, and telling
+	// the publisher to wait for a score would be telling them to wait
+	// forever.
+	Quality QualityState `json:"quality,omitempty"`
+}
+
+// QualityState is the publish response's report on the evaluation, if any,
+// that was queued for the new version.
+type QualityState struct {
+	State string `json:"state,omitempty"`
+	JobID string `json:"job_id,omitempty"`
 }
 
 // ManifestEntry holds the sync metadata for a single skill.

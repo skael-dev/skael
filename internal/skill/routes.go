@@ -375,6 +375,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, fmt.Errorf("publish: scan: %w", err)
 		}
 		scan.MergeExternal(ctx, external, tmpDir, report)
+		// tmpDir is a throwaway unpack directory. Its absolute path means
+		// nothing to the publisher and leaks the server's filesystem layout,
+		// so rewrite before the report is persisted, decided on, or returned.
+		scan.Relativize(report, tmpDir)
 
 		decision := DecidePublish(report, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
 

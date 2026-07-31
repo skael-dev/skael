@@ -314,6 +314,9 @@ func importSingleSkill(
 		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("scan: %w", err)
 	}
 	scan.MergeExternal(ctx, external, skillDir, report)
+	// skillDir lives under a throwaway checkout; findings are persisted and
+	// rendered, so they must name the file inside the bundle, not on disk.
+	scan.Relativize(report, skillDir)
 	scanJSON, err := json.Marshal(report)
 	if err != nil {
 		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal scan result: %w", err)
