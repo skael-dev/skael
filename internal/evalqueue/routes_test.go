@@ -18,8 +18,10 @@ import (
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
+	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
 )
@@ -61,7 +63,12 @@ func newTestServerWithRole(t *testing.T, role string) *testServer {
 		t.Fatalf("NewLocalStorage: %v", err)
 	}
 	suiteRegistry := evalsuite.NewRegistry(pool, suiteStorage)
-	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry)
+	// A non-zero floor so the ingestion tests can tell "cleared" from "did
+	// not clear"; a zero floor would make every verified score clear.
+	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry, evalqueue.RouteOptions{
+		Releaser:     skill.NewReleaser(skillStore),
+		QualityFloor: testQualityFloor,
+	})
 
 	return &testServer{handler: r, skills: skillStore, queue: q, pool: pool}
 }
@@ -559,5 +566,117 @@ func TestHeartbeatRoute_409OnLapsedLeaseStillMarkedRunning(t *testing.T) {
 	srv.handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+}
+
+// testQualityFloor is the floor the test server decides with.
+const testQualityFloor = 60
+
+// heldVersion creates a version held for review on an appealable finding, the
+// way publish does when the scanner guesses from shape.
+func (s *testServer) heldVersion(t *testing.T, skillID, name string) int {
+	t.Helper()
+	rep := scan.Report{Findings: []scan.Finding{{
+		Rule:     "curl-pipe",
+		Severity: "high",
+		File:     "SKILL.md",
+		Line:     4,
+		Message:  "piping a download into a shell",
+		Class:    string(scan.ClassExecution),
+	}}}
+	scanJSON, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatalf("marshal scan report: %v", err)
+	}
+	v, err := s.skills.CreateVersion(t.Context(), skillID, "p/"+name, "c-"+name, "", "d", "c",
+		json.RawMessage(`{}`), nil, scanJSON, "t",
+		gate.Decision{Outcome: gate.NeedsReview, Reasons: []gate.Reason{{Rule: "curl-pipe", Class: "execution"}}})
+	if err != nil {
+		t.Fatalf("CreateVersion: %v", err)
+	}
+	return v.Version
+}
+
+// claimOnly claims the single queued job and returns its claim token.
+func (s *testServer) claimOnly(t *testing.T, jobID string) string {
+	t.Helper()
+	claim := s.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	if claim.Code != http.StatusOK {
+		t.Fatalf("claim: status = %d: %s", claim.Code, claim.Body)
+	}
+	var claimed struct {
+		Job        struct{ ID string } `json:"job"`
+		ClaimToken string              `json:"claim_token"`
+	}
+	if err := json.Unmarshal(claim.Body.Bytes(), &claimed); err != nil {
+		t.Fatalf("claim: unmarshal: %v", err)
+	}
+	if claimed.Job.ID != jobID {
+		t.Fatalf("claimed job = %q, want %q", claimed.Job.ID, jobID)
+	}
+	return claimed.ClaimToken
+}
+
+// TestReportRoute_ClearingScoreReleasesAHeldVersion is what makes the gate
+// something other than a permanent hold: the report that measures the skill is
+// also what lets it out.
+func TestReportRoute_ClearingScoreReleasesAHeldVersion(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	version := srv.heldVersion(t, skillID, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", version, "sha256:abc")
+
+	token := srv.claimOnly(t, jobID)
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 82))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	ver, err := srv.skills.GetVersion(t.Context(), "deploy-helper", version)
+	if err != nil || ver == nil {
+		t.Fatalf("GetVersion: %v", err)
+	}
+	if ver.GateState != "released" {
+		t.Fatalf("gate_state = %q, want released — a verified clearing score must release the version", ver.GateState)
+	}
+	sk, err := srv.skills.GetByName(t.Context(), "deploy-helper")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if sk.LatestVersion != version {
+		t.Fatalf("latest_version = %d, want %d — a released version must be served", sk.LatestVersion, version)
+	}
+}
+
+// TestReportRoute_ShortScoreLeavesTheVersionHeld is the other half: the score
+// is stored, the job completes, and the version stays out of circulation.
+func TestReportRoute_ShortScoreLeavesTheVersionHeld(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	version := srv.heldVersion(t, skillID, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", version, "sha256:abc")
+
+	token := srv.claimOnly(t, jobID)
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 40))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	ver, err := srv.skills.GetVersion(t.Context(), "deploy-helper", version)
+	if err != nil || ver == nil {
+		t.Fatalf("GetVersion: %v", err)
+	}
+	if ver.GateState != "needs_review" {
+		t.Fatalf("gate_state = %q, want needs_review — a score under the floor must not release", ver.GateState)
+	}
+
+	// The measurement is still worth keeping, and the job is still done.
+	q := quality.NewStore(srv.pool)
+	rec, err := q.Latest(context.Background(), skillID, version)
+	if err != nil || rec == nil {
+		t.Fatalf("a short score must still be stored: %v", err)
+	}
+	if job := srv.getJob(t, jobID); job.Status != "done" {
+		t.Fatalf("job status = %q, want done", job.Status)
 	}
 }

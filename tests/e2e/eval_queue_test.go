@@ -164,7 +164,9 @@ func startServer(t *testing.T) *evalEnv {
 	})
 
 	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
-	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry)
+	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
+		Releaser: skill.NewReleaser(skillStore),
+	})
 	quality.RegisterRoutes(api, qualityStore, skillStore)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

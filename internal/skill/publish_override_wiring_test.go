@@ -25,6 +25,14 @@ import (
 // Tests reassign *caller between requests to change identity.
 func setupTestAPIAsUser(t *testing.T, caller **auth.User) http.Handler {
 	t.Helper()
+	h, _ := setupTestAPIAsUserWithStore(t, caller)
+	return h
+}
+
+// setupTestAPIAsUserWithStore is setupTestAPIAsUser, plus the store behind the
+// handler, for tests that need to read what a request actually persisted.
+func setupTestAPIAsUserWithStore(t *testing.T, caller **auth.User) (http.Handler, *skill.Store) {
+	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
 	store := skill.NewStore(pool)
@@ -44,7 +52,7 @@ func setupTestAPIAsUser(t *testing.T, caller **auth.User) http.Handler {
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{})
 
-	return r
+	return r, store
 }
 
 // buildUnappealableArchive packs a skill whose SKILL.md trips an unappealable

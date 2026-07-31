@@ -185,7 +185,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Eval job queue. The server enqueues and ingests; it never holds a
 	// Docker socket or an LLM key — those live on the worker.
-	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry)
+	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
+		Releaser:     skill.NewReleaser(skillStore),
+		QualityFloor: cfg.QualityFloor,
+	})
 
 	// Read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)
