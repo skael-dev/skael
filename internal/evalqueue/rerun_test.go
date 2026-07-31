@@ -141,10 +141,14 @@ func (s *rerunTestServer) registerSuite(t *testing.T, name string) string {
 	sfx := &suite.Suite{
 		Tasks: []suite.TaskPkg{
 			{
-				ID:       "t1",
-				Kind:     "happy",
+				ID:   "t1",
+				Kind: "happy",
+				// PromptMD embeds the skill name so two skills' fixture
+				// suites hash to distinct content-addressed refs — refs are
+				// content-addressed independent of the skill field, so two
+				// otherwise-identical fixtures would collide onto one ref.
 				Split:    "holdout",
-				PromptMD: "# Task\n\nDo the thing.\n",
+				PromptMD: "# Task for " + name + "\n\nDo the thing.\n",
 				Oracle:   "#!/bin/sh\necho ok\n",
 				Verifier: "#!/bin/sh\nexit 0\n",
 			},
@@ -317,5 +321,63 @@ func TestRerun_RequiresPrivilege(t *testing.T) {
 	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{})
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.Code)
+	}
+}
+
+// A caller-supplied suite_ref that belongs to a different skill must be
+// rejected: eval_suites.ref is globally unique and eval_jobs.suite_ref has no
+// foreign key, so an unchecked ref would let a privileged caller run another
+// skill's tasks (and verifiers written for a different tool) and have the
+// score attributed to this skill — the same comparability hazard the default
+// path exists to prevent, arriving through the explicit suite_ref door.
+func TestRerun_RejectsASuiteRefFromAnotherSkill(t *testing.T) {
+	srv := newRerunTestServerAsAdmin(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.publish(t, "deploy-helper", fixtureBundle(t))
+	srv.registerSuite(t, "deploy-helper")
+
+	srv.createSkill(t, "other-skill")
+	otherRef := srv.registerSuite(t, "other-skill")
+	srv.drainQueue(t)
+
+	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{
+		"suite_ref": otherRef,
+	})
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body.String(), otherRef) || !strings.Contains(resp.Body.String(), "other-skill") {
+		t.Fatalf("the error does not name the ref and the skill it actually belongs to: %s", resp.Body)
+	}
+}
+
+// A caller-supplied suite_ref that does not exist at all must fail at
+// submission time (404), not silently enqueue a job that only fails later
+// when a worker tries to fetch it.
+func TestRerun_RejectsANonexistentSuiteRef(t *testing.T) {
+	srv := newRerunTestServerAsAdmin(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.publish(t, "deploy-helper", fixtureBundle(t))
+
+	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{
+		"suite_ref": "sha256:does-not-exist",
+	})
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
+	}
+}
+
+// A skill created but never published has LatestVersion == 0. Enqueuing a
+// job against version 0 defers a certain failure to whatever a worker makes
+// of it; refuse at request time instead, the same way the sibling call sites
+// in internal/skill/routes.go (:384, :883) do.
+func TestRerun_404WhenSkillHasNoPublishedVersion(t *testing.T) {
+	srv := newRerunTestServerAsAdmin(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.registerSuite(t, "deploy-helper")
+
+	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{})
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
 	}
 }

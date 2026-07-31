@@ -381,6 +381,24 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		if version <= 0 {
 			version = sk.LatestVersion
 		}
+		if version == 0 {
+			// A skill created but never published has LatestVersion == 0.
+			// Enqueuing a job against version 0 would only defer a certain
+			// failure to whatever a worker makes of it — refuse now, the same
+			// way the sibling call sites in internal/skill/routes.go handle
+			// an unpublished skill.
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q has no published version", input.Name))
+		}
+		if input.Body.Version > 0 {
+			ver, err := skills.GetVersion(ctx, input.Name, input.Body.Version)
+			if err != nil {
+				log.Error().Err(err).Str("skill", input.Name).Int("version", input.Body.Version).Msg("evalqueue: get version failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+			if ver == nil {
+				return nil, huma.Error404NotFound(fmt.Sprintf("skill %q has no version %d", input.Name, input.Body.Version))
+			}
+		}
 
 		suiteRef := input.Body.SuiteRef
 		if suiteRef == "" {
@@ -397,6 +415,26 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 				return nil, huma.Error500InternalServerError("rerun eval: internal error")
 			}
 			suiteRef = rec.Ref
+		} else {
+			// A caller-named ref must be validated: eval_suites.ref is
+			// globally unique across skills and eval_jobs.suite_ref carries
+			// no foreign key, so an unchecked ref would let a privileged
+			// caller point this skill's job at another skill's tasks and
+			// verifiers — a score attributed here that measures something
+			// else entirely — or at a ref that does not exist at all, which
+			// would otherwise surface only as a worker failure long after
+			// this 202 was returned.
+			rec, err := suites.Get(ctx, suiteRef)
+			if err != nil {
+				if errors.Is(err, evalsuite.ErrNotFound) {
+					return nil, huma.Error404NotFound(fmt.Sprintf("suite %q not found", suiteRef))
+				}
+				log.Error().Err(err).Str("skill", input.Name).Str("suite_ref", suiteRef).Msg("evalqueue: suite lookup failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+			if rec.SkillName != input.Name {
+				return nil, huma.Error404NotFound(fmt.Sprintf("suite %q belongs to skill %q, not %q", suiteRef, rec.SkillName, input.Name))
+			}
 		}
 
 		tier := input.Body.Tier
