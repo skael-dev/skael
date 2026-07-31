@@ -82,9 +82,14 @@ func main() {
 }
 
 // configFromEnv resolves and validates the worker's configuration from the
-// environment. It never falls back to a subscription agent CLI found on
-// PATH: a verified score must come from a reproducible, metered backend, and
-// the only such backend this binary knows about is the direct API gateway.
+// environment. ANTHROPIC_API_KEY wires the direct API gateway used for the
+// LLM judge, which is always the metered backend. It does not make panel
+// execution metered too: the claude-code agent adapter declares AuthDirs
+// (~/.claude, ~/.config/claude — see internal/eval/agent/claudecode) which
+// internal/eval/runner/session.go mounts into the sandbox, so a panel member
+// run through that adapter authenticates with whatever host credentials it
+// finds there — subscription-backed wherever those directories exist on the
+// host running this worker.
 func configFromEnv() (workerConfig, error) {
 	endpoint := os.Getenv("SKAEL_ENDPOINT")
 	apiKey := os.Getenv("SKAEL_API_KEY")

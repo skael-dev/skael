@@ -40,7 +40,7 @@ Three binaries from one Go module (`github.com/skael-dev/skael`):
 
 **`cmd/skael`** — CLI. Cobra commands, Lipgloss styling. Talks to the server API via `cli/client/`. Config at `~/.skael/config.json`, sync state at `~/.skael/state.json`.
 
-**`cmd/skael-worker`** — Eval queue worker. Polls `POST /api/eval/jobs/claim`, materialises a local whetstone workspace from the claimed job's skill bundle and suite, runs the evaluation against a Docker sandbox and the direct Anthropic API gateway (never a subscription CLI on PATH — a verified score has to come from a reproducible, metered backend), heartbeats the lease while running, and posts the report back. One poll loop, one job at a time per process; run more replicas for throughput. `checkAdapters` at startup asserts every agent adapter blank-import actually registered, since a forgotten import compiles clean but silently thins the panel.
+**`cmd/skael-worker`** — Eval queue worker. Polls `POST /api/eval/jobs/claim`, materialises a local whetstone workspace from the claimed job's skill bundle and suite, runs the evaluation against a Docker sandbox, heartbeats the lease while running, and posts the report back. The LLM judge always runs through the direct Anthropic API gateway (`ANTHROPIC_API_KEY`), never a subscription CLI on PATH. Panel execution is not the same guarantee: the claude-code agent adapter declares `AuthDirs: ["~/.claude", "~/.config/claude"]`, which `internal/eval/runner/session.go` mounts into every sandbox, so a panel member authenticates with whatever host credentials it finds there — subscription-backed wherever those directories exist on the worker's host. One poll loop, one job at a time per process; run more replicas for throughput. `checkAdapters` at startup asserts every agent adapter blank-import actually registered, since a forgotten import compiles clean but silently thins the panel.
 
 ### Package layout
 
@@ -126,7 +126,7 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 |---|---|---|---|
 | `SKAEL_ENDPOINT` | yes | — | Base URL of the Skael server the worker claims jobs from |
 | `SKAEL_API_KEY` | yes | — | API key the worker authenticates with |
-| `ANTHROPIC_API_KEY` | yes | — | Direct Anthropic API gateway key. The worker never falls back to a subscription CLI on PATH — a verified score has to come from a reproducible, metered backend |
+| `ANTHROPIC_API_KEY` | yes | — | Direct Anthropic API gateway key for the LLM judge, which never falls back to a subscription CLI on PATH. Panel execution is separate: agent adapters with `AuthDirs` (e.g. claude-code) mount host credential directories into the sandbox and are subscription-backed wherever those exist |
 | `WORKER_ID` | no | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | no | `5m` | How long a claimed job's lease lasts before it's considered abandoned (Go duration) |
 | `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
