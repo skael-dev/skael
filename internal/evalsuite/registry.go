@@ -128,8 +128,14 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 		return nil, fmt.Errorf("evalsuite: Put marshal checks: %w", err)
 	}
 
+	// A caller that marshals a nil Go value still produces the 4-byte JSON
+	// literal "null" rather than an empty byte slice, and storing that in the
+	// jsonb column round-trips as "spec": null on read — which fools
+	// unmarshalSuiteSpec into thinking a spec was provided. Normalize both
+	// "empty" and "null" to a real SQL NULL here so the column never holds
+	// the literal.
 	var specParam any
-	if len(specJSON) > 0 {
+	if len(specJSON) > 0 && string(bytes.TrimSpace(specJSON)) != "null" {
 		specParam = specJSON
 	} // else left nil -> NULL
 

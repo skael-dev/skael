@@ -172,10 +172,15 @@ func specFromBundle(bundleDir, skillName string) (*spec.SkillSpec, error) {
 }
 
 // unmarshalSuiteSpec decodes the JSON a suite record carries in its Spec
-// field. Returns (nil, nil) when specJSON is empty — "no spec recorded" is
-// not an error, callers fall back to specFromBundle for that case.
+// field. Returns (nil, nil) when specJSON is empty or the JSON literal null
+// — a jsonb column holding SQL NULL round-trips through encoding/json as the
+// 4-byte literal "null", not as an empty RawMessage, so both must be treated
+// as "no spec recorded". Without this, the literal null unmarshals into a
+// non-nil but empty *SkillSpec, Materialize takes the "spec provided" branch,
+// Validate() fails, and the job burns every retry instead of falling back to
+// specFromBundle.
 func unmarshalSuiteSpec(specJSON json.RawMessage) (*spec.SkillSpec, error) {
-	if len(specJSON) == 0 {
+	if len(specJSON) == 0 || string(bytes.TrimSpace(specJSON)) == "null" {
 		return nil, nil
 	}
 	var sp spec.SkillSpec

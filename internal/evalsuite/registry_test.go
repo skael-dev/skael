@@ -113,6 +113,35 @@ func TestRegistry_PutIsIdempotentOnRef(t *testing.T) {
 	}
 }
 
+// A caller that passes the JSON literal null as specJSON (e.g. a Go nil
+// marshaled through encoding/json, rather than an actually-omitted field)
+// must not have that literal stored in the spec column: read back later, it
+// would unmarshal into a non-nil, empty *SkillSpec instead of being treated
+// as "no spec recorded" — see internal/worker.unmarshalSuiteSpec.
+func TestRegistry_NormalizesJSONNullSpecToSQLNull(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	st := newTempStorage(t)
+	reg := evalsuite.NewRegistry(pool, st)
+	archive := fixtureSuiteArchive(t)
+	checks := []evalsuite.Check{{TaskID: "t1", OK: true}}
+
+	rec, err := reg.Put(ctx, "deploy-helper", archive, checks, 1, "nate@example.com", []byte("null"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Spec) != 0 {
+		t.Fatalf("rec.Spec = %q, want empty (JSON null must normalize to SQL NULL, not be stored literally)", rec.Spec)
+	}
+
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT spec FROM eval_suites WHERE ref = $1`, rec.Ref).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != nil {
+		t.Fatalf("spec column = %q, want SQL NULL", raw)
+	}
+}
+
 // The ref must be the content hash of the extracted suite, i.e. the same value
 // suite.Ref computes locally — otherwise a report's suite_ref can never match
 // the registry's and every score is unattributable.
