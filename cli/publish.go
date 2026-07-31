@@ -115,31 +115,36 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --skip-local-scan only skips this check; the server scans again and can
-	// still reject. --override is what actually gets past a blocking finding.
+	// The local scan exists to save an upload that the server would refuse.
+	// That is now a narrower set than "any blocking finding": an appealable
+	// finding is no longer a rejection, it is the review path. So decide
+	// locally with the *same* function the server uses — not a reimplemented
+	// threshold, which would drift — and abort only on a Block. Anything the
+	// server would hold gets sent, held, and reported as held.
+	//
+	// --skip-local-scan skips this check entirely; the server scans again and
+	// can still reject. --override is what gets a privileged user past a
+	// finding that would otherwise hold the version.
 	skipLocalScan := publishSkipLocalScan || publishForce
-	blockedSuggestion := "fix the findings above, publish with --skip-local-scan to send it to the review gate, " +
-		"or ask an owner or admin to publish with --override"
-	// Deciding locally costs nothing and keeps the advice honest: an
-	// unappealable finding is cleared by removing it and by nothing else, so
-	// pointing the publisher at --override would send them after a
-	// permission that cannot help them.
-	if gate.Decide(*report, nil, gate.Policy{}).Outcome == gate.Block {
-		blockedSuggestion = "remove the findings above: credential-theft and data-exfiltration " +
-			"findings are unappealable, and no override clears them"
-	}
+	localDecision := gate.Decide(*report, nil, gate.Policy{})
 
-	if (report.Status == "critical" || report.Status == "warn") && !skipLocalScan && !publishOverride {
+	if localDecision.Outcome == gate.Block && !skipLocalScan && !publishOverride {
 		if ui.JSONMode {
-			ui.PrintJSONError("security findings block publish", "scan_blocked", blockedSuggestion)
-			return nil
+			return encodeDecision(localDecision)
 		}
+		printUnappealable(localDecision)
 		ui.Error(ui.ErrorDetail{
-			Message:    "security findings block publish",
-			Suggestion: blockedSuggestion,
+			Message: "publish blocked: bundle contains unappealable findings",
 		})
 		return nil
 	}
+
+	if localDecision.Held() && !skipLocalScan && !publishOverride && !ui.JSONMode {
+		fmt.Fprintln(os.Stdout,
+			"  These findings do not block publishing, but they will hold the version for review.")
+	}
+
+	const blockedSuggestion = "fix the findings above, or ask an owner or admin to publish with --override"
 
 	// Pack the skill directory into a tar.gz archive
 	sp = StartSpinner("Packing archive...")
@@ -211,18 +216,9 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			// operator after a permission that cannot help.
 			if decision != nil && decision.Outcome == gate.Block {
 				if ui.JSONMode {
-					out := struct {
-						Decision gate.Decision `json:"decision"`
-					}{Decision: *decision}
-					enc := json.NewEncoder(os.Stdout)
-					enc.SetIndent("", "  ")
-					return enc.Encode(out)
+					return encodeDecision(*decision)
 				}
-				fmt.Fprintln(os.Stdout, "\n  Blocked — unappealable findings:")
-				for _, r := range decision.Reasons {
-					fmt.Fprintf(os.Stdout, "  %s:%d\t%s (%s, %s)\n    %s\n    Clears: %s\n",
-						r.File, r.Line, r.Rule, r.Class, r.Severity, r.Message, r.Clears)
-				}
+				printUnappealable(*decision)
 				ui.Error(ui.ErrorDetail{
 					Message: "publish blocked: archive contains unappealable findings",
 				})
@@ -327,4 +323,28 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
 	}
 	return nil
+}
+
+// printUnappealable renders a Block decision. Local and server-side blocks
+// share it so a publisher sees the same thing wherever the block was decided —
+// the two are the same verdict from the same function, and presenting them
+// differently would suggest they are appealable in different ways.
+func printUnappealable(d gate.Decision) {
+	fmt.Fprintln(os.Stdout, "\n  Blocked — unappealable findings:")
+	for _, r := range d.Reasons {
+		fmt.Fprintf(os.Stdout, "  %s:%d\t%s (%s, %s)\n    %s\n    Clears: %s\n",
+			r.File, r.Line, r.Rule, r.Class, r.Severity, r.Message, r.Clears)
+	}
+}
+
+// encodeDecision writes a decision as the sole key of a JSON object, matching
+// the shape the server returns on a 422 so a CI job can read
+// .decision.outcome without caring which side decided.
+func encodeDecision(d gate.Decision) error {
+	out := struct {
+		Decision gate.Decision `json:"decision"`
+	}{Decision: d}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }

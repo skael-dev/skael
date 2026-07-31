@@ -84,6 +84,8 @@ Every `skael publish` runs a security scan that checks for hardcoded secrets, pr
 
 **Held for review.** Everything else that blocks — dangerous execution, prompt injection, heuristic matches — creates the version but does not release it. The archive exists and has a version number, but `skills.latest_version` doesn't advance, so the skill never appears in the sync manifest, `skael add` reports it as not found, `skael sync` won't install it, and no client can download it. A held version clears one of two ways: a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel and no critical contract violations, or an explicit human decision — `skael review <name> <version> --approve --reason "..."`, owner or admin only, recorded server-side. An owner or admin can also short-circuit at publish time with `--override`.
 
+`skael publish` runs the same scan locally first and applies the same decision, so it can tell you before the upload rather than after. It aborts only on what the server would block outright; an appealable finding is sent, held, and reported as held. `--skip-local-scan` skips the local check entirely and lets the server decide.
+
 One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
 
 Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
