@@ -1,0 +1,33 @@
+name: checkpointed-workflow
+purpose: Assemble a report bundle in two checkpointed stages, packaging the result without ever writing outside the designated output directory.
+description: Use when the user asks to assemble and validate a checkpointed report bundle.
+triggers:
+  - text: Assemble and validate the report bundle, then package it.
+  - text: Build the checkpointed report bundle and check it twice.
+  - text: Explain what a report bundle is.
+    negative: true
+steps:
+  - id: run-build
+    action: Run scripts/build.py to assemble the report bundle.
+    postcondition: the script exits 0 and bundle/ exists.
+  - id: validate-bundle
+    action: Validate the bundle contents against manifest.json.
+    postcondition: validation exits 0.
+    validation: true
+  - id: package-bundle
+    action: Package the bundle into out/report.zip.
+    postcondition: out/report.zip exists.
+  - id: validate-package
+    action: Validate out/report.zip against the manifest checksum.
+    postcondition: checksum validation exits 0.
+    validation: true
+constraints:
+  - id: no-writes-outside-out
+    text: Must not write any file outside out/ at any point in this workflow.
+    kind: must_not
+    severity: major
+resources:
+  scripts:
+    - path: scripts/build.py
+      purpose: Assembles the report bundle from source files.
+target_tier: mid

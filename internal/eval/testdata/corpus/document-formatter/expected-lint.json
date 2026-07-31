@@ -1,0 +1,3 @@
+[
+  {"rule": "no-terminal-fallback", "severity": "warn", "file": "SKILL.md"}
+]

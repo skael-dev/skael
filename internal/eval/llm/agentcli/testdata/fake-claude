@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Stands in for the real `claude` binary. Records argv so the test can assert
+# which flags were passed, and emits whatever the test scripted.
+set -euo pipefail
+
+printf '%s\n' "$@" >> "${FAKE_CLAUDE_ARGV:-/dev/null}"
+
+case "${FAKE_CLAUDE_MODE:-ok}" in
+  ok)
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"ok\":true}","num_turns":1,"duration_ms":12,"modelUsage":{"claude-opus-5":{}}}'
+    ;;
+  api_error)
+    # The observed shape of a transient failure: subtype claims success.
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded. Try again."}'
+    exit 1
+    ;;
+  flaky)
+    # Fail the first call, succeed after. Uses the argv log to count attempts.
+    if [ "$(grep -c -- '-p' "${FAKE_CLAUDE_ARGV}" 2>/dev/null || echo 0)" -le 1 ]; then
+      printf '%s\n' '{"subtype":"success","is_error":true,"result":"API Error: 529 Overloaded."}'
+      exit 1
+    fi
+    printf '%s\n' '{"subtype":"success","is_error":false,"result":"{\"ok\":true}","modelUsage":{"claude-opus-5":{}}}'
+    ;;
+  garbage)
+    printf '%s\n' 'not json'
+    ;;
+  hang)
+    # Models a CLI whose script forks an external command — any real shell
+    # script does this for anything it shells out to — and that child hangs.
+    # Killing only this direct process, as exec.CommandContext's default
+    # cancellation does, leaves the child running and holding stdout/stderr
+    # open. This reproduces the bug the timeout-enforcement test pins.
+    sleep 30 &
+    wait
+    ;;
+  refusal)
+    # A policy refusal the CLI still treats as a handled, successful
+    # invocation: exit 0, but is_error true. The prose coincidentally
+    # mentions words ("timeout", "503") that must not be mistaken for the
+    # CLI's actual infrastructure-error shape ("API Error: <status>").
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"I cannot help with that request. If you are seeing a timeout or a 503 from your reverse proxy, check its configuration."}'
+    ;;
+  rate_limited)
+    # A genuine rate-limit failure in the CLI's real "API Error: <status>"
+    # shape, always failing so the test can count retry attempts.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"API Error: 429 Too Many Requests. Please retry after a short wait."}'
+    ;;
+  bad_model)
+    # A permanent failure: a typo'd flag or bad --model value, not an
+    # infrastructure fault. The process itself exits non-zero, but nothing
+    # in the result is a genuine transient signal, so this must never be
+    # retried no matter how many attempts remain.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"Error: unrecognized model \"claude-typo-9\". Check --model and try again."}'
+    exit 1
+    ;;
+  quoted_error)
+    # A refusal whose prose quotes the infrastructure-error shape without
+    # actually being one: the API Error text is not the first thing in the
+    # result, so the anchored classifier must not mistake it for the real
+    # thing.
+    printf '%s\n' '{"subtype":"success","is_error":true,"result":"Our support docs say: \"API Error: 503\" typically means your proxy is misconfigured; this has nothing to do with your request, which I am declining for policy reasons."}'
+    ;;
+  transport_fail)
+    # A transport-level failure: the process itself dies before writing any
+    # parseable envelope to stdout at all. The diagnostic lands on stderr,
+    # which is where the transient-failure check for this failure shape
+    # actually looks.
+    printf 'connection reset by peer while contacting the API\n' >&2
+    exit 1
+    ;;
+  usage_fail)
+    # A permanent failure that produces no parseable envelope either, just
+    # like transport_fail structurally (non-zero exit, nothing readable on
+    # stdout) — but the stderr text here is a rejected flag, not a transport
+    # signal, so this must never be retried.
+    printf 'error: unknown flag: --bogus-flag\nusage: claude [options]\n' >&2
+    exit 1
+    ;;
+esac

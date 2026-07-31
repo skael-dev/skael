@@ -1,0 +1,83 @@
+# Synthetic distractor pack used to measure trigger precision: a skill under
+# test must fire on its own positive prompts and stay silent for every entry
+# here, regardless of tier. Names are invented, not published skills, so
+# there is no licensing question and difficulty stays fully controlled.
+#
+# tier: near — adjacent-domain near-misses. These are the discriminating
+#   entries: plausible enough that a loosely-worded description could
+#   wrongly fire on them.
+# tier: mid  — related but clearly distinct in purpose or file format.
+# tier: far  — obviously unrelated domain.
+
+- name: csv-merge
+  description: Merges multiple CSV files into one, aligning columns by header name. Use when the user has several CSVs to combine.
+  tier: near
+- name: pdf-split
+  description: Splits a PDF into one file per page. Use when the user wants a multi-page PDF broken apart.
+  tier: near
+- name: pdf-form-filler
+  description: Fills the AcroForm fields of a PDF template from a JSON record. Use when the user has a fillable PDF form and structured data to populate it with.
+  tier: near
+- name: spreadsheet-cell-diff
+  description: Diffs two XLSX workbooks cell by cell and reports changed, added, and removed rows. Use when the user wants to compare two spreadsheet versions.
+  tier: near
+- name: json-schema-validator
+  description: Validates a JSON document against a JSON Schema and reports every violation with its path. Use when the user has JSON they want checked against a schema.
+  tier: near
+- name: markdown-toc-builder
+  description: Generates and inserts a table of contents into a Markdown document from its headings. Use when the user wants a TOC added to or refreshed in a Markdown file.
+  tier: near
+- name: scanned-image-ocr
+  description: Runs OCR over a scanned image or photo and returns the recognized text. Use when the user has an image of text they want transcribed.
+  tier: near
+- name: photo-table-to-csv
+  description: Extracts a tabular grid photographed or screenshotted from a page into a CSV file. Use when the user has a picture of a table and wants the data as CSV.
+  tier: near
+- name: docx-to-markdown
+  description: Converts Word documents to Markdown, preserving headings and tables. Use when the user has a .docx to convert.
+  tier: mid
+- name: epub-metadata-editor
+  description: Reads and rewrites the title, author, and cover metadata embedded in an EPUB file. Use when the user wants to correct an ebook's metadata.
+  tier: mid
+- name: log-file-summarizer
+  description: Summarizes a large application log file into an error and warning digest with counts and first/last timestamps. Use when the user has a log file they want condensed.
+  tier: mid
+- name: sql-query-formatter
+  description: Reformats and lints SQL queries to a consistent style, flagging ambiguous joins. Use when the user pastes SQL they want cleaned up.
+  tier: mid
+- name: yaml-json-converter
+  description: Converts configuration files between YAML and JSON, preserving key order and comments where possible. Use when the user needs a config file in the other format.
+  tier: mid
+- name: git-changelog-generator
+  description: Generates a grouped changelog from git commit history between two tags. Use when the user wants release notes drafted from commits.
+  tier: mid
+- name: openapi-mock-server
+  description: Spins up a local mock HTTP server that serves canned responses from an OpenAPI specification. Use when the user wants to develop against an API before it exists.
+  tier: mid
+- name: dependency-license-auditor
+  description: Scans a project's dependency tree and reports each package's license, flagging any that are not on an allowed list. Use when the user needs a license compliance report.
+  tier: mid
+- name: git-bisect-helper
+  description: Automates git bisect against a test command to find the commit that introduced a failure.
+  tier: far
+- name: docker-compose-linter
+  description: Lints docker-compose.yml files for common misconfigurations like missing health checks or unpinned image tags. Use when the user wants their compose file reviewed.
+  tier: far
+- name: cron-expression-explainer
+  description: Explains, in plain English, when a cron expression will next run. Use when the user pastes a cron schedule and wants to know what it means.
+  tier: far
+- name: regex-plain-english-explainer
+  description: Explains what a regular expression matches, term by term, in plain English. Use when the user has a regex they want explained rather than debugged.
+  tier: far
+- name: currency-rate-converter
+  description: Converts an amount between currencies using a fetched exchange rate. Use when the user wants a monetary value converted between currencies.
+  tier: far
+- name: meeting-time-scheduler
+  description: Finds a shared free time slot across several people's calendars and drafts an invite. Use when the user wants to schedule a meeting across multiple attendees.
+  tier: far
+- name: weather-alert-notifier
+  description: Checks a location's forecast and sends a notification when severe weather is expected. Use when the user wants to be warned about upcoming severe weather.
+  tier: far
+- name: podcast-transcript-summarizer
+  description: Summarizes a podcast episode transcript into key points with timestamps. Use when the user has a podcast transcript they want condensed.
+  tier: far

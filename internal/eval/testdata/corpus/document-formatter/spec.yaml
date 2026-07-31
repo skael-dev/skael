@@ -1,0 +1,26 @@
+name: document-formatter
+purpose: Format a draft document into the house style, using a fixed style guide and report template.
+description: Use when the user asks to format a document against the house style guide.
+triggers:
+  - text: Format this draft to match our house style guide.
+  - text: Apply the style guide to this document and produce a report.
+  - text: Proofread this document for grammar mistakes.
+    negative: true
+steps:
+  - id: read-style-guide
+    action: Read references/style-guide.md.
+    postcondition: the style rules for headings, lists, and code blocks are loaded.
+  - id: apply-style
+    action: Apply the style rules and fill assets/report.tmpl.
+    postcondition: the rendered report exits 0 from the template linter.
+  - id: write-report
+    action: Write the rendered report to out/report.md.
+    postcondition: out/report.md exists and matches the template's section order.
+resources:
+  references:
+    - path: references/style-guide.md
+      purpose: House style rules for headings, lists, and code blocks.
+  assets:
+    - path: assets/report.tmpl
+      purpose: Report template with title, summary, and details sections.
+target_tier: floor

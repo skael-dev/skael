@@ -84,6 +84,25 @@ Every agent that uses a skill reports activation events back to the platform. `s
 
 Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation; the Cursor hook scans a session transcript afterwards and matches skill files that were referenced. The first misses skills that were read but never invoked, the second may count skills that were only read — so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
 
+## whetstone: authoring and linting skills
+
+`whetstone` is a separate, standalone CLI for drafting and linting skills before they're published. It's not the registry client — that's `skael` — and it works entirely on local files, with no server required.
+
+```bash
+whetstone init                    # create a .whetstone workspace in the current directory
+whetstone doctor                  # check the agent CLI, LLM gateway, and sandbox runtime
+whetstone new "<intent>"          # interview, generate, lint, and evaluate a new skill from a plain-language intent
+whetstone spec show my-skill      # print the latest stored spec
+whetstone spec edit my-skill      # edit a spec and store the result as a new version
+whetstone spec approve my-skill   # mark the latest stored spec version approved
+whetstone gen my-skill            # regenerate a skill bundle from its approved spec
+whetstone lint my-skill           # run spec conformance, quality, and injection lint over a bundle
+whetstone suite gen my-skill      # generate and write the evaluation suite for a skill
+whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
+```
+
+Evaluation and scoring are **not implemented yet** — `whetstone` can generate a suite and lint a bundle, but it does not run skills against a model panel or produce a score. Treat any mention of scoring as forward-looking, not available today.
+
 ## Development
 
 Requires: Go 1.25+, Docker, [just](https://github.com/casey/just)
