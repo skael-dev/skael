@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,12 +26,8 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
-	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
-	"github.com/skael-dev/skael/internal/quality"
-	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
-	gosync "github.com/skael-dev/skael/internal/sync"
 	skweb "github.com/skael-dev/skael/web"
 )
 
@@ -209,98 +204,23 @@ func (b *Builder) Build() (*Server, error) {
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
-	// 10. Register health endpoint (auth middleware skips /api/health).
-	huma.Register(api, huma.Operation{
-		OperationID: "health",
-		Method:      http.MethodGet,
-		Path:        "/api/health",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct {
-			Status string `json:"status"`
-		}
-	}, error) {
-		out := &struct {
-			Body struct {
-				Status string `json:"status"`
-			}
-		}{}
-		out.Body.Status = "ok"
-		return out, nil
+	// 10. Register all /api/* routes (health, capabilities, readiness, auth,
+	// skills, sync manifest, analytics, import, eval suites, eval queue,
+	// quality). This is the same registration path `skael-server --openapi`
+	// uses, so the generated spec cannot drift from what the real server
+	// serves — see internal/server/routes.go.
+	RegisterAPIRoutes(api, router, RegisterAPIDeps{
+		Pool:           b.pool,
+		Config:         cfg,
+		SessionManager: sessionManager,
+		UserStore:      userStore,
+		KeyStore:       keyStore,
+		Storage:        storage,
+		Caps:           b.caps,
 	})
 
-	// 10a. Register capabilities endpoint.
-	b.caps.Register(api)
-
-	// 10b. Readiness: verifies DB and storage connectivity. Liveness stays on
-	// /api/health (static) so orchestrators don't restart pods on DB blips.
-	type readyBody struct {
-		Status string      `json:"status"`
-		Checks ReadyChecks `json:"checks"`
-	}
-	huma.Register(api, huma.Operation{
-		OperationID: "health-ready",
-		Method:      http.MethodGet,
-		Path:        "/api/health/ready",
-	}, func(ctx context.Context, _ *struct{}) (*struct{ Body readyBody }, error) {
-		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		checks, ready := readinessChecks(checkCtx, b.pool, storage)
-		if !ready {
-			detail, _ := json.Marshal(checks)
-			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
-		}
-		out := &struct{ Body readyBody }{}
-		out.Body.Status = "ready"
-		out.Body.Checks = checks
-		return out, nil
-	})
-
-	// 11. Register auth routes.
-	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, cfg.DisableSignup)
-
-	// 12. Register skill routes. An opt-in external scanner (EXTERNAL_SCAN_CMD)
-	// is merged into the publish/import security scan when configured. The
-	// eval queue and suite registry are constructed here (ahead of their own
-	// route registration below) because publish needs them to enqueue an
-	// evaluation for a skill that has a registered suite.
-	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
-	if externalScanner != nil {
-		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
-	}
-	skillStore := skill.NewStore(b.pool)
-	evalPool := evalqueue.NewPool(b.pool)
-	qualityStore := quality.NewStore(b.pool)
-	suiteRegistry := evalsuite.NewRegistry(b.pool, storage)
-	skill.RegisterRoutes(api, router, skillStore, storage, skill.RouteOptions{
-		External: externalScanner,
-		Queue:    evalQueueAdapter{q: evalPool},
-		Suites:   evalSuiteAdapter{r: suiteRegistry},
-	})
-
-	// 13. Register sync manifest route.
-	syncStore := gosync.NewStore(b.pool)
-	huma.Register(api, huma.Operation{
-		OperationID: "get-manifest",
-		Method:      http.MethodGet,
-		Path:        "/api/sync/manifest",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body []gosync.ManifestEntry
-	}, error) {
-		entries, err := syncStore.GetManifest(ctx)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("", err)
-		}
-		return &struct {
-			Body []gosync.ManifestEntry
-		}{Body: entries}, nil
-	})
-
-	// 14. Register analytics routes.
+	// 10a. Run event retention cleanup on startup.
 	analyticsStore := analytics.NewStore(b.pool)
-	analytics.RegisterRoutes(api, analyticsStore)
-
-	// 14a. Run event retention cleanup on startup.
 	if cfg.EventRetentionDays > 0 {
 		deleted, err := analyticsStore.CleanupOldEvents(context.Background(), cfg.EventRetentionDays)
 		if err != nil {
@@ -310,27 +230,7 @@ func (b *Builder) Build() (*Server, error) {
 		}
 	}
 
-	// 15. Register import routes.
-	importStore := skillimport.NewStore(b.pool)
-	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
-	skillimport.RegisterRoutes(api, router, importStore, skillStore, storage, importFetcher, skillimport.RouteOptions{
-		External: externalScanner,
-		Queue:    evalPool,
-		Suites:   suiteRegistry,
-	})
-
-	// 15a. Register eval suite registry routes. suiteRegistry was constructed
-	// above, alongside evalPool, so skill.RegisterRoutes could enqueue.
-	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
-
-	// 15b. Register the eval job queue. The server enqueues and ingests; it
-	// never holds a Docker socket or an LLM key — those live on the worker.
-	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry)
-
-	// 15c. Register read-only quality endpoints: latest score and history.
-	quality.RegisterRoutes(api, qualityStore, skillStore)
-
-	// 16. Register extra routes from enterprise plugins.
+	// 11. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {
 		reg(api, router, b.pool)
 	}

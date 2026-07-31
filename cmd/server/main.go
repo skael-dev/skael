@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -13,13 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
-	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
-	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/server"
-	"github.com/skael-dev/skael/internal/skill"
-	gosync "github.com/skael-dev/skael/internal/sync"
 )
 
 var (
@@ -144,59 +139,18 @@ func resetPassword(args []string) {
 	fmt.Println(tempPass)
 }
 
+// printOpenAPISpec builds a throwaway Huma API with no live database or
+// storage and registers every route through server.RegisterAPIRoutes — the
+// same function Builder.Build uses for the real server — so the generated
+// spec (web/openapi.json, and the TS SDK generated from it) cannot drift
+// from what the server actually serves. All RegisterAPIDeps fields are left
+// nil/zero: route registration only needs types, not live data.
 func printOpenAPISpec() {
 	router := chi.NewMux()
 	config := huma.DefaultConfig("Skael API", "1.0.0")
 	api := humachi.New(router, config)
 
-	auth.RegisterRoutes(api, nil, nil, nil, false)
-	skill.RegisterRoutes(api, router, nil, nil, skill.RouteOptions{})
-	analytics.RegisterRoutes(api, nil)
-	skillimport.RegisterRoutes(api, router, nil, nil, nil, nil, skillimport.RouteOptions{})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "get-manifest",
-		Method:      http.MethodGet,
-		Path:        "/api/sync/manifest",
-	}, func(_ context.Context, _ *struct{}) (*struct {
-		Body []gosync.ManifestEntry
-	}, error) {
-		return nil, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "health",
-		Method:      http.MethodGet,
-		Path:        "/api/health",
-	}, func(_ context.Context, _ *struct{}) (*struct {
-		Body struct {
-			Status string `json:"status"`
-		}
-	}, error) {
-		return nil, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "health-ready",
-		Method:      http.MethodGet,
-		Path:        "/api/health/ready",
-	}, func(_ context.Context, _ *struct{}) (*struct {
-		Body struct {
-			Status string `json:"status"`
-		}
-	}, error) {
-		return nil, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "get-capabilities",
-		Method:      http.MethodGet,
-		Path:        "/api/capabilities",
-	}, func(_ context.Context, _ *struct{}) (*struct {
-		Body server.CapabilitiesResponse
-	}, error) {
-		return nil, nil
-	})
+	server.RegisterAPIRoutes(api, router, server.RegisterAPIDeps{})
 
 	spec, err := json.MarshalIndent(api.OpenAPI(), "", "  ")
 	if err != nil {
