@@ -52,6 +52,12 @@ type Job struct {
 	LastError    string
 	RequestedBy  string
 	CreatedAt    time.Time
+	// StartedAt is when the job first entered `running`. It is set once and
+	// never moved: a retry re-claims the same job and elapsed time is
+	// measured from when the work began, not from the latest attempt.
+	// Elapsed cannot be derived from LeaseExpiresAt, which every heartbeat
+	// pushes forward.
+	StartedAt *time.Time
 }
 
 // Executor submits and cancels eval jobs.

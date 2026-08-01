@@ -296,6 +296,90 @@ func TestReapExpired_DoesNotTouchAJobWithRetriesRemaining(t *testing.T) {
 	}
 }
 
+func TestQueuePosition_CountsOnlyEarlierQueuedJobs(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+
+	submit := func(name string) evalqueue.JobID {
+		id, err := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: name, Version: 1, SuiteRef: "r"})
+		if err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return id
+	}
+
+	first := submit("skill-a")
+	second := submit("skill-b")
+	third := submit("skill-c")
+
+	for _, tc := range []struct {
+		id   evalqueue.JobID
+		want int
+	}{
+		{first, 0}, {second, 1}, {third, 2},
+	} {
+		got, err := q.QueuePosition(ctx, tc.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Fatalf("position = %d, want %d", got, tc.want)
+		}
+	}
+
+	// A claimed job is running, not queued: it has no position, and it must
+	// not still be counted ahead of the jobs behind it.
+	if _, _, ok, err := q.Claim(ctx, "worker-1", time.Minute); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	got, err := q.QueuePosition(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("position after the job ahead was claimed = %d, want 0", got)
+	}
+}
+
+func TestClaim_SetsStartedAtOnceAndOnlyOnce(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	id, err := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r"})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if _, _, ok, err := q.Claim(ctx, "worker-1", time.Millisecond*50); err != nil || !ok {
+		t.Fatalf("first claim: ok=%v err=%v", ok, err)
+	}
+	j, err := q.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.StartedAt == nil {
+		t.Fatal("StartedAt is nil after a claim")
+	}
+	first := *j.StartedAt
+
+	// Let the lease lapse so the job is reclaimable, then reclaim it. A retry
+	// must not reset StartedAt: elapsed time is measured from when the work
+	// first began, and resetting it hides a job that has been retrying for
+	// an hour.
+	time.Sleep(100 * time.Millisecond)
+	if _, _, ok, err := q.Claim(ctx, "worker-2", time.Minute); err != nil || !ok {
+		t.Fatalf("reclaim: ok=%v err=%v", ok, err)
+	}
+	j, err = q.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !j.StartedAt.Equal(first) {
+		t.Fatalf("StartedAt moved on reclaim: %v -> %v", first, *j.StartedAt)
+	}
+}
+
 func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	q := evalqueue.NewPool(pool)

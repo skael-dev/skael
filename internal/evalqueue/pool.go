@@ -58,7 +58,7 @@ func (p *PoolExecutor) WithExecutor(e DBExecutor) *PoolExecutor {
 // order. Claim's UPDATE ... RETURNING (a later task) returns the same list.
 const jobColumns = `id, skill_id, skill_name, version, suite_ref, tier, panel,
 	status, attempts, max_attempts, worker_id, lease_expires_at, lease_seconds,
-	last_error, requested_by, created_at`
+	last_error, requested_by, created_at, started_at`
 
 // row is the subset of pgx.Row/pgx.Rows that Scan needs.
 type row interface {
@@ -73,7 +73,7 @@ func scanJob(r row) (*Job, error) {
 	err := r.Scan(
 		&id, &skillID, &j.SkillName, &j.Version, &j.SuiteRef, &j.Tier, &panelJSON,
 		&j.Status, &j.Attempts, &j.MaxAttempts, &j.WorkerID, &j.LeaseExpiresAt, &j.LeaseSeconds,
-		&j.LastError, &j.RequestedBy, &j.CreatedAt,
+		&j.LastError, &j.RequestedBy, &j.CreatedAt, &j.StartedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -197,6 +197,7 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		    lease_expires_at = now() + make_interval(secs => $2),
 		    lease_seconds = $2,
 		    claim_token_hash = $3,
+		    started_at = COALESCE(j.started_at, now()),
 		    updated_at = now()
 		FROM claimable c
 		WHERE j.id = c.claim_id
@@ -210,6 +211,27 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		return nil, "", false, fmt.Errorf("evalqueue: claim: %w", err)
 	}
 	return j, token, true, nil
+}
+
+// QueuePosition reports how many queued jobs sit ahead of id, so the UI can
+// say "position 3" instead of showing a spinner for the 45-90 minutes an eval
+// takes. It returns 0 for a job that is not queued - running, done, failed or
+// absent - because a position is only meaningful while waiting.
+//
+// It is a hint, not a promise: concurrency and retries move it.
+func (p *PoolExecutor) QueuePosition(ctx context.Context, id JobID) (int, error) {
+	var pos int
+	err := p.db.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM eval_jobs ahead
+		WHERE ahead.status = 'queued'
+		  AND ahead.created_at < (
+		      SELECT created_at FROM eval_jobs WHERE id = $1 AND status = 'queued'
+		  )`, string(id)).Scan(&pos)
+	if err != nil {
+		return 0, fmt.Errorf("evalqueue: queue position: %w", err)
+	}
+	return pos, nil
 }
 
 // Heartbeat extends the lease only while this worker still owns the job and

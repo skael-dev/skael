@@ -40,14 +40,20 @@ type jobOutput struct {
 	// a worker claiming this job over HTTP has no way to learn which panel
 	// was asked for and silently falls back to its own default — defeating
 	// the point of the re-run endpoint's agents/models parameters.
-	Agents      []string `json:"agents,omitempty"`
-	Models      []string `json:"models,omitempty"`
-	Status      string   `json:"status"`
-	Attempts    int      `json:"attempts"`
-	MaxAttempts int      `json:"max_attempts"`
-	WorkerID    string   `json:"worker_id,omitempty"`
-	LastError   string   `json:"last_error,omitempty"`
-	RequestedBy string   `json:"requested_by,omitempty"`
+	Agents      []string   `json:"agents,omitempty"`
+	Models      []string   `json:"models,omitempty"`
+	Status      string     `json:"status"`
+	Attempts    int        `json:"attempts"`
+	MaxAttempts int        `json:"max_attempts"`
+	WorkerID    string     `json:"worker_id,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+	RequestedBy string     `json:"requested_by,omitempty"`
+	EnqueuedAt  time.Time  `json:"enqueued_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	// QueuePosition is how many queued jobs are ahead of this one, and 0
+	// whenever the job is not queued. It is a hint: retries and concurrency
+	// move it, so the UI shows a position and never an ETA.
+	QueuePosition int `json:"queue_position"`
 }
 
 func toJobOutput(j *Job) jobOutput {
@@ -66,6 +72,8 @@ func toJobOutput(j *Job) jobOutput {
 		WorkerID:    j.WorkerID,
 		LastError:   j.LastError,
 		RequestedBy: j.RequestedBy,
+		EnqueuedAt:  j.CreatedAt,
+		StartedAt:   j.StartedAt,
 	}
 }
 
@@ -290,7 +298,61 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		if j == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("job %q not found", input.ID))
 		}
-		return &getJobOutput{Body: toJobOutput(j)}, nil
+		out := toJobOutput(j)
+		if j.Status == StatusQueued {
+			pos, err := q.QueuePosition(ctx, j.ID)
+			if err != nil {
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: queue position failed")
+				return nil, huma.Error500InternalServerError("get eval job: internal error")
+			}
+			out.QueuePosition = pos
+		}
+		return &getJobOutput{Body: out}, nil
+	})
+
+	type skillEvalsInput struct {
+		Name string `path:"name"`
+	}
+	type skillEvalsBody struct {
+		Jobs []jobOutput `json:"jobs"`
+	}
+	type skillEvalsOutput struct {
+		Body skillEvalsBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "list-skill-evals",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/evals",
+		Summary:     "List eval jobs for a skill, newest first",
+	}, func(ctx context.Context, input *skillEvalsInput) (*skillEvalsOutput, error) {
+		sk, err := skills.GetByName(ctx, input.Name)
+		if err != nil {
+			log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: get skill failed")
+			return nil, huma.Error500InternalServerError("list skill evals: internal error")
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
+		jobs, err := q.ListBySkill(ctx, sk.ID)
+		if err != nil {
+			log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: list skill evals failed")
+			return nil, huma.Error500InternalServerError("list skill evals: internal error")
+		}
+		out := skillEvalsBody{Jobs: make([]jobOutput, 0, len(jobs))}
+		for i := range jobs {
+			j := &jobs[i]
+			o := toJobOutput(j)
+			if j.Status == StatusQueued {
+				pos, err := q.QueuePosition(ctx, j.ID)
+				if err != nil {
+					log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: queue position failed")
+					return nil, huma.Error500InternalServerError("list skill evals: internal error")
+				}
+				o.QueuePosition = pos
+			}
+			out.Jobs = append(out.Jobs, o)
+		}
+		return &skillEvalsOutput{Body: out}, nil
 	})
 
 	huma.Register(api, huma.Operation{
