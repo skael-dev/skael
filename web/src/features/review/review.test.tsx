@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -124,6 +125,29 @@ describe("ReviewQueue", () => {
     mockReviewQueue([oneHeld({ clears: "an owner or admin approval" })]);
     render(withQuery(<ReviewQueue />));
     expect(await screen.findByRole("button", { name: /approve/i })).toBeEnabled();
+  });
+
+  it("sends the held version's own version number when running an eval, not the latest", async () => {
+    mockReviewQueue([oneHeld({ clears: "a verified evaluation" })]);
+    let capturedBody: unknown;
+    server.use(
+      http.post("/api/skills/:name/evals", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ id: "job-1", status: "queued" });
+      }),
+    );
+    render(withQuery(<ReviewQueue />));
+    const button = await screen.findByRole("button", { name: /run eval/i });
+    await userEvent.click(button);
+    expect(capturedBody).toEqual({ version: 4 });
+  });
+
+  it("does not enable run eval for a non-privileged member", async () => {
+    mockUser({ role: "member" });
+    mockReviewQueue([oneHeld({ clears: "an owner or admin approval" })]);
+    render(withQuery(<ReviewQueue />));
+    const button = await screen.findByRole("button", { name: /run eval/i });
+    expect(button).toBeDisabled();
   });
 
   it("reads as clear, not empty, when nothing is held", async () => {

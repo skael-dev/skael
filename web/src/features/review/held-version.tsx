@@ -49,6 +49,7 @@ export function HeldVersion({
   const qc = useQueryClient();
   const { run, isPending: evalPending, isError: evalError, error: evalErr } = useRunEval(
     held.skill_name,
+    held.version,
   );
 
   const decide = useMutation({
@@ -104,7 +105,8 @@ export function HeldVersion({
         <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={run}
-            disabled={evalPending}
+            disabled={!canDecide || evalPending}
+            title={!canDecide ? decideDisabledReason : undefined}
             className="text-xs text-accent hover:underline disabled:opacity-50"
           >
             {evalPending ? "Queueing…" : "Run eval"}

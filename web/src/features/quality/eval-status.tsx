@@ -2,9 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { listSkillEvals } from "@/api/sdk.gen";
 import type { QualitySummary } from "@/api/types.gen";
+import { useAuth } from "@/app/auth-provider";
 import { useRunEval } from "./use-run-eval";
 
 const ACTIVE = new Set(["queued", "running"]);
+
+// Enqueuing an eval is owner/admin only server-side (rerun-eval is gated on
+// u.IsPrivileged() in internal/evalqueue/routes.go) — mirrored here so a
+// member sees why the button is disabled rather than a 403 after clicking.
+const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
+const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
 
 function elapsed(since: string): string {
   const mins = Math.floor((Date.now() - new Date(since).getTime()) / 60_000);
@@ -22,6 +29,8 @@ export function EvalStatus({
   quality?: QualitySummary | null;
   latestVersion: number;
 }) {
+  const { user } = useAuth();
+  const canRun = user != null && RUN_EVAL_ROLES.has(user.role);
   const { run, isPending, isError, error } = useRunEval(skillName);
   const evalsQuery = useQuery({
     queryKey: ["skill-evals", skillName],
@@ -75,11 +84,13 @@ export function EvalStatus({
       )}
       <button
         onClick={run}
-        disabled={isPending}
+        disabled={!canRun || isPending}
+        title={!canRun ? RUN_EVAL_DISABLED_REASON : undefined}
         className="text-accent hover:underline disabled:opacity-50"
       >
         {isPending ? "Queueing…" : label}
       </button>
+      {!canRun && <span className="text-text-tertiary">{RUN_EVAL_DISABLED_REASON}</span>}
       {isError && (
         <span className="text-xs text-danger flex items-center gap-1">
           <AlertTriangle size={12} />

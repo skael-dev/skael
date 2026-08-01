@@ -150,7 +150,7 @@ function PanelMatrixTable({ data }: { data: unknown }) {
                   <td className="px-3 py-1.5 font-mono text-text-primary">
                     {unhealthy
                       ? "—"
-                      : measurement(entry.effectiveness, (v) => String(v))}
+                      : measurement(entry.effectiveness, formatDriftScale)}
                   </td>
                   <td className="px-3 py-1.5 text-text-primary">
                     {entry.drift_grade ?? "not measured"}
@@ -376,11 +376,11 @@ export function QualityReport({
       <div className="mb-6">
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="text-3xl font-mono text-text-primary">
-            {summary.headline_score}
+            {Math.round(summary.headline_score)}
           </span>
           {summary.headline_ci_low != null && summary.headline_ci_high != null && (
             <span className="text-xs text-text-secondary">
-              CI {summary.headline_ci_low}–{summary.headline_ci_high}
+              CI {Math.round(summary.headline_ci_low)}–{Math.round(summary.headline_ci_high)}
             </span>
           )}
         </div>
@@ -397,7 +397,7 @@ export function QualityReport({
       <div className="mb-6">
         <h3 className="text-sm font-medium text-text-primary mb-2">Robustness gap</h3>
         <div className="text-sm text-text-secondary">
-          {measurement(summary.robustness_gap, (v) => String(v))}
+          {measurement(summary.robustness_gap, formatDriftScale)}
         </div>
       </div>
 

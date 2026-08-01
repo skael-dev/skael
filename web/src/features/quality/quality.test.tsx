@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { AuthProvider } from "@/app/auth-provider";
 import { server } from "@/test/handlers";
 import { QualityBadge } from "./quality-badge";
 import { EvalStatus } from "./eval-status";
@@ -61,7 +62,11 @@ describe("QualityBadge", () => {
 
 function withQuery(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={qc}>
+      <AuthProvider>{ui}</AuthProvider>
+    </QueryClientProvider>
+  );
 }
 
 function mockEvals(jobs: Partial<JobOutput>[]) {
@@ -210,7 +215,9 @@ describe("QualityReport", () => {
       suite_ref: "sha256:abcdef0123456789",
     });
     render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
-    expect(await screen.findByText(/74\.2/)).toBeInTheDocument();
+    // Headline renders rounded, matching the badge (Math.round), not the
+    // raw geometric-mean float.
+    expect(await screen.findByText("74")).toBeInTheDocument();
     expect(screen.getByText(/70.*78/)).toBeInTheDocument();
     expect(screen.getByText(/6\.5/)).toBeInTheDocument();
     expect(screen.getByText("B")).toBeInTheDocument();
@@ -287,13 +294,13 @@ describe("QualityReport", () => {
         {
           member: { agent: "claude-code", model: "strong" },
           pillars: { TriggerF1: 0.9 },
-          effectiveness: 0.82,
+          effectiveness: 82.4,
           drift_grade: "A",
           healthy: true,
         },
         {
           member: { agent: "codex", model: "floor" },
-          effectiveness: 0.1,
+          effectiveness: 10.1,
           drift_grade: "D",
           healthy: false,
           detail: "sandbox crashed on task 3",
@@ -308,7 +315,11 @@ describe("QualityReport", () => {
     // effectiveness number.
     expect(screen.getByText(/unhealthy/i)).toBeInTheDocument();
     expect(screen.getByText(/sandbox crashed on task 3/)).toBeInTheDocument();
-    expect(screen.queryByText(/^0\.1$/)).not.toBeInTheDocument();
+    // 0-100 scale, formatted via the same formatDriftScale used elsewhere
+    // in this file — not a bare String(v) and not a [0,1] percentage.
+    expect(screen.getByText("82.4")).toBeInTheDocument();
+    expect(screen.queryByText(/^10\.1$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("8240.0%")).not.toBeInTheDocument();
   });
 
   // pillar_breakdown is keyed "agent/model" (memberKey, ingest.go:189); its

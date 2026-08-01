@@ -46,8 +46,8 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
     return (
       <div className="text-[11px] text-text-secondary">
         One score so far — not enough to plot a trend.{" "}
-        <span data-point title={`v${p.version} · ${p.headline_score}`}>
-          v{p.version} · {p.headline_score}
+        <span data-point title={`v${p.version} · ${Math.round(p.headline_score)}`}>
+          v{p.version} · {Math.round(p.headline_score)}
         </span>
       </div>
     );
@@ -78,7 +78,7 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
             r={3}
             fill="var(--color-chart-1, currentColor)"
           >
-            <title>{`v${p.version} · ${p.headline_score}`}</title>
+            <title>{`v${p.version} · ${Math.round(p.headline_score)}`}</title>
           </circle>
         ))}
       </svg>

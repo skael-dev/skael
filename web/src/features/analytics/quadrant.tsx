@@ -10,10 +10,18 @@ import {
   YAxis,
 } from "recharts";
 import { analyticsSkills } from "@/api/sdk.gen";
-import { rerunEval } from "@/api/sdk.gen";
 import type { SkillAnalytics } from "@/api/types.gen";
+import { useAuth } from "@/app/auth-provider";
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { QualityBadge } from "@/features/quality/quality-badge";
+import { useRunEval } from "@/features/quality/use-run-eval";
+
+// Enqueuing an eval is owner/admin only server-side (rerun-eval is gated on
+// u.IsPrivileged() in internal/evalqueue/routes.go) — mirrored here so a
+// member sees why the button is disabled rather than a silently swallowed
+// 403.
+const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
+const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
 
 // analytics/skills' `limit` maxes at 100 server-side (internal/analytics/routes.go).
 const MAX_LIMIT = 100;
@@ -39,13 +47,24 @@ export function median(values: number[]): number {
 }
 
 function RunEvalButton({ skillName }: { skillName: string }) {
+  const { user } = useAuth();
+  const canRun = user != null && RUN_EVAL_ROLES.has(user.role);
+  const { run, isPending, isError, error } = useRunEval(skillName);
+
   return (
-    <button
-      onClick={() => rerunEval({ path: { name: skillName }, body: {} })}
-      className="text-[11px] text-accent hover:underline shrink-0"
-    >
-      Run eval
-    </button>
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        onClick={run}
+        disabled={!canRun || isPending}
+        title={!canRun ? RUN_EVAL_DISABLED_REASON : undefined}
+        className="text-[11px] text-accent hover:underline shrink-0 disabled:opacity-50"
+      >
+        {isPending ? "Queueing…" : "Run eval"}
+      </button>
+      {isError && (
+        <span className="text-[11px] text-danger">{error?.message ?? "Failed to queue eval"}</span>
+      )}
+    </span>
   );
 }
 
