@@ -152,13 +152,16 @@ func (s *Store) LatestAcrossVersions(ctx context.Context, skillID string) (*Reco
 }
 
 // GetVersion returns the score for one specific version, including the full
-// stored report. Returns (nil, nil) when that version has never been scored.
+// stored report. Ordered by scored_at with id as a deterministic tiebreak
+// (see Latest) so re-fetching one version cannot return different rows on
+// different requests. Returns (nil, nil) when that version has never been
+// scored.
 func (s *Store) GetVersion(ctx context.Context, skillID string, version int) (*Record, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT `+getVersionColumns+`
 		FROM skill_quality
 		WHERE skill_id = $1 AND version = $2
-		ORDER BY scored_at DESC
+		ORDER BY scored_at DESC, id DESC
 		LIMIT 1`, skillID, version)
 
 	rec, err := scanRecordWithReport(row)
