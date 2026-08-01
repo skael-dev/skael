@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ShieldQuestion } from "lucide-react";
 import { reviewSkillVersion } from "@/api/sdk.gen";
-import type { HeldVersion as HeldVersionType, Reason, ScanReport } from "@/api/types.gen";
-import { ScanFindings } from "@/features/security/scan-findings";
+import type { HeldVersion as HeldVersionType, Reason } from "@/api/types.gen";
+import { ScanFindings, type ScanReport } from "@/features/security/scan-findings";
 import { useRunEval } from "@/features/quality/use-run-eval";
 
 // The gate's own decision shape isn't in the generated types beyond

@@ -41,7 +41,8 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
   }
 
   if (pts.length === 1) {
-    const p = pts[0];
+    const [p] = pts;
+    if (!p) return null;
     return (
       <div className="text-[11px] text-text-secondary">
         One score so far — not enough to plot a trend.{" "}

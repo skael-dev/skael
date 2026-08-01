@@ -29,7 +29,13 @@ export function median(values: number[]): number {
   // Even count: average the two middle values. Odd count: the middle value
   // itself. With one point, sorted.length === 1 and mid === 0, so this
   // returns that single point's activation count rather than NaN.
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  // sorted.length > 0 is guaranteed by the early return above, so mid (and
+  // mid - 1 for the even branch) are always in bounds; the `?? 0` fallbacks
+  // are unreachable but satisfy noUncheckedIndexedAccess honestly.
+  if (sorted.length % 2 === 1) return sorted[mid] ?? 0;
+  const lower = sorted[mid - 1] ?? 0;
+  const upper = sorted[mid] ?? 0;
+  return (lower + upper) / 2;
 }
 
 function RunEvalButton({ skillName }: { skillName: string }) {
@@ -133,7 +139,9 @@ export function Quadrant() {
                 cursor={{ strokeDasharray: "3 3" }}
                 content={({ active, payload }) => {
                   if (!active || !payload?.length) return null;
-                  const p = payload[0].payload as { name: string; activations: number; score: number };
+                  const first = payload[0];
+                  if (!first) return null;
+                  const p = first.payload as { name: string; activations: number; score: number };
                   return (
                     <div className="rounded-md border border-border bg-bg-secondary px-2.5 py-1.5 text-[11px]">
                       <div className="text-text-primary font-medium">{p.name}</div>

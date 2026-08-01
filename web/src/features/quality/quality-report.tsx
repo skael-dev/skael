@@ -317,6 +317,7 @@ export function QualityReport({
     queryKey: ["skill-quality", skillName],
     queryFn: async () => {
       const res = await getSkillQuality({ path: { name: skillName } });
+      if (!res.response) throw new Error("Failed to load quality");
       if (res.response.status === 404) {
         const err = new Error("not_scored") as Error & { status: number };
         err.status = 404;
