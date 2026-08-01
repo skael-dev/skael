@@ -6,7 +6,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { server } from "@/test/handlers";
 import { QualityBadge } from "./quality-badge";
 import { EvalStatus } from "./eval-status";
-import type { JobOutput } from "@/api/types.gen";
+import { QualityReport } from "./quality-report";
+import type { JobOutput, RecordOutput } from "@/api/types.gen";
 
 const verified = {
   version: 3, headline_score: 74.2, verified: true,
@@ -136,5 +137,141 @@ describe("EvalStatus", () => {
     await user.click(button);
 
     expect(await screen.findByText(/failed|queue is full/i)).toBeInTheDocument();
+  });
+});
+
+const DEFAULT_RECORD: RecordOutput = {
+  critical_forbid_violations: 0,
+  drift_breakdown: {},
+  engine_version: "1",
+  headline_ci_high: 0,
+  headline_ci_low: 0,
+  headline_score: 0,
+  model_panel: {},
+  panel_complete: true,
+  panel_matrix: {},
+  pillar_breakdown: {},
+  scored_at: "2026-08-01T00:00:00Z",
+  skill_id: "skill-1",
+  suite_ref: "sha256:abcdef0123456789",
+  tier: "standard",
+  verified: true,
+  version: 1,
+};
+
+// mockQuality mocks the summary endpoint (GET .../quality) only, with no
+// report — for tests focused on the aggregate fields the summary carries on
+// its own.
+function mockQuality(overrides: Partial<RecordOutput>) {
+  const record: RecordOutput = { ...DEFAULT_RECORD, ...overrides };
+  server.use(
+    http.get("/api/skills/:name/quality", () => HttpResponse.json(record)),
+    http.get("/api/skills/:name/quality/:version", () =>
+      HttpResponse.json({ ...record, report: null }),
+    ),
+  );
+}
+
+// mockQualityVersion mocks both the summary and the version-detail endpoint
+// with the same aggregate fields, so the detail's `report` (or its absence)
+// is what the test exercises.
+function mockQualityVersion(
+  overrides: Partial<RecordOutput> & { report?: unknown },
+) {
+  const record = { ...DEFAULT_RECORD, ...overrides };
+  server.use(
+    http.get("/api/skills/:name/quality", () => HttpResponse.json(record)),
+    http.get("/api/skills/:name/quality/:version", () => HttpResponse.json(record)),
+  );
+}
+
+// A 404 from the quality endpoint means "never scored" — a state, not an
+// error.
+function mockQualityNotFound() {
+  server.use(
+    http.get("/api/skills/:name/quality", () =>
+      HttpResponse.json({ detail: "not scored" }, { status: 404 }),
+    ),
+  );
+}
+
+describe("QualityReport", () => {
+  it("renders the pillars, panel and drift for a scored version", async () => {
+    mockQuality({
+      version: 3,
+      headline_score: 74.2,
+      headline_ci_low: 70,
+      headline_ci_high: 78,
+      verified: true,
+      panel_complete: true,
+      robustness_gap: 6.5,
+      drift_grade: "B",
+      suite_ref: "sha256:abcdef0123456789",
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText(/74\.2/)).toBeInTheDocument();
+    expect(screen.getByText(/70.*78/)).toBeInTheDocument();
+    expect(screen.getByText(/6\.5/)).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
+  });
+
+  it("says a null robustness gap was not measured, never zero", async () => {
+    mockQuality({
+      version: 3,
+      headline_score: 74.2,
+      verified: true,
+      panel_complete: true,
+      robustness_gap: undefined,
+      drift_grade: "B",
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText(/not measured/i)).toBeInTheDocument();
+    // The bug this exists to prevent: "the floor model kept up" shown for
+    // "we could not tell".
+    expect(screen.queryByText(/^0$/)).not.toBeInTheDocument();
+  });
+
+  it("renders aggregates when the stored report is absent", async () => {
+    mockQualityVersion({ version: 1, headline_score: 50, verified: true, panel_complete: true, report: null });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/50/)).toBeInTheDocument();
+    expect(screen.getByText(/detailed report not available/i)).toBeInTheDocument();
+  });
+
+  it("renders judge evidence when the report has it", async () => {
+    mockQualityVersion({
+      version: 1, headline_score: 50, verified: true, panel_complete: true,
+      report: { tasks: [{ task_id: "t1", judge: [{ model: "m", winner: "with_skill", margin: 0.3, evidence: ["cited the contract"], votes: 2 }] }] },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/cited the contract/i)).toBeInTheDocument();
+  });
+
+  it("shows an unscored skill as unscored, not as a failure", async () => {
+    mockQualityNotFound();
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/not scored/i)).toBeInTheDocument();
+    expect(screen.queryByText(/error/i)).not.toBeInTheDocument();
+  });
+
+  it("never renders a spec version", async () => {
+    mockQualityVersion({ version: 1, headline_score: 50, verified: true, panel_complete: true, report: { spec_version: 1 } });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(screen.queryByText(/spec version/i)).not.toBeInTheDocument();
+  });
+
+  it("sorts contract violations critical-first and counts the truncated remainder", async () => {
+    const violations = Array.from({ length: 12 }, (_, i) => ({
+      rule_id: `r${i}`,
+      severity: i === 11 ? "critical" : "minor",
+      message: `violation ${i}`,
+    }));
+    mockQualityVersion({
+      version: 1, headline_score: 50, verified: true, panel_complete: true,
+      report: { tasks: [{ task_id: "t1", drift: [{ violations }] }] },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/violation 11/)).toBeInTheDocument();
+    expect(await screen.findByText(/2 more violations? not shown/i)).toBeInTheDocument();
   });
 });
