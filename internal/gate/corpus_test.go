@@ -41,15 +41,18 @@ func TestPublicCorpusOutcomes(t *testing.T) {
 		{"claude-api-curl-auth", gate.NeedsReview,
 			"an authenticated API call must be reviewable: this rule cannot tell " +
 				"a skill using a key from one stealing it"},
-		// This one is Block, and it is why anthropics/skills' claude-api still
-		// cannot be imported. The finding is SECRET_EXPOSURE (class secret,
-		// unappealable) on a vendored SDK README whose offending lines are
-		// `access_token: "xoxp-..."` — a redacted placeholder, not a secret.
-		// That is a separate rule from anything this gate work touched and
-		// wants its own ruling; the expectation is recorded as-is rather than
-		// wished away, so that ruling lands as a deliberate change here.
-		{"claude-api-sdk-readme", gate.Block,
-			"a redacted placeholder token in vendored SDK docs reads as a real secret"},
+		// This bundle used to Block, and it was the sole reason
+		// anthropics/skills' claude-api could not be imported at all: two
+		// SECRET_EXPOSURE hits (class secret, unappealable) on
+		// `access_token: "xoxp-..."`, a redacted placeholder with the ellipsis
+		// literally in the file, and on a getenv() call. The secret class and
+		// its unappealability did not change — the detection did.
+		{"claude-api-sdk-readme", gate.AllowWithWarning,
+			"a redacted placeholder and an env lookup are not hardcoded secrets"},
+		// The corpus must prove the gate still blocks, not only that it lets
+		// things through. A real key of two different shapes, unappealable.
+		{"hardcoded-secret", gate.Block,
+			"a genuine hardcoded credential is the one thing this gate exists to refuse"},
 	}
 
 	for _, tc := range cases {
@@ -63,6 +66,16 @@ func TestPublicCorpusOutcomes(t *testing.T) {
 			// Anything not expected to Block must also carry no unappealable
 			// finding: an unappealable reason inside a held version is a
 			// latent Block waiting for one more finding to arrive.
+			if tc.want == gate.Block {
+				var unappealable bool
+				for _, r := range d.Reasons {
+					if r.Class == string(gate.ClassSecret) || r.Class == string(gate.ClassExfiltration) {
+						unappealable = true
+					}
+				}
+				assert.True(t, unappealable,
+					"%s must block on an unappealable finding, not an appealable pile-up: %+v", tc.dir, d.Reasons)
+			}
 			if tc.want != gate.Block {
 				for _, r := range d.Reasons {
 					assert.NotEqual(t, string(gate.ClassExfiltration), r.Class,
