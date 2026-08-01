@@ -18,19 +18,18 @@ import { QualityBadge } from "@/features/quality/quality-badge";
 // analytics/skills' `limit` maxes at 100 server-side (internal/analytics/routes.go).
 const MAX_LIMIT = 100;
 
-function median(values: number[]): number {
+// The true statistical median, no lean: the middle order statistic for an
+// odd count, the mean of the two central values for an even count. This
+// number is the claim "heavily used" rests on, so it must not be tuned to
+// make any particular skill land on one side or the other.
+export function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  // Even count: average the two middle values. Odd count: lean toward the
-  // lower of the two central values (index mid-1 when available) rather
-  // than the strict middle order statistic, so a skill sitting at ordinary
-  // usage isn't pushed onto the "not worth attention" side of the split by
-  // a single more-popular peer. With one point, sorted.length === 1 and
-  // mid === 0, so this returns that single point's activation count rather
-  // than NaN.
-  if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
-  return sorted[Math.max(0, mid - 1)];
+  // Even count: average the two middle values. Odd count: the middle value
+  // itself. With one point, sorted.length === 1 and mid === 0, so this
+  // returns that single point's activation count rather than NaN.
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
 function RunEvalButton({ skillName }: { skillName: string }) {
@@ -80,9 +79,10 @@ export function Quadrant() {
 
   const activationMedian = median(scored.map((s) => s.activations));
 
-  // Inclusive on the median itself: a skill sitting exactly at the split is
-  // still "at or above typical usage," and hiding it would understate how
-  // many heavily-used skills are scoring poorly.
+  // High-activation side is >= median (inclusive of the median itself), not
+  // strictly >. Test data must therefore avoid landing a candidate exactly
+  // on the median if the intent is to exercise exclusion — see
+  // quadrant.test.tsx.
   const attention = scored
     .filter((s) => s.activations >= activationMedian && (s.quality!.headline_score ?? 0) < 50)
     .sort((a, b) => a.quality!.headline_score - b.quality!.headline_score);
