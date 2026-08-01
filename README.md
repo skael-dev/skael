@@ -62,13 +62,14 @@ This validates the connection, saves config, and installs activation tracking an
 
 ```bash
 skael add my-skill               # install a skill from the registry
-skael add my-skill --scope project  # install to project scope only
+skael add my-skill --scope user  # install to user scope only
 skael remove my-skill            # uninstall a skill
 skael sync                       # update installed skills to latest versions
 skael list                       # see everything published on the registry
 skael list --installed           # see what you have installed locally
 skael init my-skill              # scaffold a new spec-compliant skill
 skael publish ./my-skill         # publish a skill to the registry
+skael import <url|path>          # import skills from GitHub or a local directory
 skael scan ./my-skill            # security scan before publishing
 skael search "review"            # find skills
 skael show my-skill              # skill details, versions, activations
@@ -77,6 +78,23 @@ skael hook install               # set up activation tracking + auto-sync
 ```
 
 Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
+
+### User scope vs. project scope
+
+Every install lands in one of two places: **user scope** puts a skill in your home directory, available to you in every project on that machine. **Project scope** puts it inside the current repo, so anyone who checks out that repo and runs `skael sync` gets it too.
+
+The default is `project`. Run `skael setup --scope user` to change your default, or override per skill with `skael add my-skill --scope user`. `skael sync --scope user` overrides for that run, but any skill with its own recorded scope (set via `skael add --scope`) keeps it regardless. Project root is the nearest ancestor directory containing `.git`, falling back to the current directory if there isn't one.
+
+Where each agent looks:
+
+| Agent | user scope | project scope |
+|---|---|---|
+| Claude Code | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` |
+| Cursor | `~/.cursor/skills/<name>` | `<project>/.cursor/skills/<name>` |
+| Codex | `~/.codex/skills/<name>` | `<project>/.agents/skills/<name>` |
+| OpenCode | `~/.config/opencode/skills/<name>` | `<project>/.opencode/skills/<name>` |
+
+Codex is the odd one out — project scope goes to `.agents/skills/`, not `.codex/skills/`. Don't assume it follows the same pattern as the others.
 
 Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings don't all mean the same thing, so they don't all get the same treatment.
 
@@ -87,6 +105,16 @@ Every `skael publish` runs a security scan that checks for hardcoded secrets, pr
 `skael publish` runs the same scan locally first and applies the same decision, so it can tell you before the upload rather than after. It aborts only on what the server would block outright; an appealable finding is sent, held, and reported as held. `--skip-local-scan` skips the local check entirely and lets the server decide.
 
 One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
+
+`skael import <url|path>` brings skills into the registry from GitHub or a local directory, instead of authoring them from scratch:
+
+```bash
+skael import https://github.com/anthropics/skills                            # a whole repo
+skael import https://github.com/anthropics/skills/tree/main/skills/docx      # a subpath within a repo
+skael import ./my-skills/code-review                                          # a local directory
+```
+
+It discovers skills at the source and prompts before importing each one — pass `--all` to import everything without prompting, or `--dry-run` to preview first. Each import runs the same security scan and publish gate described above, so an imported skill can be rejected or held for review exactly like one published with `skael publish`. Set `GITHUB_TOKEN` on the server to raise GitHub's API rate limit for larger repos.
 
 Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
 
