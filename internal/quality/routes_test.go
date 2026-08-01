@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
@@ -228,6 +229,118 @@ func allowDecision() gate.Decision {
 	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
 }
 
+// needsReviewDecision holds the version for review, matching what a blocking
+// (but appealable) scan finding produces on publish.
+func needsReviewDecision() gate.Decision {
+	return gate.Decision{Outcome: gate.NeedsReview, Reasons: []gate.Reason{}}
+}
+
+// doGetAs mirrors doGet but attaches an auth user to the request context,
+// the same approach internal/evalqueue/routes_test.go uses to exercise
+// privilege checks at the HTTP layer.
+func doGetAs(t *testing.T, handler http.Handler, path string, user *auth.User) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), user))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestGetQualityVersion_HeldVersion_PrivilegedSeesReport(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "held-skill", "held-skill", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive.tar.gz", "cksum", "",
+		"desc", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester",
+		needsReviewDecision()); err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1,
+		json.RawMessage(`{"schema_version":1,"headline":74.2,"judge_note":{"evidence":"quoted skill text"}}`))
+
+	admin := &auth.User{ID: "1", Email: "admin@example.com", Role: auth.RoleAdmin}
+	rr := doGetAs(t, handler, "/api/skills/held-skill/quality/1", admin)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Report json.RawMessage `json:"report"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Report) == 0 || string(body.Report) == "null" {
+		t.Fatalf("report = %q, want the stored report for a privileged caller", body.Report)
+	}
+}
+
+func TestGetQualityVersion_HeldVersion_NonPrivilegedGetsNullReport(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "held-skill-2", "held-skill-2", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive.tar.gz", "cksum", "",
+		"desc", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester",
+		needsReviewDecision()); err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1,
+		json.RawMessage(`{"schema_version":1,"headline":74.2,"judge_note":{"evidence":"quoted skill text"}}`))
+
+	member := &auth.User{ID: "2", Email: "member@example.com", Role: auth.RoleMember}
+	rr := doGetAs(t, handler, "/api/skills/held-skill-2/quality/1", member)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Headline float64         `json:"headline_score"`
+		Report   json.RawMessage `json:"report"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Headline != 74.2 {
+		t.Fatalf("headline = %v, want 74.2 (aggregates must still be served)", body.Headline)
+	}
+	if string(body.Report) != "null" {
+		t.Fatalf("report = %q, want null for a non-privileged caller on a held version", body.Report)
+	}
+}
+
+func TestGetQualityVersion_ReleasedVersion_NonPrivilegedSeesReport(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "released-skill", "released-skill", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive.tar.gz", "cksum", "",
+		"desc", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester",
+		allowDecision()); err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1,
+		json.RawMessage(`{"schema_version":1,"headline":74.2,"judge_note":{"evidence":"quoted skill text"}}`))
+
+	member := &auth.User{ID: "3", Email: "member2@example.com", Role: auth.RoleMember}
+	rr := doGetAs(t, handler, "/api/skills/released-skill/quality/1", member)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Report json.RawMessage `json:"report"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Report) == 0 || string(body.Report) == "null" {
+		t.Fatalf("report = %q, want the stored report on a released version for any caller", body.Report)
+	}
+}
+
 // seedRecordWithReport upserts a minimal scored record for skillID/version,
 // with report set to the given raw JSON (nil for a row written before
 // migration 015 added report_json).
@@ -248,6 +361,16 @@ func TestGetQualityVersion_ServesStoredReport(t *testing.T) {
 	handler, qs, sk, _ := newQualityTestServer(t)
 	created, err := sk.Create(t.Context(), "detail-skill", "detail-skill", "", "", json.RawMessage(`{}`))
 	if err != nil {
+		t.Fatal(err)
+	}
+	// v1 released, unscored.
+	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive-v1.tar.gz", "cksum1", "",
+		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision()); err != nil {
+		t.Fatal(err)
+	}
+	// v2 released and scored — the version this test asserts against.
+	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive-v2.tar.gz", "cksum2", "",
+		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision()); err != nil {
 		t.Fatal(err)
 	}
 	seedRecordWithReport(t, qs, created.ID, 2,

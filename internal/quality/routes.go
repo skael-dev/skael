@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -191,10 +192,26 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 				fmt.Sprintf("skill %q version %d has never been scored", input.Name, input.Version))
 		}
 		body := versionBody{RecordOutput: toRecordOutput(*rec)}
+		body.Report = json.RawMessage("null")
 		if rec.ReportJSON != nil {
-			body.Report = rec.ReportJSON
-		} else {
-			body.Report = json.RawMessage("null")
+			// The report can contain LLM prose quoting the skill's content
+			// (JudgeNote.Evidence). For a released version that content is
+			// already public via the download/show endpoints, so the report
+			// is unrestricted. For a version still held for review
+			// (gate_state != "released"), skill_versions' description/content
+			// are json:"-" everywhere else — serving the full report here
+			// would leak them indirectly. Only a privileged caller
+			// (owner/admin) may see it; everyone else gets the aggregates
+			// unchanged with report:null, exactly like the existing
+			// "no stored report" case the UI already handles.
+			ver, err := skills.GetVersion(ctx, input.Name, input.Version)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("get skill quality version: internal error", err)
+			}
+			released := ver != nil && ver.GateState == "released"
+			if released || auth.UserFromContext(ctx).IsPrivileged() {
+				body.Report = rec.ReportJSON
+			}
 		}
 		return &versionOutput{Body: body}, nil
 	})
