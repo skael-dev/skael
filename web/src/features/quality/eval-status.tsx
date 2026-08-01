@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 import { listSkillEvals } from "@/api/sdk.gen";
 import type { QualitySummary } from "@/api/types.gen";
 import { useRunEval } from "./use-run-eval";
@@ -21,7 +22,7 @@ export function EvalStatus({
   quality?: QualitySummary | null;
   latestVersion: number;
 }) {
-  const { run, isPending } = useRunEval(skillName);
+  const { run, isPending, isError, error } = useRunEval(skillName);
   const evalsQuery = useQuery({
     queryKey: ["skill-evals", skillName],
     queryFn: async () => (await listSkillEvals({ path: { name: skillName } })).data,
@@ -37,13 +38,13 @@ export function EvalStatus({
   const active = jobs.find((j) => ACTIVE.has(j.status));
 
   if (active?.status === "queued") {
-    // queue_position is 0-indexed at the server (0 = front of the queue).
-    // We display the raw value rather than inventing a 1-indexed "human"
-    // number: the field name already says "position", and translating it
-    // would silently diverge from what the API actually reports.
+    // The wire value queue_position is 0-indexed (0 = front of the queue) —
+    // that's the correct wire contract and stays as-is. The DISPLAY is
+    // 1-indexed because a human in a queue is first, not zeroth. Do not
+    // "fix" this back to the raw value.
     return (
       <span className="text-[11px] text-text-secondary">
-        Queued · position {active.queue_position}
+        Queued · position {active.queue_position + 1}
       </span>
     );
   }
@@ -79,6 +80,12 @@ export function EvalStatus({
       >
         {isPending ? "Queueing…" : label}
       </button>
+      {isError && (
+        <span className="text-xs text-danger flex items-center gap-1">
+          <AlertTriangle size={12} />
+          {error?.message ?? "Failed to queue eval"}
+        </span>
+      )}
     </span>
   );
 }

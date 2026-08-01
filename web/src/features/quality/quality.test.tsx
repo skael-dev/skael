@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -71,10 +72,19 @@ function mockEvals(jobs: Partial<JobOutput>[]) {
 
 describe("EvalStatus", () => {
   it("shows queue position rather than a spinner", async () => {
+    // Wire value is 0-indexed; display is 1-indexed (a human is "first",
+    // not "zeroth"). queue_position: 3 -> "position 4".
     mockEvals([{ id: "j1", status: "queued", queue_position: 3, enqueued_at: "2026-08-01T00:00:00Z" }]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
-    expect(await screen.findByText(/position 3/i)).toBeInTheDocument();
+    expect(await screen.findByText(/position 4/i)).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("shows the front of the queue as position 1, not position 0", async () => {
+    mockEvals([{ id: "j1", status: "queued", queue_position: 0, enqueued_at: "2026-08-01T00:00:00Z" }]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+    expect(await screen.findByText(/position 1/i)).toBeInTheDocument();
+    expect(screen.queryByText(/position 0/i)).not.toBeInTheDocument();
   });
 
   it("shows elapsed time while running", async () => {
@@ -110,5 +120,21 @@ describe("EvalStatus", () => {
     mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: "sandbox image missing", enqueued_at: "2026-08-01T00:00:00Z" }]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
     expect(await screen.findByText(/sandbox image missing/i)).toBeInTheDocument();
+  });
+
+  it("surfaces an enqueue failure so a silent click isn't mistaken for a no-op", async () => {
+    const user = userEvent.setup();
+    mockEvals([]);
+    server.use(
+      http.post("/api/skills/:name/evals", () => {
+        return HttpResponse.json({ detail: "queue is full" }, { status: 500 });
+      }),
+    );
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    const button = await screen.findByRole("button", { name: /run eval/i });
+    await user.click(button);
+
+    expect(await screen.findByText(/failed|queue is full/i)).toBeInTheDocument();
   });
 });

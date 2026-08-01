@@ -12,7 +12,7 @@ export function useRunEval(skillName: string) {
       // Pass an empty body and let the server default the panel/tier rather
       // than inventing values here.
       const res = await rerunEval({ path: { name: skillName }, body: {} });
-      if (res.error) throw new Error(String(res.error));
+      if (res.error) throw new Error(res.error.detail ?? "Failed to queue eval");
       return res.data;
     },
     onSuccess: () => {
@@ -22,6 +22,7 @@ export function useRunEval(skillName: string) {
   return {
     run: () => mutation.mutate(),
     isPending: mutation.isPending,
+    isError: mutation.isError,
     error: (mutation.error as Error) ?? null,
   };
 }
