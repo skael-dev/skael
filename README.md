@@ -73,6 +73,7 @@ skael import <url|path>          # import skills from GitHub or a local director
 skael scan ./my-skill            # security scan before publishing
 skael search "review"            # find skills
 skael show my-skill              # skill details, versions, activations
+skael review my-skill 3 --approve --reason "..."  # release a version held for review
 skael doctor                     # check your setup
 skael hook install               # set up activation tracking + auto-sync
 ```
