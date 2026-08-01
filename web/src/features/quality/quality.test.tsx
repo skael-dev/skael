@@ -350,4 +350,53 @@ describe("QualityReport", () => {
     expect(screen.queryByText(/8750/)).not.toBeInTheDocument();
     expect(screen.queryByText("87.5%")).not.toBeInTheDocument();
   });
+
+  // judge_kappa is a *float64 in Go (report.go:135): nil means no judge was
+  // calibrated, a different fact from a judge calibrated at κ=0. It lives on
+  // `report`, alongside judge_labeled_by as provenance.
+  it("renders judge_kappa and judge_labeled_by from the report", async () => {
+    mockQualityVersion({
+      version: 1, headline_score: 50, verified: true, panel_complete: true,
+      report: { judge_kappa: 0.75, judge_labeled_by: "author", tasks: [] },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/0\.75/)).toBeInTheDocument();
+    expect(screen.getByText(/labeled by author/i)).toBeInTheDocument();
+  });
+
+  it("says a null judge_kappa was not measured, never zero — and can be negative when present", async () => {
+    mockQualityVersion({
+      version: 1, headline_score: 50, verified: true, panel_complete: true,
+      robustness_gap: 1.2, drift_grade: "C",
+      report: { judge_kappa: null, tasks: [] },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/not measured/i)).toBeInTheDocument();
+    expect(screen.queryByText(/κ = 0$/)).not.toBeInTheDocument();
+  });
+
+  it("renders a negative judge_kappa as negative, not clamped to zero", async () => {
+    mockQualityVersion({
+      version: 1, headline_score: 50, verified: true, panel_complete: true,
+      report: { judge_kappa: -0.2, tasks: [] },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/-0\.20/)).toBeInTheDocument();
+  });
+
+  // A failed detail fetch (500, network drop) must not be indistinguishable
+  // from a legitimate `report: null` — one is "nothing to show", the other
+  // is "we couldn't ask".
+  it("distinguishes a failed report fetch from a genuine null report", async () => {
+    const record = { ...DEFAULT_RECORD, version: 1, headline_score: 50 };
+    server.use(
+      http.get("/api/skills/:name/quality", () => HttpResponse.json(record)),
+      http.get("/api/skills/:name/quality/:version", () =>
+        HttpResponse.json({ detail: "internal error" }, { status: 500 }),
+      ),
+    );
+    render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
+    expect(await screen.findByText(/could not load the detailed report/i)).toBeInTheDocument();
+    expect(screen.queryByText(/detailed report not available/i)).not.toBeInTheDocument();
+  });
 });

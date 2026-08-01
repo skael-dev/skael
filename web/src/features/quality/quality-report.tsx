@@ -43,7 +43,23 @@ type TaskEntry = {
 type ReportShape = {
   tasks?: TaskEntry[];
   void_tasks?: unknown[];
+  // judge_kappa is a *float64 in Go (report.go:135): nil means no judge was
+  // calibrated for this run, a different fact from a judge calibrated at
+  // κ=0. judge_labeled_by (report.go:136) is the provenance of the labels
+  // that κ was computed against.
+  judge_kappa?: number | null;
+  judge_labeled_by?: string;
 };
+
+// Cohen's κ (score.Kappa, internal/eval/score/calibrate.go) is in [-1, 1]
+// and can legitimately be negative — worse than chance agreement is a real,
+// meaningful outcome, not a clamping bug. Neither formatRate ([0,1] as a
+// percentage) nor formatDriftScale (0-100) is right for this: it gets its
+// own formatter rather than reusing one because it's nearby, which is
+// exactly the mistake that caused the round 1 regression.
+function formatKappa(v: number): string {
+  return v.toFixed(2);
+}
 
 function sortedViolations(report: ReportShape | null | undefined): {
   shown: (DriftViolation & { taskId?: string })[];
@@ -410,26 +426,45 @@ export function QualityReport({
         )}
       </div>
 
-      {report == null ? (
+      {versionQuery.isError ? (
+        // A failed fetch is not the same fact as a legitimate `report:
+        // null` — the version row exists and simply has no report attached
+        // is different from "we couldn't ask the server at all".
+        <div className="text-sm text-danger mb-6">
+          Could not load the detailed report.
+        </div>
+      ) : report == null ? (
         <div className="text-sm text-text-secondary mb-6">
           Detailed report not available for this score.
         </div>
       ) : (
-        <div className="mb-6">
-          <h3 className="text-sm font-medium text-text-primary mb-2">Judge evidence</h3>
-          {(report.tasks ?? []).flatMap((task) =>
-            (task.judge ?? []).flatMap((j, ji) =>
-              (j.evidence ?? []).map((quote, qi) => (
-                <div
-                  key={`${task.task_id}-${ji}-${qi}`}
-                  className="text-[11px] text-text-secondary bg-bg-tertiary border border-border rounded px-3 py-2 mb-2"
-                >
-                  {quote}
-                </div>
-              )),
-            ),
-          )}
-        </div>
+        <>
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-text-primary mb-2">Judge calibration</h3>
+            <div className="text-sm text-text-secondary">
+              κ = {measurement(report.judge_kappa, formatKappa)}
+              {report.judge_labeled_by && (
+                <span className="text-text-tertiary"> · labeled by {report.judge_labeled_by}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-text-primary mb-2">Judge evidence</h3>
+            {(report.tasks ?? []).flatMap((task) =>
+              (task.judge ?? []).flatMap((j, ji) =>
+                (j.evidence ?? []).map((quote, qi) => (
+                  <div
+                    key={`${task.task_id}-${ji}-${qi}`}
+                    className="text-[11px] text-text-secondary bg-bg-tertiary border border-border rounded px-3 py-2 mb-2"
+                  >
+                    {quote}
+                  </div>
+                )),
+              ),
+            )}
+          </div>
+        </>
       )}
 
       <div className="text-[11px] text-text-tertiary">
