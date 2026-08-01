@@ -10,6 +10,7 @@ import { SkillDetail } from "@/features/skills/skill-detail";
 import { Analytics } from "@/features/analytics/analytics";
 import { Settings } from "@/features/settings/settings";
 import { ReviewQueue } from "@/features/review/review-queue";
+import { Quadrant } from "@/features/analytics/quadrant";
 import { NotFound } from "@/features/not-found";
 
 function ErrorFallback() {
@@ -54,6 +55,7 @@ export function App() {
             <Route path="/skills/:name" element={<SkillDetail />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/review" element={<ReviewQueue />} />
+            <Route path="/quadrant" element={<Quadrant />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<NotFound />} />
