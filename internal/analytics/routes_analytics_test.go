@@ -432,7 +432,13 @@ func TestGetSkillsAnalytics_UsesLatestScoreAcrossVersions(t *testing.T) {
 	id := seedSkillWithQuality(t, pool, "multi", 1, 40, true, true)
 	insertQuality(t, pool, id, 2, 80, true, true) // newer scored_at
 
-	got, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50})
+	got, total, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50})
 	require.NoError(t, err)
+	// The skill has two skill_quality rows; a regression to a plain join
+	// (instead of LEFT JOIN LATERAL ... LIMIT 1) would multiply this one
+	// skill into two result rows, silently doubling its reported activation
+	// counts. Assert exactly one row for it, not just that headline == 80.
+	require.Equal(t, 1, total, "the skill must not be multiplied by its quality row count")
+	require.Len(t, got, 1)
 	require.Equal(t, 80.0, got[0].Quality.Headline)
 }
