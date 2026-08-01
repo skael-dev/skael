@@ -201,3 +201,113 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 func allowDecision() gate.Decision {
 	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
 }
+
+// seedRecordWithReport upserts a minimal scored record for skillID/version,
+// with report set to the given raw JSON (nil for a row written before
+// migration 015 added report_json).
+func seedRecordWithReport(t *testing.T, qs *quality.Store, skillID string, version int, report json.RawMessage) {
+	t.Helper()
+	rec := quality.Record{
+		SkillID: skillID, Version: version, SuiteRef: "r", Tier: "full", Headline: 74.2,
+		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
+		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
+		ScoredAt: time.Now(), ReportJSON: report,
+	}
+	if err := qs.Upsert(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetQualityVersion_ServesStoredReport(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "detail-skill", "detail-skill", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 2,
+		json.RawMessage(`{"schema_version":1,"headline":74.2,"tasks":[{"task_id":"t1"}]}`))
+
+	rr := doGet(t, handler, "/api/skills/detail-skill/quality/2")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Version int             `json:"version"`
+		Report  json.RawMessage `json:"report"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Version != 2 {
+		t.Fatalf("version = %d, want 2", body.Version)
+	}
+	if len(body.Report) == 0 || string(body.Report) == "null" {
+		t.Fatalf("report = %q, want the stored report", body.Report)
+	}
+}
+
+// A row written before migration 015 must serve its aggregates with a null
+// report, not a 500 and not a 404. The UI branches on this.
+func TestGetQualityVersion_NullReportStillServesAggregates(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "legacy-skill", "legacy-skill", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1, nil)
+
+	rr := doGet(t, handler, "/api/skills/legacy-skill/quality/1")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Headline float64         `json:"headline_score"`
+		Report   json.RawMessage `json:"report"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if body.Headline == 0 {
+		t.Fatal("aggregates missing on a record whose report is absent")
+	}
+	if string(body.Report) != "null" {
+		t.Fatalf("report = %q, want null", body.Report)
+	}
+}
+
+func TestGetQualityVersion_UnscoredVersionIs404(t *testing.T) {
+	handler, _, sk, _ := newQualityTestServer(t)
+	_, err := sk.Create(t.Context(), "never-scored", "never-scored", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := doGet(t, handler, "/api/skills/never-scored/quality/1")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+}
+
+// /quality/history must not be captured by the {version} route.
+func TestGetQualityHistory_NotShadowedByVersionRoute(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "shadow-check", "shadow-check", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1, nil)
+
+	rr := doGet(t, handler, "/api/skills/shadow-check/quality/history")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		History []struct {
+			Version int `json:"version"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("history route returned a non-history body: %v", err)
+	}
+	if len(body.History) != 1 {
+		t.Fatalf("history length = %d, want 1", len(body.History))
+	}
+}

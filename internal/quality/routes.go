@@ -12,8 +12,8 @@ import (
 	"github.com/skael-dev/skael/internal/skill"
 )
 
-// recordOutput is the wire shape for a Record.
-type recordOutput struct {
+// RecordOutput is the wire shape for a Record.
+type RecordOutput struct {
 	SkillID                  string          `json:"skill_id"`
 	Version                  int             `json:"version"`
 	Headline                 float64         `json:"headline_score"`
@@ -43,11 +43,11 @@ type recordOutput struct {
 	ReportJSON json.RawMessage `json:"-"`
 }
 
-// toRecordOutput converts a Record to its wire shape. recordOutput's fields
+// toRecordOutput converts a Record to its wire shape. RecordOutput's fields
 // deliberately match Record's, in order and type, so this is a plain
 // conversion rather than a field-by-field copy.
-func toRecordOutput(rec Record) recordOutput {
-	return recordOutput(rec)
+func toRecordOutput(rec Record) RecordOutput {
+	return RecordOutput(rec)
 }
 
 type qualityInput struct {
@@ -55,11 +55,11 @@ type qualityInput struct {
 }
 
 type qualityOutput struct {
-	Body recordOutput
+	Body RecordOutput
 }
 
 type qualityHistoryBody struct {
-	History []recordOutput `json:"history"`
+	History []RecordOutput `json:"history"`
 }
 
 type qualityHistoryOutput struct {
@@ -120,10 +120,56 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 			return nil, huma.Error500InternalServerError("get skill quality history: internal error", err)
 		}
 
-		out := qualityHistoryBody{History: make([]recordOutput, 0, len(hist))}
+		out := qualityHistoryBody{History: make([]RecordOutput, 0, len(hist))}
 		for _, rec := range hist {
 			out.History = append(out.History, toRecordOutput(rec))
 		}
 		return &qualityHistoryOutput{Body: out}, nil
+	})
+
+	type versionInput struct {
+		Name    string `path:"name"`
+		Version int    `path:"version"`
+	}
+	// versionOutput embeds RecordOutput so the aggregate fields stay
+	// byte-identical to the summary endpoint's, and adds the report the
+	// summary deliberately omits. Report is a pointer-free RawMessage that
+	// marshals to `null` when absent, which is the signal the detail page
+	// branches on to render its aggregates-only view.
+	type versionBody struct {
+		RecordOutput
+		Report json.RawMessage `json:"report"`
+	}
+	type versionOutput struct {
+		Body versionBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get-skill-quality-version",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/quality/{version}",
+		Summary:     "Get the full quality report for one skill version",
+	}, func(ctx context.Context, input *versionInput) (*versionOutput, error) {
+		sk, err := skills.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality version: internal error", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
+		rec, err := store.GetVersion(ctx, sk.ID, input.Version)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality version: internal error", err)
+		}
+		if rec == nil {
+			return nil, huma.Error404NotFound(
+				fmt.Sprintf("skill %q version %d has never been scored", input.Name, input.Version))
+		}
+		body := versionBody{RecordOutput: toRecordOutput(*rec)}
+		if rec.ReportJSON != nil {
+			body.Report = rec.ReportJSON
+		} else {
+			body.Report = json.RawMessage("null")
+		}
+		return &versionOutput{Body: body}, nil
 	})
 }
