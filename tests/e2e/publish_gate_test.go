@@ -244,6 +244,25 @@ func (e *evalEnv) getVersion(t *testing.T, skillName string, version int) skill.
 	return skill.Version{}
 }
 
+// reviewQueueResult is the wire shape of GET /api/review/queue.
+type reviewQueueResult struct {
+	Held []struct {
+		SkillName    string          `json:"skill_name"`
+		Version      int             `json:"version"`
+		GateState    string          `json:"gate_state"`
+		GateDecision json.RawMessage `json:"gate_decision,omitempty"`
+	} `json:"held"`
+	Total int `json:"total"`
+}
+
+// reviewQueue returns every version held for review.
+func (e *evalEnv) reviewQueue(t *testing.T) reviewQueueResult {
+	t.Helper()
+	var out reviewQueueResult
+	e.getJSON(t, "/api/review/queue", &out)
+	return out
+}
+
 // review posts a human approve/reject decision on a held version.
 func (e *evalEnv) review(t *testing.T, skillName string, version int, action, reason string) rawResponse {
 	t.Helper()
