@@ -34,6 +34,13 @@ type recordOutput struct {
 	JobID                    string          `json:"job_id,omitempty"`
 	ScoredAt                 time.Time       `json:"scored_at"`
 	CriticalForbidViolations int             `json:"critical_forbid_violations"`
+	// ReportJSON is json:"-" deliberately. The summary and history endpoints
+	// share this shape and must stay small; the full report is served only by
+	// the per-version endpoint, which wraps this struct rather than widening
+	// it. Struct tags are ignored by the conversion in toRecordOutput, so the
+	// field must still be present here or that conversion stops compiling —
+	// which is exactly the drift alarm it exists to be.
+	ReportJSON json.RawMessage `json:"-"`
 }
 
 // toRecordOutput converts a Record to its wire shape. recordOutput's fields

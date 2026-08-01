@@ -367,7 +367,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		// d. FromReport is pure validation/mapping; a malformed report at
 		// this stage is a 400, an unexpected error is a 500.
-		rec, err := quality.FromReport(rep)
+		rec, err := quality.FromReportRaw(rep, input.RawBody)
 		if err != nil {
 			return nil, huma.Error400BadRequest("report eval job: " + err.Error())
 		}

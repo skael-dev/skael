@@ -58,6 +58,14 @@ type Record struct {
 	// gate expresses "not measured at all" as a nil *QualityState, never as
 	// a zero.
 	CriticalForbidViolations int
+
+	// ReportJSON is the worker's full report exactly as posted, kept so the
+	// detail page can show judge evidence and per-task contract violations —
+	// facts the aggregates above deliberately compress away. Nil for every
+	// row written before migration 015, and for any record read by a query
+	// that does not select it: only Store.GetVersion does, because the
+	// payload is large and no list or summary needs it.
+	ReportJSON json.RawMessage
 }
 
 // FromReport maps a report onto a record. It is pure: no database, no clock,
@@ -162,6 +170,19 @@ func FromReport(r *report.Report) (Record, error) {
 		ScoredAt:                 r.FinishedAt,
 		CriticalForbidViolations: criticalViolations,
 	}, nil
+}
+
+// FromReportRaw is FromReport plus the report's own serialised bytes. The
+// caller passes what it received rather than re-marshalling r: a round trip
+// through the struct would silently drop any field this binary does not know,
+// and the stored report is meant to outlive this binary's schema.
+func FromReportRaw(r *report.Report, raw json.RawMessage) (Record, error) {
+	rec, err := FromReport(r)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.ReportJSON = raw
+	return rec, nil
 }
 
 // memberKey identifies a panel member within a report's per-member maps.
