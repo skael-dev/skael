@@ -188,7 +188,7 @@ const TAG_COLORS: Record<string, string> = {
 };
 
 // Sort options exposed in the UI; mapped to the server's `sort` param.
-type SortKey = "updated" | "name" | "usage";
+type SortKey = "updated" | "name" | "usage" | "quality";
 
 // ── Stat tile ─────────────────────────────────────────────────
 function StatTile({
@@ -275,6 +275,7 @@ export function SkillList() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [authorFilter, setAuthorFilter] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>("updated");
+  const [unscoredOnly, setUnscoredOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"registry" | "unregistered">("registry");
@@ -310,12 +311,13 @@ export function SkillList() {
   const PAGE = 50;
   const debouncedQuery = useDebouncedValue(query, 250);
   const serverSort = sortBy === "usage" ? "activations" : sortBy;
+  const scored = unscoredOnly ? "no" : undefined;
   const skillsQuery = useInfiniteQuery({
-    queryKey: ["analytics", "skills", { sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "" }],
+    queryKey: ["analytics", "skills", { sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "", scored }],
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
       const res = await analyticsSkills({
-        query: { days: 30, limit: PAGE, offset: pageParam as number, sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "" },
+        query: { days: 30, limit: PAGE, offset: pageParam as number, sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "", scored },
       });
       if (res.error) throw res.error;
       return (res.data as { skills: SkillAnalytics[] | null; total: number }) ?? { skills: [], total: 0 };
@@ -621,6 +623,7 @@ export function SkillList() {
               <div className="flex items-center gap-1.5 px-2.5 h-8 border border-border rounded-md text-text-secondary text-xs shrink-0">
                 <ArrowUpDown className="size-3" />
                 <select
+                  aria-label="Sort"
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value as SortKey)}
                   className="bg-transparent border-none outline-none text-text-secondary text-xs font-sans cursor-pointer pr-3.5"
@@ -628,8 +631,16 @@ export function SkillList() {
                   <option value="updated">Updated</option>
                   <option value="name">Name</option>
                   <option value="usage">Usage</option>
+                  <option value="quality">Score</option>
                 </select>
               </div>
+
+              {/* Unscored-only filter */}
+              <FilterPill
+                active={unscoredOnly}
+                onClick={() => setUnscoredOnly((v) => !v)}
+                label="Unscored only"
+              />
 
               {/* Import button */}
               <Button
