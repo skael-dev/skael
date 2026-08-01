@@ -24,8 +24,8 @@ type SeriesPoint struct {
 type Series struct {
 	// Key is opaque and stable within one response; the client uses it for
 	// React keys and nothing else.
-	Key     string        `json:"key"`
-	Current bool          `json:"current"`
+	Key     string `json:"key"`
+	Current bool   `json:"current"`
 	// Reason is empty on the current series and otherwise names, in the
 	// engine's own words, why this run cannot be charted with it.
 	Reason string        `json:"reason"`
