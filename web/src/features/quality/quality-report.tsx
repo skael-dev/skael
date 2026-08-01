@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
 import { EvalStatus } from "./eval-status";
+import { QualityTrend } from "./quality-trend";
 
 // The engine keeps a measurement that was never defined for a run distinct
 // from a measured zero, using a nullable field, in several places
@@ -386,6 +387,8 @@ export function QualityReport({
           <EvalStatus skillName={skillName} quality={summary} latestVersion={latestVersion} />
         </div>
       </div>
+
+      <QualityTrend skillName={skillName} />
 
       <PillarBreakdownTable data={summary.pillar_breakdown} />
       <PanelMatrixTable data={summary.panel_matrix} />

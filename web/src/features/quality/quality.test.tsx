@@ -7,7 +7,8 @@ import { server } from "@/test/handlers";
 import { QualityBadge } from "./quality-badge";
 import { EvalStatus } from "./eval-status";
 import { QualityReport } from "./quality-report";
-import type { JobOutput, RecordOutput } from "@/api/types.gen";
+import { QualityTrend } from "./quality-trend";
+import type { JobOutput, RecordOutput, Series } from "@/api/types.gen";
 
 const verified = {
   version: 3, headline_score: 74.2, verified: true,
@@ -398,5 +399,78 @@ describe("QualityReport", () => {
     render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
     expect(await screen.findByText(/could not load the detailed report/i)).toBeInTheDocument();
     expect(screen.queryByText(/detailed report not available/i)).not.toBeInTheDocument();
+  });
+});
+
+function mockSeries(series: Series[]) {
+  server.use(
+    http.get("/api/skills/:name/quality/series", () =>
+      HttpResponse.json({ series }),
+    ),
+  );
+}
+
+describe("QualityTrend", () => {
+  it("charts the current series", async () => {
+    mockSeries([
+      {
+        key: "s0",
+        current: true,
+        reason: "",
+        points: [
+          { version: 3, headline_score: 74, headline_ci_low: 70, headline_ci_high: 78, verified: true, scored_at: "2026-07-01T00:00:00Z" },
+          { version: 4, headline_score: 78, headline_ci_low: 74, headline_ci_high: 82, verified: true, scored_at: "2026-08-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/v3/)).toBeInTheDocument();
+    expect(screen.getByText(/v4/)).toBeInTheDocument();
+  });
+
+  it("does not chart an incomparable series, and says why", async () => {
+    mockSeries([
+      {
+        key: "s0",
+        current: true,
+        reason: "",
+        points: [
+          { version: 4, headline_score: 78, headline_ci_low: 74, headline_ci_high: 82, verified: true, scored_at: "2026-08-01T00:00:00Z" },
+        ],
+      },
+      {
+        key: "s1",
+        current: false,
+        reason: "different model panels: a score change could be the models rather than the skill",
+        points: [
+          { version: 3, headline_score: 30, headline_ci_low: 20, headline_ci_high: 40, verified: true, scored_at: "2026-07-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    const { container } = render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/different model panels/i)).toBeInTheDocument();
+    // The 30 must not appear as a plotted point on the current line.
+    expect(container.querySelectorAll("[data-point]")).toHaveLength(1);
+  });
+
+  it("says a single score is not yet a trend", async () => {
+    mockSeries([
+      {
+        key: "s0",
+        current: true,
+        reason: "",
+        points: [
+          { version: 1, headline_score: 50, headline_ci_low: 40, headline_ci_high: 60, verified: true, scored_at: "2026-08-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/one score so far/i)).toBeInTheDocument();
+  });
+
+  it("renders nothing loud when there is no history", async () => {
+    mockSeries([]);
+    render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/no scores yet/i)).toBeInTheDocument();
   });
 });
