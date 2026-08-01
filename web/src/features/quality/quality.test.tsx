@@ -149,7 +149,7 @@ const DEFAULT_RECORD: RecordOutput = {
   headline_score: 0,
   model_panel: {},
   panel_complete: true,
-  panel_matrix: {},
+  panel_matrix: [],
   pillar_breakdown: {},
   scored_at: "2026-08-01T00:00:00Z",
   skill_id: "skill-1",
@@ -273,5 +273,81 @@ describe("QualityReport", () => {
     render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
     expect(await screen.findByText(/violation 11/)).toBeInTheDocument();
     expect(await screen.findByText(/2 more violations? not shown/i)).toBeInTheDocument();
+  });
+
+  // panel_matrix is a JSON ARRAY of MemberReport (internal/quality/ingest.go
+  // marshals `members` directly), not an object keyed by member. A test
+  // using the wrong shape is exactly what let a raw-JSON-dump regression
+  // through once already.
+  it("renders panel_matrix as one row per array element, keyed by agent/model", async () => {
+    mockQuality({
+      version: 3,
+      panel_matrix: [
+        {
+          member: { agent: "claude-code", model: "strong" },
+          pillars: { TriggerF1: 0.9 },
+          effectiveness: 0.82,
+          drift_grade: "A",
+          healthy: true,
+        },
+        {
+          member: { agent: "codex", model: "floor" },
+          effectiveness: 0.1,
+          drift_grade: "D",
+          healthy: false,
+          detail: "sandbox crashed on task 3",
+        },
+      ],
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText("claude-code/strong")).toBeInTheDocument();
+    expect(screen.getByText("codex/floor")).toBeInTheDocument();
+    // An unhealthy member contributed nothing to the headline — that must
+    // read as unhealthy, never as its (possibly low, possibly zero)
+    // effectiveness number.
+    expect(screen.getByText(/unhealthy/i)).toBeInTheDocument();
+    expect(screen.getByText(/sandbox crashed on task 3/)).toBeInTheDocument();
+    expect(screen.queryByText(/^0\.1$/)).not.toBeInTheDocument();
+  });
+
+  // pillar_breakdown is keyed "agent/model" (memberKey, ingest.go:189); its
+  // values are score.Pillars, which has no JSON tags and so serialises with
+  // capitalised Go field names.
+  it("renders pillar_breakdown's capitalised Go field names as labelled columns", async () => {
+    mockQuality({
+      version: 3,
+      pillar_breakdown: {
+        "claude-code/strong": {
+          TriggerF1: 0.9,
+          Reliability: 0.8,
+          Uplift: 0.7,
+          Efficiency: 0.6,
+        },
+      },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText("claude-code/strong")).toBeInTheDocument();
+    expect(screen.getByText("Trigger F1")).toBeInTheDocument();
+    expect(screen.getByText("90%")).toBeInTheDocument();
+    expect(screen.getByText("80%")).toBeInTheDocument();
+    expect(screen.getByText("70%")).toBeInTheDocument();
+    expect(screen.getByText("60%")).toBeInTheDocument();
+  });
+
+  // drift_breakdown is keyed the same way; its values (drift.Agg) are also
+  // untagged AND on a 0-100 scale, not [0,1] — this exact field has already
+  // been run through a [0,1] percentage formatter once and rendered 87.5 as
+  // "8750.0%". It must never share a formatter with the pillar rates.
+  it("renders drift_breakdown's 0-100 scale values without a percentage formatter", async () => {
+    mockQuality({
+      version: 3,
+      drift_breakdown: {
+        "claude-code/strong": { Mean: 87.5, Worst: 60.2, Sigma: 4.1, N: 5 },
+      },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText("87.5")).toBeInTheDocument();
+    expect(screen.queryByText(/8750/)).not.toBeInTheDocument();
+    expect(screen.queryByText("87.5%")).not.toBeInTheDocument();
   });
 });

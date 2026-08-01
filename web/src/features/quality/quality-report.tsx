@@ -66,33 +66,225 @@ function sortedViolations(report: ReportShape | null | undefined): {
   return { shown: all.slice(0, 10), extra: Math.max(0, all.length - 10) };
 }
 
-function KeyedTable({
-  title,
-  data,
-}: {
-  title: string;
-  data: unknown;
-}) {
-  if (!data || typeof data !== "object") return null;
-  const entries = Object.entries(data as Record<string, unknown>);
-  if (entries.length === 0) return null;
+// ── panel_matrix: a JSON ARRAY of MemberReport, not an object keyed by
+// member (internal/quality/ingest.go marshals `members` directly). ─────────
+type PanelMember = {
+  agent?: string;
+  model?: string;
+  class?: string;
+};
+
+type PanelMatrixEntry = {
+  member?: PanelMember;
+  pillars?: Record<string, number>;
+  effectiveness?: number;
+  drift?: unknown;
+  drift_grade?: string;
+  healthy?: boolean;
+  detail?: string;
+};
+
+function memberLabel(member: PanelMember | undefined, fallback: string): string {
+  if (!member) return fallback;
+  const parts = [member.agent, member.model].filter(Boolean);
+  return parts.length > 0 ? parts.join("/") : fallback;
+}
+
+function isPanelMatrixArray(data: unknown): data is PanelMatrixEntry[] {
+  return Array.isArray(data);
+}
+
+function PanelMatrixTable({ data }: { data: unknown }) {
+  if (!isPanelMatrixArray(data)) {
+    // Defensive fallback for a shape that doesn't match the real payload —
+    // this is the exception path, not the one the server actually sends.
+    if (data == null) return null;
+    return (
+      <div className="mb-6">
+        <h3 className="text-sm font-medium text-text-primary mb-2">Model panel matrix</h3>
+        <div className="text-[11px] text-text-tertiary">Unexpected panel matrix shape.</div>
+      </div>
+    );
+  }
+  if (data.length === 0) return null;
   return (
     <div className="mb-6">
-      <h3 className="text-sm font-medium text-text-primary mb-2">{title}</h3>
+      <h3 className="text-sm font-medium text-text-primary mb-2">Model panel matrix</h3>
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-border text-text-tertiary text-left">
+              <th className="px-3 py-1.5 font-normal">Member</th>
+              <th className="px-3 py-1.5 font-normal">Effectiveness</th>
+              <th className="px-3 py-1.5 font-normal">Drift grade</th>
+              <th className="px-3 py-1.5 font-normal">Status</th>
+            </tr>
+          </thead>
           <tbody>
-            {entries.map(([member, value]) => (
-              <tr key={member} className="border-b border-border last:border-b-0">
-                <td className="px-3 py-1.5 text-text-secondary">{member}</td>
-                <td className="px-3 py-1.5 font-mono text-text-primary">
-                  {typeof value === "number" ? value : JSON.stringify(value)}
-                </td>
-              </tr>
-            ))}
+            {data.map((entry, i) => {
+              const label = memberLabel(entry.member, `member ${i}`);
+              // An unhealthy member contributed nothing to the headline —
+              // that is a different fact from a measured low/zero score,
+              // and must never be rendered as one.
+              const unhealthy = entry.healthy === false;
+              return (
+                <tr key={label + i} className="border-b border-border last:border-b-0">
+                  <td className="px-3 py-1.5 text-text-secondary">{label}</td>
+                  <td className="px-3 py-1.5 font-mono text-text-primary">
+                    {unhealthy
+                      ? "—"
+                      : measurement(entry.effectiveness, (v) => String(v))}
+                  </td>
+                  <td className="px-3 py-1.5 text-text-primary">
+                    {entry.drift_grade ?? "not measured"}
+                  </td>
+                  <td className="px-3 py-1.5 text-text-secondary">
+                    {unhealthy ? (
+                      <span className="text-danger">
+                        Unhealthy{entry.detail ? ` — ${entry.detail}` : ""}
+                      </span>
+                    ) : (
+                      "Healthy"
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── pillar_breakdown: object keyed "agent/model" (memberKey, ingest.go:189),
+// values are score.Pillars — no JSON tags, so keys are capitalised Go field
+// names. These are rates in [0, 1] (score.Pillars.Validate). ──────────────
+const PILLAR_LABELS: Record<string, string> = {
+  TriggerF1: "Trigger F1",
+  Reliability: "Reliability",
+  Uplift: "Uplift",
+  Efficiency: "Efficiency",
+};
+const PILLAR_KEYS = ["TriggerF1", "Reliability", "Uplift", "Efficiency"] as const;
+
+function formatRate(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
+
+function isPillarsShape(value: unknown): value is Record<string, number> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    PILLAR_KEYS.some((k) => typeof (value as Record<string, unknown>)[k] === "number")
+  );
+}
+
+function PillarBreakdownTable({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const entries = Object.entries(data as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  const malformed = entries.some(([, v]) => !isPillarsShape(v));
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-medium text-text-primary mb-2">Pillar breakdown</h3>
+      {malformed ? (
+        <div className="text-[11px] text-text-tertiary">Unexpected pillar breakdown shape.</div>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="border-b border-border text-text-tertiary text-left">
+                <th className="px-3 py-1.5 font-normal">Member</th>
+                {PILLAR_KEYS.map((k) => (
+                  <th key={k} className="px-3 py-1.5 font-normal">
+                    {PILLAR_LABELS[k]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(([member, value]) => {
+                const pillars = value as Record<string, number>;
+                return (
+                  <tr key={member} className="border-b border-border last:border-b-0">
+                    <td className="px-3 py-1.5 text-text-secondary">{member}</td>
+                    {PILLAR_KEYS.map((k) => (
+                      <td key={k} className="px-3 py-1.5 font-mono text-text-primary">
+                        {measurement(pillars[k], formatRate)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── drift_breakdown: object keyed the same way as pillar_breakdown, values
+// are drift.Agg — also untagged, so capitalised Go field names. Trap: these
+// values are on a 0-100 SCALE, NOT [0,1] — this field has already been run
+// through a [0,1] percentage formatter once and shown 87.5 as "8750.0%".
+// Never share a formatter with the pillar rates above. ─────────────────────
+const DRIFT_KEYS = ["Mean", "Worst", "Sigma", "N"] as const;
+
+function formatDriftScale(v: number): string {
+  return v.toFixed(1);
+}
+
+function isDriftAggShape(value: unknown): value is Record<string, number> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    DRIFT_KEYS.some((k) => typeof (value as Record<string, unknown>)[k] === "number")
+  );
+}
+
+function DriftBreakdownTable({ data }: { data: unknown }) {
+  if (!data || typeof data !== "object") return null;
+  const entries = Object.entries(data as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  const malformed = entries.some(([, v]) => !isDriftAggShape(v));
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-medium text-text-primary mb-2">Drift breakdown</h3>
+      {malformed ? (
+        <div className="text-[11px] text-text-tertiary">Unexpected drift breakdown shape.</div>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="border-b border-border text-text-tertiary text-left">
+                <th className="px-3 py-1.5 font-normal">Member</th>
+                {DRIFT_KEYS.map((k) => (
+                  <th key={k} className="px-3 py-1.5 font-normal">
+                    {k}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(([member, value]) => {
+                const agg = value as Record<string, number>;
+                return (
+                  <tr key={member} className="border-b border-border last:border-b-0">
+                    <td className="px-3 py-1.5 text-text-secondary">{member}</td>
+                    {DRIFT_KEYS.map((k) => (
+                      <td key={k} className="px-3 py-1.5 font-mono text-text-primary">
+                        {measurement(agg[k], formatDriftScale)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -179,8 +371,8 @@ export function QualityReport({
         </div>
       </div>
 
-      <KeyedTable title="Pillar breakdown" data={summary.pillar_breakdown} />
-      <KeyedTable title="Model panel matrix" data={summary.panel_matrix} />
+      <PillarBreakdownTable data={summary.pillar_breakdown} />
+      <PanelMatrixTable data={summary.panel_matrix} />
 
       <div className="mb-6">
         <h3 className="text-sm font-medium text-text-primary mb-2">Robustness gap</h3>
@@ -194,7 +386,7 @@ export function QualityReport({
         <div className="text-sm text-text-secondary mb-2">
           Grade: <span>{summary.drift_grade ?? "not measured"}</span>
         </div>
-        <KeyedTable title="Drift breakdown" data={summary.drift_breakdown} />
+        <DriftBreakdownTable data={summary.drift_breakdown} />
 
         {violations.length > 0 && (
           <div className="border border-border rounded-lg overflow-hidden">
