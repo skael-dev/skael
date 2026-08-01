@@ -107,7 +107,9 @@ func newRerunTestServerWithRole(t *testing.T, role string) *rerunTestServer {
 		Suites: rerunSuiteAdapter{r: suiteRegistry},
 	})
 	evalsuite.RegisterRoutes(api, r, suiteRegistry, skillStore)
-	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry)
+	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry, evalqueue.RouteOptions{
+		Releaser: skill.NewReleaser(skillStore),
+	})
 
 	return &rerunTestServer{handler: r, skills: skillStore, suites: suiteRegistry, queue: q, pool: pool}
 }

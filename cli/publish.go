@@ -9,6 +9,7 @@ import (
 
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/ui"
@@ -114,22 +115,36 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --skip-local-scan only skips this check; the server scans again and can
-	// still reject. --override is what actually gets past a blocking finding.
+	// The local scan exists to save an upload that the server would refuse.
+	// That is now a narrower set than "any blocking finding": an appealable
+	// finding is no longer a rejection, it is the review path. So decide
+	// locally with the *same* function the server uses — not a reimplemented
+	// threshold, which would drift — and abort only on a Block. Anything the
+	// server would hold gets sent, held, and reported as held.
+	//
+	// --skip-local-scan skips this check entirely; the server scans again and
+	// can still reject. --override is what gets a privileged user past a
+	// finding that would otherwise hold the version.
 	skipLocalScan := publishSkipLocalScan || publishForce
-	const blockedSuggestion = "fix the findings above, or ask an owner or admin to publish with --override"
+	localDecision := gate.Decide(*report, nil, gate.Policy{})
 
-	if (report.Status == "critical" || report.Status == "warn") && !skipLocalScan && !publishOverride {
+	if localDecision.Outcome == gate.Block && !skipLocalScan && !publishOverride {
 		if ui.JSONMode {
-			ui.PrintJSONError("security findings block publish", "scan_blocked", blockedSuggestion)
-			return nil
+			return encodeDecision(localDecision)
 		}
+		printUnappealable(localDecision)
 		ui.Error(ui.ErrorDetail{
-			Message:    "security findings block publish",
-			Suggestion: blockedSuggestion,
+			Message: "publish blocked: bundle contains unappealable findings",
 		})
 		return nil
 	}
+
+	if localDecision.Held() && !skipLocalScan && !publishOverride && !ui.JSONMode {
+		fmt.Fprintln(os.Stdout,
+			"  These findings do not block publishing, but they will hold the version for review.")
+	}
+
+	const blockedSuggestion = "fix the findings above, or ask an owner or admin to publish with --override"
 
 	// Pack the skill directory into a tar.gz archive
 	sp = StartSpinner("Packing archive...")
@@ -192,10 +207,24 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	// Publish the new version
-	ver, serverReport, pubErr := c.PublishVersion(name, archive, publishOverride)
+	ver, serverReport, decision, pubErr := c.PublishVersion(name, archive, publishOverride)
 	sp.Stop()
 	if pubErr != nil {
 		if apiErr, ok := pubErr.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			// A Block outcome is unappealable: no evaluation, no admin
+			// override, clears it. Suggesting --override here would send the
+			// operator after a permission that cannot help.
+			if decision != nil && decision.Outcome == gate.Block {
+				if ui.JSONMode {
+					return encodeDecision(*decision)
+				}
+				printUnappealable(*decision)
+				ui.Error(ui.ErrorDetail{
+					Message: "publish blocked: archive contains unappealable findings",
+				})
+				return nil
+			}
+
 			if ui.JSONMode {
 				ui.PrintJSONError("publish blocked by server-side security scan", "scan_blocked", blockedSuggestion)
 				return nil
@@ -228,13 +257,17 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	if ui.JSONMode {
 		out := struct {
-			Name    string `json:"name"`
-			Version int    `json:"version"`
-			Created bool   `json:"created"`
+			Name      string        `json:"name"`
+			Version   int           `json:"version"`
+			Created   bool          `json:"created"`
+			Decision  gate.Decision `json:"decision"`
+			GateState string        `json:"gate_state"`
 		}{
-			Name:    name,
-			Version: ver.Version,
-			Created: ver.Created,
+			Name:      name,
+			Version:   ver.Version,
+			Created:   ver.Created,
+			Decision:  ver.Decision,
+			GateState: ver.GateState,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -242,11 +275,76 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	if !ver.Created {
+		// An unchanged-checksum republish returns the version's *persisted*
+		// gate state, not a fresh recompute — GateState is read back from
+		// the row, so it cannot be stale the way a recomputed Decision could
+		// be (e.g. a version held on first publish, then approved by an
+		// admin: GateState is "released" even though re-deciding from
+		// scratch with no quality evidence would say needs_review again).
+		// Branch on GateState, not on Decision.Held().
+		switch ver.GateState {
+		case "needs_review":
+			ui.Info("No changes detected — v%d is unchanged (still held for review)", ver.Version)
+			return nil
+		case "rejected":
+			ui.Info("No changes detected — v%d is unchanged (rejected, not served)", ver.Version)
+			return nil
+		}
 		ui.Info("No changes detected — v%d is already up to date", ver.Version)
 		return nil
 	}
 
-	fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)
-	fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	switch ver.Decision.Outcome {
+	case gate.NeedsReview:
+		fmt.Fprintf(os.Stdout, "  ⏸ %s v%d created and held for review\n", name, ver.Version)
+		fmt.Fprintln(os.Stdout, "  It is not served to any client until it is cleared.")
+		fmt.Fprintln(os.Stdout)
+		for _, r := range ver.Decision.Reasons {
+			fmt.Fprintf(os.Stdout, "  %s:%d  %s (%s, %s)\n", r.File, r.Line, r.Rule, r.Class, r.Severity)
+			fmt.Fprintf(os.Stdout, "    %s\n", r.Message)
+			fmt.Fprintf(os.Stdout, "    Clears: %s\n", r.Clears)
+		}
+		fmt.Fprintln(os.Stdout)
+		if ver.Quality.State == "pending" {
+			fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand instead:")
+		} else {
+			fmt.Fprintln(os.Stdout, "  No evaluation suite is registered for this skill, so nothing will")
+			fmt.Fprintln(os.Stdout, "  clear it automatically. An owner or admin can approve it:")
+		}
+		fmt.Fprintf(os.Stdout, "    skael review %s %d --approve --reason \"...\"\n", name, ver.Version)
+	case gate.AllowWithWarning:
+		fmt.Fprintf(os.Stdout, "  ⚠ %s v%d published with warnings\n", name, ver.Version)
+		for _, r := range ver.Decision.Reasons {
+			fmt.Fprintf(os.Stdout, "  %s:%d  %s  %s\n", r.File, r.Line, r.Rule, r.Message)
+		}
+		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	default:
+		fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)
+		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	}
 	return nil
+}
+
+// printUnappealable renders a Block decision. Local and server-side blocks
+// share it so a publisher sees the same thing wherever the block was decided —
+// the two are the same verdict from the same function, and presenting them
+// differently would suggest they are appealable in different ways.
+func printUnappealable(d gate.Decision) {
+	fmt.Fprintln(os.Stdout, "\n  Blocked — unappealable findings:")
+	for _, r := range d.Reasons {
+		fmt.Fprintf(os.Stdout, "  %s:%d\t%s (%s, %s)\n    %s\n    Clears: %s\n",
+			r.File, r.Line, r.Rule, r.Class, r.Severity, r.Message, r.Clears)
+	}
+}
+
+// encodeDecision writes a decision as the sole key of a JSON object, matching
+// the shape the server returns on a 422 so a CI job can read
+// .decision.outcome without caring which side decided.
+func encodeDecision(d gate.Decision) error {
+	out := struct {
+		Decision gate.Decision `json:"decision"`
+	}{Decision: d}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }

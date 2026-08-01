@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
@@ -118,7 +119,7 @@ func TestGetQuality_ReturnsLatestScoredVersion(t *testing.T) {
 	// Publishing bumps latest_version; simulate it directly so the store's
 	// notion of "current version" matches what the record scores.
 	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive.tar.gz", "cksum", "",
-		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester"); err != nil {
+		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +161,7 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 
 	// v1: published and scored.
 	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive-v1.tar.gz", "cksum1", "",
-		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester"); err != nil {
+		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision()); err != nil {
 		t.Fatal(err)
 	}
 	rec := quality.Record{
@@ -176,7 +177,7 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 	// v2: published, but no eval has landed for it yet — the skill's
 	// latest_version is now 2, and skill_quality has no row for it.
 	if _, err := sk.CreateVersion(t.Context(), created.ID, "archive-v2.tar.gz", "cksum2", "",
-		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester"); err != nil {
+		"", "body", json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "tester", allowDecision()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -194,4 +195,9 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 	if out.Version != 1 || out.Headline != 90 {
 		t.Fatalf("quality = %+v, want version 1 headline 90", out)
 	}
+}
+
+// allowDecision is the clean-scan gate decision: nothing to hold on.
+func allowDecision() gate.Decision {
+	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
 }

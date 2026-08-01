@@ -146,9 +146,23 @@ type rerunOutput struct {
 // defaultLeaseSeconds is used when a claim request omits lease_seconds.
 const defaultLeaseSeconds = 60
 
+// RouteOptions carries the collaborators the report handler needs to act on a
+// score beyond storing it. Each is optional: an operator running without the
+// gate wired must not hit a nil dereference.
+type RouteOptions struct {
+	// Releaser re-decides a held version once its score lands. Nil disables
+	// the re-decision entirely: reports are still ingested, held versions
+	// simply stay held.
+	Releaser *skill.Releaser
+	// QualityFloor is the minimum headline score a verified report must
+	// reach to clear a held version. It comes from
+	// platform.Config.QualityFloor, the same value publish decides with.
+	QualityFloor float64
+}
+
 // RegisterRoutes wires up the eval job queue HTTP endpoints: claim,
 // heartbeat, report ingestion, fail, status lookup, and re-run.
-func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *skill.Store, suites *evalsuite.Registry) {
+func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *skill.Store, suites *evalsuite.Registry, opts RouteOptions) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "claim-eval-job",
 		Method:        http.MethodPost,
@@ -398,6 +412,45 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: complete job failed")
 			return nil, huma.Error500InternalServerError("report eval job: internal error")
 		}
+		// h. Re-decide the version now that a measurement exists: a version
+		// held on an appealable finding is released if this score clears it.
+		// Without this the gate never lets go by itself.
+		//
+		// Note the deliberate asymmetry with the transaction. The release
+		// writes through tx, so it cannot outlive a rolled-back score. But a
+		// release *error* does not roll the score back: a verified
+		// measurement is worth keeping whatever the gate write did, and the
+		// version simply stays held, which is the safe direction.
+		//
+		// The release runs inside a savepoint (pgx models a nested Begin as
+		// one) rather than directly on tx, because that asymmetry is
+		// otherwise unachievable: a failed statement aborts the whole
+		// Postgres transaction, so a release error would take the score down
+		// with it at Commit. The savepoint confines the damage to the
+		// release.
+		if opts.Releaser != nil {
+			sp, spErr := tx.Begin(ctx)
+			if spErr != nil {
+				log.Error().Err(spErr).Str("job_id", input.ID).Msg("evalqueue: begin release savepoint failed")
+			} else if _, released, err := opts.Releaser.Reconsider(ctx, sp, j.SkillName, j.Version,
+				skill.QualityEvidence{
+					Verified:                 rec.Verified,
+					PanelComplete:            rec.PanelComplete,
+					Headline:                 rec.Headline,
+					CriticalForbidViolations: rec.CriticalForbidViolations,
+				}, opts.QualityFloor); err != nil {
+				_ = sp.Rollback(ctx)
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: reconsider held version failed")
+			} else {
+				if err := sp.Commit(ctx); err != nil {
+					log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: release savepoint commit failed")
+				} else if released {
+					log.Info().Str("skill", j.SkillName).Int("version", j.Version).
+						Msg("evalqueue: report released a held version")
+				}
+			}
+		}
+
 		if err := tx.Commit(ctx); err != nil {
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: commit transaction failed")
 			return nil, huma.Error500InternalServerError("report eval job: internal error")

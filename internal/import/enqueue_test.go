@@ -106,7 +106,7 @@ func TestImportSingleSkill_EnqueuesOneJobWhenASuiteIsRegistered(t *testing.T) {
 	src := Source{Type: "github", Owner: "acme", Repo: "skills", Ref: "main", CommitSHA: "abc123"}
 
 	q := &fakeQueue{}
-	ver, created, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, q, suites)
+	ver, created, _, _, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, q, suites, 0)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -146,7 +146,7 @@ func TestImportSingleSkill_NoSuiteMeansNoJob(t *testing.T) {
 	src := Source{Type: "github", Owner: "acme", Repo: "skills", Ref: "main", CommitSHA: "abc123"}
 
 	q := &fakeQueue{}
-	_, created, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, q, suites)
+	_, created, _, _, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, q, suites, 0)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -187,7 +187,7 @@ func TestImportSingleSkill_SubmitFailureDoesNotAbortTheImport(t *testing.T) {
 
 	failing := &fakeQueue{err: context.DeadlineExceeded}
 
-	_, createdA, errA := importSingleSkill(ctx, rootDir, dsA, src, skillStore, importStore, storage, nil, failing, suites)
+	_, createdA, _, _, errA := importSingleSkill(ctx, rootDir, dsA, src, skillStore, importStore, storage, nil, failing, suites, 0)
 	if errA != nil {
 		t.Fatalf("skill-a: enqueue failure must not fail the import: %v", errA)
 	}
@@ -195,7 +195,7 @@ func TestImportSingleSkill_SubmitFailureDoesNotAbortTheImport(t *testing.T) {
 		t.Fatal("skill-a: expected created=true even though enqueue failed")
 	}
 
-	_, createdB, errB := importSingleSkill(ctx, rootDir, dsB, src, skillStore, importStore, storage, nil, failing, suites)
+	_, createdB, _, _, errB := importSingleSkill(ctx, rootDir, dsB, src, skillStore, importStore, storage, nil, failing, suites, 0)
 	if errB != nil {
 		t.Fatalf("skill-b: a prior enqueue failure must not abort subsequent skills: %v", errB)
 	}

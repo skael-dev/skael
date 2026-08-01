@@ -68,7 +68,7 @@ Body content.
 		CommitSHA: "abc123",
 	}
 
-	_, created, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, nil, nil)
+	_, created, _, _, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, nil, nil, 0)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -120,7 +120,7 @@ Body content.
 	ds := DiscoveredSkill{Name: "deploy", Description: "Deploys the service.", Path: "deploy"}
 	src := Source{Type: "github", Owner: "acme", Repo: "skills", Ref: "main", CommitSHA: "def456"}
 
-	_, _, err = importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, nil, nil)
+	_, _, _, _, err = importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, nil, nil, 0)
 	require.NoError(t, err)
 
 	var count int

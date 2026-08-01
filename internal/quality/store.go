@@ -40,7 +40,8 @@ func (s *Store) WithExecutor(e Executor) *Store {
 // expects, in order.
 const recordColumns = `skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 	pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
-	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at`
+	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
+	critical_forbid_violations`
 
 // row is the subset of pgx.Row/pgx.Rows that scanRecord needs.
 type row interface {
@@ -56,6 +57,7 @@ func scanRecord(r row) (*Record, error) {
 		&rec.Pillars, &rec.PanelMatrix, &rec.RobustnessGap, &rec.DriftGrade, &rec.DriftBreakdown,
 		&rec.Verified, &rec.PanelComplete, &rec.SuiteRef, &rec.EngineVersion, &rec.ModelPanel,
 		&rec.Tier, &rec.UpliftSource, &jobID, &rec.ScoredAt,
+		&rec.CriticalForbidViolations,
 	)
 	if err != nil {
 		return nil, err
@@ -77,12 +79,14 @@ func (s *Store) Upsert(ctx context.Context, rec Record) error {
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO skill_quality (skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 			pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
-			verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+			verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
+			critical_forbid_violations)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		rec.SkillID, rec.Version, rec.Headline, rec.HeadlineCILow, rec.HeadlineCIHigh,
 		rec.Pillars, rec.PanelMatrix, rec.RobustnessGap, rec.DriftGrade, rec.DriftBreakdown,
 		rec.Verified, rec.PanelComplete, rec.SuiteRef, rec.EngineVersion, rec.ModelPanel,
-		rec.Tier, rec.UpliftSource, jobID, rec.ScoredAt)
+		rec.Tier, rec.UpliftSource, jobID, rec.ScoredAt,
+		rec.CriticalForbidViolations)
 	if err != nil {
 		return fmt.Errorf("quality.Store.Upsert: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/analytics"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
 )
@@ -28,7 +29,7 @@ func insertTestVersion(t *testing.T, ctx context.Context, skillStore *skill.Stor
 	t.Helper()
 	scanResult := json.RawMessage(`{"status":"` + scanStatus + `","findings":[],"summary":{"critical":0,"high":0,"medium":0,"info":0}}`)
 	manifest := []skill.FileEntry{{Path: "SKILL.md", Size: 512}}
-	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", description, "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com")
+	_, err := skillStore.CreateVersion(ctx, skillID, "/archives/test.tar.gz", "checksum123", "test release", description, "", json.RawMessage(`{}`), manifest, scanResult, "test@example.com", allowDecision())
 	require.NoError(t, err)
 }
 
@@ -296,4 +297,9 @@ func TestAnalyticsSkills_PaginatedShapeViaHTTP(t *testing.T) {
 
 	tagsRR := doJSONAnalytics(t, handler, http.MethodGet, "/api/skills/tags", nil)
 	require.Equal(t, http.StatusOK, tagsRR.Code, "body: %s", tagsRR.Body.String())
+}
+
+// allowDecision is the clean-scan gate decision: nothing to hold on.
+func allowDecision() gate.Decision {
+	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
 }

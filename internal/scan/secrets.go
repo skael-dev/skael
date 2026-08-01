@@ -118,7 +118,30 @@ var secretRules = []Rule{
 		// The word list is deliberately limited to UNAMBIGUOUS placeholders — words
 		// like "secret"/"token"/"test" are omitted because real secret values
 		// commonly start with them, and rejecting those would be a false negative.
-		Reject:  regexp.MustCompile(`(?i)["'](your|example|sample|change|placeholder|dummy|fake|redacted|todo|none|null|xxx|abc123)|(?-i:["'][A-Z][A-Z0-9_]{2,}["'])`),
+		// Two further branches, both structural rather than lexical — they
+		// match what the code *does*, not a warning word the author happened
+		// to write nearby, which is the bypass vector this project rules out.
+		// Reject is tested against the matched text only (see scanner.go), so
+		// neither can suppress a real secret elsewhere on the same line, and
+		// neither applies to the prefixed-token rules above: a real
+		// sk-ant-/AKIA/xox…/ghp_ key is matched by its own rule, which has no
+		// Reject at all.
+		//
+		//  1. An environment lookup. `getenv('ANTHROPIC_API_KEY')`,
+		//     `os.environ[...]`, `process.env.X`, `ENV['X']` name a secret;
+		//     they do not contain one, by construction. Flagging them punishes
+		//     the recommended practice.
+		//  2. A redacted documentation placeholder — a value that is a short
+		//     prefix followed by a literal ellipsis (`"xoxp-..."`), or whose
+		//     whole body is filler (`"xxxx"`, `"****"`). Deliberately anchored
+		//     to the entire value: a real key is never wholly filler, and a
+		//     looser `x{4,}` anywhere would reject genuine base64 key material.
+		//     That would be a false negative, which is the one direction this
+		//     rule may not fail in.
+		Reject: regexp.MustCompile(`(?i)["'](your|example|sample|change|placeholder|dummy|fake|redacted|todo|none|null|xxx|abc123)` +
+			`|(?-i:["'][A-Z][A-Z0-9_]{2,}["'])` +
+			`|\b(getenv|os\.environ|os\.Getenv|process\.env|System\.getenv|GetEnvironmentVariable)\b|\bENV\[` +
+			`|["'][A-Za-z0-9_\-]{0,16}(\.\.\.|…)["']|["'][xX]{4,}["']|["']\*{3,}["']`),
 		Message: "Hardcoded password or secret in plaintext",
 	},
 }

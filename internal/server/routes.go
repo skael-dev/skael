@@ -140,6 +140,8 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		External: externalScanner,
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
+
+		QualityFloor: cfg.QualityFloor,
 	})
 
 	// Sync manifest.
@@ -171,9 +173,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	importStore := skillimport.NewStore(d.Pool)
 	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
 	skillimport.RegisterRoutes(api, router, importStore, skillStore, d.Storage, importFetcher, skillimport.RouteOptions{
-		External: externalScanner,
-		Queue:    evalPool,
-		Suites:   suiteRegistry,
+		External:     externalScanner,
+		Queue:        evalPool,
+		Suites:       suiteRegistry,
+		QualityFloor: cfg.QualityFloor,
 	})
 
 	// Eval suite registry. suiteRegistry was constructed above, alongside
@@ -182,7 +185,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Eval job queue. The server enqueues and ingests; it never holds a
 	// Docker socket or an LLM key — those live on the worker.
-	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry)
+	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
+		Releaser:     skill.NewReleaser(skillStore),
+		QualityFloor: cfg.QualityFloor,
+	})
 
 	// Read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)

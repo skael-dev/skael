@@ -175,6 +175,12 @@ func parseSARIF(data []byte, name string) ([]Finding, error) {
 				File:       file,
 				Line:       line,
 				Message:    strings.TrimSpace(r.Message.Text),
+				// The documented use of EXTERNAL_SCAN_CMD is gitleaks, a
+				// secrets scanner; an operator who wires one up means its
+				// findings as secrets. If a non-secret external ruleset ever
+				// needs a different class, add an EXTERNAL_SCAN_CLASS env
+				// var rather than guessing from the tool name here.
+				Class: string(ClassSecret),
 			})
 		}
 	}

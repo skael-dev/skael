@@ -16,15 +16,12 @@ import (
 // silent skip would let an attacker hide a payload by padding past the limit.
 const maxScanBytes = 1 << 20 // 1 MiB
 
-// allRules is the combined set of all detection rules, populated at init time.
+// allRules is the combined set of all detection rules, populated at init time
+// from AllRules() so the two definitions cannot drift.
 var allRules []Rule
 
 func init() {
-	allRules = append(allRules, secretRules...)
-	allRules = append(allRules, injectionRules...)
-	allRules = append(allRules, exfiltrationRules...)
-	allRules = append(allRules, obfuscationRules...)
-	allRules = append(allRules, executionRules...)
+	allRules = AllRules()
 }
 
 // ScanDir walks a directory tree, scans each file, and returns an aggregated report.
@@ -109,6 +106,7 @@ func scanLine(filename, line string, lineNum int, report *Report) {
 			// Never echo a credential verbatim in the report.
 			shown = maskSecret(match)
 		}
+		class, _ := rule.ResolvedClass()
 		report.Findings = append(report.Findings, Finding{
 			Rule:       rule.Name,
 			Severity:   rule.Severity,
@@ -117,6 +115,7 @@ func scanLine(filename, line string, lineNum int, report *Report) {
 			Line:       lineNum,
 			Match:      shown,
 			Message:    rule.Message,
+			Class:      string(class),
 		})
 	}
 }

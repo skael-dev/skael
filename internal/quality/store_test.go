@@ -148,6 +148,27 @@ func TestStore_EmptyPanelMatrixRoundTripsAsArray(t *testing.T) {
 	}
 }
 
+func TestStore_CriticalForbidViolationsRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.SetupTestDB(t)
+	s := quality.NewStore(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: "r", Tier: "full",
+		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
+		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
+		CriticalForbidViolations: 3, ScoredAt: time.Now()}
+	if err := s.Upsert(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Latest(ctx, skillID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CriticalForbidViolations != 3 {
+		t.Fatalf("critical_forbid_violations = %d, want 3", got.CriticalForbidViolations)
+	}
+}
+
 // insertSkill creates the skills row the foreign key needs.
 func insertSkill(t *testing.T, pool *pgxpool.Pool, name string) string {
 	t.Helper()

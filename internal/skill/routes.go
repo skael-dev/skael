@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/scan"
 )
@@ -69,6 +70,17 @@ func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 	return auth.UserFromContext(ctx).IsPrivileged()
 }
 
+// DecidePublish is the one definition of "what does this scan report mean for
+// this version" shared by every route that creates a version — publish and
+// import alike. A version has no quality state yet by definition: the
+// evaluation that could produce one runs against the bundle this call is
+// creating, so q is always nil here. floor and override are the resolved
+// gate.Policy inputs; import has no interactive override and must always
+// pass false.
+func DecidePublish(rep *scan.Report, floor float64, override bool) gate.Decision {
+	return gate.Decide(*rep, nil, gate.Policy{Floor: floor, AdminOverride: override})
+}
+
 // EvalJobRequest is what publish needs to enqueue an evaluation. It mirrors
 // the fields of evalqueue.Job that publish sets, but is declared in this
 // package rather than imported: internal/evalqueue imports internal/skill
@@ -114,6 +126,11 @@ type RouteOptions struct {
 	Queue QueueSubmitter
 	// Suites looks up the latest registered eval suite for a skill by name.
 	Suites SuiteLookup
+	// QualityFloor is the minimum headline quality score a verified
+	// evaluation must reach to clear a held version. It comes from
+	// platform.Config.QualityFloor; the zero value means any verified,
+	// complete, contract-clean report clears.
+	QualityFloor float64
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -316,8 +333,9 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	}
 	type publishBody struct {
 		Version
-		Created bool         `json:"created"`
-		Quality qualityState `json:"quality"`
+		Created  bool          `json:"created"`
+		Quality  qualityState  `json:"quality"`
+		Decision gate.Decision `json:"decision"`
 	}
 	type publishOutput struct {
 		Body *publishBody
@@ -357,15 +375,28 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			return nil, fmt.Errorf("publish: scan: %w", err)
 		}
 		scan.MergeExternal(ctx, external, tmpDir, report)
-		if report.Status == "critical" || report.Status == "warn" {
-			if !publishOverrideAllowed(ctx, input.Override) {
-				scanJSON, _ := json.Marshal(report)
-				return nil, huma.NewError(
-					http.StatusUnprocessableEntity,
-					"archive rejected: resolve the findings below, or have an admin publish with override",
-					fmt.Errorf("%s", scanJSON),
-				)
-			}
+		// tmpDir is a throwaway unpack directory. Its absolute path means
+		// nothing to the publisher and leaks the server's filesystem layout,
+		// so rewrite before the report is persisted, decided on, or returned.
+		scan.Relativize(report, tmpDir)
+
+		decision := DecidePublish(report, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
+
+		if decision.Outcome == gate.Block {
+			payload, _ := json.Marshal(struct {
+				Scan     *scan.Report  `json:"scan"`
+				Decision gate.Decision `json:"decision"`
+			}{report, decision})
+			return nil, huma.NewError(
+				http.StatusUnprocessableEntity,
+				"archive rejected: it contains credential-theft or data-exfiltration findings, which are unappealable — no evaluation and no override clears them",
+				fmt.Errorf("%s", payload),
+			)
+		}
+
+		if decision.Outcome == gate.Allow && len(decision.Reasons) > 0 {
+			// Reached only via an admin override, since a clean report has
+			// no reasons and a quality state cannot exist at publish time.
 			user := auth.UserFromContext(ctx)
 			log.Warn().
 				Str("skill", input.Name).
@@ -374,7 +405,14 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 				Str("scan_status", report.Status).
 				Int("critical", report.Summary.Critical).
 				Int("high", report.Summary.High).
-				Msg("publish override: privileged user published a skill with blocking scan findings")
+				Msg("publish override: privileged user published a skill with findings that would otherwise hold it for review")
+		}
+
+		if decision.Outcome == gate.NeedsReview {
+			log.Info().
+				Str("skill", input.Name).
+				Int("reasons", len(decision.Reasons)).
+				Msg("publish held for review: version created but not served until an evaluation or an admin clears it")
 		}
 
 		// 4. Compute checksum and compare against latest version.
@@ -384,11 +422,29 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if sk.LatestVersion > 0 {
 			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
 			if err == nil && latest != nil && latest.Checksum == checksum {
-				// Unchanged content, nothing new to score: "none" is accurate
-				// here, not a third undocumented state. A zero-value
-				// qualityState would serialize as {} — no state field at all
-				// — which a client switching on state has no branch for.
-				return &publishOutput{Body: &publishBody{Version: *latest, Created: false, Quality: qualityState{State: "none"}}}, nil
+				// Unchanged content: report the version's persisted gate
+				// state, not a fresh recompute. `decision` above was
+				// computed with nil quality evidence and no admin override
+				// in play for *this* request — it is a hypothetical ("what
+				// would this bundle decide right now"), not the version's
+				// actual status. latest may have been approved or rejected
+				// since it was first decided, and that stored outcome —
+				// gate_decision, snapshotted at the time it was made — is
+				// the only truth for a bundle nobody is re-deciding.
+				// Nothing new was scored, so quality state is "none"; created
+				// is false, so a client knows nothing new was gated either.
+				persisted := decision
+				if len(latest.GateDecision) > 0 {
+					var stored gate.Decision
+					if err := json.Unmarshal(latest.GateDecision, &stored); err != nil {
+						return nil, fmt.Errorf("publish: unmarshal persisted gate decision: %w", err)
+					}
+					persisted = stored
+				}
+				return &publishOutput{Body: &publishBody{
+					Version: *latest, Created: false,
+					Quality: qualityState{State: "none"}, Decision: persisted,
+				}}, nil
 			}
 		}
 
@@ -485,15 +541,22 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			manifest,
 			scanJSON,
 			publishedBy,
+			decision,
 		)
 		if err != nil {
 			_ = storage.Delete(ctx, archiveName)
 			return nil, huma.Error500InternalServerError("creating version", err)
 		}
 
-		// 9. Extract and persist spec-compliance metadata.
-		spec := ValidateSpec(fm, sk.Name)
-		_ = store.UpdateSpecFields(ctx, sk.Name, spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
+		// 9. Extract and persist spec-compliance metadata — but only for a
+		// version that is actually being served. A held version must not
+		// publish its own metadata onto the skill row while the gate is
+		// withholding its archive; the held version's frontmatter lives on
+		// its own skill_versions row, which is what a review UI renders.
+		if !decision.Held() {
+			spec := ValidateSpec(fm, sk.Name)
+			_ = store.UpdateSpecFields(ctx, sk.Name, spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
+		}
 
 		// 10. Enqueue an evaluation when a suite exists for this skill. A queue
 		// outage must not fail a publish: the version is already durable, and
@@ -521,7 +584,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			}
 		}
 
-		return &publishOutput{Body: &publishBody{Version: *ver, Created: true, Quality: quality}}, nil
+		return &publishOutput{Body: &publishBody{Version: *ver, Created: true, Quality: quality, Decision: decision}}, nil
 	})
 
 	// -----------------------------------------------------------------
@@ -822,6 +885,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// GET /api/skills/{name}/scan — scan results for the latest version
 		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
 	}
+
+	// POST /api/skills/{name}/versions/{version}/review — owner/admin
+	// approval or rejection of a version held for review.
+	registerReviewRoutes(api, store)
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a specific

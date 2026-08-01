@@ -78,7 +78,17 @@ skael hook install               # set up activation tracking + auto-sync
 
 Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
 
-Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings block publishing; an owner or admin can publish anyway with `--override`, which is recorded server-side. Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
+Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings don't all mean the same thing, so they don't all get the same treatment.
+
+**Blocked, permanently.** A finding that means credentials or data are leaving the machine — a hardcoded secret, a reverse shell — is unappealable. The publish is rejected with a 422, no version is created, and nothing clears it: not an evaluation, not `--override`, not an admin. The only fix is to remove it from the bundle. This is a per-rule property, not a per-category one: reading a credential path is *access* and is appealable; shipping the credential is not.
+
+**Held for review.** Everything else that blocks — dangerous execution, prompt injection, heuristic matches — creates the version but does not release it. The archive exists and has a version number, but `skills.latest_version` doesn't advance, so the skill never appears in the sync manifest, `skael add` reports it as not found, `skael sync` won't install it, and no client can download it. A held version clears one of two ways: a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel and no critical contract violations, or an explicit human decision — `skael review <name> <version> --approve --reason "..."`, owner or admin only, recorded server-side. An owner or admin can also short-circuit at publish time with `--override`.
+
+`skael publish` runs the same scan locally first and applies the same decision, so it can tell you before the upload rather than after. It aborts only on what the server would block outright; an appealable finding is sent, held, and reported as held. `--skip-local-scan` skips the local check entirely and lets the server decide.
+
+One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
+
+Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
 
 Every agent that uses a skill reports activation events back to the platform. `skael doctor` shows you which agents have tracking installed.
 

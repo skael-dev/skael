@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadConfig_RequiresDatabaseURL(t *testing.T) {
@@ -59,5 +61,32 @@ func TestLoadConfig_DisableSignupDefault(t *testing.T) {
 	}
 	if cfg.DisableSignup {
 		t.Error("expected DisableSignup to be false by default")
+	}
+}
+
+func TestConfigQualityFloor(t *testing.T) {
+	t.Run("defaults to zero", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "postgres://x")
+		c, err := platform.LoadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, c.QualityFloor,
+			"the default floor accepts any verified report; a nonzero default would hold versions on a deployment that never asked for a floor")
+	})
+
+	t.Run("parses a value", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "postgres://x")
+		t.Setenv("QUALITY_FLOOR", "72.5")
+		c, err := platform.LoadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 72.5, c.QualityFloor)
+	})
+
+	for _, bad := range []string{"-1", "101", "high", ""} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://x")
+			t.Setenv("QUALITY_FLOOR", bad)
+			_, err := platform.LoadConfig()
+			require.Error(t, err, "an unparseable or out-of-range floor must refuse to boot rather than silently becoming 0 — a floor that reads as 'no floor' is the failure nobody notices")
+		})
 	}
 }
