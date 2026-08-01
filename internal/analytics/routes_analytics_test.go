@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/analytics"
@@ -302,4 +303,136 @@ func TestAnalyticsSkills_PaginatedShapeViaHTTP(t *testing.T) {
 // allowDecision is the clean-scan gate decision: nothing to hold on.
 func allowDecision() gate.Decision {
 	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
+}
+
+// seedSkillWithQuality creates a skill (with skills.tags set via the column,
+// not only frontmatter) and a scored skill_quality row for it. Returns the
+// skill's ID so callers can add further quality rows with insertQuality.
+func seedSkillWithQuality(t *testing.T, pool *pgxpool.Pool, name string, version int, headline float64, verified, panelComplete bool) string {
+	t.Helper()
+	ctx := context.Background()
+	skillStore := skill.NewStore(pool)
+	sk := insertTestSkillTagged(t, ctx, skillStore, name, []string{})
+	insertQuality(t, pool, sk.ID, version, headline, verified, panelComplete)
+	return sk.ID
+}
+
+// seedSkillOnly creates a skill with no quality row at all.
+func seedSkillOnly(t *testing.T, pool *pgxpool.Pool, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	skillStore := skill.NewStore(pool)
+	sk := insertTestSkillTagged(t, ctx, skillStore, name, []string{})
+	return sk.ID
+}
+
+// insertQuality inserts a skill_quality row directly, each call getting a
+// strictly later scored_at than the previous so ordering by scored_at DESC is
+// deterministic across the rows a single test inserts.
+var insertQualitySeq int64
+
+func insertQuality(t *testing.T, pool *pgxpool.Pool, skillID string, version int, headline float64, verified, panelComplete bool) {
+	t.Helper()
+	insertQualitySeq++
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO skill_quality (skill_id, version, headline_score, verified, panel_complete, suite_ref, scored_at)
+		VALUES ($1, $2, $3, $4, $5, 'suite-ref', now() + make_interval(secs => $6))`,
+		skillID, version, headline, verified, panelComplete, insertQualitySeq)
+	require.NoError(t, err)
+}
+
+func TestGetSkillsAnalytics_QualityRidesAlong(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	store := analytics.NewStore(pool)
+
+	scored := seedSkillWithQuality(t, pool, "scored-one", 3, 74.2, true, true)
+	_ = scored
+	seedSkillOnly(t, pool, "unscored-one")
+
+	got, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50})
+	require.NoError(t, err)
+	byName := map[string]analytics.SkillAnalytics{}
+	for _, s := range got {
+		byName[s.Name] = s
+	}
+	q := byName["scored-one"].Quality
+	require.NotNil(t, q, "scored skill has no quality summary")
+	require.Equal(t, 74.2, q.Headline)
+	require.Equal(t, 3, q.Version)
+	require.True(t, q.Verified)
+
+	require.Nil(t, byName["unscored-one"].Quality, "an unscored skill must have a nil quality summary, not a zero one")
+}
+
+// An unscored skill must never sort as though it scored zero — in either
+// direction. This is the rule the whole 'unscored reads neutral' requirement
+// rests on, and NULLS LAST in only one direction is the easy way to break it.
+func TestGetSkillsAnalytics_UnscoredSortsLastInBothDirections(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	store := analytics.NewStore(pool)
+
+	seedSkillWithQuality(t, pool, "high", 1, 90, true, true)
+	seedSkillWithQuality(t, pool, "low", 1, 10, true, true)
+	seedSkillOnly(t, pool, "none")
+
+	for _, tc := range []struct {
+		order string
+		first string
+	}{
+		{"desc", "high"},
+		{"asc", "low"},
+	} {
+		got, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{
+			Limit: 50, Sort: "quality", Order: tc.order,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tc.first, got[0].Name, "order=%s", tc.order)
+		require.Equal(t, "none", got[len(got)-1].Name, "order=%s", tc.order)
+	}
+}
+
+func TestGetSkillsAnalytics_ScoredFilter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	store := analytics.NewStore(pool)
+	seedSkillWithQuality(t, pool, "has-score", 1, 50, true, true)
+	seedSkillOnly(t, pool, "no-score")
+
+	no, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50, Scored: "no"})
+	require.NoError(t, err)
+	require.Len(t, no, 1)
+	require.Equal(t, "no-score", no[0].Name)
+
+	yes, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50, Scored: "yes"})
+	require.NoError(t, err)
+	require.Len(t, yes, 1)
+	require.Equal(t, "has-score", yes[0].Name)
+}
+
+// The latest score across versions wins, matching GET /api/skills/{name}/quality:
+// a badge must not vanish because the newest version has not been scored yet.
+func TestGetSkillsAnalytics_UsesLatestScoreAcrossVersions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	store := analytics.NewStore(pool)
+	id := seedSkillWithQuality(t, pool, "multi", 1, 40, true, true)
+	insertQuality(t, pool, id, 2, 80, true, true) // newer scored_at
+
+	got, _, err := store.GetSkillsAnalytics(ctx, 30, analytics.SkillsQuery{Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 80.0, got[0].Quality.Headline)
 }

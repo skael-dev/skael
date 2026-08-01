@@ -110,6 +110,8 @@ func RegisterRoutes(api huma.API, store *Store) {
 		Sort   string `query:"sort"   default:"activations"`
 		Q      string `query:"q"`
 		Tag    string `query:"tag"`
+		Order  string `query:"order,omitempty"  enum:"asc,desc"`
+		Scored string `query:"scored,omitempty" enum:"yes,no"`
 	}
 	type skillsAnalyticsOutput struct {
 		Body struct {
@@ -129,6 +131,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		}
 		skills, total, err := store.GetSkillsAnalytics(ctx, days, SkillsQuery{
 			Limit: input.Limit, Offset: input.Offset, Sort: input.Sort, Query: input.Q, Tag: input.Tag,
+			Order: input.Order, Scored: input.Scored,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("analytics skills: %w", err)
