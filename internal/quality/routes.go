@@ -127,6 +127,32 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 		return &qualityHistoryOutput{Body: out}, nil
 	})
 
+	type seriesBody struct {
+		Series []Series `json:"series"`
+	}
+	type seriesOutput struct {
+		Body seriesBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get-skill-quality-series",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/quality/series",
+		Summary:     "Get a skill's quality history grouped into comparable series",
+	}, func(ctx context.Context, input *qualityInput) (*seriesOutput, error) {
+		sk, err := skills.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality series: internal error", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
+		hist, err := store.History(ctx, sk.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality series: internal error", err)
+		}
+		return &seriesOutput{Body: seriesBody{Series: BuildSeries(input.Name, hist)}}, nil
+	})
+
 	type versionInput struct {
 		Name    string `path:"name"`
 		Version int    `path:"version"`

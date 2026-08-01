@@ -197,6 +197,32 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 	}
 }
 
+// /quality/series must not be captured by the {version} route.
+func TestGetQualitySeries_NotShadowedByVersionRoute(t *testing.T) {
+	handler, qs, sk, _ := newQualityTestServer(t)
+	created, err := sk.Create(t.Context(), "series-shadow", "series-shadow", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRecordWithReport(t, qs, created.ID, 1, nil)
+
+	rr := doGet(t, handler, "/api/skills/series-shadow/quality/series")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Series []struct {
+			Current bool `json:"current"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("series route returned a non-series body: %v", err)
+	}
+	if len(body.Series) != 1 || !body.Series[0].Current {
+		t.Fatalf("series = %+v, want one current series", body.Series)
+	}
+}
+
 // allowDecision is the clean-scan gate decision: nothing to hold on.
 func allowDecision() gate.Decision {
 	return gate.Decision{Outcome: gate.Allow, Reasons: []gate.Reason{}}
