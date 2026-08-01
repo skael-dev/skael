@@ -115,7 +115,22 @@ export function QualityTrend({ skillName }: { skillName: string }) {
     );
   }
 
-  const [current, ...earlier] = series;
+  // Select by the explicit `current` flag, not position. The contract
+  // promises the current series comes first, but trusting position anyway
+  // is a needless bet: if that ordering were ever violated upstream, this
+  // component would silently chart a non-current — possibly incomparable —
+  // series and look completely normal while doing it. If nothing is
+  // flagged current, that's a server contract violation; charting an
+  // arbitrary series would be a confident wrong answer, so fall back to the
+  // same quiet no-trend state used for empty history instead.
+  const current = series.find((s) => s.current);
+  const earlier = series.filter((s) => s !== current);
+
+  if (!current) {
+    return (
+      <div className="text-[11px] text-text-tertiary mb-6">No scores yet.</div>
+    );
+  }
 
   return (
     <div className="mb-6">

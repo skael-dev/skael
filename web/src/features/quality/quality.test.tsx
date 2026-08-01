@@ -473,4 +473,56 @@ describe("QualityTrend", () => {
     render(withQuery(<QualityTrend skillName="s" />));
     expect(await screen.findByText(/no scores yet/i)).toBeInTheDocument();
   });
+
+  it("selects the current series by its flag, not by position", async () => {
+    mockSeries([
+      {
+        key: "s0",
+        current: false,
+        reason: "different model panels: a score change could be the models rather than the skill",
+        points: [
+          { version: 2, headline_score: 10, headline_ci_low: 5, headline_ci_high: 15, verified: true, scored_at: "2026-06-01T00:00:00Z" },
+        ],
+      },
+      {
+        key: "s1",
+        current: true,
+        reason: "",
+        points: [
+          { version: 3, headline_score: 74, headline_ci_low: 70, headline_ci_high: 78, verified: true, scored_at: "2026-07-01T00:00:00Z" },
+          { version: 4, headline_score: 78, headline_ci_low: 74, headline_ci_high: 82, verified: true, scored_at: "2026-08-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    const { container } = render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/different model panels/i)).toBeInTheDocument();
+    const points = container.querySelectorAll("[data-point]");
+    expect(points).toHaveLength(2);
+    const titles = Array.from(points).map((p) => p.getAttribute("title") ?? p.querySelector("title")?.textContent);
+    expect(titles).toEqual(["v3 · 74", "v4 · 78"]);
+  });
+
+  it("renders the quiet no-trend state when no series is flagged current", async () => {
+    mockSeries([
+      {
+        key: "s0",
+        current: false,
+        reason: "different task suites: a score change could be the tasks rather than the skill",
+        points: [
+          { version: 2, headline_score: 10, headline_ci_low: 5, headline_ci_high: 15, verified: true, scored_at: "2026-06-01T00:00:00Z" },
+        ],
+      },
+      {
+        key: "s1",
+        current: false,
+        reason: "different model panels: a score change could be the models rather than the skill",
+        points: [
+          { version: 3, headline_score: 74, headline_ci_low: 70, headline_ci_high: 78, verified: true, scored_at: "2026-07-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    const { container } = render(withQuery(<QualityTrend skillName="s" />));
+    expect(await screen.findByText(/no scores yet/i)).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-point]")).toHaveLength(0);
+  });
 });
