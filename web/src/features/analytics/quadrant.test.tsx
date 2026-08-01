@@ -102,4 +102,43 @@ describe("Quadrant", () => {
     expect(screen.queryByTestId("attention-row")).not.toBeInTheDocument();
     expect(await screen.findByText(/1 incomplete/i)).toBeInTheDocument();
   });
+
+  it("pages through the full population instead of stopping at the first 100", async () => {
+    // 150 skills, only fitting in two 100-skill pages. If the component
+    // still used a single limit:100 request, only the first page (offset 0)
+    // would be seen and the median would be computed over a biased subset.
+    const skills: Partial<SkillAnalytics>[] = [];
+    for (let i = 0; i < 150; i++) {
+      skills.push({ name: `skill-${i}`, activations: i, latest_version: 1, quality: q(70) });
+    }
+    server.use(
+      http.get("/api/analytics/skills", ({ request }) => {
+        const url = new URL(request.url);
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        const limit = Number(url.searchParams.get("limit") ?? "50");
+        return HttpResponse.json({ skills: skills.slice(offset, offset + limit), total: skills.length });
+      }),
+    );
+    const { container } = render(withQuery(<Quadrant />));
+    await screen.findByText("skill-0");
+    expect(container.querySelectorAll("[data-plotted]")).toHaveLength(150);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a truncation notice when the page cap is hit instead of silently reporting a partial median", async () => {
+    // A `total` that never converges (larger than any number of pages could
+    // satisfy) forces the loop to hit MAX_PAGES rather than looping forever.
+    server.use(
+      http.get("/api/analytics/skills", ({ request }) => {
+        const url = new URL(request.url);
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        const page: Partial<SkillAnalytics>[] = [
+          { name: `skill-${offset}`, activations: offset, latest_version: 1, quality: q(70) },
+        ];
+        return HttpResponse.json({ skills: page, total: 1_000_000 });
+      }),
+    );
+    render(withQuery(<Quadrant />));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/partial/i);
+  });
 });

@@ -26,6 +26,39 @@ const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation
 // analytics/skills' `limit` maxes at 100 server-side (internal/analytics/routes.go).
 const MAX_LIMIT = 100;
 
+// Hard cap on page requests when paging through analytics/skills. At 100
+// skills/page this covers 5000 skills — comfortably past any real
+// deployment — while still bounding the worst case (e.g. a `total` that
+// disagrees with reality) to a fixed number of requests rather than an
+// unbounded loop.
+const MAX_PAGES = 50;
+
+// Fetch every skill from analytics/skills, paging on `total` rather than
+// trusting the server's default (activations-descending) sort and a single
+// page. The median activation count that buckets "high activation, low
+// score" skills must be computed over the full population — computing it
+// over only the most-active 100 biases the threshold high, silently hiding
+// the report's raison d'être for any team with more than 100 skills.
+async function fetchAllSkills(): Promise<{ skills: SkillAnalytics[]; truncated: boolean }> {
+  const skills: SkillAnalytics[] = [];
+  let offset = 0;
+  let total = Infinity;
+  let pages = 0;
+
+  while (skills.length < total && pages < MAX_PAGES) {
+    const res = await analyticsSkills({ query: { days: 30, limit: MAX_LIMIT, offset } });
+    if (res.error) throw res.error;
+    const page = (res.data?.skills as SkillAnalytics[] | null) ?? [];
+    skills.push(...page);
+    total = res.data?.total ?? skills.length;
+    pages += 1;
+    offset += MAX_LIMIT;
+    if (page.length === 0) break; // defend against a total that never converges
+  }
+
+  return { skills, truncated: skills.length < total };
+}
+
 // The true statistical median, no lean: the middle order statistic for an
 // odd count, the mean of the two central values for an even count. This
 // number is the claim "heavily used" rests on, so it must not be tuned to
@@ -75,11 +108,7 @@ const chartConfig: ChartConfig = {
 export function Quadrant() {
   const query = useQuery({
     queryKey: ["analytics", "quadrant"],
-    queryFn: async () => {
-      const res = await analyticsSkills({ query: { days: 30, limit: MAX_LIMIT } });
-      if (res.error) throw res.error;
-      return (res.data?.skills as SkillAnalytics[] | null) ?? [];
-    },
+    queryFn: fetchAllSkills,
   });
 
   if (query.isLoading) {
@@ -94,7 +123,8 @@ export function Quadrant() {
     );
   }
 
-  const skills = query.data ?? [];
+  const skills = query.data?.skills ?? [];
+  const truncated = query.data?.truncated ?? false;
 
   // Three buckets, not two: an incomplete panel is neither a score nor an
   // absence of one, and folding it into either misreports it.
@@ -125,6 +155,16 @@ export function Quadrant() {
           produce.
         </p>
       </div>
+
+      {truncated && (
+        <div
+          role="alert"
+          className="text-xs text-warning border border-warning/40 bg-warning/10 rounded-md px-3 py-2"
+        >
+          Showing a partial result — too many skills to load in full. The median and
+          buckets below are computed only over the skills fetched, not the whole registry.
+        </div>
+      )}
 
       {scored.length === 0 ? (
         <div className="text-sm text-text-secondary py-8 text-center">
