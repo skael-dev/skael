@@ -7,6 +7,9 @@ data/
 *.tar.gz
 # Private product docs (specs, plans, PRD) — root only; do NOT match site/src/content/docs/
 /docs/
+# Agent scratch workspaces: task briefs, reports and ledgers that quote the
+# private docs above. Never publishable.
+/.superpowers/
 web/dist/*
 !web/dist/.gitkeep
 web/src/api/
