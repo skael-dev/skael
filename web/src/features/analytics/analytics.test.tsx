@@ -1,8 +1,35 @@
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "@/test/handlers";
-import { renderWithProviders, screen, waitFor } from "@/test/render";
+import { renderWithProviders, screen, waitFor, userEvent, within } from "@/test/render";
 import { Analytics } from "./analytics";
+import { AnalyticsTable } from "./analytics-table";
+import type { SkillAnalytics } from "@/api/types.gen";
+
+// Minimal SkillAnalytics rows for AnalyticsTable-only tests (client-side
+// sort), independent of the mocked /api/analytics/skills fixtures.
+function renderTable(skills: Array<Partial<SkillAnalytics> & { name: string }>) {
+  const full: SkillAnalytics[] = skills.map((s) => ({
+    description: "",
+    author: "",
+    spec_compliance: "",
+    activations: 0,
+    unique_devs: 0,
+    last_triggered: null,
+    latest_version: 1,
+    reviewed_at: null,
+    security_status: "clean",
+    tags: [],
+    updated_at: "2026-08-01T00:00:00Z",
+    ...s,
+  }));
+  return renderWithProviders(<AnalyticsTable skills={full} />);
+}
+
+function rowNames(): string[] {
+  const rows = screen.getAllByRole("row").slice(1); // drop header row
+  return rows.map((row) => within(row).getByRole("link").textContent ?? "");
+}
 
 describe("Analytics", () => {
   it("KPI tiles render correct numbers", async () => {
@@ -67,5 +94,17 @@ describe("Analytics", () => {
     expect(
       await screen.findByText(/couldn't load analytics/i),
     ).toBeInTheDocument();
+  });
+
+  it("sorts unscored skills last in both directions", async () => {
+    renderTable([
+      { name: "mid", quality: { version: 1, headline_score: 50, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z" } },
+      { name: "none" },
+      { name: "high", quality: { version: 1, headline_score: 90, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z" } },
+    ]);
+    await userEvent.click(screen.getByRole("columnheader", { name: /score/i })); // desc
+    expect(rowNames()).toEqual(["high", "mid", "none"]);
+    await userEvent.click(screen.getByRole("columnheader", { name: /score/i })); // asc
+    expect(rowNames()).toEqual(["mid", "high", "none"]);
   });
 });
