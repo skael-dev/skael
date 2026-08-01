@@ -119,6 +119,43 @@ func TestReviewQueueRoute_ReturnsHeldVersions(t *testing.T) {
 	assert.Equal(t, "held-three", body.Held[0].SkillName)
 }
 
+// TestListHeldVersions_NullDecisionAndScanResultAreRejectedBySchema proves,
+// rather than asserts in prose, that ListHeldVersions's nil-tolerant scan of
+// gate_decision/scan_result is defensive against a state the schema itself
+// forbids: both columns are `JSONB NOT NULL DEFAULT '{}'`
+// (internal/platform/migrate/001_initial.sql, 013_publish_gate.sql), so an
+// INSERT carrying a literal SQL NULL in either column is rejected by
+// Postgres before ListHeldVersions ever sees the row. This is checked
+// directly, bypassing CreateVersion, because CreateVersion would never
+// produce this row shape either.
+func TestListHeldVersions_NullDecisionAndScanResultAreRejectedBySchema(t *testing.T) {
+	pool, store, ctx := gateFixture(t)
+	sk := newGateSkill(t, store, ctx, "null-columns")
+
+	const insertNullDecision = `
+		INSERT INTO skill_versions
+			(skill_id, version, archive_path, checksum, gate_state, gate_decision, scan_result)
+		VALUES ($1, 1, 'p/null', 'null-c', 'needs_review', NULL, '{}')`
+	_, err := pool.Exec(ctx, insertNullDecision, sk.ID)
+	require.Error(t, err, "gate_decision is NOT NULL; a literal NULL insert must fail at the DB")
+	assert.Contains(t, err.Error(), "null value in column")
+
+	const insertNullScanResult = `
+		INSERT INTO skill_versions
+			(skill_id, version, archive_path, checksum, gate_state, gate_decision, scan_result)
+		VALUES ($1, 1, 'p/null', 'null-c', 'needs_review', '{}', NULL)`
+	_, err = pool.Exec(ctx, insertNullScanResult, sk.ID)
+	require.Error(t, err, "scan_result is NOT NULL; a literal NULL insert must fail at the DB")
+	assert.Contains(t, err.Error(), "null value in column")
+
+	// Since no such row can exist, ListHeldVersions has nothing to choke on;
+	// confirm the listing still runs clean over whatever legitimately-shaped
+	// held rows do exist (none, here).
+	got, err := store.ListHeldVersions(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
 // TestReviewQueueRoute_EmptyIsEmptyArray pins the []HeldVersion{} choice: a
 // nil slice marshals to `null`, and the sidebar count and empty state both
 // read this response's held field with .length.
