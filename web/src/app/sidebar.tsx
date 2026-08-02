@@ -176,7 +176,7 @@ export function Sidebar() {
     queryKey: ["review-queue"],
     queryFn: async () => (await getReviewQueue()).data,
   });
-  const reviewCount = reviewQuery.data?.held?.length ?? 0;
+  const reviewCount = reviewQuery.data?.total ?? 0;
 
   return (
     <aside
