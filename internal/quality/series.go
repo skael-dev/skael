@@ -10,6 +10,22 @@ import (
 	"github.com/skael-dev/skael/internal/eval/score"
 )
 
+// unknownJudge is the JudgeModel value asReport substitutes for a record with
+// no recorded judge (Record.JudgeModel == nil) — every row scored before
+// migration 016 added the column, plus any row whose caller genuinely could
+// not tell which model judged it. It is one shared, distinct value: distinct
+// from any real model name, so a known judge never silently groups with an
+// unknown one, but shared across every unknown row rather than unique per
+// row. The alternative — a value unique per row — was rejected because it
+// would fragment every pre-migration skill's entire history into one-point
+// series on this deploy alone, which is a worse false signal ("the trend
+// broke") than the one this field exists to prevent ("a judge swap read as
+// the skill changing"). A row that legitimately ran no judge at all (e.g. a
+// Smoke tier with no baseline to compare against) is indistinguishable from
+// "unknown" here; both are "there is no judge identity to compare", which is
+// the same fact for this purpose.
+const unknownJudge = "\x00unknown-judge"
+
 // SeriesPoint is one scored version on a trend line.
 type SeriesPoint struct {
 	Version        int       `json:"version"`
@@ -59,7 +75,17 @@ func asReport(skillName string, r Record) *report.Report {
 		ModelPanel:    panel,
 		PanelComplete: r.PanelComplete,
 		UpliftSource:  score.UpliftSource(r.UpliftSource),
+		JudgeModel:    judgeModelFor(r),
 	}
+}
+
+// judgeModelFor resolves the JudgeModel dimension Comparable groups on: the
+// recorded value as-is, or unknownJudge when none was recorded.
+func judgeModelFor(r Record) string {
+	if r.JudgeModel != nil {
+		return *r.JudgeModel
+	}
+	return unknownJudge
 }
 
 // BuildSeries groups a skill's history into runs that report.Comparable

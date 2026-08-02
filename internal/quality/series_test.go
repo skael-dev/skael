@@ -20,6 +20,14 @@ func rec(version int, headline float64, suiteRef, engine, tier string, panel []r
 	}
 }
 
+// recJudge is rec plus an explicit JudgeModel, for tests where the judge
+// dimension is what's under test.
+func recJudge(version int, headline float64, suiteRef, engine, tier string, panel []report.PanelMember, complete bool, judgeModel string) quality.Record {
+	r := rec(version, headline, suiteRef, engine, tier, panel, complete)
+	r.JudgeModel = &judgeModel
+	return r
+}
+
 var panelA = []report.PanelMember{{Agent: "claude-code", Model: "strong", Class: "strong"}}
 var panelB = []report.PanelMember{{Agent: "claude-code", Model: "floor", Class: "floor"}}
 
@@ -87,6 +95,69 @@ func TestBuildSeries_IncompletePanelIsNeverChartedWithComplete(t *testing.T) {
 	})
 	if len(got) != 2 {
 		t.Fatalf("series count = %d, want 2 — an incomplete panel's minimum is over fewer members", len(got))
+	}
+}
+
+// TestBuildSeries_DifferentJudgeModelSplits is the test that proves the
+// judge-model dimension is not inert: two records differing only in which
+// model judged them must land in separate series, or a judge swap would
+// silently read as the skill's score moving.
+func TestBuildSeries_DifferentJudgeModelSplits(t *testing.T) {
+	got := quality.BuildSeries("s", []quality.Record{
+		recJudge(4, 78, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-5"), // newest
+		recJudge(3, 74, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-4-1"),
+	})
+	if len(got) != 2 {
+		t.Fatalf("series count = %d, want 2 — a different judge can move the number without the skill changing", len(got))
+	}
+	if !got[0].Current {
+		t.Fatal("the newest record's series must be first and current")
+	}
+	if !strings.Contains(got[1].Reason, "judge") {
+		t.Fatalf("reason = %q, want it to name the judge", got[1].Reason)
+	}
+}
+
+// TestBuildSeries_SameJudgeModelIsOneSeries confirms the positive case: two
+// records recording the same judge, otherwise identical, still chart
+// together.
+func TestBuildSeries_SameJudgeModelIsOneSeries(t *testing.T) {
+	got := quality.BuildSeries("s", []quality.Record{
+		recJudge(4, 78, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-5"),
+		recJudge(3, 74, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-5"),
+	})
+	if len(got) != 1 {
+		t.Fatalf("series count = %d, want 1", len(got))
+	}
+}
+
+// TestBuildSeries_NoRecordedJudgeGroupsWithOtherUnrecordedJudges documents the
+// pre-migration behaviour: two records that both have no recorded judge
+// (Record.JudgeModel == nil, e.g. every row scored before this column
+// existed) still chart together. Splitting them instead would fragment every
+// skill's pre-existing history into one-point series the moment this field
+// shipped, which is a worse false signal than the one it exists to prevent.
+func TestBuildSeries_NoRecordedJudgeGroupsWithOtherUnrecordedJudges(t *testing.T) {
+	got := quality.BuildSeries("s", []quality.Record{
+		rec(4, 78, "sha-1", "v1.0.0", "full", panelA, true), // no JudgeModel
+		rec(3, 74, "sha-1", "v1.0.0", "full", panelA, true), // no JudgeModel
+	})
+	if len(got) != 1 {
+		t.Fatalf("series count = %d, want 1 — two rows with no recorded judge must not fragment pre-existing history", len(got))
+	}
+}
+
+// TestBuildSeries_RecordedJudgeNeverGroupsWithUnrecorded confirms the other
+// half: a row with a known judge model must not be treated as comparable to
+// a row where the judge is simply unknown — that would assert something
+// about the unknown row nobody can verify.
+func TestBuildSeries_RecordedJudgeNeverGroupsWithUnrecorded(t *testing.T) {
+	got := quality.BuildSeries("s", []quality.Record{
+		recJudge(4, 78, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-5"),
+		rec(3, 74, "sha-1", "v1.0.0", "full", panelA, true), // no JudgeModel
+	})
+	if len(got) != 2 {
+		t.Fatalf("series count = %d, want 2 — a known judge must not group with an unrecorded one", len(got))
 	}
 }
 

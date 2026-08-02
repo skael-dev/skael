@@ -32,6 +32,7 @@ type RecordOutput struct {
 	ModelPanel               json.RawMessage `json:"model_panel"`
 	Tier                     string          `json:"tier"`
 	UpliftSource             string          `json:"uplift_source,omitempty"`
+	JudgeModel               *string         `json:"judge_model,omitempty"`
 	JobID                    string          `json:"job_id,omitempty"`
 	ScoredAt                 time.Time       `json:"scored_at"`
 	CriticalForbidViolations int             `json:"critical_forbid_violations"`

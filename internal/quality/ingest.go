@@ -45,8 +45,17 @@ type Record struct {
 	// ModelPanel, PanelComplete) so a version-over-version trend can tell
 	// whether its own comparison is valid without re-fetching every report.
 	UpliftSource string
-	JobID        string
-	ScoredAt     time.Time
+	// JudgeModel mirrors report.Report.JudgeModel — preserved alongside the
+	// other Comparable fields so BuildSeries can reconstruct a report that
+	// groups on it. nil for a row written before this field existed, and for
+	// any run where the caller building the report could not determine which
+	// model judged it. asReport (internal/quality/series.go) maps nil to one
+	// shared "unknown judge" value, distinct from every real model name but
+	// shared across every unknown row — see its doc for why records with no
+	// recorded judge still group with each other rather than fragmenting.
+	JudgeModel *string
+	JobID      string
+	ScoredAt   time.Time
 
 	// CriticalForbidViolations counts critical-severity forbid-rule
 	// violations observed across every run in the report. It is the one
@@ -137,6 +146,11 @@ func FromReport(r *report.Report) (Record, error) {
 		}
 	}
 
+	var judgeModel *string
+	if r.JudgeModel != "" {
+		judgeModel = &r.JudgeModel
+	}
+
 	criticalViolations := 0
 	for _, task := range r.Tasks {
 		for _, rd := range task.Drift {
@@ -167,6 +181,7 @@ func FromReport(r *report.Report) (Record, error) {
 		ModelPanel:               modelPanelJSON,
 		Tier:                     r.Tier,
 		UpliftSource:             string(r.UpliftSource),
+		JudgeModel:               judgeModel,
 		ScoredAt:                 r.FinishedAt,
 		CriticalForbidViolations: criticalViolations,
 	}, nil

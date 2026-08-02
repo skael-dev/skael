@@ -169,6 +169,54 @@ func TestStore_CriticalForbidViolationsRoundTrips(t *testing.T) {
 	}
 }
 
+func TestStore_JudgeModelRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.SetupTestDB(t)
+	s := quality.NewStore(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	model := "claude-opus-5"
+	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: "r", Tier: "full",
+		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
+		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
+		JudgeModel: &model, ScoredAt: time.Now()}
+	if err := s.Upsert(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Latest(ctx, skillID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JudgeModel == nil || *got.JudgeModel != model {
+		t.Fatalf("judge_model = %v, want %q", got.JudgeModel, model)
+	}
+}
+
+// TestStore_AbsentJudgeModelRoundTripsAsNil is the pre-migration / no-judge
+// case: a row that never recorded a judge model must read back nil, not "" —
+// asReport's grouping decision (an absent judge is its own distinct value)
+// depends on being able to tell "no judge recorded" apart from an empty
+// string.
+func TestStore_AbsentJudgeModelRoundTripsAsNil(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.SetupTestDB(t)
+	s := quality.NewStore(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: "r", Tier: "full",
+		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
+		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
+		ScoredAt: time.Now()}
+	if err := s.Upsert(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Latest(ctx, skillID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JudgeModel != nil {
+		t.Fatalf("judge_model = %v, want nil", *got.JudgeModel)
+	}
+}
+
 func TestStore_GetVersion_RoundTripsReportJSON(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.SetupTestDB(t)
