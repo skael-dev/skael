@@ -47,7 +47,12 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 		}
 	}()
 
-	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
+	// The probe authenticates exactly the way a real session does. It used to
+	// mount credential directories and forward nothing, so a worker configured
+	// with environment credentials failed every probe — marking every panel
+	// member unhealthy and turning every evaluation into an incomplete panel,
+	// with no indication that authentication was the cause.
+	mounts, authVars, err := resolveAuth(a, r.o.Logger)
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: err.Error()}
 	}
@@ -56,6 +61,7 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 		Image:     image,
 		Workspace: ws,
 		Mounts:    mounts,
+		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     r.o.AllowDomains,
 		Timeout:   healthProbeTimeout,
