@@ -114,8 +114,13 @@ func TestComplete_AuthStyleBearerSendsAuthorizationOnly(t *testing.T) {
 	if gotKey != "" {
 		t.Errorf("x-api-key = %q, want it unset under the bearer auth style", gotKey)
 	}
-	if gotVersion != "" {
-		t.Errorf("anthropic-version = %q, want it unset under the bearer auth style", gotVersion)
+	// anthropic-version is sent under both auth styles. The request body is
+	// the Anthropic Messages shape either way, and a compatible gateway is
+	// built to accept what an Anthropic client sends. Omitting it would fail
+	// outright against a gateway that requires it, while sending it to one
+	// that ignores it costs nothing.
+	if gotVersion == "" {
+		t.Error("anthropic-version was not sent under the bearer auth style; a compatible gateway may require it")
 	}
 }
 

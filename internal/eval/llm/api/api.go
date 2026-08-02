@@ -32,16 +32,15 @@ const (
 type AuthStyle string
 
 const (
-	// AuthStyleAnthropic sends `x-api-key` plus `anthropic-version`, the
-	// direct Anthropic API's own scheme. This is the default: unset, it is
-	// exactly today's behaviour.
+	// AuthStyleAnthropic sends `x-api-key`, the direct Anthropic API's own
+	// scheme. This is the default: unset, it is exactly today's behaviour.
 	AuthStyleAnthropic AuthStyle = "x-api-key"
-	// AuthStyleBearer sends `Authorization: Bearer <key>` and omits
-	// `anthropic-version`, which is what Anthropic-compatible gateways such
-	// as OpenRouter (https://openrouter.ai/api/v1/messages) expect. A
-	// version header meant for Anthropic's own API is unlikely to be
-	// understood by a different vendor's gateway, so it is only sent in the
-	// Anthropic style.
+	// AuthStyleBearer sends `Authorization: Bearer <key>`, which is what
+	// Anthropic-compatible gateways such as OpenRouter
+	// (https://openrouter.ai/api/v1/messages) expect.
+	//
+	// Only the auth header differs. `anthropic-version` is sent either way —
+	// see the comment at the header block for why.
 	AuthStyleBearer AuthStyle = "bearer"
 )
 
@@ -169,12 +168,19 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, false, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
+	// anthropic-version goes on every request regardless of auth style. The
+	// body is the Anthropic Messages shape either way, and an
+	// Anthropic-compatible gateway is built to receive exactly what an
+	// Anthropic client sends — the Claude Code CLI talks to OpenRouter's
+	// compatible endpoint and sends this header, so it is accepted there.
+	// Sending it when the gateway ignores it costs nothing; omitting it when
+	// the gateway requires it fails every request, so the asymmetry decides.
+	req.Header.Set("anthropic-version", apiVersion)
 	switch g.opts.AuthStyle {
 	case AuthStyleBearer:
 		req.Header.Set("Authorization", "Bearer "+g.opts.APIKey)
 	default:
 		req.Header.Set("x-api-key", g.opts.APIKey)
-		req.Header.Set("anthropic-version", apiVersion)
 	}
 
 	resp, err := g.opts.HTTPClient.Do(req)
