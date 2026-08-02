@@ -147,7 +147,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.Logger)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -156,7 +156,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
-		Env:       authEnv(a.Caps().AuthEnv),
+		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     r.o.AllowDomains,
 		Timeout:   r.o.SessionTimeout,
@@ -324,7 +324,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.Logger)
 	if err != nil {
 		return finish(err)
 	}
@@ -333,7 +333,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
-		Env:       authEnv(a.Caps().AuthEnv),
+		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     r.o.AllowDomains,
 		Timeout:   r.o.SessionTimeout,
@@ -533,6 +533,32 @@ func backoff(attempt int) time.Duration {
 		d = maxBackoff
 	}
 	return d
+}
+
+// resolveAuth decides how a session authenticates. Environment variables win:
+// when any of the adapter's AuthEnv names is set, the host's credential
+// directories are NOT mounted at all.
+//
+// Mounting them alongside is not merely redundant, it breaks runs. An agent
+// CLI that finds stored credentials may prefer them over the environment, so a
+// stale or expired login on the host defeats a correctly configured gateway —
+// observed as `401 OAuth access token has expired` on a run whose environment
+// pointed at a different gateway entirely. The host's settings ride along too:
+// a personal session hook mounted into the sandbox tried to execute a binary
+// that does not exist inside it.
+//
+// A run must depend on what it was configured with, not on what happens to be
+// lying around in the operator's home directory.
+func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
+	env := authEnv(a.Caps().AuthEnv)
+	if len(env) > 0 {
+		return nil, env, nil
+	}
+	mounts, err := authMounts(a.Caps().AuthDirs, logf)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mounts, nil, nil
 }
 
 // authMounts expands an adapter's declared auth directories to absolute host
