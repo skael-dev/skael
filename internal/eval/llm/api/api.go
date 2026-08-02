@@ -28,14 +28,34 @@ const (
 	defaultTimeout = 3 * time.Minute
 )
 
+// AuthStyle selects how the API key is presented to the gateway.
+type AuthStyle string
+
+const (
+	// AuthStyleAnthropic sends `x-api-key` plus `anthropic-version`, the
+	// direct Anthropic API's own scheme. This is the default: unset, it is
+	// exactly today's behaviour.
+	AuthStyleAnthropic AuthStyle = "x-api-key"
+	// AuthStyleBearer sends `Authorization: Bearer <key>` and omits
+	// `anthropic-version`, which is what Anthropic-compatible gateways such
+	// as OpenRouter (https://openrouter.ai/api/v1/messages) expect. A
+	// version header meant for Anthropic's own API is unlikely to be
+	// understood by a different vendor's gateway, so it is only sent in the
+	// Anthropic style.
+	AuthStyleBearer AuthStyle = "bearer"
+)
+
 // Options configures the gateway.
 type Options struct {
 	BaseURL     string
 	APIKey      string
 	StrongModel string
 	FastModel   string
-	Cache       llm.Cache
-	HTTPClient  *http.Client
+	// AuthStyle selects the auth header sent with every request. Empty
+	// defaults to AuthStyleAnthropic, today's behaviour.
+	AuthStyle  AuthStyle
+	Cache      llm.Cache
+	HTTPClient *http.Client
 	// MaxRetries bounds retries of transient (5xx/429) upstream failures.
 	MaxRetries int
 	// Sleep is the backoff hook, overridden in tests so they do not wait.
@@ -59,6 +79,9 @@ func New(o Options) (*Gateway, error) {
 	}
 	if o.FastModel == "" {
 		o.FastModel = "claude-haiku-4-5-20251001"
+	}
+	if o.AuthStyle == "" {
+		o.AuthStyle = AuthStyleAnthropic
 	}
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{Timeout: defaultTimeout}
@@ -146,8 +169,13 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, false, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-api-key", g.opts.APIKey)
-	req.Header.Set("anthropic-version", apiVersion)
+	switch g.opts.AuthStyle {
+	case AuthStyleBearer:
+		req.Header.Set("Authorization", "Bearer "+g.opts.APIKey)
+	default:
+		req.Header.Set("x-api-key", g.opts.APIKey)
+		req.Header.Set("anthropic-version", apiVersion)
+	}
 
 	resp, err := g.opts.HTTPClient.Do(req)
 	if err != nil {

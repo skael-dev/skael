@@ -36,6 +36,11 @@ const (
 const (
 	apiKeyEnv     = "ANTHROPIC_API_KEY"
 	apiBaseURLEnv = "ANTHROPIC_BASE_URL"
+	// apiAuthTokenEnv is the Claude Code CLI's own name for a bearer token,
+	// used together with apiBaseURLEnv to point at an Anthropic-compatible
+	// gateway such as OpenRouter. Preferred over apiKeyEnv when both are set,
+	// since a bearer token implies a non-Anthropic gateway is intended.
+	apiAuthTokenEnv = "ANTHROPIC_AUTH_TOKEN"
 )
 
 // maxGatewayRetries bounds retries of transient upstream failures. Generation
@@ -105,6 +110,12 @@ func chooseGateway() gatewayChoice {
 			Detail: fmt.Sprintf("agent CLI %s, billed to your subscription", bin),
 		}
 	}
+	if os.Getenv(apiAuthTokenEnv) != "" {
+		return gatewayChoice{
+			Kind:   gatewayAPI,
+			Detail: fmt.Sprintf("direct API, authenticated with %s", apiAuthTokenEnv),
+		}
+	}
 	if os.Getenv(apiKeyEnv) != "" {
 		return gatewayChoice{
 			Kind:   gatewayAPI,
@@ -113,7 +124,7 @@ func chooseGateway() gatewayChoice {
 	}
 	return gatewayChoice{
 		Kind:   gatewayNone,
-		Detail: fmt.Sprintf("no supported agent CLI on PATH and %s is unset", apiKeyEnv),
+		Detail: fmt.Sprintf("no supported agent CLI on PATH and neither %s nor %s is set", apiKeyEnv, apiAuthTokenEnv),
 	}
 }
 
@@ -129,9 +140,16 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 			MaxRetries: maxGatewayRetries,
 		})
 	case gatewayAPI:
+		authStyle := api.AuthStyleAnthropic
+		key := os.Getenv(apiKeyEnv)
+		if token := os.Getenv(apiAuthTokenEnv); token != "" {
+			authStyle = api.AuthStyleBearer
+			key = token
+		}
 		return api.New(api.Options{
 			BaseURL:    os.Getenv(apiBaseURLEnv),
-			APIKey:     os.Getenv(apiKeyEnv),
+			APIKey:     key,
+			AuthStyle:  authStyle,
 			Cache:      cache,
 			HTTPClient: &http.Client{Timeout: authoringTimeout},
 			MaxRetries: maxGatewayRetries,

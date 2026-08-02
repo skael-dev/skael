@@ -65,6 +65,96 @@ func TestComplete_SendsAuthAndVersionHeaders(t *testing.T) {
 	}
 }
 
+// TestComplete_AuthStyleAnthropicIsTheDefault pins that leaving AuthStyle
+// unset behaves exactly like AuthStyleAnthropic — no bearer header, and
+// anthropic-version still sent — so existing callers see no change.
+func TestComplete_AuthStyleAnthropicIsTheDefault(t *testing.T) {
+	var gotKey, gotVersion, gotAuth string
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{}"}],"model":"m"}`)
+	})
+
+	if _, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotKey != "sk-test" {
+		t.Errorf("x-api-key = %q, want it sent by default", gotKey)
+	}
+	if gotVersion == "" {
+		t.Error("anthropic-version missing under the default auth style")
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want it unset under the default auth style", gotAuth)
+	}
+}
+
+// TestComplete_AuthStyleBearerSendsAuthorizationOnly pins the OpenRouter-
+// compatible auth path: Authorization: Bearer <key>, and neither x-api-key
+// nor anthropic-version, since a version header meant for Anthropic's own
+// API may not be understood by a different vendor's gateway.
+func TestComplete_AuthStyleBearerSendsAuthorizationOnly(t *testing.T) {
+	var gotAuth, gotKey, gotVersion string
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{}"}],"model":"m"}`)
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) { o.AuthStyle = api.AuthStyleBearer })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sk-test")
+	}
+	if gotKey != "" {
+		t.Errorf("x-api-key = %q, want it unset under the bearer auth style", gotKey)
+	}
+	if gotVersion != "" {
+		t.Errorf("anthropic-version = %q, want it unset under the bearer auth style", gotVersion)
+	}
+}
+
+// TestNew_DefaultsAreUnchanged pins that New with an empty Options (besides
+// the required key) still yields today's defaults, so adding AuthStyle,
+// BaseURL, and model overrides does not silently change existing behaviour.
+func TestNew_DefaultsAreUnchanged(t *testing.T) {
+	var gotKey, gotVersion, gotAuth, gotURL string
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		gotAuth = r.Header.Get("Authorization")
+		var body struct{ Model string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotURL = body.Model
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{}"}],"model":"m"}`)
+	})
+
+	g, err := api.New(api.Options{BaseURL: s.URL, APIKey: "sk-test", Sleep: func(time.Duration) {}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotKey != "sk-test" {
+		t.Errorf("x-api-key = %q", gotKey)
+	}
+	if gotVersion == "" {
+		t.Error("anthropic-version missing with default Options")
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want unset with default Options", gotAuth)
+	}
+	if gotURL != "claude-opus-5" {
+		t.Errorf("model = %q, want the default strong model claude-opus-5", gotURL)
+	}
+}
+
 func TestComplete_ConcatenatesTextBlocks(t *testing.T) {
 	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"a\":"},{"type":"text","text":"1}"}],"model":"m"}`)

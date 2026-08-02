@@ -58,6 +58,13 @@ type workerConfig struct {
 	worker.Config
 	AnthropicAPIKey string
 	Concurrency     int
+	// LLM gateway overrides for pointing the judge at an Anthropic-compatible
+	// gateway (e.g. OpenRouter) instead of the direct Anthropic API. All
+	// optional; empty/unset reproduces today's behaviour exactly.
+	LLMBaseURL     string
+	LLMAuthStyle   api.AuthStyle
+	LLMStrongModel string
+	LLMFastModel   string
 }
 
 func main() {
@@ -139,6 +146,11 @@ func configFromEnv() (workerConfig, error) {
 		concurrency = n
 	}
 
+	authStyle, err := parseLLMAuthStyle(os.Getenv("LLM_AUTH_STYLE"))
+	if err != nil {
+		return workerConfig{}, err
+	}
+
 	return workerConfig{
 		Config: worker.Config{
 			Endpoint:     endpoint,
@@ -150,7 +162,25 @@ func configFromEnv() (workerConfig, error) {
 		},
 		AnthropicAPIKey: anthropicKey,
 		Concurrency:     concurrency,
+		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
+		LLMAuthStyle:    authStyle,
+		LLMStrongModel:  os.Getenv("LLM_STRONG_MODEL"),
+		LLMFastModel:    os.Getenv("LLM_FAST_MODEL"),
 	}, nil
+}
+
+// parseLLMAuthStyle resolves LLM_AUTH_STYLE. Empty defaults to
+// api.AuthStyleAnthropic (today's x-api-key behaviour); any other value must
+// be one of the two the gateway understands.
+func parseLLMAuthStyle(v string) (api.AuthStyle, error) {
+	switch v {
+	case "", string(api.AuthStyleAnthropic):
+		return api.AuthStyleAnthropic, nil
+	case string(api.AuthStyleBearer):
+		return api.AuthStyleBearer, nil
+	default:
+		return "", fmt.Errorf("skael-worker: LLM_AUTH_STYLE %q is not one of %q, %q", v, api.AuthStyleAnthropic, api.AuthStyleBearer)
+	}
 }
 
 func parseDurationEnv(name string, def time.Duration) (time.Duration, error) {
@@ -190,8 +220,12 @@ func run(cfg workerConfig) error {
 	}
 
 	gw, err := api.New(api.Options{
-		APIKey:     cfg.AnthropicAPIKey,
-		HTTPClient: &http.Client{Timeout: 3 * time.Minute},
+		APIKey:      cfg.AnthropicAPIKey,
+		BaseURL:     cfg.LLMBaseURL,
+		AuthStyle:   cfg.LLMAuthStyle,
+		StrongModel: cfg.LLMStrongModel,
+		FastModel:   cfg.LLMFastModel,
+		HTTPClient:  &http.Client{Timeout: 3 * time.Minute},
 	})
 	if err != nil {
 		return fmt.Errorf("skael-worker: LLM gateway: %w", err)

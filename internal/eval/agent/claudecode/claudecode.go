@@ -35,8 +35,13 @@ func (a *Adapter) Caps() agent.Caps {
 		// ANTHROPIC_API_KEY is priority 3 in Claude Code's auth order and is
 		// always used in non-interactive -p mode; CLAUDE_CODE_OAUTH_TOKEN
 		// (from `claude setup-token`) is the subscription equivalent. Both are
-		// documented and verified against the CLI.
-		AuthEnv:                 []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
+		// documented and verified against the CLI. ANTHROPIC_BASE_URL and
+		// ANTHROPIC_AUTH_TOKEN are also read by the CLI, and together are what
+		// points this panel agent at an Anthropic-compatible gateway such as
+		// OpenRouter instead of Anthropic's own API. Adding them here is safe
+		// for existing users: both are simply unset unless the worker's own
+		// environment sets them.
+		AuthEnv:                 []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"},
 		SupportsSkillInvocation: true,
 	}
 }
