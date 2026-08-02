@@ -41,6 +41,13 @@ const (
 	// gateway such as OpenRouter. Preferred over apiKeyEnv when both are set,
 	// since a bearer token implies a non-Anthropic gateway is intended.
 	apiAuthTokenEnv = "ANTHROPIC_AUTH_TOKEN"
+	// Model overrides, named to match the worker's so one environment
+	// configures both. Without these, pointing apiBaseURLEnv at a non-Anthropic
+	// gateway still asks it for Anthropic's own model names — OpenRouter
+	// namespaces its identifiers (anthropic/claude-opus-4), so the request
+	// 404s and authoring fails with a confusing "no endpoints found".
+	strongModelEnv = "LLM_STRONG_MODEL"
+	fastModelEnv   = "LLM_FAST_MODEL"
 )
 
 // maxGatewayRetries bounds retries of transient upstream failures. Generation
@@ -147,12 +154,14 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 			key = token
 		}
 		return api.New(api.Options{
-			BaseURL:    os.Getenv(apiBaseURLEnv),
-			APIKey:     key,
-			AuthStyle:  authStyle,
-			Cache:      cache,
-			HTTPClient: &http.Client{Timeout: authoringTimeout},
-			MaxRetries: maxGatewayRetries,
+			BaseURL:     os.Getenv(apiBaseURLEnv),
+			APIKey:      key,
+			AuthStyle:   authStyle,
+			StrongModel: os.Getenv(strongModelEnv),
+			FastModel:   os.Getenv(fastModelEnv),
+			Cache:       cache,
+			HTTPClient:  &http.Client{Timeout: authoringTimeout},
+			MaxRetries:  maxGatewayRetries,
 		})
 	default:
 		return nil, fmt.Errorf("no LLM gateway available: %s (run `whetstone doctor`)", c.Detail)
