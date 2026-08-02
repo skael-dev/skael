@@ -15,6 +15,16 @@ type GateDecision = {
   reasons: Reason[] | null;
 };
 
+// gate_decision is opaque JSON on the wire — a malformed or absent payload
+// must render as "no decision recorded" rather than crash on `.reasons`.
+function isGateDecision(value: unknown): value is GateDecision {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as { outcome?: unknown }).outcome === "string"
+  );
+}
+
 function ReasonRow({ reason }: { reason: Reason }) {
   return (
     <div className="border-b border-border last:border-b-0 px-4 py-3">
@@ -66,7 +76,9 @@ export function HeldVersion({
     },
   });
 
-  const decision = (held.gate_decision ?? null) as GateDecision | null;
+  const rawDecision = held.gate_decision;
+  const decision = isGateDecision(rawDecision) ? rawDecision : null;
+  const malformedDecision = rawDecision != null && !isGateDecision(rawDecision);
   const scanResult = (held.scan_result ?? null) as ScanReport | null;
   const reasons = decision?.reasons ?? [];
   const findings = scanResult?.findings ?? [];
@@ -94,6 +106,11 @@ export function HeldVersion({
           {reasons.map((r, i) => (
             <ReasonRow key={`${r.rule}-${r.file}-${r.line}-${i}`} reason={r} />
           ))}
+        </div>
+      )}
+      {malformedDecision && (
+        <div className="border-b border-border px-4 py-3 text-[11px] text-text-tertiary italic">
+          No decision recorded.
         </div>
       )}
 

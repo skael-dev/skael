@@ -155,4 +155,17 @@ describe("ReviewQueue", () => {
     render(withQuery(<ReviewQueue />));
     expect(await screen.findByText(/nothing awaiting review/i)).toBeInTheDocument();
   });
+
+  it("renders 'no decision recorded' instead of crashing on a malformed gate_decision", async () => {
+    mockReviewQueue([{
+      skill_name: "deploy-helper", version: 4, gate_state: "needs_review",
+      created_at: "2026-08-01T00:00:00Z",
+      // Malformed: not the { outcome, reasons } shape the gate actually sends.
+      gate_decision: { unexpected: true } as unknown as HeldVersion["gate_decision"],
+      scan_result: { status: "warn", findings: [], summary: { critical: 0, high: 0, medium: 0, info: 0 } },
+    }]);
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText("deploy-helper")).toBeInTheDocument();
+    expect(screen.getByText(/no decision recorded/i)).toBeInTheDocument();
+  });
 });
