@@ -166,6 +166,26 @@ skael-worker
 
 Once a job completes, `GET /api/skills/{name}/quality` returns the most recent score; `.../quality/history` returns the full history, newest first. Until then, that endpoint 404s — there's no "pending" score record, just none yet (the publish response does carry a `quality.state` of `"pending"` with the job's ID while it's in flight, versus `"none"` when no suite is registered at all).
 
+## Scoring a skill and clearing a hold
+
+What has to be running: the server, Postgres, and a `skael-worker` with a Docker daemon. Nothing gets scored without a worker — jobs just queue.
+
+A skill needs a registered suite before it can be scored:
+
+```bash
+whetstone suite gen my-skill
+whetstone suite push my-skill
+```
+
+No suite means no score, ever — that's by design (see "Running the eval worker" above).
+
+On publish, the server looks up the skill's registered suite and enqueues an evaluation job automatically. A version the gate holds still gets a version number and an archive, but isn't served until it clears.
+
+If a version is held, check the review queue (web UI's Review page, or `GET /api/review/queue` via the API) and clear it one of two ways:
+
+- Wait for a verified evaluation to score at or above `QUALITY_FLOOR` — an eval run takes roughly 45-90 minutes.
+- Have an owner or admin approve it directly: `skael review <name> <version> --approve --reason "..."`.
+
 ## Development
 
 Requires: Go 1.25+, Docker, [just](https://github.com/casey/just)
