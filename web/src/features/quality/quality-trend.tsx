@@ -11,7 +11,7 @@ import type { Series } from "@/api/types.gen";
 // of comparability in the UI).
 
 const CHART_WIDTH = 300;
-const CHART_HEIGHT = 60;
+const CHART_HEIGHT = 150;
 const CHART_PAD = 8;
 
 function buildPath(points: { version: number; headline_score: number }[]) {
@@ -60,7 +60,7 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
     <div className="bg-bg-secondary border border-border rounded-lg p-3 mb-2">
       <svg
         viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-        className="w-full h-[60px]"
+        className="w-full h-[150px]"
         preserveAspectRatio="none"
       >
         <polyline
@@ -98,7 +98,7 @@ export function QualityTrend({ skillName }: { skillName: string }) {
 
   if (seriesQuery.isLoading) {
     return (
-      <div className="h-[60px] bg-bg-secondary border border-border rounded-lg animate-pulse-soft mb-6" />
+      <div className="h-[150px] bg-bg-secondary border border-border rounded-lg animate-pulse-soft mb-6" />
     );
   }
 
