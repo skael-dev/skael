@@ -186,6 +186,16 @@ If a version is held, check the review queue (web UI's Review page, or `GET /api
 - Wait for a verified evaluation to score at or above `QUALITY_FLOOR` — an eval run takes roughly 45-90 minutes.
 - Have an owner or admin approve it directly: `skael review <name> <version> --approve --reason "..."`.
 
+![The review queue — a held version with its scan findings, and what the gate says would clear each one](site/public/review-queue.png)
+
+Scores appear wherever skills are listed. A skill that has never been scored reads as unscored, not as a zero — those are different facts, and a score of nothing is not a score of zero:
+
+![Skill analytics with a score column — verified, attested, incomplete-panel, and unscored all read differently](site/public/quality-scores.png)
+
+Crossing usage against quality is the report the two halves exist to produce: the skills your team leans on daily that measurably don't work.
+
+![Activation plotted against quality, with high-activation low-score called out worst-first](site/public/activation-quality.png)
+
 ## Development
 
 Requires: Go 1.25+, Docker, [just](https://github.com/casey/just)
