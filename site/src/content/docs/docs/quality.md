@@ -54,6 +54,10 @@ The one thing to understand here: two scores are only comparable if they came fr
 
 So the trend line only plots scores that are genuinely comparable to each other. Everything else is listed separately, with the reason it's not part of the trend (different suite, different panel). A trend line that quietly mixed incomparable scores together would be worse than no trend line at all.
 
+![A skill's score across four versions, with one earlier run listed below the chart because it used a different task suite](../../../../public/quality-trend.png)
+
+In the example above, four versions were scored the same way, so they form one line. A fifth score exists but was run against a different set of tasks, so it sits under the chart with the reason rather than being plotted.
+
 ## How this feeds back into publishing
 
 A version held for review by the publish gate clears automatically once it has a **verified** score at or above `QUALITY_FLOOR` (an operator-configured minimum, default `0` — any verified score with a complete panel and no contract violations clears it). Short of that, it takes an owner or admin running `skael review <name> <version> --approve --reason "..."`.
