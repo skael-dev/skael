@@ -363,6 +363,21 @@ describe("QualityReport", () => {
     expect(screen.queryByText("87.5%")).not.toBeInTheDocument();
   });
 
+  // N is a count of runs, not a 0-100 measurement — it must render as a
+  // plain integer ("6"), not run through formatDriftScale like Mean/Worst/
+  // Sigma ("6.0").
+  it("renders drift_breakdown's N as an integer, not a decimal", async () => {
+    mockQuality({
+      version: 3,
+      drift_breakdown: {
+        "claude-code/strong": { Mean: 87.5, Worst: 60.2, Sigma: 4.1, N: 6 },
+      },
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText("6")).toBeInTheDocument();
+    expect(screen.queryByText("6.0")).not.toBeInTheDocument();
+  });
+
   // judge_kappa is a *float64 in Go (report.go:135): nil means no judge was
   // calibrated, a different fact from a judge calibrated at κ=0. It lives on
   // `report`, alongside judge_labeled_by as provenance.

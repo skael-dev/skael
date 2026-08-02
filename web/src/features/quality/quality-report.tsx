@@ -253,6 +253,12 @@ function formatDriftScale(v: number): string {
   return v.toFixed(1);
 }
 
+// N is a count of runs, not a 0-100 measurement — render it as an integer
+// rather than running it through formatDriftScale like Mean/Worst/Sigma.
+function formatDriftCount(v: number): string {
+  return String(Math.round(v));
+}
+
 function isDriftAggShape(value: unknown): value is Record<string, number> {
   return (
     !!value &&
@@ -292,7 +298,7 @@ function DriftBreakdownTable({ data }: { data: unknown }) {
                     <td className="px-3 py-1.5 text-text-secondary">{member}</td>
                     {DRIFT_KEYS.map((k) => (
                       <td key={k} className="px-3 py-1.5 font-mono text-text-primary">
-                        {measurement(agg[k], formatDriftScale)}
+                        {measurement(agg[k], k === "N" ? formatDriftCount : formatDriftScale)}
                       </td>
                     ))}
                   </tr>
