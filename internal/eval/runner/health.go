@@ -63,7 +63,7 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
-		Allow:     r.o.AllowDomains,
+		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
 		Timeout:   healthProbeTimeout,
 	})
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,7 +159,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
-		Allow:     r.o.AllowDomains,
+		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
 		Timeout:   r.o.SessionTimeout,
 	})
 
@@ -335,7 +336,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
-		Allow:     r.o.AllowDomains,
+		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
 		Timeout:   r.o.SessionTimeout,
 	})
 
@@ -559,6 +560,51 @@ func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, [
 		return nil, nil, err
 	}
 	return mounts, nil, nil
+}
+
+// gatewayHosts returns the hosts named by any *_BASE_URL among the forwarded
+// auth variables, so the sandbox's egress allowlist follows the gateway the
+// operator actually configured.
+//
+// Without this the allowlist permits Anthropic's own domains and nothing else,
+// so pointing an agent at a compatible gateway is refused by the sandbox's
+// proxy rather than by anything that explains itself — observed as
+// `403 Filtered` inside the session, which reads like an API rejection.
+//
+// This widens egress only to an endpoint the operator deliberately set as the
+// agent's gateway. The allowlist still exists to keep "did the skill reach
+// out" answerable, and everything not configured here remains blocked.
+func gatewayHosts(env []string) []string {
+	var hosts []string
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasSuffix(name, "_BASE_URL") || value == "" {
+			continue
+		}
+		u, err := url.Parse(value)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		hosts = append(hosts, u.Hostname())
+	}
+	return hosts
+}
+
+// allowWith returns base plus extra, without duplicates.
+func allowWith(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, d := range append(append([]string{}, base...), extra...) {
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
 }
 
 // authMounts expands an adapter's declared auth directories to absolute host
