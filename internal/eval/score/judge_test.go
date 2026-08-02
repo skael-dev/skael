@@ -29,6 +29,8 @@ func (g *scriptedGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error
 	return llm.Res{Text: g.answer(n, r.Prompt), Model: "fake"}, nil
 }
 
+func (g *scriptedGateway) ModelFor(llm.ModelClass) string { return "fake" }
+
 func verdictJSON(winner string, margin float64, quote string) string {
 	b, _ := json.Marshal(map[string]any{"winner": winner, "margin": margin, "evidence": []string{quote}})
 	return string(b)

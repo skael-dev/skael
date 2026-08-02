@@ -248,6 +248,15 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 	return g.opts.StrongModel
 }
 
+// ModelFor implements llm.Gateway. When StrongModel/FastModel were left
+// unset, run passes no --model flag (see run) and the CLI picks its own
+// default — this gateway never observes what that default resolved to, so it
+// returns "" rather than guess. It only reports a model when the operator
+// configured one explicitly.
+func (g *Gateway) ModelFor(c llm.ModelClass) string {
+	return g.modelFor(c)
+}
+
 // apiErrorPattern anchors on the shape observed for the CLI's own
 // infrastructure failures: the result *beginning with* "API Error: <status>".
 // Anchoring at the start, rather than searching for the phrase anywhere in

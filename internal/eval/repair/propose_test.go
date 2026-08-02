@@ -229,6 +229,8 @@ func (g *recordingGateway) Complete(_ context.Context, r llm.Req) (llm.Res, erro
 	return llm.Res{Text: g.reply, Model: "fake"}, nil
 }
 
+func (g *recordingGateway) ModelFor(llm.ModelClass) string { return "fake" }
+
 // demoSpec returns a minimal valid *spec.SkillSpec matching bodyMD's content.
 func demoSpec() *spec.SkillSpec {
 	return &spec.SkillSpec{

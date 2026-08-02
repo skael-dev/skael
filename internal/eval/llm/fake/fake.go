@@ -53,3 +53,12 @@ func (g *Gateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	}
 	return llm.Res{Text: g.responses[len(g.calls)-1], Model: "fake"}, nil
 }
+
+// ModelFor implements llm.Gateway with a deterministic, class-distinguishing
+// name, so tests that assert on which model a role used can rely on it.
+func (g *Gateway) ModelFor(c llm.ModelClass) string {
+	if c == llm.ClassFast {
+		return "fake-fast"
+	}
+	return "fake-strong"
+}

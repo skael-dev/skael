@@ -242,3 +242,11 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 	}
 	return g.opts.StrongModel
 }
+
+// ModelFor implements llm.Gateway. This gateway always knows its own model:
+// StrongModel and FastModel are configured (or defaulted) in New, so an
+// unrecognized class simply falls back to the strong model, matching
+// modelFor's own convention.
+func (g *Gateway) ModelFor(c llm.ModelClass) string {
+	return g.modelFor(c)
+}

@@ -569,3 +569,25 @@ type memCache struct{ m map[string]string }
 
 func (c *memCache) Get(k string) (string, bool, error) { v, ok := c.m[k]; return v, ok, nil }
 func (c *memCache) Put(k, v string) error              { c.m[k] = v; return nil }
+
+func TestModelFor_ReturnsTheConfiguredModelPerClass(t *testing.T) {
+	g, err := api.New(api.Options{
+		APIKey:      "sk-test",
+		StrongModel: "claude-opus-5",
+		FastModel:   "claude-haiku-4-5-20251001",
+	})
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	if got := g.ModelFor(llm.ClassStrong); got != "claude-opus-5" {
+		t.Errorf("ModelFor(ClassStrong) = %q, want %q", got, "claude-opus-5")
+	}
+	if got := g.ModelFor(llm.ClassFast); got != "claude-haiku-4-5-20251001" {
+		t.Errorf("ModelFor(ClassFast) = %q, want %q", got, "claude-haiku-4-5-20251001")
+	}
+	// An unrecognized class falls back to the strong model, matching
+	// Complete's own modelFor convention rather than returning "".
+	if got := g.ModelFor(llm.ModelClass("weird")); got != "claude-opus-5" {
+		t.Errorf("ModelFor(unknown) = %q, want the strong-model fallback %q", got, "claude-opus-5")
+	}
+}
