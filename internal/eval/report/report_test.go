@@ -396,6 +396,35 @@ func TestComparable_DifferentUpliftSources(t *testing.T) {
 	}
 }
 
+func TestComparable_DifferentJudgeModels(t *testing.T) {
+	a, b := demoReport(), demoReport()
+	a.JudgeModel = "claude-opus-5"
+	b.JudgeModel = "claude-opus-4-1"
+	// A different judge can move the number without the skill changing
+	// underneath it: the judge is a distinct axis of comparability from the
+	// model panel being scored, and once the judge becomes
+	// operator-configurable this is the only thing standing between "the
+	// skill regressed" and "we swapped judges".
+	ok, why := a.Comparable(b)
+	if ok {
+		t.Error("reports with different judge models reported as comparable")
+	}
+	if !strings.Contains(why, "claude-opus-5") || !strings.Contains(why, "claude-opus-4-1") {
+		t.Errorf("reason = %q, want it to name both judge models", why)
+	}
+}
+
+func TestComparable_SameJudgeModelsStillComparable(t *testing.T) {
+	a, b := demoReport(), demoReport()
+	a.JudgeModel = "claude-opus-5"
+	b.JudgeModel = "claude-opus-5"
+	// Matching judges, matching everything else already covered elsewhere:
+	// this must still read as one series.
+	if ok, why := a.Comparable(b); !ok {
+		t.Errorf("reports with the same judge model reported as incomparable: %s", why)
+	}
+}
+
 func TestComparable_PanelOrderDoesNotMatter(t *testing.T) {
 	a, b := demoReport(), demoReport()
 	b.ModelPanel = []report.PanelMember{a.ModelPanel[1], a.ModelPanel[0]}
