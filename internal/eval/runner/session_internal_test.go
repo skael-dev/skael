@@ -54,3 +54,29 @@ func TestAuthMounts_RewritesHomeAndDropsMissingEntries(t *testing.T) {
 		t.Error("auth mount must be read-only")
 	}
 }
+
+// TestAuthEnv_ForwardsOnlySetNames pins the contract that authEnv only
+// forwards names that are actually set and non-empty in the worker's own
+// environment, in "NAME=value" form, and that an adapter declaring no
+// AuthEnv names yields nothing.
+func TestAuthEnv_ForwardsOnlySetNames(t *testing.T) {
+	t.Setenv("SKAEL_TEST_AUTH_SET", "super-secret-value")
+	t.Setenv("SKAEL_TEST_AUTH_EMPTY", "")
+	// Deliberately leave SKAEL_TEST_AUTH_UNSET unset.
+
+	env := authEnv([]string{"SKAEL_TEST_AUTH_SET", "SKAEL_TEST_AUTH_EMPTY", "SKAEL_TEST_AUTH_UNSET"})
+
+	if len(env) != 1 {
+		t.Fatalf("authEnv = %v, want exactly one forwarded var", env)
+	}
+	if env[0] != "SKAEL_TEST_AUTH_SET=super-secret-value" {
+		t.Errorf("authEnv[0] = %q, want %q", env[0], "SKAEL_TEST_AUTH_SET=super-secret-value")
+	}
+
+	if got := authEnv(nil); got != nil {
+		t.Errorf("authEnv(nil) = %v, want nil", got)
+	}
+	if got := authEnv([]string{}); got != nil {
+		t.Errorf("authEnv([]) = %v, want nil", got)
+	}
+}

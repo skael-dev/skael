@@ -28,10 +28,15 @@ func (a *Adapter) Name() string { return "claude-code" }
 // invocation as an explicit Skill tool call.
 func (a *Adapter) Caps() agent.Caps {
 	return agent.Caps{
-		EventTier:               "A",
-		ModelFlag:               "--model",
-		SkillDir:                ".claude/skills",
-		AuthDirs:                []string{"~/.claude", "~/.config/claude"},
+		EventTier: "A",
+		ModelFlag: "--model",
+		SkillDir:  ".claude/skills",
+		AuthDirs:  []string{"~/.claude", "~/.config/claude"},
+		// ANTHROPIC_API_KEY is priority 3 in Claude Code's auth order and is
+		// always used in non-interactive -p mode; CLAUDE_CODE_OAUTH_TOKEN
+		// (from `claude setup-token`) is the subscription equivalent. Both are
+		// documented and verified against the CLI.
+		AuthEnv:                 []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
 		SupportsSkillInvocation: true,
 	}
 }

@@ -26,6 +26,13 @@ func NewExec(d Driver, base RunSpec) *Executor { return &Executor{d: d, base: ba
 // instead.
 func (e *Executor) Workspace() string { return e.base.Workspace }
 
+// Env reports the environment variables ("NAME=value") a session run through
+// this executor will see, the same way Workspace reports where it runs — a
+// caller that needs to verify credential forwarding reads it from here rather
+// than InvokeSpec, which does not carry its own copy for the same reason
+// Workspace's doc comment gives.
+func (e *Executor) Env() []string { return e.base.Env }
+
 // Exec runs one command and returns its exit code.
 func (e *Executor) Exec(ctx context.Context, argv []string, stdout, stderr io.Writer) (int, error) {
 	rs := e.base

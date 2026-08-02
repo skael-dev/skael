@@ -29,6 +29,7 @@ type wsSnapshot struct {
 	workspace  string
 	skillCount int
 	hasOracle  bool
+	env        []string
 }
 
 // skillDirCount reports how many skill directories are present under
@@ -69,6 +70,10 @@ type fakeAdapter struct {
 	// alwaysRateLimited makes every invocation report a rate limit, so the
 	// retry-exhaustion path is exercised without a real 429 that never lets up.
 	alwaysRateLimited atomic.Bool
+	// authEnv, when set, is returned from Caps().AuthEnv so a test can
+	// exercise env-based credential forwarding without changing every other
+	// fixture's Caps().
+	authEnv []string
 	// failOnce, when true, makes exactly the next Invoke call fail and then
 	// clears itself atomically — CompareAndSwap rather than a plain bool field
 	// so concurrent workers racing to invoke never see (or write) it
@@ -79,7 +84,7 @@ type fakeAdapter struct {
 
 func (f *fakeAdapter) Name() string { return "claude-code" }
 func (f *fakeAdapter) Caps() agent.Caps {
-	return agent.Caps{EventTier: "A", ModelFlag: "--model", SkillDir: ".claude/skills", SupportsSkillInvocation: true}
+	return agent.Caps{EventTier: "A", ModelFlag: "--model", SkillDir: ".claude/skills", AuthEnv: f.authEnv, SupportsSkillInvocation: true}
 }
 func (f *fakeAdapter) InstallSkill(ws, bundle string) error {
 	f.mu.Lock()
@@ -96,14 +101,17 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 	// InvokeSpec carries no workspace of its own (the sandbox already knows
 	// it), so it comes from the executor the runner built around it.
 	ws := ""
+	var env []string
 	if se, ok := s.Exec.(*sandbox.Executor); ok {
 		ws = se.Workspace()
+		env = se.Env()
 	}
 	f.snapshots = append(f.snapshots, wsSnapshot{
 		prompt:     s.Prompt,
 		workspace:  ws,
 		skillCount: skillDirCount(ws),
 		hasOracle:  hasOracleFile(ws),
+		env:        env,
 	})
 	f.mu.Unlock()
 	if f.failOnce.CompareAndSwap(true, false) {
@@ -425,6 +433,41 @@ func TestExecute_BaselineNeverInstallsTheSkill(t *testing.T) {
 	// skill with no effect.
 	if got := h.adapter.installCount(); got != skillRuns {
 		t.Errorf("%d installs for %d skill runs and %d baselines; the skill leaked into a baseline", got, skillRuns, baselineRuns)
+	}
+}
+
+// TestExecute_ForwardsAuthEnvIntoTheSandboxRunSpec pins the fix for the
+// broken credential path: a worker with no interactive login has none of
+// AuthDirs' host directories, so ANTHROPIC_API_KEY set in the worker's own
+// environment must reach the sandbox's RunSpec.Env, not just get logged as a
+// skipped mount.
+func TestExecute_ForwardsAuthEnvIntoTheSandboxRunSpec(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-value")
+
+	h := newHarness(t)
+	h.adapter.authEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+	if _, err := h.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshots := h.adapter.invokeSnapshots()
+	if len(snapshots) == 0 {
+		t.Fatal("no sessions invoked")
+	}
+	for _, s := range snapshots {
+		found := false
+		for _, e := range s.env {
+			if e == "CLAUDE_CODE_OAUTH_TOKEN=" || strings.HasPrefix(e, "CLAUDE_CODE_OAUTH_TOKEN=") {
+				t.Errorf("unset CLAUDE_CODE_OAUTH_TOKEN was forwarded: %q", e)
+			}
+			if e == "ANTHROPIC_API_KEY=sk-ant-test-value" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("session env = %v, want ANTHROPIC_API_KEY forwarded", s.env)
+		}
 	}
 }
 

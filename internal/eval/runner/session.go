@@ -151,10 +151,12 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
+	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
+		Env:       authEnv(a.Caps().AuthEnv),
 		Network:   sandbox.NetAllowlist,
 		Allow:     r.o.AllowDomains,
 		Timeout:   r.o.SessionTimeout,
@@ -326,10 +328,12 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	if err != nil {
 		return finish(err)
 	}
+	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
+		Env:       authEnv(a.Caps().AuthEnv),
 		Network:   sandbox.NetAllowlist,
 		Allow:     r.o.AllowDomains,
 		Timeout:   r.o.SessionTimeout,
@@ -582,4 +586,63 @@ func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, erro
 		mounts = append(mounts, sandbox.Mount{HostPath: hostPath, ContainerPath: containerPath, ReadOnly: true})
 	}
 	return mounts, nil
+}
+
+// authEnv forwards the worker's own environment into the sandbox for each
+// name the adapter declares in Caps().AuthEnv that is actually set and
+// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
+// works on a headless host with no interactive login, unlike authMounts
+// above. An unset or empty variable is skipped rather than passed through as
+// "NAME=" — a value the CLI would treat as present but wrong, instead of
+// absent.
+//
+// These values are secrets: this function must never log them, only the
+// names it forwards (a name reveals nothing; the value does).
+// authEnv forwards the worker's own environment into the sandbox for each
+// name the adapter declares in Caps().AuthEnv that is actually set and
+// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
+// works on a headless host with no interactive login, unlike authMounts
+// above. An unset or empty variable is skipped rather than passed through as
+// "NAME=" — a value the CLI would treat as present but wrong, instead of
+// absent.
+//
+// These values are secrets: this function must never log them, only the
+// names it forwards (a name reveals nothing; the value does).
+func authEnv(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			env = append(env, name+"="+v)
+		}
+	}
+	return env
+}
+
+// warnIfNoAuth logs a clear, actionable warning when an adapter declares
+// credentials of either kind but neither is actually available: no auth dir
+// exists on the host (mounts is empty) and no auth env var is set in the
+// worker's own environment. Left unwarned, this surfaces later only as a
+// confusing "incomplete panel" with no indication of why. It stays a warning,
+// not a hard failure, since the sandbox may be pre-provisioned another way
+// (e.g. credentials baked into the image).
+func warnIfNoAuth(a agent.Adapter, mounts []sandbox.Mount, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	caps := a.Caps()
+	if len(caps.AuthEnv) == 0 && len(caps.AuthDirs) == 0 {
+		return
+	}
+	if len(mounts) > 0 {
+		return
+	}
+	for _, name := range caps.AuthEnv {
+		if os.Getenv(name) != "" {
+			return
+		}
+	}
+	logf("runner: %s has no available credentials — no auth dir found on the host and none of %v are set; set one of them or pre-provision the sandbox image", a.Name(), caps.AuthEnv)
 }
