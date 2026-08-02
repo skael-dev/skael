@@ -58,6 +58,39 @@ Optional, with defaults:
 
 The worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed container, one job at a time per worker process. Run more worker replicas for more throughput.
 
+### Choosing a judge model and gateway
+
+By default the judge talks to Anthropic's own API. That's optional: point it at OpenRouter or any Anthropic-compatible gateway instead, and pick which models it uses for the strong and fast model classes. Set none of these and nothing changes.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_BASE_URL` | `https://api.anthropic.com` | Gateway base URL. The gateway posts to `{base}/v1/messages`. |
+| `LLM_AUTH_STYLE` | `x-api-key` | `x-api-key` (Anthropic's own scheme) or `bearer` (`Authorization: Bearer`, what OpenRouter expects). |
+| `LLM_STRONG_MODEL` | `claude-opus-5` | Model for the strong class — this is what the judge uses. |
+| `LLM_FAST_MODEL` | `claude-haiku-4-5-20251001` | Model for the fast class. |
+
+`ANTHROPIC_API_KEY` is still the key the judge authenticates with, whichever gateway it points at.
+
+The panel agent (claude-code) has its own path to the same gateway. Its adapter forwards `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, if set in the worker's environment, into the sandbox — that's what points the panel at OpenRouter instead of Anthropic directly.
+
+A complete OpenRouter setup, covering both the judge and the panel:
+
+```bash
+LLM_BASE_URL=https://openrouter.ai/api
+LLM_AUTH_STYLE=bearer
+LLM_STRONG_MODEL=anthropic/claude-opus-4
+ANTHROPIC_API_KEY=<your OpenRouter key>
+
+ANTHROPIC_BASE_URL=https://openrouter.ai/api
+ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
+```
+
+OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`). This is a description of what's configurable, not a claim that OpenRouter or any other third-party gateway has been tested end to end here.
+
+Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line — the platform records which model judged each run and splits the trend when it differs, with the reason shown, the same way it already splits on a changed suite or panel (see "Comparing versions over time" below).
+
+The judge is also a calibrated instrument: its agreement with human labels (κ) was measured for a specific judge model. Swap the judge and that calibration no longer describes the judge actually in use.
+
 ## A skill needs a suite first
 
 Before a skill can be scored, it needs a registered evaluation suite — the set of tasks the panel will attempt. Generate one with [whetstone](/docs/cli), then register it:
