@@ -34,7 +34,7 @@ Bundles Postgres, so there's nothing external to provision:
 docker compose up -d
 ```
 
-Platform is at `http://localhost:8080`. This brings up the server and database only — publishing and scanning work immediately, but skill evaluations need a `skael-worker` too (`docker compose --profile eval up -d`; see [Running the eval worker](#running-the-eval-worker)).
+Platform is at `http://localhost:8080`. This brings up the server and database only — publishing, scanning and syncing work immediately. Skill evaluations additionally need a `skael-worker` running on the host; see [Running the eval worker](#running-the-eval-worker).
 
 > **Storage:** archives default to local disk (`STORAGE_PATH`). For Kubernetes/ephemeral hosts or multiple replicas, set `STORAGE_PATH=s3://bucket/prefix` to use S3-compatible object storage (AWS S3, MinIO, R2, Spaces) — see [Self-hosting](https://skael.dev/docs/self-hosting).
 
@@ -164,7 +164,7 @@ skael-worker
 
 `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and `ANTHROPIC_API_KEY` are the only strictly required variables — the worker exits at startup listing whichever are missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [CLAUDE.md](CLAUDE.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
 
-With Docker Compose, the worker is a separate opt-in profile — `docker compose --profile eval up -d` — because it needs the host's Docker socket, not part of the default `docker compose up`.
+Run the worker on the host, not in a container. It bind-mounts its own working directory and the agent credential directories into each sandbox through the Docker socket, and those mounts are resolved by the host's daemon — a containerised worker would pass paths that only exist inside itself, and every sandbox would start with empty mounts.
 
 Two different credentials are involved, and they're checked differently. `ANTHROPIC_API_KEY` is required and validated at startup — it's the direct API gateway for the judge model that scores each run. The panel agents that attempt the tasks are separate: the claude-code adapter mounts `~/.claude` and `~/.config/claude` from the worker's host into the sandbox, read-only, so it authenticates with whatever Claude Code login it finds there. That mount is not checked at startup — if those directories don't exist, the worker still starts and claims jobs, but the panel agent inside the sandbox has no credentials and can't run. The result isn't an error, it's an incomplete panel: the job comes back without a usable score.
 

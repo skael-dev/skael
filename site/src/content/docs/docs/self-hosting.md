@@ -38,15 +38,16 @@ This starts the platform plus a Postgres container with a persistent volume. The
 
 The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a Docker daemon to sandbox each run and a direct Anthropic API key to judge the result.
 
-With Docker Compose, the worker is a profile, not a default service:
+Run it on the host, alongside Compose rather than inside it:
 
 ```bash
+export SKAEL_ENDPOINT=http://localhost:8080
 export SKAEL_API_KEY=<a personal API key with permission to claim eval jobs>
 export ANTHROPIC_API_KEY=<your direct Anthropic API key>
-docker compose --profile eval up -d
+skael-worker
 ```
 
-It's opt-in because it needs the host's Docker socket mounted into the container, which effectively grants that container root on the host — that's an operator's decision, not a default.
+**Why not a Compose service?** The worker bind-mounts its own working directory and the agent credential directories into each sandbox container, through the Docker socket. Those mounts are resolved by the host's Docker daemon. A worker running inside a container would hand the daemon paths that exist only in its own filesystem, so every sandbox would start with empty mounts and the panel would fail to authenticate. Running it on the host keeps those paths real.
 
 ### Worker configuration
 
