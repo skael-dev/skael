@@ -26,7 +26,7 @@ Without a worker running, jobs just sit in the queue — nothing gets scored.
 
 The judge and the claude-code panel agent both need Anthropic credentials, and in the simplest setup one variable covers both.
 
-- **The judge.** A separate model compares the two transcripts and scores the result. This always runs through the direct Anthropic API — `ANTHROPIC_API_KEY`. The worker checks for this at startup and exits, naming it, if it's missing. There's no fallback to a subscription CLI.
+- **The judge.** A separate model compares the two transcripts and scores the result. It authenticates with `ANTHROPIC_API_KEY`, which the worker checks at startup and exits naming if it's missing. It talks to the direct Anthropic API by default, and to any Anthropic-compatible gateway you point it at (see [Choosing a judge model and gateway](#choosing-a-judge-model-and-gateway) below). It never falls back to a subscription CLI on PATH.
 - **The panel agent.** The claude-code adapter is the only one wired up (`codex`, `cursor`, and `opencode` are registered but their parsers aren't implemented yet, so they can't run and have no credentials to configure). It reads credentials as environment variables in the worker's own process and forwards whichever are set into the sandbox:
   - `ANTHROPIC_API_KEY` — the same variable the judge uses. API-billed, no login step. This is what the Claude Code CLI uses by default in non-interactive mode, and it's the recommended setup for a server or VPS.
   - `CLAUDE_CODE_OAUTH_TOKEN` — subscription-billed (Pro/Max) instead of pay-per-call. Generate it once on any machine where you can log in interactively: `claude setup-token`. Set the resulting token as this variable on the worker.
@@ -85,7 +85,9 @@ ANTHROPIC_BASE_URL=https://openrouter.ai/api
 ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
 ```
 
-OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`). This is a description of what's configurable, not a claim that OpenRouter or any other third-party gateway has been tested end to end here.
+OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`).
+
+You are not limited to Claude models. OpenRouter's Anthropic-compatible endpoint accepts the same request shape whatever model you route to, so `google/gemini-2.5-flash-lite` and the rest of its catalogue work for the judge too. Reasoning models are the one thing to watch: if a model spends its whole output budget on thinking tokens, the reply carries no text block and the run fails rather than scoring something empty. Give those a larger budget or pick a non-reasoning model for the judge.
 
 Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line — the platform records which model judged each run and splits the trend when it differs, with the reason shown, the same way it already splits on a changed suite or panel (see "Comparing versions over time" below).
 
