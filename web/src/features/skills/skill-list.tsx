@@ -446,13 +446,13 @@ export function SkillList() {
           ))}
         </div>
         <div className="space-y-px">
-          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 80px 110px" }}>
+          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <Skeleton key={i} className="h-2 bg-bg-tertiary" />
             ))}
           </div>
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 80px 110px" }}>
+            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
               <Skeleton className="h-4 bg-bg-secondary" />
               <Skeleton className="h-4 w-2 bg-bg-secondary" />
               <Skeleton className="h-4 w-48 bg-bg-secondary" />
@@ -679,7 +679,7 @@ export function SkillList() {
             <div
               className="grid gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
               style={{
-                gridTemplateColumns: "28px 12px 1fr 80px 80px 110px",
+                gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
               }}
             >
               <span />

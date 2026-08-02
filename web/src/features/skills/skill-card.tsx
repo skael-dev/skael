@@ -98,7 +98,7 @@ export function SkillCard({
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       )}
       style={{
-        gridTemplateColumns: "28px 12px 1fr 80px 80px 110px",
+        gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
       }}
     >
       {/* Checkbox */}
