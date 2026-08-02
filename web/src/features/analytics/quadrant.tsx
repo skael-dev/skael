@@ -140,7 +140,7 @@ export function Quadrant() {
   // quadrant.test.tsx.
   const attention = scored
     .filter((s) => s.activations >= activationMedian && (s.quality!.headline_score ?? 0) < 50)
-    .sort((a, b) => a.quality!.headline_score - b.quality!.headline_score);
+    .sort((a, b) => (a.quality?.headline_score ?? 0) - (b.quality?.headline_score ?? 0));
 
   return (
     <div className="p-6 max-w-5xl mx-auto flex flex-col gap-6">
