@@ -20,7 +20,38 @@ Two things, run separately:
 1. **The server.** It queues evaluation jobs but does not run them — no Docker socket and no LLM key live there.
 2. **A `skael-worker` process, with a Docker daemon available.** The worker claims jobs from the server, runs the evaluation in a sandboxed container, and posts the score back.
 
-Without a worker running, jobs just sit in the queue — nothing gets scored. The worker needs three environment variables set: `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and `ANTHROPIC_API_KEY` (the direct Anthropic API key used for the judge model — never a subscription CLI on your PATH). It exits at startup and names whichever of the three is missing. See [Worker env vars](/docs/self-hosting) for the full list.
+Without a worker running, jobs just sit in the queue — nothing gets scored.
+
+### Two different credentials
+
+The worker needs credentials for two separate jobs, checked in different ways:
+
+- **The judge.** A separate model compares the two transcripts and scores the result. This always runs through the direct Anthropic API — `ANTHROPIC_API_KEY`. The worker checks for this at startup and exits, naming it, if it's missing. There's no fallback to a subscription CLI.
+- **The panel agents.** These are the AI coding agents that actually attempt the tasks. The claude-code adapter authenticates by mounting `~/.claude` and `~/.config/claude` from the worker's host into the sandbox, read-only — whatever Claude Code login is on that machine is what the panel uses.
+
+That second one is not checked at startup. If those directories don't exist on the worker's host, the worker still starts and still claims jobs — it just has no way to run that panel agent once it's inside the sandbox. The result isn't an error message; it shows up later as an **incomplete panel** (see "Reading a score" below), not a failure at launch. If evaluations keep coming back incomplete, this is the first thing to check.
+
+### Worker environment variables
+
+Required — the worker exits at startup naming whichever is missing:
+
+| Variable | Description |
+|---|---|
+| `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
+| `SKAEL_API_KEY` | API key the worker authenticates with |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model — never a subscription CLI on PATH |
+
+Optional, with defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
+| `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
+| `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
+| `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
+| `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
+
+The worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed container, one job at a time per worker process. Run more worker replicas for more throughput.
 
 ## A skill needs a suite first
 

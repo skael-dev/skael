@@ -26,6 +26,35 @@ services:
       timeout: 5s
       retries: 5
 
+  # Opt-in: evaluation worker. Not started by `docker compose up`; run
+  # `docker compose --profile eval up -d` once you want evaluations to
+  # actually run. It's opt-in because it needs the host's Docker socket
+  # mounted in, which effectively grants this container root on the host —
+  # that's an operator decision, not a default.
+  worker:
+    profiles: ["eval"]
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM golang:1.25
+        WORKDIR /src
+        COPY . .
+        RUN CGO_ENABLED=0 go build -o /skael-worker ./cmd/skael-worker
+        ENTRYPOINT ["/skael-worker"]
+    environment:
+      SKAEL_ENDPOINT: http://server:8080
+      # Required: a personal API key with permission to claim eval jobs, and
+      # a direct Anthropic API key for the LLM judge (never a subscription
+      # CLI on PATH). Set both before running with --profile eval.
+      SKAEL_API_KEY: ${SKAEL_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.claude:/root/.claude:ro
+    depends_on:
+      server:
+        condition: service_started
+
 volumes:
   skill-data:
   pg-data:

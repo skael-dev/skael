@@ -32,7 +32,43 @@ docker run -p 8080:8080 \
 docker compose up -d
 ```
 
-This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`; sign up to create your first account.
+This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`; sign up to create your first account. Publishing and scanning work right away. Evaluations do not — that's a separate opt-in piece, see below.
+
+## Evaluation worker (optional)
+
+The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a Docker daemon to sandbox each run and a direct Anthropic API key to judge the result.
+
+With Docker Compose, the worker is a profile, not a default service:
+
+```bash
+export SKAEL_API_KEY=<a personal API key with permission to claim eval jobs>
+export ANTHROPIC_API_KEY=<your direct Anthropic API key>
+docker compose --profile eval up -d
+```
+
+It's opt-in because it needs the host's Docker socket mounted into the container, which effectively grants that container root on the host — that's an operator's decision, not a default.
+
+### Worker configuration
+
+Required — the worker exits at startup naming whichever is missing:
+
+| Variable | Description |
+|---|---|
+| `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
+| `SKAEL_API_KEY` | API key the worker authenticates with |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model — never a subscription CLI on PATH |
+
+Optional, with defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
+| `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
+| `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
+| `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
+| `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
+
+The judge model (`ANTHROPIC_API_KEY`) is checked at startup. The panel agents that attempt the tasks are separate and not checked at startup: the claude-code adapter mounts `~/.claude` and `~/.config/claude` from the worker's host into the sandbox, read-only, so it authenticates with whatever Claude Code login is there. If those directories don't exist, the worker still starts and claims jobs, but the panel agent has no credentials and can't run — the job comes back as an incomplete panel rather than an error. See [Quality scoring](/docs/quality) for more.
 
 ## Storage
 
