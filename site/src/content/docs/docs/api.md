@@ -122,6 +122,13 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `POST` | `/api/import/upload` | Import skills from a local archive upload |
 | `GET` | `/api/import/sources` | List all imported skills with source provenance |
 | `GET` | `/api/skills/{name}/source` | Source provenance for a single skill |
+| `GET` | `/api/skills/{name}/quality` | Most recent [quality score](/docs/quality) for a skill, across all its versions |
+| `GET` | `/api/skills/{name}/quality/{version}` | One version's quality score, plus its full report |
+| `GET` | `/api/skills/{name}/quality/series` | Quality history grouped into comparable runs |
+| `GET` | `/api/skills/{name}/evals` | Evaluation jobs for a skill, newest first |
+| `POST` | `/api/skills/{name}/evals` | Enqueue an evaluation against a different model panel — owner/admin only |
+| `GET` | `/api/review/queue` | Every version currently held for review, across all skills |
+| `POST` | `/api/skills/{name}/versions/{version}/review` | Approve or reject a version held for review — owner/admin only |
 
 ## Merge
 
@@ -238,3 +245,34 @@ curl -X DELETE http://localhost:8080/api/skills/db-migrate/aliases/migrate-db \
 ```
 
 Returns `204 No Content`. Returns `404` if the alias does not exist for that canonical skill.
+
+## Quality scores
+
+See [Quality scoring](/docs/quality) for what these numbers mean and where they come from.
+
+`GET /api/skills/{name}/quality/{version}` returns the score plus the full report the evaluation produced. The report can quote the skill's own content, so its visibility depends on whether the version is released:
+
+- For a **released** version, the report is public — its content is already visible via download/show anyway.
+- For a version still **held for review**, the report is owner/admin only. Everyone else gets the score with `"report": null`.
+
+```bash
+curl http://localhost:8080/api/skills/deploy/quality/3 \
+  -H "X-API-Key: sk-..."
+```
+
+`GET /api/skills/{name}/quality/series` groups a skill's score history into comparable runs. Two scores are only comparable if they came from the same evaluation suite and the same model panel — changing either can move the number without the skill changing at all. Scores that aren't comparable to the current run are grouped into their own series rather than mixed in.
+
+## Review queue
+
+`GET /api/review/queue` lists every version currently held by the [publish gate](/docs/concepts#publish-gate), across all skills. Open to any authenticated member.
+
+`POST /api/skills/{name}/versions/{version}/review` decides one of them — owner/admin only:
+
+```bash
+curl -X POST http://localhost:8080/api/skills/deploy/versions/3/review \
+  -H "X-API-Key: sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{"action":"approve","reason":"reviewed the shell script by hand, false positive"}'
+```
+
+`action` must be `"approve"` or `"reject"`. `reason` is required on both.
