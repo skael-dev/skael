@@ -91,11 +91,11 @@ func TestComplete_AuthStyleAnthropicIsTheDefault(t *testing.T) {
 	}
 }
 
-// TestComplete_AuthStyleBearerSendsAuthorizationOnly pins the OpenRouter-
-// compatible auth path: Authorization: Bearer <key>, and neither x-api-key
-// nor anthropic-version, since a version header meant for Anthropic's own
-// API may not be understood by a different vendor's gateway.
-func TestComplete_AuthStyleBearerSendsAuthorizationOnly(t *testing.T) {
+// TestComplete_AuthStyleBearerSwapsOnlyTheAuthHeader pins the OpenRouter-
+// compatible auth path: Authorization: Bearer <key> replaces x-api-key, and
+// nothing else about the request changes — anthropic-version still goes out,
+// because the body is the Anthropic Messages shape either way.
+func TestComplete_AuthStyleBearerSwapsOnlyTheAuthHeader(t *testing.T) {
 	var gotAuth, gotKey, gotVersion string
 	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
