@@ -198,8 +198,13 @@ func TestGetQuality_KeepsShowingAnEarlierVersionsScoreAfterANewerUnscoredPublish
 	}
 }
 
-// /quality/series must not be captured by the {version} route.
-func TestGetQualitySeries_NotShadowedByVersionRoute(t *testing.T) {
+// This does not guard against route shadowing: chi prefers a static path
+// segment ("series") over a parametric one ("{version}") regardless of
+// registration order, so /quality/series can never be captured by the
+// {version} route in the first place — there is nothing for this test to
+// pin on that axis. What it does verify is that /quality/series returns the
+// series body shape, which is worth keeping a test for.
+func TestGetQualitySeries_ReturnsSeriesBodyShape(t *testing.T) {
 	handler, qs, sk, _ := newQualityTestServer(t)
 	created, err := sk.Create(t.Context(), "series-shadow", "series-shadow", "", "", json.RawMessage(`{}`))
 	if err != nil {
@@ -435,8 +440,13 @@ func TestGetQualityVersion_UnscoredVersionIs404(t *testing.T) {
 	}
 }
 
-// /quality/history must not be captured by the {version} route.
-func TestGetQualityHistory_NotShadowedByVersionRoute(t *testing.T) {
+// This does not guard against route shadowing: chi prefers a static path
+// segment ("history") over a parametric one ("{version}") regardless of
+// registration order, so /quality/history can never be captured by the
+// {version} route in the first place — there is nothing for this test to
+// pin on that axis. What it does verify is that /quality/history returns
+// the history body shape, which is worth keeping a test for.
+func TestGetQualityHistory_ReturnsHistoryBodyShape(t *testing.T) {
 	handler, qs, sk, _ := newQualityTestServer(t)
 	created, err := sk.Create(t.Context(), "shadow-check", "shadow-check", "", "", json.RawMessage(`{}`))
 	if err != nil {
