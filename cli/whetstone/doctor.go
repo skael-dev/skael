@@ -110,6 +110,21 @@ type gatewayChoice struct {
 // CLI are billed to a subscription the author already has, where the direct
 // API needs a key and bills separately.
 func chooseGateway() gatewayChoice {
+	// Explicit gateway configuration beats autodetection. Setting a base URL
+	// or a bearer token is an unambiguous statement that a particular gateway
+	// is intended; silently preferring a subscription CLI that happens to be
+	// on PATH would bill the wrong account and quietly evaluate against a
+	// different model than the one configured.
+	//
+	// ANTHROPIC_API_KEY alone stays *below* the CLI: it is present on plenty
+	// of developer machines that also have the CLI installed, and treating it
+	// as an override would change today's behaviour for them.
+	if os.Getenv(apiBaseURLEnv) != "" || os.Getenv(apiAuthTokenEnv) != "" {
+		return gatewayChoice{
+			Kind:   gatewayAPI,
+			Detail: fmt.Sprintf("direct API, configured explicitly via %s/%s", apiBaseURLEnv, apiAuthTokenEnv),
+		}
+	}
 	if bin, err := agentcli.Detect(); err == nil {
 		return gatewayChoice{
 			Kind:   gatewaySubscription,
