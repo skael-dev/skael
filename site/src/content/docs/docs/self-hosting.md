@@ -47,7 +47,9 @@ export ANTHROPIC_API_KEY=<your direct Anthropic API key>
 skael-worker
 ```
 
-**Why not a Compose service?** The worker bind-mounts its own working directory and the agent credential directories into each sandbox container, through the Docker socket. Those mounts are resolved by the host's Docker daemon. A worker running inside a container would hand the daemon paths that exist only in its own filesystem, so every sandbox would start with empty mounts and the panel would fail to authenticate. Running it on the host keeps those paths real.
+This is enough for a VPS: no interactive login step, no credential directory to provision. `ANTHROPIC_API_KEY` covers both the judge and the claude-code panel agent, since the worker forwards it into the sandbox as an environment variable.
+
+**Why not a Compose service?** The worker bind-mounts its own working directory into each sandbox container through the Docker socket, and that mount is resolved by the host's Docker daemon. A worker running inside a container would hand the daemon a path that exists only in its own filesystem, so the mount would come up empty. Running it on the host keeps that path real.
 
 ### Worker configuration
 
@@ -57,19 +59,20 @@ Required — the worker exits at startup naming whichever is missing:
 |---|---|
 | `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
 | `SKAEL_API_KEY` | API key the worker authenticates with |
-| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model — never a subscription CLI on PATH |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model, and (forwarded into the sandbox) for the claude-code panel agent — never a subscription CLI on PATH |
 
 Optional, with defaults:
 
 | Variable | Default | Description |
 |---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
 | `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
 | `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
 
-The judge model (`ANTHROPIC_API_KEY`) is checked at startup. The panel agents that attempt the tasks are separate and not checked at startup: the claude-code adapter mounts `~/.claude` and `~/.config/claude` from the worker's host into the sandbox, read-only, so it authenticates with whatever Claude Code login is there. If those directories don't exist, the worker still starts and claims jobs, but the panel agent has no credentials and can't run — the job comes back as an incomplete panel rather than an error. See [Quality scoring](/docs/quality) for more.
+The judge model (`ANTHROPIC_API_KEY`) is checked at startup. The panel agent is not checked at startup: if neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set, and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today — `codex`, `cursor`, and `opencode` are registered but can't yet run. See [Quality scoring](/docs/quality) for more.
 
 ## Storage
 

@@ -22,14 +22,18 @@ Two things, run separately:
 
 Without a worker running, jobs just sit in the queue — nothing gets scored.
 
-### Two different credentials
+### One credential, two jobs
 
-The worker needs credentials for two separate jobs, checked in different ways:
+The judge and the claude-code panel agent both need Anthropic credentials, and in the simplest setup one variable covers both.
 
 - **The judge.** A separate model compares the two transcripts and scores the result. This always runs through the direct Anthropic API — `ANTHROPIC_API_KEY`. The worker checks for this at startup and exits, naming it, if it's missing. There's no fallback to a subscription CLI.
-- **The panel agents.** These are the AI coding agents that actually attempt the tasks. The claude-code adapter authenticates by mounting `~/.claude` and `~/.config/claude` from the worker's host into the sandbox, read-only — whatever Claude Code login is on that machine is what the panel uses.
+- **The panel agent.** The claude-code adapter is the only one wired up (`codex`, `cursor`, and `opencode` are registered but their parsers aren't implemented yet, so they can't run and have no credentials to configure). It reads credentials as environment variables in the worker's own process and forwards whichever are set into the sandbox:
+  - `ANTHROPIC_API_KEY` — the same variable the judge uses. API-billed, no login step. This is what the Claude Code CLI uses by default in non-interactive mode, and it's the recommended setup for a server or VPS.
+  - `CLAUDE_CODE_OAUTH_TOKEN` — subscription-billed (Pro/Max) instead of pay-per-call. Generate it once on any machine where you can log in interactively: `claude setup-token`. Set the resulting token as this variable on the worker.
 
-That second one is not checked at startup. If those directories don't exist on the worker's host, the worker still starts and still claims jobs — it just has no way to run that panel agent once it's inside the sandbox. The result isn't an error message; it shows up later as an **incomplete panel** (see "Reading a score" below), not a failure at launch. If evaluations keep coming back incomplete, this is the first thing to check.
+Set one of these and both jobs are covered. Neither is checked for the panel at startup, since the sandbox may already have credentials baked into its image — but if neither is set and no auth directory is available either, the worker logs a warning naming the adapter and the variables that would fix it, instead of the job silently coming back with an **incomplete panel** (see "Reading a score" below).
+
+For local development on a machine that already has an interactive Claude Code login, the adapter also falls back to mounting `~/.claude` and `~/.config/claude` from the host into the sandbox, read-only. That's a convenience, not something to rely on for a server: on macOS the actual credential lives in the Keychain, not in `~/.claude`, so copying that directory to a Linux worker was never going to authenticate anything. Set an environment variable instead.
 
 ### Worker environment variables
 
@@ -45,6 +49,7 @@ Optional, with defaults:
 
 | Variable | Default | Description |
 |---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
 | `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
