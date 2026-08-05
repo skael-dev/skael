@@ -42,6 +42,11 @@ type RouteOptions struct {
 	// skill.RouteOptions.QualityFloor; the zero value means any verified,
 	// complete, contract-clean report clears.
 	QualityFloor float64
+	// Ownership resolves and claims skill ownership, mirroring
+	// skill.RouteOptions.Ownership. A nil resolver leaves the zero
+	// gate.OwnerState, which contributes nothing — that is what keeps every
+	// test harness on the pre-ownership behaviour.
+	Ownership skill.OwnerResolver
 }
 
 // importQualityState mirrors the unexported type of the same name declared inside
