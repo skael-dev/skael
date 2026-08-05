@@ -46,6 +46,16 @@ type Res struct {
 // Gateway is a model backend.
 type Gateway interface {
 	Complete(ctx context.Context, r Req) (Res, error)
+	// ModelFor names the concrete model that would serve a request of the
+	// given class, without making a call. This exists so a caller that only
+	// knows the class it asked for (the gateway resolves ModelClass to a
+	// concrete model internally) can still record which model actually did
+	// the work — e.g. Report.JudgeModel, which gates whether two scores are
+	// comparable. A gateway that genuinely cannot know its own model (a
+	// subscription CLI left to pick its own default) must return "" rather
+	// than guess: an empty value means "unknown", and a guess recorded as
+	// provenance would be worse than no provenance at all.
+	ModelFor(class ModelClass) string
 }
 
 // Cache stores completions by content hash so a given request is never asked

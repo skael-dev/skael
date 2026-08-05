@@ -83,6 +83,10 @@ type ComposeInput struct {
 	JudgeTrusted   bool
 	JudgeKappa     *float64
 	JudgeLabeledBy string
+	// JudgeModel is passed straight through onto Report.JudgeModel — see that
+	// field's doc for why only a model name, not a gateway base URL, is
+	// available to record here.
+	JudgeModel string
 
 	TriggerInferred bool
 	// TriggerSource is passed through to Report.TriggerSource unchanged: the
@@ -225,6 +229,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		UpliftSource:      upliftSource,
 		JudgeKappa:        in.JudgeKappa,
 		JudgeLabeledBy:    in.JudgeLabeledBy,
+		JudgeModel:        in.JudgeModel,
 		Members:           members,
 		RobustnessGap:     gap,
 		Tasks:             tasks,

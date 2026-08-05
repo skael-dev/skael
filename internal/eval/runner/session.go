@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,16 +148,18 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.Logger)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
+	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
+		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
-		Allow:     r.o.AllowDomains,
+		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
 		Timeout:   r.o.SessionTimeout,
 	})
 
@@ -322,16 +325,18 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, err := authMounts(a.Caps().AuthDirs, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.Logger)
 	if err != nil {
 		return finish(err)
 	}
+	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
 		Mounts:    mounts,
+		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
-		Allow:     r.o.AllowDomains,
+		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
 		Timeout:   r.o.SessionTimeout,
 	})
 
@@ -531,6 +536,77 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
+// resolveAuth decides how a session authenticates. Environment variables win:
+// when any of the adapter's AuthEnv names is set, the host's credential
+// directories are NOT mounted at all.
+//
+// Mounting them alongside is not merely redundant, it breaks runs. An agent
+// CLI that finds stored credentials may prefer them over the environment, so a
+// stale or expired login on the host defeats a correctly configured gateway —
+// observed as `401 OAuth access token has expired` on a run whose environment
+// pointed at a different gateway entirely. The host's settings ride along too:
+// a personal session hook mounted into the sandbox tried to execute a binary
+// that does not exist inside it.
+//
+// A run must depend on what it was configured with, not on what happens to be
+// lying around in the operator's home directory.
+func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
+	env := authEnv(a.Caps().AuthEnv)
+	if len(env) > 0 {
+		return nil, env, nil
+	}
+	mounts, err := authMounts(a.Caps().AuthDirs, logf)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mounts, nil, nil
+}
+
+// gatewayHosts returns the hosts named by any *_BASE_URL among the forwarded
+// auth variables, so the sandbox's egress allowlist follows the gateway the
+// operator actually configured.
+//
+// Without this the allowlist permits Anthropic's own domains and nothing else,
+// so pointing an agent at a compatible gateway is refused by the sandbox's
+// proxy rather than by anything that explains itself — observed as
+// `403 Filtered` inside the session, which reads like an API rejection.
+//
+// This widens egress only to an endpoint the operator deliberately set as the
+// agent's gateway. The allowlist still exists to keep "did the skill reach
+// out" answerable, and everything not configured here remains blocked.
+func gatewayHosts(env []string) []string {
+	var hosts []string
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasSuffix(name, "_BASE_URL") || value == "" {
+			continue
+		}
+		u, err := url.Parse(value)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		hosts = append(hosts, u.Hostname())
+	}
+	return hosts
+}
+
+// allowWith returns base plus extra, without duplicates.
+func allowWith(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, d := range append(append([]string{}, base...), extra...) {
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
 // authMounts expands an adapter's declared auth directories to absolute host
 // paths, mounted read-only so subscription auth works inside the sandbox
 // without the run being able to modify it.
@@ -582,4 +658,63 @@ func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, erro
 		mounts = append(mounts, sandbox.Mount{HostPath: hostPath, ContainerPath: containerPath, ReadOnly: true})
 	}
 	return mounts, nil
+}
+
+// authEnv forwards the worker's own environment into the sandbox for each
+// name the adapter declares in Caps().AuthEnv that is actually set and
+// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
+// works on a headless host with no interactive login, unlike authMounts
+// above. An unset or empty variable is skipped rather than passed through as
+// "NAME=" — a value the CLI would treat as present but wrong, instead of
+// absent.
+//
+// These values are secrets: this function must never log them, only the
+// names it forwards (a name reveals nothing; the value does).
+// authEnv forwards the worker's own environment into the sandbox for each
+// name the adapter declares in Caps().AuthEnv that is actually set and
+// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
+// works on a headless host with no interactive login, unlike authMounts
+// above. An unset or empty variable is skipped rather than passed through as
+// "NAME=" — a value the CLI would treat as present but wrong, instead of
+// absent.
+//
+// These values are secrets: this function must never log them, only the
+// names it forwards (a name reveals nothing; the value does).
+func authEnv(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			env = append(env, name+"="+v)
+		}
+	}
+	return env
+}
+
+// warnIfNoAuth logs a clear, actionable warning when an adapter declares
+// credentials of either kind but neither is actually available: no auth dir
+// exists on the host (mounts is empty) and no auth env var is set in the
+// worker's own environment. Left unwarned, this surfaces later only as a
+// confusing "incomplete panel" with no indication of why. It stays a warning,
+// not a hard failure, since the sandbox may be pre-provisioned another way
+// (e.g. credentials baked into the image).
+func warnIfNoAuth(a agent.Adapter, mounts []sandbox.Mount, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	caps := a.Caps()
+	if len(caps.AuthEnv) == 0 && len(caps.AuthDirs) == 0 {
+		return
+	}
+	if len(mounts) > 0 {
+		return
+	}
+	for _, name := range caps.AuthEnv {
+		if os.Getenv(name) != "" {
+			return
+		}
+	}
+	logf("runner: %s has no available credentials — no auth dir found on the host and none of %v are set; set one of them or pre-provision the sandbox image", a.Name(), caps.AuthEnv)
 }

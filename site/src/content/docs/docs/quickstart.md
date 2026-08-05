@@ -21,6 +21,8 @@ No Postgres handy? Use Docker Compose, which bundles one:
 docker compose up -d
 ```
 
+This brings up the server and database only. Publishing, scanning and syncing work immediately. Skill evaluations need a separate `skael-worker` running on the host — see [Self-hosting](/docs/self-hosting#evaluation-worker-optional).
+
 ## 2. Install the CLI
 
 ```bash

@@ -622,6 +622,21 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// the judge's higher fidelity when some of them do not.
 	usedJudge := scoredMembers > 0 && judgeMembers == scoredMembers
 
+	// judgeModel names the model that actually served the judge's calls, so
+	// Report.Comparable can tell "a different judge moved this number" from
+	// "the skill changed" — see Report.JudgeModel. It comes from the gateway
+	// itself, not from any config the caller believes is in effect: the
+	// gateway resolves ModelClass to a concrete model internally, and a
+	// value threaded down separately could name a different model than the
+	// one that actually ran. Judge.Pairwise and Judge.Semantic both request
+	// llm.ClassStrong (see score/judge.go), so that is the class asked
+	// about here. Left empty when no judge was constructed at all — an
+	// empty JudgeModel must mean "no judge", not "unknown judge".
+	var judgeModel string
+	if judge != nil {
+		judgeModel = d.Gateway.ModelFor(llm.ClassStrong)
+	}
+
 	taskIDs := make([]string, 0, len(taskAgg))
 	for id := range taskAgg {
 		taskIDs = append(taskIDs, id)
@@ -650,7 +665,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Skill: req.Skill, SpecVersion: specVersion, Tier: string(req.Tier), SuiteRef: suiteRef,
 		EngineVersion: d.EngineVersion, ModelPanel: modelPanelOut, PanelComplete: execRes.PanelComplete,
 		Members: members, Tasks: tasksOut, Void: voidTasks,
-		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy,
+		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy, JudgeModel: judgeModel,
 		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
 		StartedAt: startedAt, FinishedAt: now(),

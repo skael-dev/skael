@@ -648,6 +648,48 @@ func TestReportRoute_ClearingScoreReleasesAHeldVersion(t *testing.T) {
 	}
 }
 
+func TestListSkillEvals_ReturnsJobsNewestFirst(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "eval-list")
+	older := srv.submitJob(t, skillID, "eval-list", 1, "sha256:abc")
+	newer := srv.submitJob(t, skillID, "eval-list", 2, "sha256:abc")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skills/eval-list/evals", nil)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Jobs []struct {
+			ID            string `json:"id"`
+			QueuePosition int    `json:"queue_position"`
+		} `json:"jobs"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Jobs) != 2 {
+		t.Fatalf("jobs = %d, want 2", len(body.Jobs))
+	}
+	if body.Jobs[0].ID != newer || body.Jobs[1].ID != older {
+		t.Fatalf("jobs out of order: %+v", body.Jobs)
+	}
+	if body.Jobs[1].QueuePosition != 0 || body.Jobs[0].QueuePosition != 1 {
+		t.Fatalf("queue positions = %+v, want the older job first in line", body.Jobs)
+	}
+}
+
+func TestListSkillEvals_UnknownSkillIs404(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/skills/nope/evals", nil)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+}
+
 // TestReportRoute_ShortScoreLeavesTheVersionHeld is the other half: the score
 // is stored, the job completes, and the version stays out of circulation.
 func TestReportRoute_ShortScoreLeavesTheVersionHeld(t *testing.T) {

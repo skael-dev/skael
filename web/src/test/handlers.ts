@@ -161,6 +161,12 @@ export const handlers = [
     return HttpResponse.json(mockScanReport);
   }),
 
+  // Default: no quality history. Tests exercising the trend override this
+  // per-test with server.use(...).
+  http.get("/api/skills/:name/quality/series", () => {
+    return HttpResponse.json({ series: [] });
+  }),
+
   http.put("/api/skills/review", () => {
     return HttpResponse.json({ reviewed: 2 });
   }),

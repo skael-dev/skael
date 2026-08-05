@@ -29,10 +29,14 @@ func (a *Adapter) Name() string { return "opencode" }
 // zero trigger measurement.
 func (a *Adapter) Caps() agent.Caps {
 	return agent.Caps{
-		EventTier:               "A",
-		ModelFlag:               "--model",
-		SkillDir:                ".opencode/skills",
-		AuthDirs:                []string{"~/.local/share/opencode", "~/.config/opencode"},
+		EventTier: "A",
+		ModelFlag: "--model",
+		SkillDir:  ".opencode/skills",
+		AuthDirs:  []string{"~/.local/share/opencode", "~/.config/opencode"},
+		// AuthEnv is left empty: Parse returns ErrParseNotImplemented, so this
+		// adapter cannot contribute to a panel yet. It gets populated when the
+		// parser lands and the real CLI's env-based auth can be verified,
+		// rather than guessed from documentation.
 		SupportsSkillInvocation: false,
 	}
 }

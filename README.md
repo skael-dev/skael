@@ -34,7 +34,7 @@ Bundles Postgres, so there's nothing external to provision:
 docker compose up -d
 ```
 
-Platform is at `http://localhost:8080`.
+Platform is at `http://localhost:8080`. This brings up the server and database only — publishing, scanning and syncing work immediately. Skill evaluations additionally need a `skael-worker` running on the host; see [Running the eval worker](#running-the-eval-worker).
 
 > **Storage:** archives default to local disk (`STORAGE_PATH`). For Kubernetes/ephemeral hosts or multiple replicas, set `STORAGE_PATH=s3://bucket/prefix` to use S3-compatible object storage (AWS S3, MinIO, R2, Spaces) — see [Self-hosting](https://skael.dev/docs/self-hosting).
 
@@ -62,21 +62,40 @@ This validates the connection, saves config, and installs activation tracking an
 
 ```bash
 skael add my-skill               # install a skill from the registry
-skael add my-skill --scope project  # install to project scope only
+skael add my-skill --scope user  # install to user scope only
 skael remove my-skill            # uninstall a skill
 skael sync                       # update installed skills to latest versions
 skael list                       # see everything published on the registry
 skael list --installed           # see what you have installed locally
 skael init my-skill              # scaffold a new spec-compliant skill
 skael publish ./my-skill         # publish a skill to the registry
+skael import <url|path>          # import skills from GitHub or a local directory
 skael scan ./my-skill            # security scan before publishing
 skael search "review"            # find skills
 skael show my-skill              # skill details, versions, activations
+skael review my-skill 3 --approve --reason "..."  # release a version held for review
 skael doctor                     # check your setup
 skael hook install               # set up activation tracking + auto-sync
 ```
 
 Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
+
+### User scope vs. project scope
+
+Every install lands in one of two places: **user scope** puts a skill in your home directory, available to you in every project on that machine. **Project scope** puts it inside the current repo, so anyone who checks out that repo and runs `skael sync` gets it too.
+
+The default is `project`. Run `skael setup --scope user` to change your default, or override per skill with `skael add my-skill --scope user`. `skael sync --scope user` overrides for that run, but any skill with its own recorded scope (set via `skael add --scope`) keeps it regardless. Project root is the nearest ancestor directory containing `.git`, falling back to the current directory if there isn't one.
+
+Where each agent looks:
+
+| Agent | user scope | project scope |
+|---|---|---|
+| Claude Code | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` |
+| Cursor | `~/.cursor/skills/<name>` | `<project>/.cursor/skills/<name>` |
+| Codex | `~/.codex/skills/<name>` | `<project>/.agents/skills/<name>` |
+| OpenCode | `~/.config/opencode/skills/<name>` | `<project>/.opencode/skills/<name>` |
+
+Codex is the odd one out — project scope goes to `.agents/skills/`, not `.codex/skills/`. Don't assume it follows the same pattern as the others.
 
 Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings don't all mean the same thing, so they don't all get the same treatment.
 
@@ -87,6 +106,16 @@ Every `skael publish` runs a security scan that checks for hardcoded secrets, pr
 `skael publish` runs the same scan locally first and applies the same decision, so it can tell you before the upload rather than after. It aborts only on what the server would block outright; an appealable finding is sent, held, and reported as held. `--skip-local-scan` skips the local check entirely and lets the server decide.
 
 One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
+
+`skael import <url|path>` brings skills into the registry from GitHub or a local directory, instead of authoring them from scratch:
+
+```bash
+skael import https://github.com/anthropics/skills                            # a whole repo
+skael import https://github.com/anthropics/skills/tree/main/skills/docx      # a subpath within a repo
+skael import ./my-skills/code-review                                          # a local directory
+```
+
+It discovers skills at the source and prompts before importing each one — pass `--all` to import everything without prompting, or `--dry-run` to preview first. Each import runs the same security scan and publish gate described above, so an imported skill can be rejected or held for review exactly like one published with `skael publish`. Set `GITHUB_TOKEN` on the server to raise GitHub's API rate limit for larger repos.
 
 Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
 
@@ -135,7 +164,39 @@ skael-worker
 
 `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and `ANTHROPIC_API_KEY` are the only strictly required variables — the worker exits at startup listing whichever are missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [CLAUDE.md](CLAUDE.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
 
+`ANTHROPIC_API_KEY` covers both the judge that scores each run and the claude-code panel agent that attempts the tasks — the worker forwards it into the sandbox as an environment variable. Set `CLAUDE_CODE_OAUTH_TOKEN` instead (generate it with `claude setup-token`) if you'd rather the panel run against your subscription than pay per API call; the judge still needs `ANTHROPIC_API_KEY` either way. Both the judge model and the gateway it talks to are configurable (OpenRouter or any Anthropic-compatible endpoint), with unchanged defaults if you set nothing. See [Quality scoring](https://skael.dev/docs/quality) for the details.
+
 Once a job completes, `GET /api/skills/{name}/quality` returns the most recent score; `.../quality/history` returns the full history, newest first. Until then, that endpoint 404s — there's no "pending" score record, just none yet (the publish response does carry a `quality.state` of `"pending"` with the job's ID while it's in flight, versus `"none"` when no suite is registered at all).
+
+## Scoring a skill and clearing a hold
+
+What has to be running: the server, Postgres, and a `skael-worker` with a Docker daemon. Nothing gets scored without a worker — jobs just queue.
+
+A skill needs a registered suite before it can be scored:
+
+```bash
+whetstone suite gen my-skill
+whetstone suite push my-skill
+```
+
+No suite means no score, ever — that's by design (see "Running the eval worker" above).
+
+On publish, the server looks up the skill's registered suite and enqueues an evaluation job automatically. A version the gate holds still gets a version number and an archive, but isn't served until it clears.
+
+If a version is held, check the review queue (web UI's Review page, or `GET /api/review/queue` via the API) and clear it one of two ways:
+
+- Wait for a verified evaluation to score at or above `QUALITY_FLOOR` — an eval run takes roughly 45-90 minutes.
+- Have an owner or admin approve it directly: `skael review <name> <version> --approve --reason "..."`.
+
+![The review queue — a held version with its scan findings, and what the gate says would clear each one](site/public/review-queue.png)
+
+Scores appear wherever skills are listed. A skill that has never been scored reads as unscored, not as a zero — those are different facts, and a score of nothing is not a score of zero:
+
+![Skill analytics with a score column — verified, attested, incomplete-panel, and unscored all read differently](site/public/quality-scores.png)
+
+Crossing usage against quality is the report the two halves exist to produce: the skills your team leans on daily that measurably don't work.
+
+![Activation plotted against quality, with high-activation low-score called out worst-first](site/public/activation-quality.png)
 
 ## Development
 

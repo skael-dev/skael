@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skael-dev/skael/internal/eval/llm/api"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/worker"
 )
@@ -78,6 +79,54 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	}
 	if cfg.WorkerID == "" {
 		t.Fatal("worker id defaulted to empty; two anonymous workers cannot be told apart in the lease column")
+	}
+	if cfg.LLMBaseURL != "" || cfg.LLMAuthStyle != api.AuthStyleAnthropic || cfg.LLMStrongModel != "" || cfg.LLMFastModel != "" {
+		t.Fatalf("LLM gateway overrides = %+v, want all empty/default when unset", cfg)
+	}
+}
+
+// TestConfigFromEnv_LLMGatewayOverrides pins that LLM_BASE_URL,
+// LLM_AUTH_STYLE, LLM_STRONG_MODEL, and LLM_FAST_MODEL resolve onto
+// workerConfig, so an operator can point the judge at an Anthropic-compatible
+// gateway such as OpenRouter and pick models.
+func TestConfigFromEnv_LLMGatewayOverrides(t *testing.T) {
+	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
+	t.Setenv("SKAEL_API_KEY", "k")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+	t.Setenv("LLM_AUTH_STYLE", "bearer")
+	t.Setenv("LLM_STRONG_MODEL", "anthropic/claude-opus-5")
+	t.Setenv("LLM_FAST_MODEL", "anthropic/claude-haiku-4-5")
+
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMBaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("LLMBaseURL = %q", cfg.LLMBaseURL)
+	}
+	if cfg.LLMAuthStyle != api.AuthStyleBearer {
+		t.Errorf("LLMAuthStyle = %q, want bearer", cfg.LLMAuthStyle)
+	}
+	if cfg.LLMStrongModel != "anthropic/claude-opus-5" {
+		t.Errorf("LLMStrongModel = %q", cfg.LLMStrongModel)
+	}
+	if cfg.LLMFastModel != "anthropic/claude-haiku-4-5" {
+		t.Errorf("LLMFastModel = %q", cfg.LLMFastModel)
+	}
+}
+
+// TestConfigFromEnv_RejectsUnknownAuthStyle guards against a typo'd
+// LLM_AUTH_STYLE silently falling back to the default rather than failing
+// loudly at startup.
+func TestConfigFromEnv_RejectsUnknownAuthStyle(t *testing.T) {
+	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
+	t.Setenv("SKAEL_API_KEY", "k")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("LLM_AUTH_STYLE", "not-a-real-style")
+
+	if _, err := configFromEnv(); err == nil {
+		t.Fatal("configFromEnv accepted an unrecognised LLM_AUTH_STYLE")
 	}
 }
 

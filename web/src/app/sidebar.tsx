@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
-import { Layers, BarChart3, Settings, LogOut } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target } from "lucide-react";
 import { useAuth } from "@/app/auth-provider";
+import { getReviewQueue } from "@/api/sdk.gen";
 
 type NavItem = {
   id: string;
@@ -19,6 +21,8 @@ const navItems: NavItem[] = [
     path: "/analytics",
     icon: <BarChart3 size={16} />,
   },
+  { id: "review", label: "Review", path: "/review", icon: <ShieldCheck size={16} /> },
+  { id: "quadrant", label: "Quadrant", path: "/quadrant", icon: <Target size={16} /> },
 ];
 
 const bottomItems: NavItem[] = [
@@ -42,8 +46,17 @@ function Tooltip({ label }: { label: string }) {
   );
 }
 
-function SidebarItem({ item }: { item: NavItem }) {
+function SidebarItem({ item, count }: { item: NavItem; count?: number }) {
   const [hovered, setHovered] = useState(false);
+  const dot = !!count && count > 0 && (
+    <span
+      className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-[3px] rounded-full
+        bg-warning text-[9px] font-semibold text-bg-primary flex items-center justify-center leading-none"
+      aria-label={`${count} awaiting review`}
+    >
+      {count > 9 ? "9+" : count}
+    </span>
+  );
 
   if (item.disabled) {
     return (
@@ -75,6 +88,7 @@ function SidebarItem({ item }: { item: NavItem }) {
       onMouseLeave={() => setHovered(false)}
     >
       {item.icon}
+      {dot}
       {hovered && <Tooltip label={item.label} />}
     </NavLink>
   );
@@ -158,6 +172,12 @@ function UserAvatar() {
 }
 
 export function Sidebar() {
+  const reviewQuery = useQuery({
+    queryKey: ["review-queue"],
+    queryFn: async () => (await getReviewQueue()).data,
+  });
+  const reviewCount = reviewQuery.data?.total ?? 0;
+
   return (
     <aside
       className="w-14 min-w-14 h-screen bg-bg-secondary border-r border-border
@@ -177,7 +197,11 @@ export function Sidebar() {
       {/* Main nav */}
       <nav className="py-3 flex flex-col gap-1">
         {navItems.map((item) => (
-          <SidebarItem key={item.id} item={item} />
+          <SidebarItem
+            key={item.id}
+            item={item}
+            count={item.id === "review" ? reviewCount : undefined}
+          />
         ))}
       </nav>
 

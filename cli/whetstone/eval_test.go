@@ -138,6 +138,39 @@ func TestRunEvalWith_RecordsJudgeKappaWhenAGatewayIsAvailable(t *testing.T) {
 	}
 }
 
+// TestRunEvalWith_RecordsJudgeModelFromTheGateway is the test that proves
+// Report.JudgeModel is not inert: a run that constructs a judge (calibration
+// succeeds against a real gateway) must record the model the gateway itself
+// reports for the judge's role, not an empty string. Report.Comparable
+// treats a differing JudgeModel as "these two scores cannot be charted on
+// one trend line" — that guard never fires if this field is always empty.
+func TestRunEvalWith_RecordsJudgeModelFromTheGateway(t *testing.T) {
+	d, req := evalHarness(t)
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+	if r.JudgeModel != scriptedGatewayModel {
+		t.Errorf("JudgeModel = %q, want %q (the gateway's own report of what served the judge's role)", r.JudgeModel, scriptedGatewayModel)
+	}
+}
+
+// TestRunEvalWith_NoGatewayMeansNoJudgeModel guards the other side of the
+// contract: an empty JudgeModel must mean "no judge ran", not "unknown
+// judge". With no gateway at all, no judge is ever constructed, so the field
+// must stay empty rather than fall back to some placeholder.
+func TestRunEvalWith_NoGatewayMeansNoJudgeModel(t *testing.T) {
+	d, req := evalHarness(t)
+	d.Gateway = nil
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("eval with no gateway failed outright: %v", err)
+	}
+	if r.JudgeModel != "" {
+		t.Errorf("JudgeModel = %q, want empty with no gateway/no judge", r.JudgeModel)
+	}
+}
+
 // evalHarnessFull is evalHarness's Full-tier counterpart: a 10-task suite
 // with a dev/holdout split and 8 positive/8 negative trigger phrases, so
 // BuildPlan can actually fill a Full tier's budget (baselines and probes),
@@ -775,6 +808,18 @@ func (g scriptedGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error)
 	default:
 		return llm.Res{}, fmt.Errorf("scriptedGateway: no script for role %q", r.Role)
 	}
+}
+
+// scriptedGatewayModel is the model scriptedGateway reports itself as via
+// ModelFor, used by tests to assert Report.JudgeModel came from the gateway
+// rather than from a value the caller happened to already believe.
+const scriptedGatewayModel = "scripted-strong"
+
+func (g scriptedGateway) ModelFor(c llm.ModelClass) string {
+	if c == llm.ClassFast {
+		return "scripted-fast"
+	}
+	return scriptedGatewayModel
 }
 
 func extractSection(s, start, end string) string {

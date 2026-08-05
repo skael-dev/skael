@@ -28,14 +28,33 @@ const (
 	defaultTimeout = 3 * time.Minute
 )
 
+// AuthStyle selects how the API key is presented to the gateway.
+type AuthStyle string
+
+const (
+	// AuthStyleAnthropic sends `x-api-key`, the direct Anthropic API's own
+	// scheme. This is the default: unset, it is exactly today's behaviour.
+	AuthStyleAnthropic AuthStyle = "x-api-key"
+	// AuthStyleBearer sends `Authorization: Bearer <key>`, which is what
+	// Anthropic-compatible gateways such as OpenRouter
+	// (https://openrouter.ai/api/v1/messages) expect.
+	//
+	// Only the auth header differs. `anthropic-version` is sent either way —
+	// see the comment at the header block for why.
+	AuthStyleBearer AuthStyle = "bearer"
+)
+
 // Options configures the gateway.
 type Options struct {
 	BaseURL     string
 	APIKey      string
 	StrongModel string
 	FastModel   string
-	Cache       llm.Cache
-	HTTPClient  *http.Client
+	// AuthStyle selects the auth header sent with every request. Empty
+	// defaults to AuthStyleAnthropic, today's behaviour.
+	AuthStyle  AuthStyle
+	Cache      llm.Cache
+	HTTPClient *http.Client
 	// MaxRetries bounds retries of transient (5xx/429) upstream failures.
 	MaxRetries int
 	// Sleep is the backoff hook, overridden in tests so they do not wait.
@@ -59,6 +78,9 @@ func New(o Options) (*Gateway, error) {
 	}
 	if o.FastModel == "" {
 		o.FastModel = "claude-haiku-4-5-20251001"
+	}
+	if o.AuthStyle == "" {
+		o.AuthStyle = AuthStyleAnthropic
 	}
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{Timeout: defaultTimeout}
@@ -146,8 +168,20 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, false, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-api-key", g.opts.APIKey)
+	// anthropic-version goes on every request regardless of auth style. The
+	// body is the Anthropic Messages shape either way, and an
+	// Anthropic-compatible gateway is built to receive exactly what an
+	// Anthropic client sends — the Claude Code CLI talks to OpenRouter's
+	// compatible endpoint and sends this header, so it is accepted there.
+	// Sending it when the gateway ignores it costs nothing; omitting it when
+	// the gateway requires it fails every request, so the asymmetry decides.
 	req.Header.Set("anthropic-version", apiVersion)
+	switch g.opts.AuthStyle {
+	case AuthStyleBearer:
+		req.Header.Set("Authorization", "Bearer "+g.opts.APIKey)
+	default:
+		req.Header.Set("x-api-key", g.opts.APIKey)
+	}
 
 	resp, err := g.opts.HTTPClient.Do(req)
 	if err != nil {
@@ -207,4 +241,12 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 		return g.opts.FastModel
 	}
 	return g.opts.StrongModel
+}
+
+// ModelFor implements llm.Gateway. This gateway always knows its own model:
+// StrongModel and FastModel are configured (or defaulted) in New, so an
+// unrecognized class simply falls back to the strong model, matching
+// modelFor's own convention.
+func (g *Gateway) ModelFor(c llm.ModelClass) string {
+	return g.modelFor(c)
 }

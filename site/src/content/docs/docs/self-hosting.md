@@ -32,7 +32,53 @@ docker run -p 8080:8080 \
 docker compose up -d
 ```
 
-This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`; sign up to create your first account.
+This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`; sign up to create your first account. Publishing and scanning work right away. Evaluations do not — that's a separate opt-in piece, see below.
+
+## Evaluation worker (optional)
+
+The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a Docker daemon to sandbox each run and a direct Anthropic API key to judge the result.
+
+Run it on the host, alongside Compose rather than inside it:
+
+```bash
+export SKAEL_ENDPOINT=http://localhost:8080
+export SKAEL_API_KEY=<a personal API key with permission to claim eval jobs>
+export ANTHROPIC_API_KEY=<your direct Anthropic API key>
+skael-worker
+```
+
+This is enough for a VPS: no interactive login step, no credential directory to provision. `ANTHROPIC_API_KEY` covers both the judge and the claude-code panel agent, since the worker forwards it into the sandbox as an environment variable.
+
+**Why not a Compose service?** The worker bind-mounts its own working directory into each sandbox container through the Docker socket, and that mount is resolved by the host's Docker daemon. A worker running inside a container would hand the daemon a path that exists only in its own filesystem, so the mount would come up empty. Running it on the host keeps that path real.
+
+### Worker configuration
+
+Required — the worker exits at startup naming whichever is missing:
+
+| Variable | Description |
+|---|---|
+| `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
+| `SKAEL_API_KEY` | API key the worker authenticates with |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model, and (forwarded into the sandbox) for the claude-code panel agent — never a subscription CLI on PATH |
+
+Optional, with defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
+| `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
+| `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
+| `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
+| `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
+| `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
+| `LLM_BASE_URL` | `https://api.anthropic.com` | Judge gateway base URL. Posts to `{base}/v1/messages` |
+| `LLM_AUTH_STYLE` | `x-api-key` | Judge auth header: `x-api-key` or `bearer` (OpenRouter expects `bearer`) |
+| `LLM_STRONG_MODEL` | `claude-opus-5` | Model for the judge (strong class) |
+| `LLM_FAST_MODEL` | `claude-haiku-4-5-20251001` | Model for the fast class |
+| `ANTHROPIC_BASE_URL` | — | Forwarded into the sandbox for the claude-code panel agent; points it at a different gateway |
+| `ANTHROPIC_AUTH_TOKEN` | — | Forwarded into the sandbox for the claude-code panel agent; the token for `ANTHROPIC_BASE_URL` |
+
+The judge model (`ANTHROPIC_API_KEY`) is checked at startup. The panel agent is not checked at startup: if neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set, and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today — `codex`, `cursor`, and `opencode` are registered but can't yet run. See [Quality scoring](/docs/quality) for the OpenRouter example and what changing the judge model means for score comparability.
 
 ## Storage
 

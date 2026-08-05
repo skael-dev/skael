@@ -119,6 +119,22 @@ type SkillAnalytics struct {
 	ReviewedAt     *time.Time `json:"reviewed_at"`
 	LatestVersion  int        `json:"latest_version"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// Quality is nil when the skill has never been scored. Nil, not a zero
+	// value: an unscored skill and a skill that scored zero are different
+	// facts, and every surface renders them differently.
+	Quality *QualitySummary `json:"quality,omitempty"`
+}
+
+// QualitySummary is the compact quality state a list row needs to render a
+// badge: enough to draw the meter and to say whether it may be trusted, and
+// nothing more. The full report is a separate endpoint.
+type QualitySummary struct {
+	Version       int       `json:"version"`
+	Headline      float64   `json:"headline_score"`
+	Verified      bool      `json:"verified"`
+	PanelComplete bool      `json:"panel_complete"`
+	ScoredAt      time.Time `json:"scored_at"`
 }
 
 // GetOverview returns aggregate KPI data covering the last `days` days.
@@ -222,15 +238,32 @@ func (s *Store) GetOverview(ctx context.Context, days int) (*OverviewData, error
 type SkillsQuery struct {
 	Limit  int
 	Offset int
-	Sort   string // "activations" (default) | "name" | "updated"
+	Sort   string // "activations" (default) | "name" | "updated" | "quality"
 	Query  string // case-insensitive substring on name/description
 	Tag    string // frontmatter tag membership
+	// Order is "asc" or "desc"; anything else uses the sort clause's own
+	// default direction.
+	Order string
+	// Scored filters to skills that have ("yes") or have not ("no") been
+	// scored. Empty means no filter.
+	Scored string
 }
 
 var skillsSortClauses = map[string]string{
 	"activations": "activations DESC, s.name ASC",
 	"name":        "s.name ASC",
 	"updated":     "s.updated_at DESC, s.name ASC",
+	// NULLS LAST is applied in both directions on purpose: an unscored skill
+	// is not a zero-scoring one, and letting it sort first under `asc` would
+	// present "never measured" as "worst".
+	"quality": "q.headline_score DESC NULLS LAST, s.name ASC",
+}
+
+// skillsSortClausesAsc holds the ascending form of any sort whose ascending
+// form is not simply the default. Only `quality` needs one, because flipping
+// DESC to ASC must not also flip NULLS LAST to NULLS FIRST.
+var skillsSortClausesAsc = map[string]string{
+	"quality": "q.headline_score ASC NULLS LAST, s.name ASC",
 }
 
 func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQuery) ([]SkillAnalytics, int, error) {
@@ -240,6 +273,10 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 	orderBy, ok := skillsSortClauses[opts.Sort]
 	if !ok {
 		orderBy = skillsSortClauses["activations"]
+	} else if opts.Order == "asc" {
+		if asc, has := skillsSortClausesAsc[opts.Sort]; has {
+			orderBy = asc
+		}
 	}
 	args := []any{days}
 	next := func(v any) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
@@ -250,6 +287,12 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 	}
 	if opts.Tag != "" {
 		where += fmt.Sprintf(" AND %s = ANY(s.tags)", next(opts.Tag))
+	}
+	switch opts.Scored {
+	case "yes":
+		where += " AND q.version IS NOT NULL"
+	case "no":
+		where += " AND q.version IS NULL"
 	}
 	q := `
 		SELECT
@@ -265,6 +308,7 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			s.tags                                                AS raw_tags,
 			s.author,
 			s.spec_compliance,
+			q.version, q.headline_score, q.verified, q.panel_complete, q.scored_at,
 			COUNT(*) OVER() AS total_count
 		FROM skills s
 		LEFT JOIN (
@@ -280,6 +324,13 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 		) e ON e.resolved_name = s.name
 		LEFT JOIN skill_versions sv
 			ON sv.skill_id = s.id AND sv.version = s.latest_version
+		LEFT JOIN LATERAL (
+			SELECT version, headline_score, verified, panel_complete, scored_at
+			FROM skill_quality
+			WHERE skill_id = s.id
+			ORDER BY scored_at DESC, id DESC
+			LIMIT 1
+		) q ON TRUE
 		WHERE 1=1` + where + `
 		ORDER BY ` + orderBy + `
 		LIMIT ` + next(opts.Limit) + ` OFFSET ` + next(opts.Offset)
@@ -294,6 +345,10 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 	for rows.Next() {
 		var sa SkillAnalytics
 		var rowTotal int
+		var qVersion *int
+		var qHeadline *float64
+		var qVerified, qPanelComplete *bool
+		var qScoredAt *time.Time
 		if err := rows.Scan(
 			&sa.Name,
 			&sa.Description,
@@ -307,12 +362,26 @@ func (s *Store) GetSkillsAnalytics(ctx context.Context, days int, opts SkillsQue
 			&sa.Tags,
 			&sa.Author,
 			&sa.SpecCompliance,
+			&qVersion,
+			&qHeadline,
+			&qVerified,
+			&qPanelComplete,
+			&qScoredAt,
 			&rowTotal,
 		); err != nil {
 			return nil, 0, fmt.Errorf("analytics.Store.GetSkillsAnalytics scan: %w", err)
 		}
 		if sa.Tags == nil {
 			sa.Tags = []string{}
+		}
+		if qVersion != nil {
+			sa.Quality = &QualitySummary{
+				Version:       *qVersion,
+				Headline:      *qHeadline,
+				Verified:      *qVerified,
+				PanelComplete: *qPanelComplete,
+				ScoredAt:      *qScoredAt,
+			}
 		}
 		total = rowTotal
 		results = append(results, sa)

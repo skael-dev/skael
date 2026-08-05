@@ -45,8 +45,17 @@ type Record struct {
 	// ModelPanel, PanelComplete) so a version-over-version trend can tell
 	// whether its own comparison is valid without re-fetching every report.
 	UpliftSource string
-	JobID        string
-	ScoredAt     time.Time
+	// JudgeModel mirrors report.Report.JudgeModel — preserved alongside the
+	// other Comparable fields so BuildSeries can reconstruct a report that
+	// groups on it. nil for a row written before this field existed, and for
+	// any run where the caller building the report could not determine which
+	// model judged it. asReport (internal/quality/series.go) maps nil to one
+	// shared "unknown judge" value, distinct from every real model name but
+	// shared across every unknown row — see its doc for why records with no
+	// recorded judge still group with each other rather than fragmenting.
+	JudgeModel *string
+	JobID      string
+	ScoredAt   time.Time
 
 	// CriticalForbidViolations counts critical-severity forbid-rule
 	// violations observed across every run in the report. It is the one
@@ -58,6 +67,14 @@ type Record struct {
 	// gate expresses "not measured at all" as a nil *QualityState, never as
 	// a zero.
 	CriticalForbidViolations int
+
+	// ReportJSON is the worker's full report exactly as posted, kept so the
+	// detail page can show judge evidence and per-task contract violations —
+	// facts the aggregates above deliberately compress away. Nil for every
+	// row written before migration 015, and for any record read by a query
+	// that does not select it: only Store.GetVersion does, because the
+	// payload is large and no list or summary needs it.
+	ReportJSON json.RawMessage
 }
 
 // FromReport maps a report onto a record. It is pure: no database, no clock,
@@ -129,6 +146,11 @@ func FromReport(r *report.Report) (Record, error) {
 		}
 	}
 
+	var judgeModel *string
+	if r.JudgeModel != "" {
+		judgeModel = &r.JudgeModel
+	}
+
 	criticalViolations := 0
 	for _, task := range r.Tasks {
 		for _, rd := range task.Drift {
@@ -159,9 +181,23 @@ func FromReport(r *report.Report) (Record, error) {
 		ModelPanel:               modelPanelJSON,
 		Tier:                     r.Tier,
 		UpliftSource:             string(r.UpliftSource),
+		JudgeModel:               judgeModel,
 		ScoredAt:                 r.FinishedAt,
 		CriticalForbidViolations: criticalViolations,
 	}, nil
+}
+
+// FromReportRaw is FromReport plus the report's own serialised bytes. The
+// caller passes what it received rather than re-marshalling r: a round trip
+// through the struct would silently drop any field this binary does not know,
+// and the stored report is meant to outlive this binary's schema.
+func FromReportRaw(r *report.Report, raw json.RawMessage) (Record, error) {
+	rec, err := FromReport(r)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.ReportJSON = raw
+	return rec, nil
 }
 
 // memberKey identifies a panel member within a report's per-member maps.

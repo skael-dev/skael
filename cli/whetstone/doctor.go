@@ -36,6 +36,18 @@ const (
 const (
 	apiKeyEnv     = "ANTHROPIC_API_KEY"
 	apiBaseURLEnv = "ANTHROPIC_BASE_URL"
+	// apiAuthTokenEnv is the Claude Code CLI's own name for a bearer token,
+	// used together with apiBaseURLEnv to point at an Anthropic-compatible
+	// gateway such as OpenRouter. Preferred over apiKeyEnv when both are set,
+	// since a bearer token implies a non-Anthropic gateway is intended.
+	apiAuthTokenEnv = "ANTHROPIC_AUTH_TOKEN"
+	// Model overrides, named to match the worker's so one environment
+	// configures both. Without these, pointing apiBaseURLEnv at a non-Anthropic
+	// gateway still asks it for Anthropic's own model names — OpenRouter
+	// namespaces its identifiers (anthropic/claude-opus-4), so the request
+	// 404s and authoring fails with a confusing "no endpoints found".
+	strongModelEnv = "LLM_STRONG_MODEL"
+	fastModelEnv   = "LLM_FAST_MODEL"
 )
 
 // maxGatewayRetries bounds retries of transient upstream failures. Generation
@@ -98,11 +110,32 @@ type gatewayChoice struct {
 // CLI are billed to a subscription the author already has, where the direct
 // API needs a key and bills separately.
 func chooseGateway() gatewayChoice {
+	// Explicit gateway configuration beats autodetection. Setting a base URL
+	// or a bearer token is an unambiguous statement that a particular gateway
+	// is intended; silently preferring a subscription CLI that happens to be
+	// on PATH would bill the wrong account and quietly evaluate against a
+	// different model than the one configured.
+	//
+	// ANTHROPIC_API_KEY alone stays *below* the CLI: it is present on plenty
+	// of developer machines that also have the CLI installed, and treating it
+	// as an override would change today's behaviour for them.
+	if os.Getenv(apiBaseURLEnv) != "" || os.Getenv(apiAuthTokenEnv) != "" {
+		return gatewayChoice{
+			Kind:   gatewayAPI,
+			Detail: fmt.Sprintf("direct API, configured explicitly via %s/%s", apiBaseURLEnv, apiAuthTokenEnv),
+		}
+	}
 	if bin, err := agentcli.Detect(); err == nil {
 		return gatewayChoice{
 			Kind:   gatewaySubscription,
 			Binary: bin,
 			Detail: fmt.Sprintf("agent CLI %s, billed to your subscription", bin),
+		}
+	}
+	if os.Getenv(apiAuthTokenEnv) != "" {
+		return gatewayChoice{
+			Kind:   gatewayAPI,
+			Detail: fmt.Sprintf("direct API, authenticated with %s", apiAuthTokenEnv),
 		}
 	}
 	if os.Getenv(apiKeyEnv) != "" {
@@ -113,7 +146,7 @@ func chooseGateway() gatewayChoice {
 	}
 	return gatewayChoice{
 		Kind:   gatewayNone,
-		Detail: fmt.Sprintf("no supported agent CLI on PATH and %s is unset", apiKeyEnv),
+		Detail: fmt.Sprintf("no supported agent CLI on PATH and neither %s nor %s is set", apiKeyEnv, apiAuthTokenEnv),
 	}
 }
 
@@ -129,12 +162,21 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 			MaxRetries: maxGatewayRetries,
 		})
 	case gatewayAPI:
+		authStyle := api.AuthStyleAnthropic
+		key := os.Getenv(apiKeyEnv)
+		if token := os.Getenv(apiAuthTokenEnv); token != "" {
+			authStyle = api.AuthStyleBearer
+			key = token
+		}
 		return api.New(api.Options{
-			BaseURL:    os.Getenv(apiBaseURLEnv),
-			APIKey:     os.Getenv(apiKeyEnv),
-			Cache:      cache,
-			HTTPClient: &http.Client{Timeout: authoringTimeout},
-			MaxRetries: maxGatewayRetries,
+			BaseURL:     os.Getenv(apiBaseURLEnv),
+			APIKey:      key,
+			AuthStyle:   authStyle,
+			StrongModel: os.Getenv(strongModelEnv),
+			FastModel:   os.Getenv(fastModelEnv),
+			Cache:       cache,
+			HTTPClient:  &http.Client{Timeout: authoringTimeout},
+			MaxRetries:  maxGatewayRetries,
 		})
 	default:
 		return nil, fmt.Errorf("no LLM gateway available: %s (run `whetstone doctor`)", c.Detail)

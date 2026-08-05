@@ -35,3 +35,18 @@ func TestGateway_ErrorsOnceResponsesAreExhausted(t *testing.T) {
 		t.Errorf("exhaustion error does not name the scripted count: %v", err)
 	}
 }
+
+func TestModelFor_IsDeterministicPerClass(t *testing.T) {
+	g := fake.New()
+	if got := g.ModelFor(llm.ClassStrong); got != "fake-strong" {
+		t.Errorf("ModelFor(ClassStrong) = %q, want %q", got, "fake-strong")
+	}
+	if got := g.ModelFor(llm.ClassFast); got != "fake-fast" {
+		t.Errorf("ModelFor(ClassFast) = %q, want %q", got, "fake-fast")
+	}
+	// An unrecognized class falls back to the strong model, the same
+	// convention the real gateways follow.
+	if got := g.ModelFor(llm.ModelClass("weird")); got != "fake-strong" {
+		t.Errorf("ModelFor(unknown) = %q, want the strong-model fallback %q", got, "fake-strong")
+	}
+}

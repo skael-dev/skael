@@ -26,6 +26,13 @@ services:
       timeout: 5s
       retries: 5
 
+# The eval worker is deliberately NOT a service here. It bind-mounts paths it
+# computes locally — the eval workspace and the agent credential directories —
+# into sandbox containers through the Docker socket. Those mounts are resolved
+# by the HOST daemon, so a worker running inside a container would hand the
+# daemon paths that only exist in its own filesystem, and every sandbox would
+# come up with empty mounts. Run skael-worker on the host instead:
+# https://skael.dev/docs/quality
 volumes:
   skill-data:
   pg-data:

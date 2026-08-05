@@ -41,7 +41,13 @@ func (s *Store) WithExecutor(e Executor) *Store {
 const recordColumns = `skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 	pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
-	critical_forbid_violations`
+	critical_forbid_violations, judge_model`
+
+// getVersionColumns is recordColumns plus the report payload. It is the only
+// column list that selects report_json: the summary and history reads stay
+// narrow because a report is orders of magnitude larger than the aggregates
+// beside it, and a list endpoint that returned one per row would be unusable.
+const getVersionColumns = recordColumns + `, report_json`
 
 // row is the subset of pgx.Row/pgx.Rows that scanRecord needs.
 type row interface {
@@ -49,17 +55,29 @@ type row interface {
 }
 
 // scanRecord scans a row shaped like recordColumns into a Record.
-func scanRecord(r row) (*Record, error) {
+func scanRecord(r row) (*Record, error) { return scanRecordShape(r, false) }
+
+// scanRecordWithReport scans a row shaped like getVersionColumns (recordColumns
+// plus report_json) into a Record.
+func scanRecordWithReport(r row) (*Record, error) { return scanRecordShape(r, true) }
+
+// scanRecordShape scans a row shaped like recordColumns, optionally followed
+// by report_json. withReport tells it which of the two shapes it was handed;
+// there is no way to infer that from a pgx.Row.
+func scanRecordShape(r row, withReport bool) (*Record, error) {
 	var rec Record
 	var jobID *string
-	err := r.Scan(
+	dest := []any{
 		&rec.SkillID, &rec.Version, &rec.Headline, &rec.HeadlineCILow, &rec.HeadlineCIHigh,
 		&rec.Pillars, &rec.PanelMatrix, &rec.RobustnessGap, &rec.DriftGrade, &rec.DriftBreakdown,
 		&rec.Verified, &rec.PanelComplete, &rec.SuiteRef, &rec.EngineVersion, &rec.ModelPanel,
 		&rec.Tier, &rec.UpliftSource, &jobID, &rec.ScoredAt,
-		&rec.CriticalForbidViolations,
-	)
-	if err != nil {
+		&rec.CriticalForbidViolations, &rec.JudgeModel,
+	}
+	if withReport {
+		dest = append(dest, &rec.ReportJSON)
+	}
+	if err := r.Scan(dest...); err != nil {
 		return nil, err
 	}
 	if jobID != nil {
@@ -80,13 +98,13 @@ func (s *Store) Upsert(ctx context.Context, rec Record) error {
 		INSERT INTO skill_quality (skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 			pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 			verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
-			critical_forbid_violations)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+			critical_forbid_violations, report_json, judge_model)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
 		rec.SkillID, rec.Version, rec.Headline, rec.HeadlineCILow, rec.HeadlineCIHigh,
 		rec.Pillars, rec.PanelMatrix, rec.RobustnessGap, rec.DriftGrade, rec.DriftBreakdown,
 		rec.Verified, rec.PanelComplete, rec.SuiteRef, rec.EngineVersion, rec.ModelPanel,
 		rec.Tier, rec.UpliftSource, jobID, rec.ScoredAt,
-		rec.CriticalForbidViolations)
+		rec.CriticalForbidViolations, rec.ReportJSON, rec.JudgeModel)
 	if err != nil {
 		return fmt.Errorf("quality.Store.Upsert: %w", err)
 	}
@@ -129,6 +147,29 @@ func (s *Store) LatestAcrossVersions(ctx context.Context, skillID string) (*Reco
 	}
 	if err != nil {
 		return nil, fmt.Errorf("quality.Store.LatestAcrossVersions: %w", err)
+	}
+	return rec, nil
+}
+
+// GetVersion returns the score for one specific version, including the full
+// stored report. Ordered by scored_at with id as a deterministic tiebreak
+// (see Latest) so re-fetching one version cannot return different rows on
+// different requests. Returns (nil, nil) when that version has never been
+// scored.
+func (s *Store) GetVersion(ctx context.Context, skillID string, version int) (*Record, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT `+getVersionColumns+`
+		FROM skill_quality
+		WHERE skill_id = $1 AND version = $2
+		ORDER BY scored_at DESC, id DESC
+		LIMIT 1`, skillID, version)
+
+	rec, err := scanRecordWithReport(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("quality.Store.GetVersion: %w", err)
 	}
 	return rec, nil
 }

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
+import { QualityBadge } from "@/features/quality/quality-badge";
 import type { SkillAnalytics } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +36,7 @@ function formatRelativeTime(dateStr: string | null): string {
 }
 
 // ── Sort state ─────────────────────────────────────────────────
-type SortKey = "name" | "activations" | "unique_devs" | "last_triggered" | "security_status";
+type SortKey = "name" | "activations" | "unique_devs" | "last_triggered" | "security_status" | "score";
 type SortDir = "asc" | "desc";
 
 function sortSkills(
@@ -64,6 +65,20 @@ function sortSkills(
       case "security_status":
         cmp = a.security_status.localeCompare(b.security_status);
         break;
+      case "score": {
+        // Unscored rows sink to the bottom whichever way the column is
+        // sorted: "never measured" is not "measured badly", and letting it
+        // lead an ascending sort would say the opposite. These branches
+        // return their fixed values before `dir` is consulted below — that
+        // ordering is what makes it hold in both directions.
+        const av = a.quality?.headline_score;
+        const bv = b.quality?.headline_score;
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        cmp = av - bv;
+        break;
+      }
     }
     return dir === "asc" ? cmp : -cmp;
   });
@@ -139,6 +154,7 @@ export function AnalyticsTable({ skills }: AnalyticsTableProps) {
           <SortableHead {...headProps("unique_devs")} label="Devs" className="text-right" />
           <SortableHead {...headProps("last_triggered")} label="Last triggered" />
           <SortableHead {...headProps("security_status")} label="Security" />
+          <SortableHead {...headProps("score")} label="Score" className="text-right" />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -189,13 +205,20 @@ export function AnalyticsTable({ skills }: AnalyticsTableProps) {
                   <ReviewStatus reviewedAt={skill.reviewed_at} />
                 </div>
               </TableCell>
+
+              {/* Score */}
+              <TableCell className="text-right">
+                <div className="flex justify-end">
+                  <QualityBadge quality={skill.quality} latestVersion={skill.latest_version} />
+                </div>
+              </TableCell>
             </TableRow>
           );
         })}
 
         {sorted.length === 0 && (
           <TableRow className="hover:bg-transparent">
-            <TableCell colSpan={5} className="text-center py-16 text-text-tertiary text-sm">
+            <TableCell colSpan={6} className="text-center py-16 text-text-tertiary text-sm">
               No skills data available for this period
             </TableCell>
           </TableRow>

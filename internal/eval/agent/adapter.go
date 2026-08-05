@@ -49,8 +49,18 @@ type Caps struct {
 	// SkillDir is where a skill bundle installs, relative to the workspace.
 	SkillDir string
 	// AuthDirs are host paths the sandbox mounts read-only so subscription auth
-	// works inside the container.
+	// works inside the container. This is a local-development convenience for
+	// a machine that already has an interactive login — it does not work on a
+	// headless worker with no such login, and it carries nothing on macOS for
+	// a CLI that keeps its token in the Keychain rather than on disk.
 	AuthDirs []string
+	// AuthEnv names the environment variables this adapter's CLI understands
+	// for authentication — names only, never values. The runner forwards any
+	// of these that are set in the worker's own environment into the sandbox.
+	// This is the preferred mechanism: it works on a headless host with no
+	// interactive login, unlike AuthDirs above. Per-adapter by design, since
+	// each agent CLI has its own.
+	AuthEnv []string
 	// SupportsSkillInvocation reports whether the stream exposes an explicit
 	// skill-invocation event. When false, activation must be inferred from a
 	// read of the skill's SKILL.md, which cannot distinguish read from invoked.

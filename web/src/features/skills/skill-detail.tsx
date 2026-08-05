@@ -14,6 +14,7 @@ import { ReviewStatus } from "@/features/security/review-status";
 import { ScanFindings } from "@/features/security/scan-findings";
 import type { ScanReport } from "@/features/security/scan-findings";
 import { SpecBadge } from "@/features/skills/spec-badge";
+import { QualityReport } from "@/features/quality/quality-report";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { cn } from "@/lib/utils";
 
@@ -701,6 +702,7 @@ const TABS: TabDef[] = [
   { id: "versions", label: "Versions" },
   { id: "usage", label: "Usage" },
   { id: "security", label: "Security" },
+  { id: "quality", label: "Quality" },
 ];
 
 // ── Fetch scan report (raw Chi route, not in generated client) ───
@@ -1006,6 +1008,9 @@ export function SkillDetail() {
             scanReport={scanReport}
             scanLoading={scanQuery.isLoading}
           />
+        )}
+        {activeTab === "quality" && skill && (
+          <QualityReport skillName={skill.name} latestVersion={skill.latest_version} />
         )}
       </div>
     </div>

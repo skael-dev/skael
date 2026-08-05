@@ -353,3 +353,30 @@ type memCache struct{ m map[string]string }
 
 func (c *memCache) Get(k string) (string, bool, error) { v, ok := c.m[k]; return v, ok, nil }
 func (c *memCache) Put(k, v string) error              { c.m[k] = v; return nil }
+
+func TestModelFor_ReturnsTheConfiguredModelPerClass(t *testing.T) {
+	g, _ := newGateway(t, "success")
+	if got := g.ModelFor(llm.ClassStrong); got != "claude-opus-5" {
+		t.Errorf("ModelFor(ClassStrong) = %q, want %q", got, "claude-opus-5")
+	}
+	if got := g.ModelFor(llm.ClassFast); got != "claude-haiku-4-5-20251001" {
+		t.Errorf("ModelFor(ClassFast) = %q, want %q", got, "claude-haiku-4-5-20251001")
+	}
+}
+
+// TestModelFor_UnconfiguredModelIsUnknown pins the case that matters most for
+// this gateway: when no model was configured, the CLI picks its own default
+// and this gateway never observes it, so ModelFor must say "" rather than
+// guess.
+func TestModelFor_UnconfiguredModelIsUnknown(t *testing.T) {
+	g, _ := newGateway(t, "success", func(o *agentcli.Options) {
+		o.StrongModel = ""
+		o.FastModel = ""
+	})
+	if got := g.ModelFor(llm.ClassStrong); got != "" {
+		t.Errorf("ModelFor(ClassStrong) = %q, want empty when unconfigured", got)
+	}
+	if got := g.ModelFor(llm.ClassFast); got != "" {
+		t.Errorf("ModelFor(ClassFast) = %q, want empty when unconfigured", got)
+	}
+}

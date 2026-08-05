@@ -21,7 +21,19 @@ A debounced hook script runs `skael sync` automatically in the background. It ch
 
 ## Scanning
 
-Every publish (and every import) runs a security scan for hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation. Critical and high-severity findings block the publish.
+Every publish (and every import) runs a security scan for hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation. What happens to a finding depends on what it is, not just how severe it's rated:
+
+- Findings that mean a credential or data is **leaving the machine** — a hardcoded secret, a reverse shell — are unappealable. The publish is rejected outright. No version is created, and nothing clears it: not an evaluation, not an admin.
+- Everything else that blocks (dangerous shell execution, prompt injection, other heuristic matches) doesn't reject the publish. It **holds** the version instead: the version is created with a real version number and a stored archive, but it isn't served — it's left out of the sync manifest, can't be installed or downloaded, and the skill's "latest version" pointer doesn't move to it.
+- A held version clears in one of two ways: a [quality score](/docs/quality) that comes back verified and at or above the configured floor, or an owner/admin running `skael review <name> <version> --approve --reason "..."`.
+
+## Quality score
+
+A number, 0-100, that says whether a skill actually works — not just whether it passed the security scan. It comes from running real tasks with a panel of models, once with the skill and once without, and comparing the results. See [Quality scoring](/docs/quality) for how it's produced and what the different states mean.
+
+## Publish gate
+
+The decision every publish and import goes through after scanning: allow it, allow it with a warning, hold it for review, or block it outright. It's what turns a scan finding into an outcome — see [Scanning](#scanning) above for what each outcome means in practice.
 
 ## Activations
 

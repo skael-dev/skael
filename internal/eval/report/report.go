@@ -134,6 +134,22 @@ type Report struct {
 	// float64 cannot distinguish them.
 	JudgeKappa     *float64 `json:"judge_kappa,omitempty"`
 	JudgeLabeledBy string   `json:"judge_labeled_by,omitempty"`
+	// JudgeModel identifies which model judged this run — the judge is a
+	// distinct axis of comparability from the model panel being scored: an
+	// operator-configurable judge means the same panel, scored on the same
+	// suite, can produce a different Headline purely because a different
+	// model did the judging. Empty when no judge ran for this report (the
+	// pass-rate fallback in UpliftSource), or when the caller building the
+	// report could not determine which model served the request.
+	//
+	// A gateway base URL would sharpen this further — a different base URL
+	// can serve a different model behind the same name — but the llm.Gateway
+	// interface this package's caller holds is opaque (Complete(ctx, Req)
+	// (Res, error), no accessor for the endpoint or model it was constructed
+	// with), so that fact is not obtainable at report-build time today. Only
+	// the model name is recorded here; see cli/whetstone/eval.go for where a
+	// future accessor would need to surface it.
+	JudgeModel string `json:"judge_model,omitempty"`
 
 	Members []MemberReport `json:"members"`
 	// RobustnessGap is nil when it could not be computed — score.Matrix.ByClass
@@ -233,6 +249,8 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 		return false, "one panel was incomplete, so its minimum was taken over fewer members"
 	case r.UpliftSource != o.UpliftSource:
 		return false, fmt.Sprintf("Uplift came from different sources (%s and %s)", r.UpliftSource, o.UpliftSource)
+	case r.JudgeModel != o.JudgeModel:
+		return false, fmt.Sprintf("different judge models (%q and %q): a different judge can move the number without the skill changing", r.JudgeModel, o.JudgeModel)
 	}
 	return true, ""
 }

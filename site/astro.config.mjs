@@ -29,6 +29,7 @@ export default defineConfig({
           { label: 'Overview', slug: 'docs' },
           { label: 'Quickstart', slug: 'docs/quickstart' },
           { label: 'Core concepts', slug: 'docs/concepts' },
+          { label: 'Quality scoring', slug: 'docs/quality' },
         ] },
         { label: 'Reference', items: [
           { label: 'CLI', slug: 'docs/cli' },

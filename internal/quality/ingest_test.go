@@ -35,6 +35,32 @@ func TestFromReport_CarriesTheHeadlineAndPanelState(t *testing.T) {
 	}
 }
 
+func TestFromReport_CarriesJudgeModel(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r", JudgeModel: "claude-opus-5"}
+	rec, err := quality.FromReport(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.JudgeModel == nil || *rec.JudgeModel != "claude-opus-5" {
+		t.Fatalf("judge model = %v, want claude-opus-5", rec.JudgeModel)
+	}
+}
+
+// A report with no judge (JudgeModel == "") must record nil, not an empty
+// string — the empty string is not a distinct fact from "we don't know",
+// while nil is, and the series grouping in internal/quality/series.go relies
+// on being able to tell them apart.
+func TestFromReport_NoJudgeModelStaysNil(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
+	rec, err := quality.FromReport(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.JudgeModel != nil {
+		t.Fatalf("judge model = %v, want nil", *rec.JudgeModel)
+	}
+}
+
 // An absent measurement is a pointer or an error, never a zero. A nil gap must
 // survive as NULL, because 0.0 means "the floor model kept up" — the opposite.
 func TestFromReport_AbsentRobustnessGapStaysAbsent(t *testing.T) {

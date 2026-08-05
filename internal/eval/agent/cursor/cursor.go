@@ -29,10 +29,14 @@ func (a *Adapter) Name() string { return "cursor" }
 // zero trigger measurement.
 func (a *Adapter) Caps() agent.Caps {
 	return agent.Caps{
-		EventTier:               "A",
-		ModelFlag:               "--model",
-		SkillDir:                ".cursor/skills",
-		AuthDirs:                []string{"~/.cursor"},
+		EventTier: "A",
+		ModelFlag: "--model",
+		SkillDir:  ".cursor/skills",
+		AuthDirs:  []string{"~/.cursor"},
+		// AuthEnv is left empty: Parse returns ErrParseNotImplemented, so this
+		// adapter cannot contribute to a panel yet. It gets populated when the
+		// parser lands and the real CLI's env-based auth can be verified,
+		// rather than guessed from documentation.
 		SupportsSkillInvocation: false,
 	}
 }

@@ -144,6 +144,11 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		QualityFloor: cfg.QualityFloor,
 	})
 
+	// Cross-skill review queue: every version currently held for review,
+	// across all skills. Open to any authenticated member; the approve/reject
+	// action stays owner/admin on the per-version review route above.
+	skill.RegisterReviewQueueRoutes(api, skillStore)
+
 	// Sync manifest.
 	syncStore := gosync.NewStore(d.Pool)
 	huma.Register(api, huma.Operation{

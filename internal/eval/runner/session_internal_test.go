@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 )
 
@@ -52,5 +54,106 @@ func TestAuthMounts_RewritesHomeAndDropsMissingEntries(t *testing.T) {
 	}
 	if !m.ReadOnly {
 		t.Error("auth mount must be read-only")
+	}
+}
+
+// TestAuthEnv_ForwardsOnlySetNames pins the contract that authEnv only
+// forwards names that are actually set and non-empty in the worker's own
+// environment, in "NAME=value" form, and that an adapter declaring no
+// AuthEnv names yields nothing.
+func TestAuthEnv_ForwardsOnlySetNames(t *testing.T) {
+	t.Setenv("SKAEL_TEST_AUTH_SET", "super-secret-value")
+	t.Setenv("SKAEL_TEST_AUTH_EMPTY", "")
+	// Deliberately leave SKAEL_TEST_AUTH_UNSET unset.
+
+	env := authEnv([]string{"SKAEL_TEST_AUTH_SET", "SKAEL_TEST_AUTH_EMPTY", "SKAEL_TEST_AUTH_UNSET"})
+
+	if len(env) != 1 {
+		t.Fatalf("authEnv = %v, want exactly one forwarded var", env)
+	}
+	if env[0] != "SKAEL_TEST_AUTH_SET=super-secret-value" {
+		t.Errorf("authEnv[0] = %q, want %q", env[0], "SKAEL_TEST_AUTH_SET=super-secret-value")
+	}
+
+	if got := authEnv(nil); got != nil {
+		t.Errorf("authEnv(nil) = %v, want nil", got)
+	}
+	if got := authEnv([]string{}); got != nil {
+		t.Errorf("authEnv([]) = %v, want nil", got)
+	}
+}
+
+// stubAdapter is an agent.Adapter that declares only the auth capabilities
+// resolveAuth reads; every other method panics, so a test that accidentally
+// exercises more than intended fails loudly rather than silently.
+type stubAdapter struct{ caps agent.Caps }
+
+func (s stubAdapter) Name() string     { return "stub" }
+func (s stubAdapter) Caps() agent.Caps { return s.caps }
+func (s stubAdapter) InstallSkill(string, string) error {
+	panic("stubAdapter.InstallSkill: not used by resolveAuth")
+}
+func (s stubAdapter) Invoke(context.Context, agent.InvokeSpec) (agent.RawStream, error) {
+	panic("stubAdapter.Invoke: not used by resolveAuth")
+}
+func (s stubAdapter) Parse(agent.RawStream) (*agent.Result, error) {
+	panic("stubAdapter.Parse: not used by resolveAuth")
+}
+
+// TestResolveAuth_EnvVarsSuppressTheHostCredentialMounts pins the precedence
+// that a real run established the hard way: with both configured, the agent
+// CLI inside the sandbox preferred the mounted host credentials and failed
+// with "401 OAuth access token has expired" — while the environment pointed
+// at a working gateway. Whatever is configured must win over whatever happens
+// to be in the operator's home directory.
+func TestResolveAuth_EnvVarsSuppressTheHostCredentialMounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SKAEL_TEST_TOKEN", "from-the-environment")
+
+	a := stubAdapter{caps: agent.Caps{
+		AuthDirs: []string{"~/.claude"},
+		AuthEnv:  []string{"SKAEL_TEST_TOKEN"},
+	}}
+
+	mounts, env, err := resolveAuth(a, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("resolveAuth: %v", err)
+	}
+	if len(mounts) != 0 {
+		t.Fatalf("mounts = %+v, want none: a set auth env var must suppress the host mounts", mounts)
+	}
+	if len(env) != 1 || env[0] != "SKAEL_TEST_TOKEN=from-the-environment" {
+		t.Fatalf("env = %+v, want the single configured variable", env)
+	}
+}
+
+// TestResolveAuth_FallsBackToMountsWhenNoEnvVarIsSet keeps the local-development
+// path working: with nothing in the environment, an existing credential
+// directory is still mounted.
+func TestResolveAuth_FallsBackToMountsWhenNoEnvVarIsSet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := stubAdapter{caps: agent.Caps{
+		AuthDirs: []string{"~/.claude"},
+		AuthEnv:  []string{"SKAEL_TEST_TOKEN_DEFINITELY_UNSET"},
+	}}
+
+	mounts, env, err := resolveAuth(a, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("resolveAuth: %v", err)
+	}
+	if len(env) != 0 {
+		t.Fatalf("env = %+v, want none", env)
+	}
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %+v, want the host credential dir mounted", mounts)
 	}
 }

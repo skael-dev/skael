@@ -3,6 +3,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
 import { SpecBadge } from "@/features/skills/spec-badge";
+import { QualityBadge } from "@/features/quality/quality-badge";
 import type { SkillAnalytics } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
 
@@ -97,7 +98,7 @@ export function SkillCard({
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       )}
       style={{
-        gridTemplateColumns: "28px 12px 1fr 80px 80px 110px",
+        gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
       }}
     >
       {/* Checkbox */}
@@ -186,6 +187,7 @@ export function SkillCard({
       {/* Security + review */}
       <div className="flex items-center justify-end gap-2">
         <SecurityBadge status={skill.security_status} showLabel />
+        <QualityBadge quality={skill.quality} latestVersion={skill.latest_version} />
         <ReviewStatus reviewedAt={skill.reviewed_at} />
       </div>
 
