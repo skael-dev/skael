@@ -58,6 +58,10 @@ type Version struct {
 	GatedBy      string          `json:"gated_by,omitempty"`
 	GatedAt      *time.Time      `json:"gated_at,omitempty"`
 	GateNote     string          `json:"gate_note,omitempty"`
+
+	// HoldReasons are the reason kinds still standing between this version
+	// and release. Empty on a released or rejected version.
+	HoldReasons []string `json:"hold_reasons"`
 }
 
 // FileEntry describes a single file within a skill archive.

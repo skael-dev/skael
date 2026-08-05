@@ -159,7 +159,14 @@ func (s *Store) CreateVersion(
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	state := "released"
-	if decision.Outcome == gate.NeedsReview {
+	holdReasons := decision.HoldReasons
+	if holdReasons == nil {
+		holdReasons = []string{}
+	}
+	// decision.Outcome is the authoritative signal from gate.Decide. len(holdReasons) > 0
+	// is checked too so a decision built without going through gate.Decide (a fixture, or a
+	// future caller) that only sets HoldReasons still holds, rather than silently releasing.
+	if decision.Outcome == gate.NeedsReview || len(holdReasons) > 0 {
 		state = "needs_review"
 	}
 
@@ -211,17 +218,17 @@ func (s *Store) CreateVersion(
 		INSERT INTO skill_versions
 			(skill_id, version, archive_path, checksum, changelog, frontmatter,
 			 file_manifest, scan_result, published_by, gate_state, gate_decision,
-			 description, content)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			 description, content, hold_reasons)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter,
 		          file_manifest, scan_result, published_by, created_at,
 		          gate_state, gate_decision, gated_by, gated_at, gate_note,
-		          description, content
+		          description, content, hold_reasons
 	`
 	row := tx.QueryRow(ctx, insertVersion,
 		skillID, newVersion, archivePath, checksum, changelog,
 		frontmatter, manifestJSON, scanResult, publishedBy, state, decisionJSON,
-		description, content,
+		description, content, holdReasons,
 	)
 	ver, err := scanVersion(row)
 	if err != nil {
@@ -256,7 +263,7 @@ func (s *Store) ListVersions(ctx context.Context, skillName string) ([]Version, 
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
 		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
-		       sv.description, sv.content
+		       sv.description, sv.content, sv.hold_reasons
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1
@@ -289,7 +296,7 @@ func (s *Store) GetVersion(ctx context.Context, skillName string, version int) (
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
 		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
-		       sv.description, sv.content
+		       sv.description, sv.content, sv.hold_reasons
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1 AND sv.version = $2
@@ -425,6 +432,7 @@ func scanVersion(row scanner) (*Version, error) {
 		&ver.GateNote,
 		&ver.Description,
 		&ver.Content,
+		&ver.HoldReasons,
 	)
 	if err != nil {
 		return nil, err
@@ -434,6 +442,9 @@ func scanVersion(row scanner) (*Version, error) {
 	ver.GateDecision = json.RawMessage(rawGateDecision)
 	if err := json.Unmarshal(rawFileManifest, &ver.FileManifest); err != nil {
 		return nil, fmt.Errorf("unmarshal file_manifest: %w", err)
+	}
+	if ver.HoldReasons == nil {
+		ver.HoldReasons = []string{}
 	}
 	return &ver, nil
 }
