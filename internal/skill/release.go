@@ -78,10 +78,9 @@ func (r *Releaser) Reconsider(
 		Headline:                 rec.Headline,
 		CriticalForbidViolations: rec.CriticalForbidViolations,
 	}
-	// AdminOverride is false: this path is an automated re-decision on
-	// evidence, and no human is asking for anything. OwnerState is zero:
-	// Reconsider only re-evaluates the scan/quality half of the gate. Task 9
-	// makes that deliberate rather than incidental.
+	// gate.OwnerState{} deliberately: this path re-decides the scan question
+	// on new evidence. Ownership is not re-litigated by an evaluation and is
+	// carried on the version's hold_reasons, which ApproveReason consults.
 	d := gate.Decide(rep, q, gate.OwnerState{}, gate.Policy{Floor: floor})
 
 	if d.Outcome != gate.Allow {
@@ -98,9 +97,22 @@ func (r *Releaser) Reconsider(
 		return d, false, nil
 	}
 
+	// The evaluation is evidence about the skill's behaviour. It answers the
+	// scan question and nothing else: a skill can score beautifully and still
+	// be a change its owner does not want. Clearing the ownership reason here
+	// would make the whole review path decorative.
 	note := fmt.Sprintf("verified score %.1f cleared the floor of %.1f", rec.Headline, floor)
-	if err := r.store.ReleaseVersion(ctx, e, skillName, version, "evaluation", note); err != nil {
+	released, err := r.store.ApproveReason(ctx, e, skillName, version,
+		gate.ReasonScan, nil, "system:eval", note)
+	if err != nil {
 		return d, false, fmt.Errorf("skill.Releaser.Reconsider: %w", err)
+	}
+	if !released {
+		log.Info().
+			Str("skill", skillName).
+			Int("version", version).
+			Msg("evaluation cleared the scan hold; the version stays held on its remaining reasons")
+		return d, false, nil
 	}
 	log.Info().
 		Str("skill", skillName).

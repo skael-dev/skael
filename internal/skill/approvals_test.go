@@ -32,6 +32,28 @@ func heldWithBothReasons(t *testing.T) (*skill.Store, string) {
 	return store, "payments:refunds"
 }
 
+// heldForScanOnly publishes a version held for scan only (not ownership)
+// and returns its store and name.
+func heldForScanOnly(t *testing.T) (*skill.Store, string) {
+	t.Helper()
+	ctx := context.Background()
+	store := skill.NewStore(testutil.SetupTestDB(t))
+
+	sk, err := store.Create(ctx, "payments:refunds", "refunds", "", "", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	d := gate.Decision{
+		Outcome:     gate.NeedsReview,
+		HoldReasons: []string{gate.ReasonScan},
+	}
+	if _, err := store.CreateVersion(ctx, sk.ID, "a.tar.gz", "sum", "", "d", "b",
+		[]byte(`{}`), nil, []byte(`{}`), "carol@acme.com", d); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	return store, "payments:refunds"
+}
+
 func TestCreateVersionPersistsHoldReasons(t *testing.T) {
 	ctx := context.Background()
 	store, name := heldWithBothReasons(t)
