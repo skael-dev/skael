@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -136,4 +137,43 @@ func (s *UserStore) List(ctx context.Context) ([]UserRow, error) {
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+// Search finds users by name or email prefix, case-insensitively. It is
+// deliberately capped and requires a minimum query length: the endpoint on
+// top of it is open to every authenticated member, so it must be a lookup
+// rather than a way to dump the directory.
+func (s *UserStore) Search(ctx context.Context, q string, limit int) ([]UserRow, error) {
+	const minQuery = 2
+	trimmed := strings.TrimSpace(q)
+	if len([]rune(trimmed)) < minQuery {
+		return []UserRow{}, nil
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 20
+	}
+	const sqlQuery = `
+		SELECT id, email, name, role, created_at
+		FROM users
+		WHERE name ILIKE $1 OR email ILIKE $1
+		ORDER BY name
+		LIMIT $2`
+	rows, err := s.pool.Query(ctx, sqlQuery, trimmed+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("auth.UserStore.Search: %w", err)
+	}
+	defer rows.Close()
+
+	users := []UserRow{}
+	for rows.Next() {
+		var u UserRow
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("auth.UserStore.Search: scan: %w", err)
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth.UserStore.Search: %w", err)
+	}
+	return users, nil
 }

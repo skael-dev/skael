@@ -513,4 +513,46 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 			Role:  input.Body.Role,
 		}}, nil
 	})
+
+	// -----------------------------------------------------------------
+	// GET /api/users/search — typeahead for assigning skill owners.
+	//
+	// Open to any authenticated user, and returning identity only: a
+	// namespace owner adding a teammate is a plain member, so restricting
+	// this to admins would make delegated ownership unusable. The trade is
+	// deliberate and bounded — no role, no timestamps, a minimum query
+	// length and a hard cap, so it is a lookup and not an export.
+	// -----------------------------------------------------------------
+	type publicUser struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	type userSearchInput struct {
+		Q string `query:"q"`
+	}
+	type userSearchBody struct {
+		Users []publicUser `json:"users"`
+	}
+	type userSearchOutput struct{ Body userSearchBody }
+
+	huma.Register(api, huma.Operation{
+		OperationID: "search-users",
+		Method:      http.MethodGet,
+		Path:        "/api/users/search",
+		Summary:     "Find users by name or email, for assigning skill owners",
+	}, func(ctx context.Context, input *userSearchInput) (*userSearchOutput, error) {
+		if UserFromContext(ctx) == nil {
+			return nil, huma.Error401Unauthorized("not authenticated")
+		}
+		rows, err := userStore.Search(ctx, input.Q, 20)
+		if err != nil {
+			return nil, fmt.Errorf("search users: %w", err)
+		}
+		users := make([]publicUser, len(rows))
+		for i, r := range rows {
+			users[i] = publicUser{ID: r.ID, Name: r.Name, Email: r.Email}
+		}
+		return &userSearchOutput{Body: userSearchBody{Users: users}}, nil
+	})
 }
