@@ -115,6 +115,19 @@ type SuiteLookup interface {
 	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
 }
 
+// OwnerResolver is the subset of the ownership store publish needs. It is
+// declared here rather than imported because internal/ownership must stay
+// free of internal/skill and the concrete wiring lives in internal/server —
+// the same shape as QueueSubmitter and SuiteLookup.
+//
+// ResolveForPublish folds instance privilege into IsOwner: an instance owner
+// or admin is an implicit owner of everything, which is what makes O5's
+// "admins are the reviewers of record" fall out without a special case.
+type OwnerResolver interface {
+	ResolveForPublish(ctx context.Context, skillName string, user *auth.User) (gate.OwnerState, error)
+	ClaimOnFirstPublish(ctx context.Context, skillName string, user *auth.User) error
+}
+
 // RouteOptions carries the optional collaborators RegisterRoutes wires into
 // the publish (and related) handlers. Each is independently optional (nil
 // disables the behavior it powers) so a caller — including tests — can opt
@@ -133,6 +146,11 @@ type RouteOptions struct {
 	// platform.Config.QualityFloor; the zero value means any verified,
 	// complete, contract-clean report clears.
 	QualityFloor float64
+	// Ownership resolves and claims skill ownership for publish. A nil
+	// resolver leaves the zero gate.OwnerState, which contributes nothing —
+	// that is what keeps every test harness and the CLI's local pre-scan on
+	// the pre-ownership behaviour.
+	Ownership OwnerResolver
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -382,7 +400,19 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// so rewrite before the report is persisted, decided on, or returned.
 		scan.Relativize(report, tmpDir)
 
-		decision := DecidePublish(report, gate.OwnerState{}, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
+		// Resolve ownership before deciding. A nil resolver leaves the zero
+		// OwnerState, which contributes nothing — that is what keeps every
+		// test harness and the CLI's local pre-scan on the pre-ownership
+		// behaviour.
+		var owner gate.OwnerState
+		if opts.Ownership != nil {
+			owner, err = opts.Ownership.ResolveForPublish(ctx, input.Name, auth.UserFromContext(ctx))
+			if err != nil {
+				return nil, fmt.Errorf("publish: resolve ownership: %w", err)
+			}
+		}
+
+		decision := DecidePublish(report, owner, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
 
 		if decision.Outcome == gate.Block {
 			payload, _ := json.Marshal(struct {
@@ -583,6 +613,20 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 				} else {
 					quality = qualityState{State: "pending", JobID: id}
 				}
+			}
+		}
+
+		// O6. A new name claims its publisher — unless a rule already covers it,
+		// in which case the rule wins and this version is held like any other
+		// proposal. Without the exception, publishing payments:anything is a way
+		// to become an owner inside someone else's namespace.
+		if opts.Ownership != nil && owner.Unowned {
+			if err := opts.Ownership.ClaimOnFirstPublish(ctx, input.Name, auth.UserFromContext(ctx)); err != nil {
+				// The version is already durable and served. Failing the publish
+				// here would be a worse outcome than an unowned skill, which is
+				// a state the product already models.
+				log.Warn().Err(err).Str("skill", input.Name).
+					Msg("publish: could not claim first-publish ownership")
 			}
 		}
 
