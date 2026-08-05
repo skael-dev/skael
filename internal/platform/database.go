@@ -64,6 +64,22 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
+// MigrateUpTo applies migrations up to and including version, leaving later
+// ones unapplied. It exists so a migration can be tested against a database
+// populated at the prior version — the only way that test means anything. A
+// test that opens a fully-migrated database and then "upgrades" it passes
+// with the migration deleted.
+func MigrateUpTo(db *sql.DB, version int64) error {
+	goose.SetBaseFS(migrations)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("set dialect: %w", err)
+	}
+	if err := goose.UpTo(db, "migrate", version); err != nil {
+		return fmt.Errorf("run migrations up to %d: %w", version, err)
+	}
+	return nil
+}
+
 func MigrateDown(db *sql.DB) error {
 	goose.SetBaseFS(migrations)
 	if err := goose.SetDialect("postgres"); err != nil {
