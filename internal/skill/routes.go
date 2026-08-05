@@ -930,6 +930,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 
 		// GET /api/skills/{name}/scan — scan results for the latest version
 		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
+
+		// GET /api/skills/{name}/versions/{version}/diff — diff a version
+		// against the currently-served one. Open to any authenticated user
+		// (auth middleware already covers /api/), not just owners/admins: a
+		// reviewer isn't the only person who benefits from seeing what a
+		// held version actually changed.
+		router.Get("/api/skills/{name}/versions/{version}/diff", makeDiffHandler(store))
 	}
 
 	// POST /api/skills/{name}/versions/{version}/review — owner/admin (or,
@@ -976,6 +983,35 @@ func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFun
 			fmt.Sprintf(`attachment; filename="%s-v%d.tar.gz"`, name, version))
 		w.WriteHeader(http.StatusOK)
 		io.Copy(w, rc) //nolint:errcheck
+	}
+}
+
+// makeDiffHandler returns a handler that diffs a specific version of a
+// skill against the version currently served.
+func makeDiffHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		versionStr := chi.URLParam(r, "version")
+		version, err := strconv.Atoi(versionStr)
+		if err != nil {
+			http.Error(w, "invalid version number", http.StatusBadRequest)
+			return
+		}
+
+		diff, err := store.DiffAgainstServed(r.Context(), name, version)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if diff == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(diff); err != nil {
+			log.Warn().Err(err).Str("skill", name).Int("version", version).Msg("diff handler: encode response failed")
+		}
 	}
 }
 
