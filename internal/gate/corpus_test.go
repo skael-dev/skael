@@ -60,7 +60,7 @@ func TestPublicCorpusOutcomes(t *testing.T) {
 			rep, err := scan.ScanDir("testdata/corpus/" + tc.dir)
 			require.NoError(t, err)
 
-			d := gate.Decide(*rep, nil, gate.Policy{})
+			d := gate.Decide(*rep, nil, gate.OwnerState{}, gate.Policy{})
 			assert.Equal(t, tc.want, d.Outcome, "%s: %+v", tc.why, d.Reasons)
 
 			// Anything not expected to Block must also carry no unappealable

@@ -79,8 +79,10 @@ func (r *Releaser) Reconsider(
 		CriticalForbidViolations: rec.CriticalForbidViolations,
 	}
 	// AdminOverride is false: this path is an automated re-decision on
-	// evidence, and no human is asking for anything.
-	d := gate.Decide(rep, q, gate.Policy{Floor: floor})
+	// evidence, and no human is asking for anything. OwnerState is zero:
+	// Reconsider only re-evaluates the scan/quality half of the gate. Task 9
+	// makes that deliberate rather than incidental.
+	d := gate.Decide(rep, q, gate.OwnerState{}, gate.Policy{Floor: floor})
 
 	if d.Outcome != gate.Allow {
 		log.Info().

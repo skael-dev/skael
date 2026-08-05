@@ -326,7 +326,7 @@ func importSingleSkill(
 	// ?override=true equivalent, and this must not gain one here. Imports
 	// are the less trusted path, not the more: an imported skill faces
 	// exactly the decision a published one does.
-	decision := skill.DecidePublish(report, qualityFloor, false)
+	decision := skill.DecidePublish(report, gate.OwnerState{}, qualityFloor, false)
 
 	if decision.Outcome == gate.Block {
 		return nil, false, importQualityState{}, decision, fmt.Errorf(

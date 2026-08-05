@@ -74,11 +74,13 @@ func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 // this version" shared by every route that creates a version — publish and
 // import alike. A version has no quality state yet by definition: the
 // evaluation that could produce one runs against the bundle this call is
-// creating, so q is always nil here. floor and override are the resolved
+// creating, so q is always nil here. o carries the resolved ownership state;
+// pass a zero OwnerState to skip the ownership dimension entirely (the CLI's
+// local pre-scan does exactly that). floor and override are the resolved
 // gate.Policy inputs; import has no interactive override and must always
 // pass false.
-func DecidePublish(rep *scan.Report, floor float64, override bool) gate.Decision {
-	return gate.Decide(*rep, nil, gate.Policy{Floor: floor, AdminOverride: override})
+func DecidePublish(rep *scan.Report, o gate.OwnerState, floor float64, override bool) gate.Decision {
+	return gate.Decide(*rep, nil, o, gate.Policy{Floor: floor, AdminOverride: override})
 }
 
 // EvalJobRequest is what publish needs to enqueue an evaluation. It mirrors
@@ -380,7 +382,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// so rewrite before the report is persisted, decided on, or returned.
 		scan.Relativize(report, tmpDir)
 
-		decision := DecidePublish(report, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
+		decision := DecidePublish(report, gate.OwnerState{}, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
 
 		if decision.Outcome == gate.Block {
 			payload, _ := json.Marshal(struct {

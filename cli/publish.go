@@ -126,7 +126,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	// can still reject. --override is what gets a privileged user past a
 	// finding that would otherwise hold the version.
 	skipLocalScan := publishSkipLocalScan || publishForce
-	localDecision := gate.Decide(*report, nil, gate.Policy{})
+	localDecision := gate.Decide(*report, nil, gate.OwnerState{}, gate.Policy{})
 
 	if localDecision.Outcome == gate.Block && !skipLocalScan && !publishOverride {
 		if ui.JSONMode {
