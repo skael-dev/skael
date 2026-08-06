@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -57,13 +58,26 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 		}
 	}()
 
-	bundleDir, err := os.MkdirTemp(dir, "bundle-*")
+	// The bundle unpacks into the skill dir itself. That directory is what
+	// RunEvalWith hands the runner as BundleDir, and what the agent adapter
+	// copies into the sandbox as the installed skill. Unpacking to a
+	// throwaway temp dir instead left it holding only spec.yaml and the eval
+	// sidecar, so the panel ran with no SKILL.md at all — measuring a skill
+	// that was never installed and scoring the result as a failure of the
+	// skill. That completes and posts a real-looking score, so it is worse
+	// than an error.
+	//
+	// Nothing in a published bundle can clobber what Materialize writes
+	// around it: lint.Excluded keeps both spec.yaml and the whole eval
+	// sidecar out of every packed archive.
+	skillDir, err := st.SkillDir(in.Skill)
 	if err != nil {
-		return nil, fmt.Errorf("worker: materialize temp bundle dir: %w", err)
+		return nil, fmt.Errorf("worker: materialize skill dir: %w", err)
 	}
-	defer os.RemoveAll(bundleDir)
-
-	if err := skill.Unpack(bytes.NewReader(in.Bundle), bundleDir); err != nil {
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return nil, fmt.Errorf("worker: materialize mkdir skill dir: %w", err)
+	}
+	if err := skill.Unpack(bytes.NewReader(in.Bundle), skillDir); err != nil {
 		return nil, fmt.Errorf("worker: materialize unpack bundle: %w", err)
 	}
 
@@ -73,7 +87,7 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 			"worker: materialize: no spec recorded for this suite; falling back to a placeholder " +
 				"reconstructed from SKILL.md frontmatter — the skill's real deps and purpose are lost, " +
 				"and the sandbox this eval runs in will not have them")
-		sp, err = specFromBundle(bundleDir, in.Skill)
+		sp, err = specFromBundle(skillDir, in.Skill)
 		if err != nil {
 			return nil, err
 		}
@@ -93,6 +107,19 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	}
 	if err := st.ApproveSpec(in.Skill, specVersion); err != nil {
 		return nil, fmt.Errorf("worker: materialize approve spec: %w", err)
+	}
+
+	// The drift contract is compiled, not shipped. `whetstone new` writes it
+	// into the eval sidecar, and lint.Excluded keeps that sidecar out of the
+	// published bundle — so a bundle downloaded from the registry never
+	// carries one no matter how the author's workspace looked. RunEvalWith
+	// opens it at its scoring step, which is *after* the panel has run, so
+	// omitting it here does not fail fast: it burns a full sandbox panel and
+	// then dies advising `whetstone new`, a command that means nothing on a
+	// worker. contract.Compile is a pure function of the spec saved above,
+	// so this needs nothing over the wire.
+	if err := writeContract(st, in.Skill, sp); err != nil {
+		return nil, err
 	}
 
 	suiteDir, err := st.SuiteDir(in.Skill)
@@ -133,6 +160,39 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	}
 
 	return st, nil
+}
+
+// writeContract compiles the drift contract from the spec and writes it into
+// the skill's eval sidecar, mirroring `whetstone new`'s writeContract — the
+// authoring path that produces the file a materialized workspace otherwise
+// lacks.
+func writeContract(st *store.Store, skillName string, sp *spec.SkillSpec) error {
+	c, err := contract.Compile(sp)
+	if err != nil {
+		return fmt.Errorf("worker: materialize compile contract: %w", err)
+	}
+
+	path, err := st.ContractPath(skillName)
+	if err != nil {
+		return fmt.Errorf("worker: materialize contract path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("worker: materialize mkdir contract dir: %w", err)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("worker: materialize create contract: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := c.Save(f); err != nil {
+		return fmt.Errorf("worker: materialize save contract: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("worker: materialize writing %s: %w", path, err)
+	}
+	return nil
 }
 
 // specFromBundle reconstructs just enough of a spec.SkillSpec from the
