@@ -6,18 +6,13 @@ import "fmt"
 // count in Report.Unevaluable is always exact; this only bounds the prose.
 const maxUnevaluableDetail = 25
 
-// dedupeDetail collapses repeated messages into "msg (×N)", preserving the
-// order in which each message was first seen, and caps the result.
+// dedupeDetail collapses repeated messages into "msg (×N)" and caps the
+// result. Unevaluable checks are counted per (rule × event) pair, so one
+// systematic cause produces hundreds of identical lines, burying the fact a
+// reader needs: how many *different* things went wrong.
 //
-// The count of unevaluable checks is per (rule × event) pair, so a single
-// systematic cause — one path the contract cannot compare, seen by every rule
-// on every event — produces hundreds of identical lines. A real report listed
-// 326 of them drawn from roughly a dozen distinct messages, which buries the
-// one fact a reader needs: how many *different* things went wrong.
-//
-// Order of first appearance rather than by frequency: the first distinct
-// message is usually the first thing that went wrong, and sorting by count
-// would reorder the list every run for the same underlying cause.
+// Ordered by first appearance, not frequency — sorting by count would reorder
+// the list every run for the same underlying cause.
 func dedupeDetail(details []string, max int) []string {
 	if len(details) == 0 {
 		return nil

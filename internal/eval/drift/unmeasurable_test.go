@@ -7,15 +7,10 @@ import (
 	"github.com/skael-dev/skael/internal/eval/drift"
 )
 
-// A run whose checks mostly could not be performed must not report a number.
-//
-// When most checks fail, the components do not degrade gracefully — they break
-// in both directions at once: coverage, checkpoints and focus fall to zero
-// because nothing matched, while violation and order rise to a vacuous 1.0
-// because nothing could be violated or mis-ordered either. The arithmetic
-// result is a constant fixed by the weights, and it reads exactly like a
-// measurement. A real report published that constant (40.0) for ten tasks and
-// graded every one D.
+// A run whose checks mostly could not be performed must not report a number:
+// the components break in both directions at once (coverage to zero, violation
+// and order to a vacuous 1.0), leaving a constant fixed by the weights that
+// reads exactly like a measurement.
 func TestScore_MostlyUnevaluableRunIsUnmeasurable(t *testing.T) {
 	tests := []struct {
 		name                   string

@@ -6,12 +6,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
-// Relativize exists because the agent CLI reports absolute *container* paths
-// ("/workspace/environment/docs/sdd.md") while contract.MatchPath compares
-// workspace-relative ones and rejects an absolute candidate outright. Without
-// this every path-bearing contract rule was unevaluable, which zeroed step
-// coverage and — because nothing could be violated either — left the
-// violation component vacuously perfect at the same time.
+// The agent CLI reports absolute container paths while contract.MatchPath
+// compares workspace-relative ones and rejects an absolute candidate outright.
 func TestRelativize(t *testing.T) {
 	const root = "/workspace"
 

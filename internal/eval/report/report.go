@@ -35,21 +35,13 @@ type MemberReport struct {
 	Pillars       score.Pillars `json:"pillars"`
 	Effectiveness float64       `json:"effectiveness"`
 	Drift         drift.Agg     `json:"drift"`
-	// DriftUnmeasurable is true when too many of this member's contract checks
-	// could not be performed for its adherence to mean anything, in which case
-	// Drift is absent rather than zero. A zero would read as "followed the
-	// contract not at all", which is a claim nothing measured.
+	// DriftUnmeasurable is true when too many checks could not be performed for
+	// adherence to mean anything, in which case Drift is absent rather than
+	// zero — a zero would read as "followed the contract not at all".
 	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
-	// DriftGrade is no longer set. The letter was derived from adherence
-	// alone, rendered in a bare "Grade" column beside Effectiveness, and read
-	// as a verdict on the skill rather than on one component of it — two
-	// composites on two scales, one of them unlabelled. Effectiveness is the
-	// single published 0–100 score; adherence is reported as its components.
-	//
-	// Retained as an always-empty, omitempty field rather than deleted: it was
-	// already absent whenever a member was unhealthy, so every consumer
-	// already tolerates its absence, and dropping the JSON key outright would
-	// break decoders that require it.
+	// DriftGrade is no longer set: it was a second composite on a second scale
+	// beside Effectiveness. Retained as an always-empty omitempty field, which
+	// it already was for unhealthy members, so decoders keep working.
 	DriftGrade string `json:"drift_grade,omitempty"`
 	// Healthy is false when the member's adapter failed its probe. Such a
 	// member contributes nothing to the headline rather than a zero.
@@ -148,10 +140,9 @@ type Report struct {
 	// measurement rather than a zero.
 	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
 	// BaselineWipeout is true when some member's baseline passed no task at
-	// all. Uplift then carries no information independent of Reliability —
-	// UpliftFromPassRates reduces to 0.5+Reliability/2 at a zero baseline —
-	// and the same shape is what a broken baseline harness produces, so the
-	// reader needs to know before treating Uplift as evidence.
+	// all, which makes Uplift a rescaling of Reliability rather than
+	// independent evidence — and is also what a broken baseline harness looks
+	// like.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 
 	UpliftSource score.UpliftSource `json:"uplift_source"`

@@ -1,12 +1,8 @@
-# The eval worker. Separate from the server's Dockerfile because it needs
-# things the server deliberately does not have: the docker CLI (it starts
-# sandbox containers) and a shell-bearing base to carry it. The server stays
-# on distroless/static with no Docker socket and no LLM key — see CLAUDE.md.
+# The eval worker. Separate from the server's Dockerfile because it needs the
+# docker CLI (it starts sandbox containers) and a shell-bearing base to carry
+# it; the server stays on distroless/static with no socket and no LLM key.
 
-# Stage 1: build the static worker binary.
-#
-# CGO_ENABLED=0 is safe here: the eval store's SQLite driver is
-# modernc.org/sqlite, which is pure Go.
+# CGO_ENABLED=0 is safe: the eval store's SQLite driver is modernc.org/sqlite.
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -14,24 +10,17 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /skael-worker ./cmd/skael-worker
 
-# Stage 2: runtime.
-#
 # docker-cli is the client only — it talks to whatever daemon the mounted
-# socket belongs to and never runs one itself. ca-certificates is required to
-# reach both the Skael API and the LLM gateway over TLS.
+# socket belongs to. ca-certificates reaches the Skael API and the LLM gateway.
 FROM alpine:3.21
 RUN apk add --no-cache docker-cli ca-certificates
 
 COPY --from=build /skael-worker /usr/local/bin/skael-worker
 
-# Both roots must resolve to the same path inside this container and on the
-# host, because the daemon resolves bind sources on the host: WORKER_RUN_ROOT
-# holds session workspaces (mounted rw as the sandbox working dir) and
-# WORKER_WORK_ROOT holds the eval workspace whose verifier/ is mounted ro at
-# /verifier. Bind each as `-v /var/lib/skael/run:/var/lib/skael/run`; a named
-# volume does NOT work, since its container path is not a host path. The
-# worker refuses to start containerized unless both are set. See
-# docker-compose.yml for the working wiring.
+# Both roots must resolve to the same path inside the container and on the
+# host, since the daemon resolves bind sources on the host. Bind each as
+# `-v /var/lib/skael/run:/var/lib/skael/run`; a named volume does not work. See
+# docker-compose.yml.
 ENV WORKER_RUN_ROOT=/var/lib/skael/run
 ENV WORKER_WORK_ROOT=/var/lib/skael/work
 RUN mkdir -p /var/lib/skael/run /var/lib/skael/work

@@ -9,22 +9,11 @@ import (
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
-// This is the regression test for the bug the corpus could not see.
-//
-// The corpus fixtures under internal/eval/testdata/corpus are hand-authored
-// with workspace-relative paths ("out/report.md"), so every scoring test
-// passed against data that does not resemble a real agent stream. A real
-// claude-code stream reports absolute *container* paths
-// ("/workspace/out/report.md"), which contract.MatchPath rejects outright —
-// so in production every path-bearing rule was unevaluable while the tests
-// stayed green.
-//
-// What made that worse than a dropped signal is the direction it broke in.
-// Step coverage, checkpoints and focus collapsed to zero because nothing
-// matched; violation and order went vacuously *perfect* because nothing could
-// be violated or mis-ordered either. Adherence became the constant
-// 100*(0.15+0.25) = 40, below the 60 a C requires, so every skill graded D
-// while "Violation 100%" read as flawless compliance.
+// The regression test for the bug the corpus could not see: its fixtures are
+// hand-authored with relative paths ("out/report.md"), while a real agent
+// stream reports absolute container paths, which MatchPath rejects. Every
+// path-bearing rule was unevaluable in production while the tests stayed
+// green.
 func TestObserve_ContainerPathsAreScoredAfterRelativisation(t *testing.T) {
 	c := &contract.Contract{Version: 1,
 		Steps: []contract.StepMatch{{

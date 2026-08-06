@@ -172,11 +172,8 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(status, err)
 	}
-	// The agent reports absolute container paths; the contract compares
-	// workspace-relative ones. Relativising here rather than in each adapter
-	// keeps the invariant in one place and applies it to every adapter,
-	// present and future — see trajectory.Relativize for what the absolute
-	// paths did to the drift score before this existed.
+	// Relativised here rather than in each adapter, so the invariant holds for
+	// every adapter present and future. See trajectory.Relativize.
 	out.Events, out.Meta = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta
 
 	// The verifier runs under NetNone in the same workspace: it must not be
@@ -355,11 +352,9 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(err)
 	}
 
-	// Relativised for the same reason as a task session's events. Trigger
-	// measurement reads only the skill directory out of a path
-	// (score.eventNamesSkill), so it happened to survive absolute paths where
-	// drift did not — but the two must not disagree about what a recorded
-	// path means.
+	// Relativised as above. Trigger measurement reads only the skill directory
+	// out of a path, so it survived absolute paths where drift did not — but
+	// the two must not disagree about what a recorded path means.
 	po.Events, po.Meta, po.Caps = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta, a.Caps()
 	return finish(nil)
 }

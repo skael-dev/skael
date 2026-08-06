@@ -49,16 +49,10 @@ func gfmt(v float64) string {
 }
 
 // deref renders the value behind a *float64 at two decimal places, or the
-// empty string for a nil pointer. Callers guard nil with {{if}} before
-// reaching for the value itself; this exists so a template pipeline never has
-// to dereference a pointer directly.
-//
-// Two decimals rather than round1 because κ and the robustness gap are read at
-// more than one decimal of precision (e.g. κ = 0.41) and rounding to one would
-// discard that. It was %g before, which is the shortest *exact* decimal for a
-// float64 and therefore prints all seventeen significant digits of a computed
-// ratio — a real report rendered "judge κ = 0.45121951219512196", which
-// overshot this comment's own stated intent by fifteen digits.
+// empty string for nil. Two decimals rather than round1 because κ and the
+// robustness gap are read at more than one decimal (e.g. κ = 0.41); %g, which
+// this used before, prints all seventeen significant digits of a computed
+// ratio.
 //
 // deref itself is unitless — it renders both a [0,1] κ and a [0,100]-point
 // robustness gap identically. The template call site is responsible for

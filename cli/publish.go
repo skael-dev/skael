@@ -182,7 +182,6 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
-	// Check if skill exists, create if not
 	sp = StartSpinner("Uploading...")
 	existing, err := c.GetSkill(name)
 	if err != nil {

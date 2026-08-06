@@ -8,15 +8,10 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
 )
 
-// InstallSkill must install shipped skill content only.
-//
-// The directory it is handed is the authoring skill dir, which also holds the
-// eval sidecar: the compiled contract, the generated suite, and every task's
-// oracle and verifier. A real eval report proved these were reaching the
-// sandbox by listing
-// ".../eval/suite/tasks/happy-full-breakdown/oracle/solve.sh" among the files
-// the agent under test had observed — i.e. the reference solution was sitting
-// in the workspace of the thing being measured.
+// InstallSkill must install shipped content only. The directory it is handed
+// is the authoring skill dir, which also holds the eval sidecar — a real
+// report proved the reference solution was reaching the sandbox by listing
+// ".../oracle/solve.sh" among the files the agent under test had observed.
 func TestInstallSkill_DoesNotInstallTheEvalSidecar(t *testing.T) {
 	src := t.TempDir()
 	write := func(rel, body string) {

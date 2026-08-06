@@ -58,18 +58,12 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 		}
 	}()
 
-	// The bundle unpacks into the skill dir itself. That directory is what
-	// RunEvalWith hands the runner as BundleDir, and what the agent adapter
-	// copies into the sandbox as the installed skill. Unpacking to a
-	// throwaway temp dir instead left it holding only spec.yaml and the eval
-	// sidecar, so the panel ran with no SKILL.md at all — measuring a skill
-	// that was never installed and scoring the result as a failure of the
-	// skill. That completes and posts a real-looking score, so it is worse
-	// than an error.
-	//
-	// Nothing in a published bundle can clobber what Materialize writes
-	// around it: lint.Excluded keeps both spec.yaml and the whole eval
-	// sidecar out of every packed archive.
+	// Into the skill dir itself: that is what RunEvalWith hands the runner as
+	// BundleDir and what the adapter installs into the sandbox. Unpacking to a
+	// temp dir left it holding only spec.yaml and the eval sidecar, so the
+	// panel ran with no SKILL.md and scored a skill that was never installed.
+	// lint.Excluded keeps both out of a packed archive, so nothing here can
+	// clobber what Materialize writes around it.
 	skillDir, err := st.SkillDir(in.Skill)
 	if err != nil {
 		return nil, fmt.Errorf("worker: materialize skill dir: %w", err)
@@ -109,15 +103,11 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 		return nil, fmt.Errorf("worker: materialize approve spec: %w", err)
 	}
 
-	// The drift contract is compiled, not shipped. `whetstone new` writes it
-	// into the eval sidecar, and lint.Excluded keeps that sidecar out of the
-	// published bundle — so a bundle downloaded from the registry never
-	// carries one no matter how the author's workspace looked. RunEvalWith
-	// opens it at its scoring step, which is *after* the panel has run, so
-	// omitting it here does not fail fast: it burns a full sandbox panel and
-	// then dies advising `whetstone new`, a command that means nothing on a
-	// worker. contract.Compile is a pure function of the spec saved above,
-	// so this needs nothing over the wire.
+	// The contract is compiled, not shipped: `whetstone new` writes it into the
+	// eval sidecar, which lint.Excluded keeps out of every published bundle. A
+	// worker therefore has to compile its own, and contract.Compile is a pure
+	// function of the spec saved above. Omitting it fails only at the scoring
+	// step, after the panel has already run.
 	if err := writeContract(st, in.Skill, sp); err != nil {
 		return nil, err
 	}
@@ -162,10 +152,8 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	return st, nil
 }
 
-// writeContract compiles the drift contract from the spec and writes it into
-// the skill's eval sidecar, mirroring `whetstone new`'s writeContract — the
-// authoring path that produces the file a materialized workspace otherwise
-// lacks.
+// writeContract mirrors `whetstone new`'s writeContract, which is the
+// authoring path that produces the file a materialized workspace lacks.
 func writeContract(st *store.Store, skillName string, sp *spec.SkillSpec) error {
 	c, err := contract.Compile(sp)
 	if err != nil {

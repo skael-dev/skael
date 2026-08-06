@@ -56,19 +56,12 @@ type EvalDeps struct {
 	// daemon it starts sandboxes on.
 	WorkspaceRoot string
 	// PanelStrongModel and PanelFastModel override the shipped panel's model
-	// ids for its strong and floor members. Empty means runner.DefaultPanel's
-	// opus/haiku, which is the whole of today's behaviour.
-	//
-	// These are already-resolved values rather than env lookups on purpose:
-	// whether a custom gateway is in play is a boundary decision, so
-	// RunEvalWith carries no policy and reads no environment. See
-	// panelModelsFromEnv, which is where that decision is actually made.
+	// ids. Already-resolved values rather than env lookups, so RunEvalWith
+	// carries no policy — see panelModelsFromEnv.
 	PanelStrongModel string
 	PanelFastModel   string
-	// PanelBaseURL is the gateway the panel's agent CLI talks to. It is
-	// carried for diagnostics only — nothing dials it here — so that a panel
-	// whose every member fails its health probe can name the endpoint that
-	// rejected the models rather than leaving the operator to guess.
+	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
+	// can name the endpoint that rejected its models.
 	PanelBaseURL string
 }
 
@@ -395,14 +388,10 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	)
 	// Every way this can fail ends in the same place — Uplift falls back to
 	// pass rates — so each one says why. Nested `if err == nil` with no else
-	// made a missing gateway, a failed judge construction, and a judge that
-	// calibrated below the κ floor indistinguishable in the report: all three
-	// surfaced only as "uplift source: passrate-fallback", which is the fact
-	// but not the reason.
-	//
-	// None of these is fatal. A run without a trusted judge is still a real
-	// measurement on the deterministic pillars, which is why the fallback
-	// exists at all.
+	// made a missing gateway, a failed construction, and a judge below the κ
+	// floor indistinguishable: all three surfaced only as
+	// "passrate-fallback". None is fatal; the deterministic pillars are still
+	// a real measurement.
 	judgeUnavailable := ""
 	switch {
 	case d.Gateway == nil:
@@ -633,15 +622,11 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 				metaPartialReason = blPartialReason
 			}
 
-			// A baseline that passed nothing anywhere makes Uplift carry no
-			// information of its own. UpliftFromPassRates is
-			// 0.5+(skill-baseline)/2, so at baseline 0 it collapses to
+			// At baseline 0, UpliftFromPassRates collapses to
 			// 0.5+Reliability/2 — a rescaling of a pillar Effectiveness
-			// already weighs, now multiplied in a second time under a second
-			// exponent. Worth saying out loud, because it is also the shape a
-			// broken baseline harness produces: nothing distinguishes "these
-			// tasks are impossible without the skill" from "the baseline never
-			// really ran".
+			// already weighs. It is also the shape a broken baseline harness
+			// produces, which is why it is worth surfacing rather than just
+			// scoring.
 			if baselinePassRate == 0 && len(baselineTasks) > 0 {
 				baselineWipeout = true
 			}

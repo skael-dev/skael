@@ -65,16 +65,13 @@ type workerConfig struct {
 	LLMAuthStyle   api.AuthStyle
 	LLMStrongModel string
 	LLMFastModel   string
-	// RunRoot is where per-session sandbox workspaces are created. Empty
-	// means os.TempDir(). It only needs setting when this worker runs inside
-	// a container against the host's Docker daemon — see requireRunRoot.
+	// RunRoot is where per-session sandbox workspaces are created; empty means
+	// os.TempDir(). Only needs setting in a container — see
+	// requireHostSharedRoots.
 	RunRoot string
-	// PanelBaseURL is ANTHROPIC_BASE_URL: the gateway the *panel* agent CLI
-	// dials from inside the sandbox, as opposed to LLMBaseURL, which is the
-	// judge's. The worker never dials it itself — the claude-code adapter
-	// forwards it into the sandbox — but it has to read it, because whether
-	// it is set is what decides if the shipped opus/haiku panel is still the
-	// right default. See panelModels.
+	// PanelBaseURL is ANTHROPIC_BASE_URL: the gateway the *panel* dials from
+	// inside the sandbox, as opposed to LLMBaseURL, which is the judge's. The
+	// worker never dials it, but whether it is set decides the panel's models.
 	PanelBaseURL string
 }
 
@@ -188,15 +185,10 @@ func configFromEnv() (workerConfig, error) {
 	}, nil
 }
 
-// panelModels resolves the model ids the eval panel should use, returning
-// empty strings when the shipped opus/haiku default is correct.
-//
-// Gated on PanelBaseURL, not on the model variables alone. LLM_STRONG_MODEL
-// and LLM_FAST_MODEL configure the judge, and an operator who set them purely
-// to pick a cheaper judge must keep the panel they already had — a changed
-// panel is recorded in model_panel and splits the score trend line. Only
-// ANTHROPIC_BASE_URL, the panel's own gateway, is evidence that the default
-// Claude Code aliases are the wrong thing to ask for.
+// panelModels resolves the model ids the eval panel should use, empty when the
+// shipped default is correct. Gated on PanelBaseURL, not on the model
+// variables alone: an operator who set them to pick a cheaper judge must keep
+// the panel they had, since a changed panel splits the score trend.
 func panelModels(cfg workerConfig) (strong, fast string) {
 	if cfg.PanelBaseURL == "" {
 		return "", ""
@@ -207,26 +199,12 @@ func panelModels(cfg workerConfig) (strong, fast string) {
 // requireHostSharedRoots refuses to start a containerized worker that has not
 // been told where the directories it hands to the Docker daemon live.
 //
-// The worker starts sandbox containers through a Docker socket, and the daemon
-// resolves every bind source in its own filesystem — the host's. A container's
-// /tmp is not the host's /tmp, so such a path names nothing there, and
-// Docker's response to a bind source that does not exist is to create an empty
-// directory, not to fail.
-//
-// Two roots feed bind mounts, and both must therefore resolve identically on
-// both sides:
-//
-//   - WORKER_RUN_ROOT holds session workspaces, bind-mounted read-write as the
-//     sandbox's working directory. Empty means the sandbox starts with no
-//     task.md and no installed skill, and the run scores as a skill that did
-//     nothing.
-//   - WORKER_WORK_ROOT holds the materialized eval workspace, and the suite's
-//     verifier directory under it is bind-mounted read-only at /verifier for
-//     the grading step. Empty means `sh /verifier/test.sh` finds no script and
-//     every task grades as a failure.
-//
-// Nothing downstream can tell either apart from a genuinely bad skill, so both
-// have to be caught here rather than surfacing as a plausible-looking score.
+// The daemon resolves every bind source in the host's filesystem, and a
+// container's /tmp names nothing there. Docker's response to a missing bind
+// source is to create an empty directory, not to fail — so an unset root
+// yields a sandbox with no task and no skill (WORKER_RUN_ROOT) or a verifier
+// script that isn't there (WORKER_WORK_ROOT), neither distinguishable
+// downstream from a genuinely bad skill.
 func requireHostSharedRoots(runRoot, workRoot string, containerized bool) error {
 	if !containerized {
 		return nil

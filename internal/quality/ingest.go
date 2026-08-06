@@ -19,12 +19,9 @@ type Record struct {
 	Version int
 
 	Headline float64
-	// HeadlineCILow and HeadlineCIHigh are no longer populated: the report's
-	// bootstrapped confidence interval was removed because it described the
-	// mean while the headline is the minimum, and at a two-member panel it
-	// could only ever reproduce [min, max]. The fields and their columns are
-	// kept so historical rows still decode and no migration is needed; new
-	// rows carry zeroes and the API omits them.
+	// No longer populated — the report's confidence interval was removed. Kept
+	// so historical rows still decode and no migration is needed; new rows
+	// carry zeroes and the API omits them.
 	HeadlineCILow  float64
 	HeadlineCIHigh float64
 

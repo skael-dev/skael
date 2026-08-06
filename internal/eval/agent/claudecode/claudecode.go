@@ -64,18 +64,11 @@ func (a *Adapter) InstallSkill(workspace, bundlePath string) error {
 // copyTree copies a directory tree, refusing symlinks. A skill bundle is
 // untrusted input, and a symlink in it would escape the workspace.
 //
-// It installs shipped skill content only. The directory handed to it is the
-// authoring skill dir, which also holds the eval sidecar — the compiled
-// contract, the generated suite, and every task's oracle and verifier — and
-// lint.Excluded is the one definition of what is not shipped content. Copying
-// the sidecar in put eval/suite/tasks/<id>/oracle/solve.sh, the reference
-// solution, inside the workspace of the agent being measured, which a real
-// report proved by listing that exact path among its observed files.
-//
-// That directly defeated a decision made one layer up: stageRunWorkspace
-// copies task.md and environment/ only, on the stated grounds that "a
-// workspace that carries [the oracle] is not measuring the skill, it is
-// handing the agent the answer". Excluding here is what makes that true.
+// It installs shipped content only. The directory handed to it is the
+// authoring skill dir, which also holds the eval sidecar — including every
+// task's oracle/solve.sh. Copying that in puts the reference solution inside
+// the workspace of the agent being measured, defeating stageRunWorkspace's
+// deliberate exclusion of it one layer up.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

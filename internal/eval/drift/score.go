@@ -95,26 +95,16 @@ type Result struct {
 // UnmeasurableThreshold is the share of a run's checks that may be unevaluable
 // before its Adherence stops meaning anything.
 //
-// The value is deliberately high. A few unevaluable checks are ordinary — a
-// write outside the workspace, an event with no recorded path — and the score
-// should absorb them. What it must not absorb is the case this constant exists
-// for: when most checks cannot be performed, the components do not degrade
-// gracefully, they break in *both* directions at once. Coverage, checkpoints
-// and focus fall to zero because nothing matched, while violation and order
-// rise to a vacuous 1.0 because nothing could be violated or mis-ordered
-// either. The resulting number is a constant determined by the weights, and it
-// reads exactly like a measurement.
-//
-// A real report scored ten tasks at a fixed adherence of 40.0 that way, and
-// graded every one of them D, while reporting "Violation 100%".
+// Deliberately high: a few unevaluable checks are ordinary and the score should
+// absorb them. What it must not absorb is most checks failing, where the
+// components break in *both* directions at once — coverage falls to zero
+// because nothing matched, violation and order rise to a vacuous 1.0 because
+// nothing could be violated either — leaving a constant that reads like a
+// measurement.
 const UnmeasurableThreshold = 0.5
 
-// ErrUnmeasurable is returned by Aggregate when every run it was given was
-// unmeasurable. It is a sentinel so a caller can tell "this member has no
-// adherence to report" apart from a genuine defect and carry on composing the
-// rest of the report — an absent drift measurement must not cost the reader
-// the effectiveness score, the task table, and everything else that was
-// measured perfectly well.
+// ErrUnmeasurable lets a caller tell "this member has no adherence to report"
+// apart from a genuine defect, and carry on composing the rest of the report.
 var ErrUnmeasurable = errors.New("drift.Aggregate: unmeasurable")
 
 // Score turns an Observation plus a judge-scored semantic rate into Adherence.
@@ -257,14 +247,10 @@ type Agg struct {
 }
 
 // Aggregate summarises runs. Zero runs is an error, not a zero: an absent
-// measurement must not be indistinguishable from total failure.
-//
-// Unmeasurable runs are dropped rather than averaged in, for the same reason.
-// Their Adherence is the constant the weights produce when nothing could be
-// checked, so folding it into a mean would drag every sibling run toward that
-// constant and present the result as though it had been measured. If every
-// run was unmeasurable there is nothing to summarise, which is the same
-// condition as having no runs at all and returns the same error.
+// measurement must not be indistinguishable from total failure. Unmeasurable
+// runs are dropped for the same reason — their Adherence is the constant the
+// weights produce when nothing could be checked, so averaging it in would drag
+// every sibling toward it.
 func Aggregate(rs []Result) (Agg, error) {
 	if len(rs) == 0 {
 		return Agg{}, errors.New("drift.Aggregate: no runs")

@@ -26,12 +26,10 @@ func NewExec(d Driver, base RunSpec) *Executor { return &Executor{d: d, base: ba
 // instead.
 func (e *Executor) Workspace() string { return e.base.Workspace }
 
-// WorkDir reports the path the workspace appears at *inside* the container,
-// which is what an agent's own reports are relative to. Workspace above is the
-// host path the same directory is mounted from; the two are different strings
-// for the same bytes, and a caller relativising an agent's reported paths
-// needs this one. Empty base.WorkDir resolves to DefaultWorkDir, matching what
-// the driver actually passes to --workdir.
+// WorkDir reports where the workspace appears *inside* the container, which is
+// what an agent's reported paths are relative to. Workspace above is the host
+// path the same directory is mounted from — a caller relativising agent paths
+// needs this one.
 func (e *Executor) WorkDir() string {
 	if e.base.WorkDir == "" {
 		return DefaultWorkDir

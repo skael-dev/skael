@@ -9,25 +9,13 @@ import (
 )
 
 // panelModelsFromEnv resolves the eval panel's model overrides, returning
-// empty strings when the shipped opus/haiku default is the right one.
+// empty strings when the shipped opus/haiku default is right.
 //
-// The override is gated on ANTHROPIC_BASE_URL rather than applied whenever
-// the model variables happen to be set, and the distinction matters. There
-// are two independent gateways: LLM_BASE_URL is the *judge's* (a Go HTTP
-// client in this process), while ANTHROPIC_BASE_URL is the *panel's* — the
-// claude-code adapter forwards it into the sandbox, where the agent CLI
-// dials it. Only the latter decides which model identifiers the panel's
-// endpoint will accept, so only the latter is evidence that opus/haiku are
-// the wrong thing to ask for.
-//
-// Gating this way also keeps a promise to everyone already running: someone
-// who set LLM_STRONG_MODEL purely to pick a cheaper judge keeps their
-// existing panel. That is not cosmetic — a changed panel is recorded in
-// model_panel and splits the score trend line, so silently changing it would
-// break comparability for a change the operator never asked for.
-//
-// baseURL is returned alongside for diagnostics, so an unhealthy panel can
-// name the endpoint that rejected it.
+// Gated on ANTHROPIC_BASE_URL — the *panel's* gateway, forwarded into the
+// sandbox — not LLM_BASE_URL, which is the judge's. Only the panel's endpoint
+// decides which model ids the panel may ask for, and gating this way means
+// retuning the judge alone does not silently change the panel, which would
+// split the score trend.
 func panelModelsFromEnv() (strong, fast, baseURL string) {
 	baseURL = os.Getenv(apiBaseURLEnv)
 	if baseURL == "" {
@@ -36,24 +24,14 @@ func panelModelsFromEnv() (strong, fast, baseURL string) {
 	return os.Getenv(strongModelEnv), os.Getenv(fastModelEnv), baseURL
 }
 
-// warnUnconfiguredPanelModels reports whether a custom panel gateway was
-// configured without telling it which models to ask for. Empty means there is
-// nothing to say.
+// warnUnconfiguredPanelModels reports a custom panel gateway configured
+// without model ids. A warning rather than a refusal: a passthrough proxy
+// resolves "opus" fine, so the health probe is the authority.
 //
-// A warning rather than a refusal because it is a guess: a passthrough proxy
-// in front of Anthropic resolves "opus" perfectly well, and refusing to start
-// would break that setup for no reason. The health probe is the authority —
-// see checkPanelHealth, which turns the real failure into something
-// actionable.
-//
-// Note that substitution is all-or-nothing: setting only one of the two
-// leaves BOTH members on the shipped aliases. Substituting one slot would be
-// worse than substituting neither. A panel with one working member and one
-// that 404s is not an error — it is a *complete run* that scores, reports
-// PanelComplete=false, and therefore can never release the version it was
-// meant to clear, having spent a full tier to get there. Keeping both members
-// on the same footing means a misconfiguration fails both probes and is
-// caught immediately instead.
+// Substitution is all-or-nothing — one slot substituted leaves a panel with
+// one working member and one that 404s, which is not an error but a complete
+// run that scores, reports PanelComplete=false, and can never release the
+// version it was meant to clear.
 func warnUnconfiguredPanelModels(strong, fast, baseURL string) string {
 	if baseURL == "" || (strong != "" && fast != "") {
 		return ""
@@ -74,27 +52,15 @@ func warnUnconfiguredPanelModels(strong, fast, baseURL string) string {
 		runner.DefaultPanel()[0].Model, runner.DefaultPanel()[1].Model)
 }
 
-// checkPanelHealth fails an eval whose panel has no healthy member at all.
+// checkPanelHealth fails an eval whose panel has no healthy member at all. A
+// *partially* unhealthy panel is deliberately allowed through — it degrades to
+// an incomplete panel, which is still a measurement.
 //
-// A *partially* unhealthy panel is deliberately allowed through — see
-// TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero — it
-// degrades to an incomplete panel rather than a zero, which is a real and
-// reportable measurement.
-//
-// A panel where nothing is healthy is different in kind — though not for the
-// reason it first looks. Very little compute is at stake: the runner already
-// skips every run and probe belonging to an unhealthy member
-// (internal/eval/runner/runner.go:188, 212, 229), so no task session executes.
-// What happens instead is that the run walks all the way to score.Headline,
-// which fails with "no panel member produced a result" — an error naming
-// neither the model ids that were asked for nor the endpoint that refused
-// them, which is almost always the actual cause. By then CreateEval has
-// written a row that nothing ever moves out of "running", since FinishEval is
-// reached only on the success path.
-//
-// So this does not save a wasted panel run; it converts an undiagnosable
-// error at the end into a diagnosis at the start, and leaves no orphaned
-// "running" eval behind.
+// This saves little compute (the runner already skips an unhealthy member's
+// sessions). It converts what would otherwise be score.Headline's "no panel
+// member produced a result" — naming neither the models nor the endpoint that
+// refused them — into a diagnosis, before CreateEval writes a row that nothing
+// moves out of "running".
 func checkPanelHealth(health []runner.Health, baseURL string) error {
 	if len(health) == 0 {
 		return nil

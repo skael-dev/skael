@@ -10,21 +10,11 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// The headline used to carry a bootstrapped 95% confidence interval. It was
-// removed rather than repaired, for two independent reasons.
-//
-// It described the wrong statistic: the interval was bootstrapped over the
-// *mean* of member effectiveness while the headline is the *minimum*, so the
-// published number did not sit inside — or even at the centre of — its own
-// stated interval.
-//
-// And at the panel sizes this product actually runs it could not carry
-// information at all. With two members, resampling with replacement yields
-// means of only {min, midpoint, max} at probabilities {0.25, 0.5, 0.25}, so
-// the 2.5th and 97.5th percentiles land in the min and max blocks every time:
-// the "95% CI" was identically [min, max] of the two member scores, for any
-// input whatsoever. A real report published [0.0, 69.6] against a headline of
-// 0.0 that way.
+// The headline used to carry a bootstrapped 95% CI, removed rather than
+// repaired: it bootstrapped the *mean* of member effectiveness while the
+// headline is the *minimum*, and at a two-member panel resampling yields means
+// of only {min, midpoint, max}, so the interval was identically [min, max] for
+// any input.
 
 // MemberInput is one panel member's raw measurements, from which Compose
 // derives Effectiveness and drift aggregation.
@@ -108,14 +98,8 @@ type ComposeInput struct {
 	TriggerUnknown int
 	Unevaluable    int
 	// UnevaluableDetail is the list of reasons checks could not be performed.
-	// Compose de-duplicates it, collapsing repeats into "… (×N)" and capping
-	// the result — see dedupeDetail.
-	//
-	// It used to be passed through verbatim on the stated grounds that the
-	// caller owned assembling it. No caller ever did, and one real report
-	// rendered 326 list items drawn from about a dozen distinct messages,
-	// which is not a list anyone reads. De-duplicating here rather than at the
-	// call site means every producer gets it.
+	// Compose de-duplicates and caps it (see dedupeDetail) rather than leaving
+	// that to callers, none of which did it.
 	UnevaluableDetail []string
 	// BaselineWipeout is passed through to Report.BaselineWipeout — see there.
 	BaselineWipeout bool
@@ -183,11 +167,9 @@ func Compose(in ComposeInput) (*Report, error) {
 				agg, err := drift.Aggregate(mi.Drift)
 				switch {
 				case errors.Is(err, drift.ErrUnmeasurable):
-					// Not a defect: too many contract checks could not be
-					// performed for this member's adherence to mean anything.
-					// Leave Drift absent — a zero would read as "followed the
-					// contract not at all", which is a claim nothing here
-					// measured — and let the report say so instead.
+					// Not a defect. Leave Drift absent: a zero would read as
+					// "followed the contract not at all", which nothing here
+					// measured.
 					mr.DriftUnmeasurable = true
 					driftUnmeasurable = true
 				case err != nil:
