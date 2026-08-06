@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target } from "lucide-react";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound } from "lucide-react";
 import { useAuth } from "@/app/auth-provider";
 import { getReviewQueue } from "@/api/sdk.gen";
 
@@ -23,6 +23,12 @@ const navItems: NavItem[] = [
   },
   { id: "review", label: "Review", path: "/review", icon: <ShieldCheck size={16} /> },
   { id: "quadrant", label: "Quadrant", path: "/quadrant", icon: <Target size={16} /> },
+  {
+    id: "ownership",
+    label: "Ownership",
+    path: "/settings/ownership",
+    icon: <UsersRound size={16} />,
+  },
 ];
 
 const bottomItems: NavItem[] = [

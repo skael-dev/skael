@@ -60,6 +60,7 @@ Three binaries from one Go module (`github.com/skael-dev/skael`):
 - `internal/testutil/` — `SetupTestDB(t)` spins up Postgres 17 via testcontainers per test.
 - `internal/ui/` — Lipgloss styles and output helpers (`Success`, `Error`, `Warn`, `Download`, `Summary`). `JSONMode` flag suppresses styled output; commands write JSON to stdout instead.
 - `cli/` — Cobra commands (one file per command): `setup`, `list`, `search`, `show`, `publish`, `sync`, `scan`, `init`, `doctor`, `hook`, `import`, `add`, `remove`. `cli/client/` is the HTTP client (with retry), `cli/config/` handles `~/.skael/` (config.json tracks installed skills like package.json, state.json caches sync state), `cli/agents/` detects installed agents (Claude Code, Codex, OpenCode, Cursor), `cli/hooks/` manages activation tracking and auto-sync hook scripts.
+- `internal/ownership/` — Who owns a skill name. `Resolve` (exact → longest prefix → unowned, replace-not-stack) and `CanManage` (admin, member of the rule, or member of a strictly-containing rule) are pure. `Store` persists `ownership_rules` + `ownership_rule_members`; `Resolver` adapts both onto `skill.OwnerResolver`, folding instance privilege into `IsOwner` at the boundary so `gate.Decide` stays pure. Routes under `/api/ownership/rules`.
 
 ### Key patterns
 
@@ -92,6 +93,11 @@ Each of these has already caused a real bug or a wasted debugging session.
 - **Test package conventions differ:** `cli/client/client_test.go` is `package client` (internal, so it can reach unexported helpers); most others are `package X_test`. Check before adding a file.
 - **The hook script tests execute real bash** (`cli/hooks/script_exec_test.go`), with a fake `curl` on `PATH`, and wait on the script's process group rather than a timeout — the scripts background their POST and `disown` it. The file is `//go:build unix`.
 - **`cmd/server` holds no Docker socket and no LLM key — both live on `cmd/skael-worker`.** Neither `cmd/server` nor `internal/server` imports anything Docker- or Anthropic-related; `cmd/skael-worker` is the only binary that does (`internal/eval/sandbox/docker`, `ANTHROPIC_API_KEY`). That's a deliberate boundary, not an oversight — it's why evaluation is a queue the server enqueues to and the worker drains, rather than something the server runs inline. A change that makes the server execute an eval directly breaks it.
+- **A hold is a set of reasons, not a state.** `skill_versions.hold_reasons` lists what must clear; `version_approvals` records who cleared what; `gate_state` is derived. A verified quality score clears only `scan` and must never clear `ownership` — if it could, the entire review path is decorative. An owner clears only `ownership` and must never clear `scan` — if they could, the security gate is as weak as the least careful self-managed namespace.
+- **`ReasonScan` and `ReasonOwnership` are persisted wire names**, in `hold_reasons` and in `version_approvals.reason`. Renaming one makes every in-flight hold permanently unclearable.
+- **Ownership never gates reads and never re-gates a released version.** Deleting a user, removing a rule, or transferring a namespace changes who reviews future changes and nothing else. A skill that worked yesterday keeps working for everyone who synced it.
+- **Unowned does not hold a publish** — only a *matched rule* does. That is what makes an upgrade a no-op for an existing install: protection switches on per namespace when someone writes their first rule. Do not "fix" this into holding every unowned publish; it floods the review queue on upgrade day.
+- **`platform.MigrateUpTo` exists so a migration is tested against a database populated at the prior version.** A test that opens a fully-migrated database and then "upgrades" it passes with the migration deleted — which is exactly what both pre-existing migration tests here did.
 
 ## Server env vars
 
@@ -159,3 +165,6 @@ These exist for good reasons — don't weaken them without understanding why:
 - Hook scripts read credentials from `~/.skael/config.json` at runtime — never embedded in agent config files
 - Sync verifies downloaded archive checksums against the manifest before extracting
 - File permissions are masked to `0o777` during extraction (no setuid/setgid)
+- `GET /api/users/search` is open to any authenticated user and returns `{id, name, email}` only — no role, no timestamps. Minimum 2 characters and a hard cap of 20 results, so it is a lookup rather than a directory export. Restricting it to admins would make delegated ownership unusable, which is the trade being made
+- `ownership.CanManage` is the entire escalation surface of ownership. It permits narrowing only; a delegate can never widen their scope. The property test in `internal/ownership/manage_test.go` is the guard — three individually-correct clauses can compose into a widening path that no per-clause test can see
+- `DELETE /api/skills/{name}` has no role check and no ownership check — any authenticated member can delete a skill's every version and archive, while being unable to publish a single line to it. This is pre-existing (not introduced by ownership) and a known gap for a follow-up, not an oversight

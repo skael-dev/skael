@@ -74,11 +74,13 @@ func publishOverrideAllowed(ctx context.Context, requested bool) bool {
 // this version" shared by every route that creates a version — publish and
 // import alike. A version has no quality state yet by definition: the
 // evaluation that could produce one runs against the bundle this call is
-// creating, so q is always nil here. floor and override are the resolved
+// creating, so q is always nil here. o carries the resolved ownership state;
+// pass a zero OwnerState to skip the ownership dimension entirely (the CLI's
+// local pre-scan does exactly that). floor and override are the resolved
 // gate.Policy inputs; import has no interactive override and must always
 // pass false.
-func DecidePublish(rep *scan.Report, floor float64, override bool) gate.Decision {
-	return gate.Decide(*rep, nil, gate.Policy{Floor: floor, AdminOverride: override})
+func DecidePublish(rep *scan.Report, o gate.OwnerState, floor float64, override bool) gate.Decision {
+	return gate.Decide(*rep, nil, o, gate.Policy{Floor: floor, AdminOverride: override})
 }
 
 // EvalJobRequest is what publish needs to enqueue an evaluation. It mirrors
@@ -113,6 +115,19 @@ type SuiteLookup interface {
 	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
 }
 
+// OwnerResolver is the subset of the ownership store publish needs. It is
+// declared here rather than imported because internal/ownership must stay
+// free of internal/skill and the concrete wiring lives in internal/server —
+// the same shape as QueueSubmitter and SuiteLookup.
+//
+// ResolveForPublish folds instance privilege into IsOwner: an instance owner
+// or admin is an implicit owner of everything, which is what makes O5's
+// "admins are the reviewers of record" fall out without a special case.
+type OwnerResolver interface {
+	ResolveForPublish(ctx context.Context, skillName string, user *auth.User) (gate.OwnerState, error)
+	ClaimOnFirstPublish(ctx context.Context, skillName string, user *auth.User) error
+}
+
 // RouteOptions carries the optional collaborators RegisterRoutes wires into
 // the publish (and related) handlers. Each is independently optional (nil
 // disables the behavior it powers) so a caller — including tests — can opt
@@ -131,6 +146,11 @@ type RouteOptions struct {
 	// platform.Config.QualityFloor; the zero value means any verified,
 	// complete, contract-clean report clears.
 	QualityFloor float64
+	// Ownership resolves and claims skill ownership for publish. A nil
+	// resolver leaves the zero gate.OwnerState, which contributes nothing —
+	// that is what keeps every test harness and the CLI's local pre-scan on
+	// the pre-ownership behaviour.
+	Ownership OwnerResolver
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -380,7 +400,19 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// so rewrite before the report is persisted, decided on, or returned.
 		scan.Relativize(report, tmpDir)
 
-		decision := DecidePublish(report, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
+		// Resolve ownership before deciding. A nil resolver leaves the zero
+		// OwnerState, which contributes nothing — that is what keeps every
+		// test harness and the CLI's local pre-scan on the pre-ownership
+		// behaviour.
+		var owner gate.OwnerState
+		if opts.Ownership != nil {
+			owner, err = opts.Ownership.ResolveForPublish(ctx, input.Name, auth.UserFromContext(ctx))
+			if err != nil {
+				return nil, fmt.Errorf("publish: resolve ownership: %w", err)
+			}
+		}
+
+		decision := DecidePublish(report, owner, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
 
 		if decision.Outcome == gate.Block {
 			payload, _ := json.Marshal(struct {
@@ -581,6 +613,25 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 				} else {
 					quality = qualityState{State: "pending", JobID: id}
 				}
+			}
+		}
+
+		// O6. A new name claims its publisher — unless a rule already covers it,
+		// in which case the rule wins and this version is held like any other
+		// proposal. Without the exception, publishing payments:anything is a way
+		// to become an owner inside someone else's namespace. This must only
+		// fire on the skill's first version: gating on owner.Unowned alone would
+		// mean the first person to publish an UPDATE to any pre-existing unowned
+		// skill (e.g. on an upgraded instance with no ownership rules yet)
+		// silently becomes its sole owner, breaking the "upgrade is a no-op"
+		// promise. ver.Version == 1 mirrors import's newSkill check.
+		if opts.Ownership != nil && owner.Unowned && ver.Version == 1 {
+			if err := opts.Ownership.ClaimOnFirstPublish(ctx, input.Name, auth.UserFromContext(ctx)); err != nil {
+				// The version is already durable and served. Failing the publish
+				// here would be a worse outcome than an unowned skill, which is
+				// a state the product already models.
+				log.Warn().Err(err).Str("skill", input.Name).
+					Msg("publish: could not claim first-publish ownership")
 			}
 		}
 
@@ -884,11 +935,19 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 
 		// GET /api/skills/{name}/scan — scan results for the latest version
 		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
+
+		// GET /api/skills/{name}/versions/{version}/diff — diff a version
+		// against the currently-served one. Open to any authenticated user
+		// (auth middleware already covers /api/), not just owners/admins: a
+		// reviewer isn't the only person who benefits from seeing what a
+		// held version actually changed.
+		router.Get("/api/skills/{name}/versions/{version}/diff", makeDiffHandler(store))
 	}
 
-	// POST /api/skills/{name}/versions/{version}/review — owner/admin
-	// approval or rejection of a version held for review.
-	registerReviewRoutes(api, store)
+	// POST /api/skills/{name}/versions/{version}/review — owner/admin (or,
+	// for the ownership reason only, a namespace owner) approval or
+	// rejection of a version held for review.
+	registerReviewRoutes(api, store, opts.Ownership)
 }
 
 // makeDownloadHandler returns a handler that streams the archive for a specific
@@ -929,6 +988,35 @@ func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFun
 			fmt.Sprintf(`attachment; filename="%s-v%d.tar.gz"`, name, version))
 		w.WriteHeader(http.StatusOK)
 		io.Copy(w, rc) //nolint:errcheck
+	}
+}
+
+// makeDiffHandler returns a handler that diffs a specific version of a
+// skill against the version currently served.
+func makeDiffHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		versionStr := chi.URLParam(r, "version")
+		version, err := strconv.Atoi(versionStr)
+		if err != nil {
+			http.Error(w, "invalid version number", http.StatusBadRequest)
+			return
+		}
+
+		diff, err := store.DiffAgainstServed(r.Context(), name, version)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if diff == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(diff); err != nil {
+			log.Warn().Err(err).Str("skill", name).Int("version", version).Msg("diff handler: encode response failed")
+		}
 	}
 }
 

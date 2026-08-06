@@ -110,7 +110,7 @@ func TestDecideTable(t *testing.T) {
 				seen++
 				name := fmt.Sprintf("%s/%s/%s", f.name, qc.name, pc.name)
 				t.Run(name, func(t *testing.T) {
-					got := gate.Decide(report(f.class), qc.q, pc.p)
+					got := gate.Decide(report(f.class), qc.q, gate.OwnerState{}, pc.p)
 					assert.Equal(t, want(f, qc.q, pc.p), got.Outcome)
 				})
 			}
@@ -127,7 +127,7 @@ func TestDecideTable(t *testing.T) {
 func TestDecideOverrideNeverClearsUnappealable(t *testing.T) {
 	perfect := &gate.QualityState{Verified: true, PanelComplete: true, Headline: 100}
 	for _, class := range []gate.Class{gate.ClassExfiltration, gate.ClassSecret} {
-		d := gate.Decide(report(string(class)), perfect, gate.Policy{Floor: 0, AdminOverride: true})
+		d := gate.Decide(report(string(class)), perfect, gate.OwnerState{}, gate.Policy{Floor: 0, AdminOverride: true})
 		assert.Equalf(t, gate.Block, d.Outcome,
 			"%s must stay blocked with a perfect verified score AND an admin override", class)
 	}
@@ -145,7 +145,7 @@ func TestDecideSeverityGates(t *testing.T) {
 		}},
 		Summary: scan.Summary{Medium: 1},
 	}
-	d := gate.Decide(rep, nil, gate.Policy{})
+	d := gate.Decide(rep, nil, gate.OwnerState{}, gate.Policy{})
 	assert.Equal(t, gate.AllowWithWarning, d.Outcome,
 		"a non-blocking severity must stay advisory; routing it to review would block most real skills")
 	assert.Len(t, d.Reasons, 1, "an advisory finding is still reported, just not blocking")
@@ -162,14 +162,14 @@ func TestDecideBlockWinsOverReview(t *testing.T) {
 		Summary: scan.Summary{Critical: 1, High: 1},
 	}
 	perfect := &gate.QualityState{Verified: true, PanelComplete: true, Headline: 100}
-	d := gate.Decide(rep, perfect, gate.Policy{AdminOverride: true})
+	d := gate.Decide(rep, perfect, gate.OwnerState{}, gate.Policy{AdminOverride: true})
 	assert.Equal(t, gate.Block, d.Outcome)
 }
 
 // TestDecideReasonsExplainThemselves: Reasons is contract, not debug output —
 // the CLI renders it and Phase 6's review screen consumes it.
 func TestDecideReasonsExplainThemselves(t *testing.T) {
-	d := gate.Decide(report(string(gate.ClassExecution)), nil, gate.Policy{Floor: 60})
+	d := gate.Decide(report(string(gate.ClassExecution)), nil, gate.OwnerState{}, gate.Policy{Floor: 60})
 	require.Len(t, d.Reasons, 1)
 	r := d.Reasons[0]
 	assert.Equal(t, "test-rule", r.Rule)
@@ -183,7 +183,7 @@ func TestDecideReasonsExplainThemselves(t *testing.T) {
 // json.Marshal on a nil slice emits null, which in a column holding an array
 // makes "no reasons" indistinguishable from "never written".
 func TestDecideReasonsEmptyNotNil(t *testing.T) {
-	d := gate.Decide(scan.Report{Status: "clean"}, nil, gate.Policy{})
+	d := gate.Decide(scan.Report{Status: "clean"}, nil, gate.OwnerState{}, gate.Policy{})
 	assert.NotNil(t, d.Reasons, "Reasons must marshal as [] rather than null")
 	assert.Empty(t, d.Reasons)
 }
@@ -192,13 +192,13 @@ func TestDecideReasonsEmptyNotNil(t *testing.T) {
 // the sentence most deployments actually show: "scoring at least 0" states a
 // threshold that isn't one.
 func TestClearsSentenceOmitsAZeroFloor(t *testing.T) {
-	d := gate.Decide(report(string(gate.ClassExecution)), nil, gate.Policy{Floor: 0})
+	d := gate.Decide(report(string(gate.ClassExecution)), nil, gate.OwnerState{}, gate.Policy{Floor: 0})
 	require.Len(t, d.Reasons, 1)
 	assert.NotContains(t, d.Reasons[0].Clears, "at least",
 		"a zero floor is no threshold; naming it reads as nonsense")
 	assert.Contains(t, d.Reasons[0].Clears, "a verified evaluation with a complete panel")
 
-	withFloor := gate.Decide(report(string(gate.ClassExecution)), nil, gate.Policy{Floor: 70})
+	withFloor := gate.Decide(report(string(gate.ClassExecution)), nil, gate.OwnerState{}, gate.Policy{Floor: 70})
 	require.Len(t, withFloor.Reasons, 1)
 	assert.Contains(t, withFloor.Reasons[0].Clears, "at least 70")
 }

@@ -161,6 +161,19 @@ export const handlers = [
     return HttpResponse.json(mockScanReport);
   }),
 
+  // Owners (Task 11, huma-registered and in the generated SDK) and version
+  // diff (Task 13, a raw Chi route not in the generated SDK) both default
+  // to the "nothing to report" shape so tests that don't care about either
+  // don't have to mock them — matches the pattern already set for
+  // /quality/series above.
+  http.get("/api/skills/:name/owners", () => {
+    return HttpResponse.json({ owners: [], unowned: true });
+  }),
+
+  http.get("/api/skills/:name/versions/:version/diff", () => {
+    return HttpResponse.json({ against: 0, skill_md: "", files: [] });
+  }),
+
   // Default: no quality history. Tests exercising the trend override this
   // per-test with server.use(...).
   http.get("/api/skills/:name/quality/series", () => {

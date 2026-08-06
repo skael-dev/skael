@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 
+	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/gate"
@@ -42,6 +43,11 @@ type RouteOptions struct {
 	// skill.RouteOptions.QualityFloor; the zero value means any verified,
 	// complete, contract-clean report clears.
 	QualityFloor float64
+	// Ownership resolves and claims skill ownership, mirroring
+	// skill.RouteOptions.Ownership. A nil resolver leaves the zero
+	// gate.OwnerState, which contributes nothing — that is what keeps every
+	// test harness on the pre-ownership behaviour.
+	Ownership skill.OwnerResolver
 }
 
 // importQualityState mirrors the unexported type of the same name declared inside
@@ -190,7 +196,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				ds.Name = input.Body.Namespace + ":" + ds.Name
 			}
 
-			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor)
+			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -258,7 +264,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	})
 
 	// POST /api/import/upload — local upload for CLI
-	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor))
+	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership))
 }
 
 func importSingleSkill(
@@ -273,6 +279,7 @@ func importSingleSkill(
 	queue evalqueue.Executor,
 	suites *evalsuite.Registry,
 	qualityFloor float64,
+	ownership skill.OwnerResolver,
 ) (*skill.Version, bool, importQualityState, gate.Decision, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
@@ -322,11 +329,24 @@ func importSingleSkill(
 		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal scan result: %w", err)
 	}
 
+	// Resolve ownership before deciding, mirroring publish
+	// (internal/skill/routes.go). A nil resolver leaves the zero OwnerState,
+	// which contributes nothing — that is what keeps every test harness on
+	// the pre-ownership behaviour.
+	var owner gate.OwnerState
+	if ownership != nil {
+		var err error
+		owner, err = ownership.ResolveForPublish(ctx, ds.Name, auth.UserFromContext(ctx))
+		if err != nil {
+			return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: resolve ownership: %w", err)
+		}
+	}
+
 	// Import has no interactive override — unlike publish, there is no
 	// ?override=true equivalent, and this must not gain one here. Imports
 	// are the less trusted path, not the more: an imported skill faces
 	// exactly the decision a published one does.
-	decision := skill.DecidePublish(report, qualityFloor, false)
+	decision := skill.DecidePublish(report, owner, qualityFloor, false)
 
 	if decision.Outcome == gate.Block {
 		return nil, false, importQualityState{}, decision, fmt.Errorf(
@@ -344,6 +364,7 @@ func importSingleSkill(
 	if err != nil {
 		return nil, false, importQualityState{}, decision, fmt.Errorf("get skill: %w", err)
 	}
+	newSkill := sk == nil
 	if sk == nil {
 		// A first version that the gate is holding must create the skill row
 		// empty. Create writes description/content/frontmatter unconditionally,
@@ -436,10 +457,26 @@ func importSingleSkill(
 		log.Warn().Err(err).Str("skill", ds.Name).Msg("import: record provenance failed (non-fatal)")
 	}
 
+	// O6. A newly created name claims its importer — unless a rule already
+	// covers it, in which case the rule wins and this version is held like
+	// any other proposal, mirroring publish (internal/skill/routes.go).
+	// Without the exception, importing into payments:anything is a way to
+	// become an owner inside someone else's namespace. Import has no
+	// interactive override, so AdminOverride stays false above.
+	if ownership != nil && newSkill && owner.Unowned {
+		if err := ownership.ClaimOnFirstPublish(ctx, ds.Name, auth.UserFromContext(ctx)); err != nil {
+			// The version is already durable and served (or held). Failing
+			// the import here would be a worse outcome than an unowned
+			// skill, which is a state the product already models.
+			log.Warn().Err(err).Str("skill", ds.Name).
+				Msg("import: could not claim first-import ownership")
+		}
+	}
+
 	return ver, true, quality, decision, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry, qualityFloor float64) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry, qualityFloor float64, ownership skill.OwnerResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
@@ -490,7 +527,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 		}
 
 		for _, ds := range discovered {
-			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external, queue, suites, qualityFloor)
+			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external, queue, suites, qualityFloor, ownership)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue

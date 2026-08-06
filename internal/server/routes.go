@@ -18,6 +18,7 @@ import (
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
+	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/scan"
@@ -136,18 +137,25 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	evalPool := evalqueue.NewPool(d.Pool)
 	qualityStore := quality.NewStore(d.Pool)
 	suiteRegistry := evalsuite.NewRegistry(d.Pool, d.Storage)
+	ownershipStore := ownership.NewStore(d.Pool)
+	ownerResolver := ownership.NewResolver(ownershipStore, d.UserStore)
 	skill.RegisterRoutes(api, router, skillStore, d.Storage, skill.RouteOptions{
 		External: externalScanner,
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
 
 		QualityFloor: cfg.QualityFloor,
+		Ownership:    ownerResolver,
 	})
+
+	// Ownership rules. Registered inside RegisterAPIRoutes, not in Build, so
+	// the generated OpenAPI spec cannot drift from what is served.
+	ownership.RegisterRoutes(api, ownershipStore, d.UserStore)
 
 	// Cross-skill review queue: every version currently held for review,
 	// across all skills. Open to any authenticated member; the approve/reject
 	// action stays owner/admin on the per-version review route above.
-	skill.RegisterReviewQueueRoutes(api, skillStore)
+	skill.RegisterReviewQueueRoutes(api, skillStore, ownerResolver)
 
 	// Sync manifest.
 	syncStore := gosync.NewStore(d.Pool)
@@ -182,6 +190,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Queue:        evalPool,
 		Suites:       suiteRegistry,
 		QualityFloor: cfg.QualityFloor,
+		Ownership:    ownerResolver,
 	})
 
 	// Eval suite registry. suiteRegistry was constructed above, alongside

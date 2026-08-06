@@ -19,8 +19,16 @@ import (
 
 // setupReviewQueueTestAPI is setupTestAPI plus the cross-skill review queue
 // route, which is registered separately from skill.RegisterRoutes because it
-// is not scoped to a single skill.
+// is not scoped to a single skill. It hydrates ownership with a fake resolver
+// that reports every skill unowned (Evaluated: true, Unowned: true, no rule,
+// no owners) — the default state a fresh install with no ownership rules
+// would resolve to.
 func setupReviewQueueTestAPI(t *testing.T) (http.Handler, *skill.Store) {
+	t.Helper()
+	return setupReviewQueueTestAPIWithOwners(t, &fakeOwners{state: gate.OwnerState{Evaluated: true, Unowned: true}})
+}
+
+func setupReviewQueueTestAPIWithOwners(t *testing.T, owners skill.OwnerResolver) (http.Handler, *skill.Store) {
 	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
@@ -32,7 +40,7 @@ func setupReviewQueueTestAPI(t *testing.T) (http.Handler, *skill.Store) {
 	r := chi.NewMux()
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{})
-	skill.RegisterReviewQueueRoutes(api, store)
+	skill.RegisterReviewQueueRoutes(api, store, owners)
 
 	return r, store
 }
@@ -165,4 +173,61 @@ func TestReviewQueueRoute_EmptyIsEmptyArray(t *testing.T) {
 	rr := doJSON(t, handler, http.MethodGet, "/api/review/queue", nil, nil)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	assert.Contains(t, rr.Body.String(), `"held":[]`)
+}
+
+// The queue must distinguish what a version is held for from what is still
+// outstanding — a partly-cleared hold is the case the UI most needs to render
+// honestly.
+func TestQueueReportsOutstandingSeparatelyFromHoldReasons(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+
+	sk := newGateSkill(t, store, ctx, "held-both-reasons")
+	_, err := store.CreateVersion(ctx, sk.ID, "p/c1", "c1", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t",
+		gate.Decision{
+			Outcome:     gate.NeedsReview,
+			HoldReasons: []string{gate.ReasonScan, gate.ReasonOwnership},
+		})
+	require.NoError(t, err)
+
+	released, err := store.ApproveReason(ctx, store.Pool(), "held-both-reasons", 1,
+		gate.ReasonOwnership, nil, "alice@acme.com", "looks right")
+	require.NoError(t, err)
+	require.False(t, released, "clearing one of two reasons must not release the version")
+
+	got, err := store.ListHeldVersions(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.ElementsMatch(t, []string{gate.ReasonScan, gate.ReasonOwnership}, got[0].HoldReasons)
+	assert.Equal(t, []string{gate.ReasonScan}, got[0].Outstanding)
+}
+
+// An unowned held version must say so, so admins can see the backlog.
+func TestQueueMarksUnownedHolds(t *testing.T) {
+	handler, store := setupReviewQueueTestAPI(t)
+	ctx := t.Context()
+
+	sk, err := store.Create(ctx, "unowned-held", "unowned-held", "a held fixture", "content", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	_, err = store.CreateVersion(ctx, sk.ID, "p/c1", "c1", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t",
+		gate.Decision{Outcome: gate.NeedsReview, HoldReasons: []string{gate.ReasonOwnership}})
+	require.NoError(t, err)
+
+	rr := doJSON(t, handler, http.MethodGet, "/api/review/queue", nil, nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var body struct {
+		Held []struct {
+			SkillName   string          `json:"skill_name"`
+			RulePattern string          `json:"rule_pattern,omitempty"`
+			Owners      []gate.OwnerRef `json:"owners"`
+			Unowned     bool            `json:"unowned"`
+		} `json:"held"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	require.Len(t, body.Held, 1)
+	assert.True(t, body.Held[0].Unowned)
+	assert.Empty(t, body.Held[0].Owners)
+	assert.Empty(t, body.Held[0].RulePattern)
 }

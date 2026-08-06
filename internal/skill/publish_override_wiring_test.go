@@ -2,6 +2,7 @@ package skill_test
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/auth"
@@ -19,6 +21,33 @@ import (
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
 )
+
+// seedUser inserts a real users row with a fixed ID, matching one of this
+// package's fabricated auth.User fixtures. Tests fake identity via a context
+// middleware rather than a real login, but a review approval writes actor as
+// a real foreign key to users(id) the moment the caller has a non-empty ID —
+// ON CONFLICT DO NOTHING because several fixtures across this package reuse
+// the same canonical ID/email/role for "the owner", "the admin", "the member".
+func seedUser(t *testing.T, pool *pgxpool.Pool, id, email, role string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO users (id, email, name, password_hash, role)
+		 VALUES ($1, $2, $2, 'x', $3)
+		 ON CONFLICT (id) DO NOTHING`,
+		id, email, role)
+	require.NoError(t, err)
+}
+
+// seedCanonicalTestUsers seeds the owner/admin/member fixtures reused by ID
+// across this package's tests (00000000-...-000000000001/2/3), so any test
+// harness that authenticates as one of them can also exercise a path that
+// writes that user as a real actor foreign key.
+func seedCanonicalTestUsers(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	seedUser(t, pool, "00000000-0000-0000-0000-000000000001", "owner@example.com", auth.RoleOwner)
+	seedUser(t, pool, "00000000-0000-0000-0000-000000000002", "admin@example.com", auth.RoleAdmin)
+	seedUser(t, pool, "00000000-0000-0000-0000-000000000003", "member@example.com", auth.RoleMember)
+}
 
 // setupTestAPIAsUser is setupTestAPI plus a middleware that attaches whatever
 // *caller points at to the request context, the way auth.Middleware would.
@@ -36,6 +65,7 @@ func setupTestAPIAsUserWithStore(t *testing.T, caller **auth.User) (http.Handler
 
 	pool := testutil.SetupTestDB(t)
 	store := skill.NewStore(pool)
+	seedCanonicalTestUsers(t, pool)
 
 	storage, err := platform.NewLocalStorage(t.TempDir())
 	require.NoError(t, err)

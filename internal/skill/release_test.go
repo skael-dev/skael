@@ -55,7 +55,7 @@ func TestReconsiderReleasesOnAClearingScore(t *testing.T) {
 	ver, err := store.GetVersion(ctx, "will-clear", v.Version)
 	require.NoError(t, err)
 	assert.Equal(t, "released", ver.GateState)
-	assert.Equal(t, "evaluation", ver.GatedBy)
+	assert.Equal(t, "system:eval", ver.GatedBy)
 }
 
 func TestReconsiderHoldsOnEachFailingCondition(t *testing.T) {
