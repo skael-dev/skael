@@ -155,7 +155,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	// Cross-skill review queue: every version currently held for review,
 	// across all skills. Open to any authenticated member; the approve/reject
 	// action stays owner/admin on the per-version review route above.
-	skill.RegisterReviewQueueRoutes(api, skillStore)
+	skill.RegisterReviewQueueRoutes(api, skillStore, ownerResolver)
 
 	// Sync manifest.
 	syncStore := gosync.NewStore(d.Pool)

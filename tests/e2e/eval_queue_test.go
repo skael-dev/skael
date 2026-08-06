@@ -176,7 +176,7 @@ func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 		QualityFloor: floor,
 	})
 
-	skill.RegisterReviewQueueRoutes(api, skillStore)
+	skill.RegisterReviewQueueRoutes(api, skillStore, nil)
 	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
