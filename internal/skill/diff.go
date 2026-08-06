@@ -115,7 +115,7 @@ func diffManifests(from, to []FileEntry) []FileChange {
 		toSize[f.Path] = f.Size
 	}
 
-	var changes []FileChange
+	changes := []FileChange{}
 	seen := make(map[string]bool, len(from)+len(to))
 
 	for _, f := range to {

@@ -180,6 +180,7 @@ function FileChangeRow({ file }: { file: VersionDiffFile }) {
 
 function VersionDiffPanel({ diff }: { diff: VersionDiffResp }) {
   const lines = diff.skill_md.split("\n").filter((l) => l.length > 0);
+  const files = diff.files ?? [];
   return (
     <div className="p-4 border-t border-border">
       <div className="text-[11px] uppercase tracking-wide text-text-tertiary mb-2">
@@ -194,9 +195,9 @@ function VersionDiffPanel({ diff }: { diff: VersionDiffResp }) {
           ))}
         </pre>
       )}
-      {diff.files.length > 0 && (
+      {files.length > 0 && (
         <div className="mt-3 flex flex-col gap-1">
-          {diff.files.map((f) => (
+          {files.map((f) => (
             <FileChangeRow key={f.path} file={f} />
           ))}
         </div>

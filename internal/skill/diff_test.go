@@ -35,6 +35,39 @@ func TestDiffAgainstServedShowsSkillMDChanges(t *testing.T) {
 	assert.Contains(t, diff.SkillMD, "+line TWO")
 }
 
+// SKILL.md content can change while its byte size stays identical (e.g. a
+// single character swapped for another). diffManifests only compares path
+// and size, so Files must come back as an empty (non-nil) slice rather than
+// nil — a raw chi handler encodes a nil slice as `"files": null`, which
+// crashes any client typed to expect an array.
+func TestDiffFilesIsEmptyNotNilWhenOnlyContentChanges(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+
+	sk := newGateSkill(t, store, ctx, "diff-same-size")
+	v1, err := store.CreateVersion(ctx, sk.ID, "p1", "c1", "", "d", "line one\nline two\n",
+		json.RawMessage(`{}`), []skill.FileEntry{{Path: "SKILL.md", Size: 10}},
+		json.RawMessage(`{}`), "t", gate.Decision{Outcome: gate.Allow})
+	require.NoError(t, err)
+	require.Equal(t, 1, v1.Version)
+
+	v2, err := store.CreateVersion(ctx, sk.ID, "p2", "c2", "", "d", "line one\nline TWO\n",
+		json.RawMessage(`{}`), []skill.FileEntry{{Path: "SKILL.md", Size: 10}},
+		json.RawMessage(`{}`), "t", gate.Decision{Outcome: gate.NeedsReview, Reasons: []gate.Reason{{Rule: "x", Class: "execution"}}})
+	require.NoError(t, err)
+	require.Equal(t, 2, v2.Version)
+
+	diff, err := store.DiffAgainstServed(ctx, "diff-same-size", v2.Version)
+	require.NoError(t, err)
+	require.NotNil(t, diff)
+	assert.NotNil(t, diff.Files)
+	assert.Empty(t, diff.Files)
+
+	encoded, err := json.Marshal(diff)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"files":[]`)
+	assert.NotContains(t, string(encoded), `"files":null`)
+}
+
 // A non-SKILL.md addition must be reported, because that is exactly when an
 // owner should stop and read the bundle properly.
 func TestDiffFlagsNonSkillMDFiles(t *testing.T) {
