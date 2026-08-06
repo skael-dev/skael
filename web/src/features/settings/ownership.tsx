@@ -79,17 +79,38 @@ function actorFromUser(user: { id: string; role: string } | null): Actor | null 
 // not as a list query), so this resolves it the same way any other reader
 // would: list skills, then ask each one who owns it. Fine at registry scale;
 // a dedicated count endpoint is the obvious follow-up if this page gets slow.
+
+// The server caps `limit` at 100 (internal/skill/routes.go: `Limit int
+// \`query:"limit" ... maximum:"100"\``) and Huma validates it before the
+// handler runs — anything higher 422s on every request, not just at scale.
+const SKILLS_PAGE_SIZE = 100;
+
+// fetchAllSkillNames pages through GET /api/skills at the server's declared
+// maximum page size, accumulating names until the reported total is
+// reached. Stops on an empty page too, so a `total` that doesn't match the
+// actual row count can't turn this into an infinite loop.
+async function fetchAllSkillNames(): Promise<string[]> {
+  const names: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const res = await listSkills({ query: { limit: SKILLS_PAGE_SIZE, offset } });
+    if (res.error) throw res.error;
+    const page = res.data?.skills ?? [];
+    for (const s of page) names.push(s.name);
+    offset += page.length;
+    const total = res.data?.total ?? names.length;
+    if (page.length === 0 || offset >= total) break;
+  }
+  return names;
+}
+
 function useUnownedCount() {
   const skillsQuery = useQuery({
     queryKey: ["skills", "list", "ownership-backlog"],
-    queryFn: async () => {
-      const res = await listSkills({ query: { limit: 1000 } });
-      if (res.error) throw res.error;
-      return res.data?.skills ?? [];
-    },
+    queryFn: fetchAllSkillNames,
   });
 
-  const names = (skillsQuery.data ?? []).map((s) => s.name);
+  const names = skillsQuery.data ?? [];
 
   const ownerQueries = useQueries({
     queries: names.map((name) => ({
@@ -104,10 +125,14 @@ function useUnownedCount() {
   });
 
   const settled = ownerQueries.length === 0 || ownerQueries.every((q) => q.isSuccess || q.isError);
-  const loading = skillsQuery.isLoading || !settled;
+  const loading = skillsQuery.isLoading || (!skillsQuery.isError && !settled);
+  // A failure anywhere (the list itself, or any one skill's owners lookup)
+  // must not render as "0 unowned" — that's indistinguishable from "we
+  // checked and found none". Surface it as unknown instead.
+  const error = skillsQuery.isError || ownerQueries.some((q) => q.isError);
   const unownedCount = ownerQueries.filter((q) => q.data?.unowned).length;
 
-  return { unownedCount, loading };
+  return { unownedCount, loading, error };
 }
 
 // ── Rule row ──────────────────────────────────────────────────────────
@@ -398,7 +423,7 @@ export function Ownership() {
   const actor = actorFromUser(user);
   const [managingRule, setManagingRule] = useState<RuleBody | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const { unownedCount, loading: unownedLoading } = useUnownedCount();
+  const { unownedCount, loading: unownedLoading, error: unownedError } = useUnownedCount();
 
   const rulesQuery = useQuery({
     queryKey: ["ownership", "rules"],
@@ -427,11 +452,20 @@ export function Ownership() {
           <ShieldOff className="size-4 text-text-tertiary shrink-0" />
           <div>
             <div className="text-[13px] text-text-secondary">Unowned skills</div>
-            <div className="text-xl font-semibold text-text-primary">
-              {unownedLoading ? "…" : unownedCount}
-            </div>
+            {unownedError ? (
+              <div className="text-xs text-danger">Couldn't load — try refreshing</div>
+            ) : (
+              <div className="text-xl font-semibold text-text-primary">
+                {unownedLoading ? "…" : unownedCount}
+              </div>
+            )}
           </div>
         </div>
+        {/* TODO(task-19+): skill-list.tsx doesn't read `unowned` yet — it's
+            out of this task's file scope (not in the Task 18 brief's Files
+            list) and filters client-side on local state today, not URL
+            params. This link is correctly targeted but is a dead end until
+            a follow-up wires skill-list.tsx to consume it. */}
         <Link to="/?unowned=true" className="text-xs text-accent hover:underline shrink-0">
           View unowned skills
         </Link>

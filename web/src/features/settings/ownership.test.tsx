@@ -13,30 +13,46 @@ function mockRules(rules: Array<{ id: string; pattern: string; members: string[]
   );
 }
 
+// Mirrors the real server's declared limits (internal/skill/routes.go:
+// `Limit int \`query:"limit" default:"20" minimum:"1" maximum:"100"\``) —
+// a request over 100 gets a 422 here exactly like it would from Huma's own
+// request validation, so a client that ever asks for more fails the test
+// instead of silently degrading.
+const SERVER_MAX_LIMIT = 100;
+
 function mockSkillsWithOwners(
   skills: Array<{ name: string; unowned: boolean; rule_pattern?: string }>,
+  requestedLimits: number[] = [],
 ) {
   server.use(
-    http.get("/api/skills", () => {
-      return HttpResponse.json({
-        skills: skills.map((s, i) => ({
-          id: `skill-${i}`,
-          name: s.name,
-          description: "",
-          frontmatter: {},
-          author: "",
-          license: "",
-          compatibility: "",
-          spec_compliance: "",
-          tags: [],
-          latest_version: 1,
-          reviewed_at: null,
-          reviewed_by: "",
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        })),
-        total: skills.length,
-      });
+    http.get("/api/skills", ({ request }) => {
+      const url = new URL(request.url);
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      requestedLimits.push(limit);
+      if (limit > SERVER_MAX_LIMIT) {
+        return HttpResponse.json(
+          { detail: `limit must be <= ${SERVER_MAX_LIMIT}` },
+          { status: 422 },
+        );
+      }
+      const page = skills.slice(offset, offset + limit).map((s, i) => ({
+        id: `skill-${offset + i}`,
+        name: s.name,
+        description: "",
+        frontmatter: {},
+        author: "",
+        license: "",
+        compatibility: "",
+        spec_compliance: "",
+        tags: [],
+        latest_version: 1,
+        reviewed_at: null,
+        reviewed_by: "",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      }));
+      return HttpResponse.json({ skills: page, total: skills.length });
     }),
     http.get("/api/skills/:name/owners", ({ params }) => {
       const s = skills.find((sk) => sk.name === params.name);
@@ -88,6 +104,49 @@ describe("Ownership settings page", () => {
 
     const link = screen.getByRole("link", { name: /view unowned skills/i });
     expect(link).toHaveAttribute("href", "/?unowned=true");
+  });
+
+  // Regression for a real bug: fetching the full skill list with a single
+  // `limit: 1000` request 422s against the real server, which enforces
+  // `maximum:"100"` (internal/skill/routes.go) via Huma request validation
+  // before the handler even runs — a constraint this MSW mock now also
+  // enforces, so a client that ever asks for more than the server's max
+  // fails loudly here instead of silently showing "0 unowned" in
+  // production.
+  it("never requests more skills per page than the server's declared maximum, and pages through all of them", async () => {
+    const requestedLimits: number[] = [];
+    const skills = Array.from({ length: 130 }, (_, i) => ({
+      name: `skill-${i}`,
+      // Every 10th skill is unowned — 13 total across 130 skills.
+      unowned: i % 10 === 0,
+    }));
+    mockRules([]);
+    mockSkillsWithOwners(skills, requestedLimits);
+
+    renderWithProviders(<Ownership />);
+
+    await waitFor(() => {
+      expect(screen.getByText("13")).toBeInTheDocument();
+    });
+
+    expect(requestedLimits.length).toBeGreaterThan(1); // it took more than one page
+    for (const limit of requestedLimits) {
+      expect(limit).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("shows an error rather than a false '0' when the skill list can't be loaded", async () => {
+    mockRules([]);
+    server.use(
+      http.get("/api/skills", () => {
+        return HttpResponse.json({ detail: "internal server error" }, { status: 500 });
+      }),
+    );
+
+    renderWithProviders(<Ownership />);
+
+    expect(await screen.findByText(/couldn't load/i)).toBeInTheDocument();
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
   // A member who cannot manage a rule sees the control disabled WITH THE
