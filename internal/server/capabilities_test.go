@@ -32,6 +32,8 @@ func TestCapabilities_OSS(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&body)
 	require.NoError(t, err)
 	require.Equal(t, "oss", body.Edition)
+	// An unstamped build reports the same string cmd/server logs at startup.
+	require.Equal(t, "dev", body.Version)
 	require.False(t, body.Features.Teams)
 	require.False(t, body.Features.RBAC)
 	require.False(t, body.Features.SSO)
@@ -59,3 +61,16 @@ func TestCapabilities_WithFeatures(t *testing.T) {
 
 // Ensure context import is used (required by capabilities.go Register signature)
 var _ = context.Background
+
+func TestCapabilities_SetVersion(t *testing.T) {
+	caps := server.NewCapabilities()
+	require.Equal(t, "dev", caps.Response().Version)
+
+	caps.SetVersion("1.2.3")
+	require.Equal(t, "1.2.3", caps.Response().Version)
+
+	// An empty ldflags value must not blank out the default — an unstamped
+	// build should read "dev", not "".
+	caps.SetVersion("")
+	require.Equal(t, "1.2.3", caps.Response().Version)
+}

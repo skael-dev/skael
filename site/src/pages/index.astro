@@ -7,7 +7,7 @@ const softwareLd = {
   "name": "skael",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "description": "One registry for your team's AI skills — across every agent and every project. Versioned, security-scanned, synced to Claude Code, Cursor, Codex, and OpenCode, with activation tracking.",
+  "description": "One registry for your team's AI skills — across every agent and every project. Versioned, security-scanned, synced to Claude Code, Cursor, Codex, and OpenCode, with per-namespace ownership, measured quality scores, and activation tracking.",
   "url": "https://skael.dev",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
 };
@@ -29,6 +29,22 @@ const faqLd = {
       "acceptedAnswer": {
         "@type": "Answer",
         "text": "For Claude.ai and Desktop, on Team and Enterprise plans — not Claude Code, and not Cursor, Codex, or OpenCode. skael is vendor-neutral: it manages the SKILL.md standard across every agent your team runs.",
+      },
+    },
+    {
+      "@type": "Question",
+      "name": "Does this stop me publishing skills?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not until you ask it to. A skill name nobody has claimed publishes exactly as it did before. Write a rule for a namespace and changes to that namespace are held until an owner approves them. Protection switches on per namespace, not on an upgrade.",
+      },
+    },
+    {
+      "@type": "Question",
+      "name": "What is a quality score actually measuring?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A panel of models attempts a real task suite twice — once with the skill available, once without — and a judge compares the transcripts. The score is the gap. A skill nobody has measured reads as unscored, which is not the same claim as scoring zero.",
       },
     },
   ],
@@ -68,7 +84,7 @@ const faqLd = {
     <div class="container">
       <span class="pill">
         <span class="pill-tag">New</span>
-        Open source · v0.9.1
+        Open source · v0.10.0
       </span>
       <h1 class="headline">
         Your team's AI skills, in one place — and on <span class="accent">every agent</span>.
@@ -148,7 +164,7 @@ const faqLd = {
       <div class="sec-head">
         <div class="sec-eyebrow">// capabilities</div>
         <h2 class="sec-title">Run your skills like infrastructure — not scattered markdown.</h2>
-        <p class="sec-sub">Centralize, distribute, secure, and measure every SKILL.md across every agent your team uses.</p>
+        <p class="sec-sub">Centralize, distribute, secure, govern, and measure every SKILL.md across every agent your team uses.</p>
       </div>
 
       <div class="feat-grid">
@@ -179,7 +195,7 @@ const faqLd = {
             </svg>
           </div>
           <h3>Scanned before it ships</h3>
-          <p>Every publish runs a security scan for hardcoded secrets, prompt injection, data exfiltration, and obfuscation. Critical findings block the publish — no <span class="mono-inline">curl | bash</span> for your agent's brain.</p>
+          <p>Every publish is scanned for hardcoded secrets, prompt injection, exfiltration, and obfuscation. A credential leaving the machine is rejected outright — nothing clears it. Everything else is held for review, not deleted. No <span class="mono-inline">curl | bash</span> for your agent's brain.</p>
         </div>
 
         <div class="feat">
@@ -211,6 +227,36 @@ const faqLd = {
           <h3>Self-hosted, no lock-in</h3>
           <p>One container against your own Postgres, or Docker Compose with a bundled database. Your skills stay on your infrastructure.</p>
         </div>
+
+        <div class="feat">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/>
+            </svg>
+          </div>
+          <h3>Someone has to say yes</h3>
+          <p>A skill lands in <span class="mono-inline">payments:</span> and nobody notices. Write one rule — that namespace belongs to Alice and Bob — and every change to it is held until one of them approves. Names nobody claimed publish exactly as before. No flag day.</p>
+        </div>
+
+        <div class="feat">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>
+            </svg>
+          </div>
+          <h3>Measured, not asserted</h3>
+          <p>"We have 50 skills" isn't a fact about whether any of them work. skael runs each one against a real task suite twice — once with it, once without — and scores the gap. Unscored reads as unscored, not as zero. Those are different facts.</p>
+        </div>
+
+        <div class="feat">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/>
+            </svg>
+          </div>
+          <h3>A finding isn't a verdict</h3>
+          <p>A hardcoded credential is rejected — nothing clears it. Everything else is held, not thrown away: the version exists, with a number and an archive, and just isn't served until a score or a human clears it. The queue tells you exactly what would release each one.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -237,6 +283,32 @@ const faqLd = {
           autoplay muted loop playsinline
           style="display:block;width:100%;height:auto;border-top:1px solid var(--border);"
         ></video>
+      </div>
+    </div>
+  </section>
+
+  <section class="preview">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-eyebrow">// governance</div>
+        <h2 class="sec-title">Held, not lost. And you can see why.</h2>
+        <p class="sec-sub">Every version waiting on a decision, what's holding it, and exactly what would release each one.</p>
+      </div>
+
+      <div class="preview-frame">
+        <div class="preview-bar">
+          <div class="dots">
+            <span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span>
+          </div>
+          <div class="url">app.skael.dev / acme / review</div>
+          <div style="width:48px"></div>
+        </div>
+        <img
+          src="/review-queue.png"
+          alt="The review queue — a held version with its scan findings and what the gate says would clear each one"
+          loading="lazy"
+          style="display:block;width:100%;height:auto;border-top:1px solid var(--border);"
+        />
       </div>
     </div>
   </section>
@@ -287,6 +359,14 @@ const faqLd = {
         <div class="faq-item">
           <h3>Doesn't Claude already do org skill sharing?</h3>
           <p>For Claude.ai and Desktop, on Team and Enterprise plans — not Claude Code, and not Cursor, Codex, or OpenCode. skael is vendor-neutral by design: it manages the SKILL.md standard across <em>every</em> agent your team runs, not one vendor's walled garden.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Does this stop me publishing skills?</h3>
+          <p>Not until you ask it to. A skill name nobody has claimed publishes exactly as it did before. Write a rule for a namespace and changes to <em>that</em> namespace are held until an owner approves them. Protection switches on per namespace, not on an upgrade.</p>
+        </div>
+        <div class="faq-item">
+          <h3>What is a quality score actually measuring?</h3>
+          <p>A panel of models attempts a real task suite twice — once with the skill available, once without — and a judge compares the transcripts. The score is the gap. A skill nobody has measured reads as <em>unscored</em>, which is not the same claim as scoring zero.</p>
         </div>
       </div>
     </div>
@@ -357,7 +437,7 @@ const faqLd = {
       </div>
       <div class="foot-bottom">
         <span>© 2026 skael</span>
-        <span>v0.9.1 · open source</span>
+        <span>v0.10.0 · open source</span>
       </div>
     </div>
   </footer>

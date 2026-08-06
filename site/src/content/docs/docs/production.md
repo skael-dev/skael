@@ -144,7 +144,7 @@ environment:
 
 Do this once, after all accounts are created.
 
-1. Deploy with `DISABLE_SIGNUP` unset (or `false`). Sign up to create the owner account — the first account created on any instance automatically becomes the owner. See [Roles](#roles) below.
+1. Deploy with `DISABLE_SIGNUP` unset (or `false`). Sign up to create the instance owner account — the first account created on any instance automatically gets the `owner` role. See [Instance roles](#instance-roles) below.
 2. Log in to the dashboard. Go to **Settings → API keys** and create keys for each teammate who needs CLI access.
 3. Distribute the API keys. Each person runs `skael setup <url> <key>` to connect their CLI.
 4. Set `DISABLE_SIGNUP=true` in `.env` and restart the server.
@@ -164,20 +164,29 @@ Expected response when signups are disabled — HTTP 403:
 
 If you see anything other than a 403, `DISABLE_SIGNUP=true` is not active. Check that the restart completed and the env var is set in the process environment, not only in `.env`.
 
-## Roles
+## Instance roles
+
+These are instance-wide. Who may publish to a given *skill name* is a separate question, answered by ownership rules rather than by role — see [Ownership](/docs/ownership).
 
 Every account has one of three roles:
 
 | Role | Granted | Can do |
 |---|---|---|
 | `owner` | Automatically, to the first account created on the instance. Exactly one per instance, and it never changes hands via the API. | Everything, plus role management: `PUT /api/admin/users/{id}/role` (promote to `admin`/`member`), `GET /api/admin/users` (list all users), `POST /api/admin/reset-password` (issue another user a temporary password). |
-| `admin` | By the owner, via the role-management endpoint above (or the dashboard). | Normal use, plus `skael publish --override` to publish a skill past a blocking scan finding. |
-| `member` | Default for every new signup. | Normal use: publish, sync, browse. Cannot override a blocked publish. |
+| `admin` | By the instance owner, via the role-management endpoint above (or the dashboard). | Normal use, plus `skael publish --override` to publish past an appealable scan finding, and `skael review --approve` to clear a version held for review. |
+| `member` | Default for every new signup. | Normal use: publish, sync, browse. Cannot override or clear a held publish. |
 
-The owner cannot change their own role, and no one can be promoted to owner — an instance always has exactly one, set at account-creation time, so there is no path to a lockout.
+Two terms are used across these docs, because "owner" on its own is ambiguous once ownership rules exist:
+
+- **instance owner** — the single `owner` account. Only the `/api/admin/*` routes require it.
+- **instance admin** — any account whose role is `owner` or `admin`. This is the check the publish override and the security-review path make.
+
+A **skill owner** or **namespace owner** is a member of an ownership rule and has nothing to do with role. A plain `member` is normally the namespace owner for their own team's skills.
+
+The instance owner cannot change their own role, and no one can be promoted to `owner` — an instance always has exactly one, set at account-creation time, so there is no path to a lockout.
 
 :::caution[Upgrading from a pre-role build]
-Before roles existed, every account but the first signed up with role `admin` by default. The upgrade migration leaves the first account's `owner` role untouched and downgrades every other existing `admin` account to `member` — a live behavior change on any multi-user instance. Log in as the owner afterward and re-promote anyone who needs `admin` (publish-override) access via `PUT /api/admin/users/{id}/role` or the dashboard — see [Upgrading](/docs/upgrading).
+Before roles existed, every account but the first signed up with role `admin` by default. The upgrade migration leaves the first account's `owner` role untouched and downgrades every other existing `admin` account to `member` — a live behavior change on any multi-user instance. Log in as the instance owner afterward and re-promote anyone who needs `admin` (publish-override) access via `PUT /api/admin/users/{id}/role` or the dashboard — see [Upgrading](/docs/upgrading).
 :::
 
 ## Health probes
@@ -282,7 +291,16 @@ This gates startup sequencing only. Once the sidecar exits, Docker Compose does 
 
 ## Security scanning
 
-Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally. **Critical and high-severity findings block the publish**; an owner or admin can publish anyway with `skael publish --override`, which is recorded server-side. (`skael publish --force` is a deprecated alias for `--skip-local-scan` — it skips the client-side scan only, and does not bypass the server's own gate.)
+Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally.
+
+`critical` and `high` findings still stop a version from being served, but they no longer all do it the same way. There are two tiers:
+
+- **Unappealable — the publish is refused.** Credential-theft and data-exfiltration findings (a hardcoded secret, a `/dev/tcp` reverse shell). The server returns 422 and creates no version row at all. No evaluation clears these, and neither does an instance admin.
+- **Appealable — the version is created and held.** Everything else that blocks: a `curl … | bash` cradle, a prompt-injection pattern. The version gets a number and a stored archive, but `skills.latest_version` does not advance, it is absent from the sync manifest, and no client can download it. It clears when a **verified** quality score reaches `QUALITY_FLOOR`, or when an instance admin approves it with `skael review <name> <version> --approve --reason "..."`.
+
+An instance admin can also skip the hold at publish time with `skael publish --override`, which is recorded server-side and logged. (`skael publish --force` is a deprecated alias for `--skip-local-scan` — it skips the client-side scan only, and does not bypass the server's own gate.)
+
+Held versions are listed on the dashboard's **Review** page and at `GET /api/review/queue`. If you run no eval worker, nothing clears a hold automatically — somebody has to review the queue.
 
 ### Optional external scanner
 

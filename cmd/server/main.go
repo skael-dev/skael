@@ -69,7 +69,7 @@ func main() {
 		log.Fatal().Err(err).Msg("migration error")
 	}
 
-	srv, err := server.NewBuilder(pool, cfg).Build()
+	srv, err := server.NewBuilder(pool, cfg).WithVersion(version).Build()
 	if err != nil {
 		log.Fatal().Err(err).Msg("server build error")
 	}

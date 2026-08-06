@@ -92,6 +92,13 @@ func (b *Builder) WithEdition(edition string) *Builder {
 	return b
 }
 
+// WithVersion records the build version reported by the capabilities endpoint,
+// so the dashboard and the server logs agree about which build is running.
+func (b *Builder) WithVersion(version string) *Builder {
+	b.caps.SetVersion(version)
+	return b
+}
+
 // WithLicense sets the license metadata returned by the capabilities endpoint.
 func (b *Builder) WithLicense(l *LicenseInfo) *Builder {
 	b.caps.SetLicense(l)

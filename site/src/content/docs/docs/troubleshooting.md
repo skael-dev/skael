@@ -92,21 +92,52 @@ Source: `cli/sync.go` — the warning fires when the SHA-256 of the downloaded a
 
 **What you see** (from `skael publish`):
 ```
-  /tmp/my-skill/SKILL.md:9	critical    AWS access key ID detected
-  /tmp/my-skill/SKILL.md:8	critical    AWS access key ID detected
+  Blocked — unappealable findings:
+  SKILL.md:9	aws-access-key-id (secret, critical)
+    AWS access key ID detected
+    Clears: nothing — remove the credential from the bundle
 
-  2 critical · 0 high · 0 medium · 0 info
-  ✗ security findings block publish
-
-    Try: fix the findings above, or ask an owner or admin to publish with --override
+  ✗ publish blocked: archive contains unappealable findings
 ```
 
-**Why:** The scanner found a secret (AWS key, token, private key, etc.) in the skill files. Both `critical` and `warn` (high severity) block publishing to protect your team.
+Note what this message does *not* say: there is no `--override` suggestion, because no permission clears this class. The `Clears:` line tells you the only way out.
+
+**Why:** The scanner found a secret (AWS key, token, private key, etc.) in the skill files. Secrets and data-exfiltration findings are **unappealable**: the server returns 422, no version row is created, and nothing clears them — not an evaluation, not `--override`, not an instance admin. Every other `critical`/`high` finding behaves differently now; it creates the version and holds it (next section).
 
 **Fix:**
 1. Run `skael scan <dir>` locally to see every finding with file and line numbers. Exit codes: `0` = clean, `1` = warn/high, `2` = critical.
 2. Remove or replace the secret. Use environment variables or `~/.skael/config.json` patterns instead of hard-coded values.
-3. Re-publish. If the finding is a deliberate example (documentation, test fixture) and you hold the `owner` or `admin` role, re-publish with `skael publish --override` — but only when you're certain the value is not a live credential. `--override` is recorded server-side. (`--skip-local-scan` only skips the client-side pre-check; the server scans again and still blocks on its own findings.)
+3. Re-publish. There is no override for this class, even for an instance admin — a deliberate example of an AWS key in documentation still has to come out of the bundle. `--override` and `--skip-local-scan` do not help: `--override` applies to appealable findings only, and `--skip-local-scan` skips the client-side pre-check while the server scans again and refuses on its own.
+
+---
+
+## Publish succeeded but the skill won't sync
+
+**What you see** (from `skael publish`):
+```
+  ⏸ my-skill v3 created and held for review
+  It is not served to any client until it is cleared.
+```
+
+and then `skael sync` on another machine keeps serving v2, or the skill shows `latest_version: 0` if v3 was its first version.
+
+**Why:** This is the publish gate working as designed, not a failure. An appealable `critical`/`high` scan finding (a `curl … | bash` cradle, a prompt-injection pattern), or a publish to a name you do not own, creates the version and **holds** it. The version has a number and a stored archive, but `skills.latest_version` does not advance, so it is absent from the sync manifest and no client can download it.
+
+**Fix:** clear the hold. A held version can be held for two independent reasons, and each has its own path:
+
+- **`scan`** — clears on a **verified** quality score at or above `QUALITY_FLOOR`, or on an instance admin running `skael review <name> <version> --approve --reason-kind scan --reason "..."`. A skill owner cannot clear this one.
+- **`ownership`** — clears on approval by a skill owner or an instance admin: `skael review <name> <version> --approve --reason-kind ownership --reason "..."`.
+
+Neither reason can clear the other. A quality score never clears an ownership hold, and a skill owner never clears a security finding.
+
+```bash
+skael review show <name>          # what is held and why
+skael review <name> <version> --approve --reason "reviewed by hand"
+```
+
+`--reason-kind` is only required when more than one reason is outstanding. The held queue is also on the dashboard's **Review** page and at `GET /api/review/queue`.
+
+If you expected the automatic path to clear it: that needs a running `skael-worker` **and** a registered evaluation suite for the skill. Without both, nothing clears the hold automatically and a person has to approve it.
 
 ---
 

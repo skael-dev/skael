@@ -106,8 +106,9 @@ Each of these has already caused a real bug or a wasted debugging session.
 | `DATABASE_URL` | yes | — | Postgres connection string |
 | `STORAGE_PATH` | no | `./data/skills` | Archive storage; local dir, or `s3://bucket/prefix` for S3 |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
-| `S3_ENDPOINT` / `S3_REGION` | no | AWS / `us-east-1` | Only when `STORAGE_PATH=s3://…` |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Fall back to `AWS_*`; omit both for IAM instance role |
+| `DISABLE_SIGNUP` | no | `false` | Set to `true` (the literal string) to lock signups after setup. The server logs a startup warning when unset |
+| `S3_ENDPOINT` / `S3_REGION` | no | `s3.amazonaws.com` / `us-east-1` | Only when `STORAGE_PATH=s3://…`. Only `S3_REGION` falls back to `AWS_REGION`; the endpoint has no `AWS_*` fallback |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Both fall back to `AWS_*`. The pair is all-or-nothing: set only one and it is silently ignored. Omit both for an IAM instance role |
 | `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
 | `EVENT_RETENTION_DAYS` | no | `90` | Days of skill_events to keep; older rows are purged on startup. `0` disables cleanup |
 | `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run on publish/import; `{dir}` → skill dir, must emit SARIF on stdout (e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`). Findings merge into the native scan. |
@@ -148,8 +149,14 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
 | `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under |
 | `WORKER_CONCURRENCY` | no | `1` | Must be a positive integer |
+| `LLM_BASE_URL` | no | `https://api.anthropic.com` | Point the judge gateway at an OpenRouter-compatible endpoint |
+| `LLM_AUTH_STYLE` | no | `x-api-key` | Either `x-api-key` (Anthropic) or `bearer`. Any other value fails startup |
+| `LLM_STRONG_MODEL` | no | `claude-opus-5` | Judge model |
+| `LLM_FAST_MODEL` | no | `claude-haiku-4-5-20251001` | Cheaper model for the gateway's fast path |
 
-Each of the events/read/write classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
+Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, `WORKER_CONCURRENCY`, or `LLM_AUTH_STYLE` fails startup with the offending value named.
+
+Each of the events/read/write/suites classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
 
 ## Security constraints
 

@@ -7,6 +7,8 @@ skael is the private control plane for your team's AI agent skills. Your `SKILL.
 
 - **versions** every skill (immutable, content-addressable),
 - **scans** it for secrets, prompt injection, and exfiltration on publish,
+- **governs** it — holds a change to a namespace until someone who owns it says yes,
+- **measures** whether it actually works, by running it against real tasks,
 - **syncs** it to Claude Code, Cursor, Codex, and OpenCode on every developer's machine,
 - and **shows you which skills actually fire** — by which agent, how often.
 
@@ -15,7 +17,9 @@ Self-hosted and open source.
 ## Where to go next
 
 - **[Quickstart](/docs/quickstart)** — get the platform and CLI running in a couple of minutes.
-- **[Core concepts](/docs/concepts)** — skills, versions, selective sync, auto-sync, scanning, activations.
+- **[Core concepts](/docs/concepts)** — skills, versions, selective sync, auto-sync, scanning, ownership, quality, activations.
+- **[Skill ownership](/docs/ownership)** — who may publish to a name, and why an upgrade changes nothing until you write a rule.
 - **[CLI reference](/docs/cli)** — every `skael` command.
+- **[whetstone](/docs/whetstone)** — the authoring CLI: draft, lint, and score a skill before you publish it.
 - **[Self-hosting](/docs/self-hosting)** — run the platform on your own infrastructure.
 - **[Why not just git?](/docs/why-not-git)** — how skael differs from a shared repo or native agent sharing.

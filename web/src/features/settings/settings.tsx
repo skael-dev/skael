@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, Check, Plus, Trash2, AlertTriangle, Key, Lock, Users, RotateCcw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { listSkills, listApiKeys, createApiKey, deleteApiKey } from "@/api/sdk.gen";
+import { listSkills, listApiKeys, createApiKey, deleteApiKey, getCapabilities } from "@/api/sdk.gen";
 import type { ListBody, ListKeysBody, ApiKeyInfo, CreateKeyResponse } from "@/api/types.gen";
 import { useAuth } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -114,8 +114,22 @@ function Row({
   );
 }
 
+// A release build stamps a bare semver ("0.10.0"); an unstamped `go run` build
+// leaves the ldflags default "dev". Prefix "v" only for the former, so a dev
+// build reads "dev" rather than "vdev".
+function formatVersion(v?: string): string {
+  if (!v) return "—";
+  return /^\d/.test(v) ? `v${v}` : v;
+}
+
 // ── Workspace section ─────────────────────────────────────────
-function WorkspaceSection({ skillsTotal }: { skillsTotal: number }) {
+function WorkspaceSection({
+  skillsTotal,
+  platformVersion,
+}: {
+  skillsTotal: number;
+  platformVersion?: string;
+}) {
   return (
     <div>
       <SectionHeader
@@ -125,7 +139,7 @@ function WorkspaceSection({ skillsTotal }: { skillsTotal: number }) {
       <Card>
         <Row label="Workspace name" value="skael" />
         <Row label="Server URL" value={window.location.origin} mono />
-        <Row label="Platform version" value="v0.1.0" mono />
+        <Row label="Platform version" value={formatVersion(platformVersion)} mono />
         <Row
           label="Skills count"
           value={`${skillsTotal} skill${skillsTotal !== 1 ? "s" : ""}`}
@@ -847,6 +861,18 @@ export function Settings() {
 
   const skillsTotal = listData?.total ?? 0;
 
+  // Same fail-soft contract as skillsTotal: the version is informational, and a
+  // dash reads better than an error boundary over the whole settings page.
+  const { data: caps } = useQuery({
+    queryKey: ["capabilities"],
+    queryFn: async () => {
+      const res = await getCapabilities();
+      if (res.error) throw res.error;
+      return res.data;
+    },
+    staleTime: Infinity, // the server version cannot change without a reload
+  });
+
   // Track active section based on scroll position
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
@@ -914,7 +940,7 @@ export function Settings() {
               sectionRefs.current.workspace = el;
             }}
           >
-            <WorkspaceSection skillsTotal={skillsTotal} />
+            <WorkspaceSection skillsTotal={skillsTotal} platformVersion={caps?.version} />
           </div>
 
           <div
