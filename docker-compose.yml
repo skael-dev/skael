@@ -121,6 +121,15 @@ services:
       #    point the panel agent at OpenRouter too. OpenRouter model ids are
       #    namespaced, unlike Anthropic's bare names.
       #
+      #    Setting ANTHROPIC_BASE_URL also makes LLM_STRONG_MODEL and
+      #    LLM_FAST_MODEL the *panel's* models, not just the judge's — the
+      #    shipped panel asks for the bare Claude Code aliases "opus" and
+      #    "haiku", which a gateway that namespaces its ids answers with a
+      #    404. Set BOTH: they apply together or not at all, because a panel
+      #    with one working member and one 404ing member still completes,
+      #    scores, and reports panel_complete=false, which silently blocks
+      #    every release gate.
+      #
       #    Watch reasoning models for the judge: one that spends its whole
       #    output budget on thinking tokens returns no text block, and the run
       #    fails rather than scoring something empty.
@@ -128,6 +137,7 @@ services:
       # LLM_BASE_URL: https://openrouter.ai/api
       # LLM_AUTH_STYLE: bearer
       # LLM_STRONG_MODEL: anthropic/claude-opus-4
+      # LLM_FAST_MODEL: anthropic/claude-3.5-haiku
       # ANTHROPIC_BASE_URL: https://openrouter.ai/api
       # ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:-}
     volumes:

@@ -55,6 +55,21 @@ type EvalDeps struct {
 	// for the interactive CLI, which always shares a filesystem with the
 	// daemon it starts sandboxes on.
 	WorkspaceRoot string
+	// PanelStrongModel and PanelFastModel override the shipped panel's model
+	// ids for its strong and floor members. Empty means runner.DefaultPanel's
+	// opus/haiku, which is the whole of today's behaviour.
+	//
+	// These are already-resolved values rather than env lookups on purpose:
+	// whether a custom gateway is in play is a boundary decision, so
+	// RunEvalWith carries no policy and reads no environment. See
+	// panelModelsFromEnv, which is where that decision is actually made.
+	PanelStrongModel string
+	PanelFastModel   string
+	// PanelBaseURL is the gateway the panel's agent CLI talks to. It is
+	// carried for diagnostics only — nothing dials it here — so that a panel
+	// whose every member fails its health probe can name the endpoint that
+	// rejected the models rather than leaving the operator to guess.
+	PanelBaseURL string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -190,7 +205,22 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	// 3. The model panel.
-	panel, err := runner.ParsePanel(req.Agents, req.Models)
+	//
+	// A caller that named a panel always wins; this only fills the default.
+	// The shipped default is the bare Claude Code aliases opus/haiku, which
+	// mean nothing to a gateway that namespaces its identifiers — so when the
+	// boundary resolved model ids for a custom gateway, build the default out
+	// of those instead. ParsePanel assigns Class positionally, so one agent
+	// with [strong, fast] yields exactly DefaultPanel's shape: a
+	// spec.TierStrong member followed by a spec.TierFloor one. The agent name
+	// comes from DefaultPanel rather than a second "claude-code" literal so
+	// the two cannot drift apart.
+	agents, models := req.Agents, req.Models
+	if len(agents) == 0 && len(models) == 0 && d.PanelStrongModel != "" && d.PanelFastModel != "" {
+		agents = []string{runner.DefaultPanel()[0].Agent}
+		models = []string{d.PanelStrongModel, d.PanelFastModel}
+	}
+	panel, err := runner.ParsePanel(agents, models)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +269,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	for _, h := range health {
 		healthy[h.Member] = h.OK
 		healthDetail[h.Member] = h.Detail
+	}
+	if err := checkPanelHealth(health, d.PanelBaseURL); err != nil {
+		return nil, err
 	}
 
 	// 7. Reuse a resumed eval row, or start a new one.
@@ -943,9 +976,15 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		gw = g
 	}
 
+	panelStrong, panelFast, panelBase := panelModelsFromEnv()
+	if w := warnUnconfiguredPanelModels(panelStrong, panelFast, panelBase); w != "" {
+		ui.Warn("%s", w)
+	}
+
 	d := EvalDeps{
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
+		PanelStrongModel: panelStrong, PanelFastModel: panelFast, PanelBaseURL: panelBase,
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

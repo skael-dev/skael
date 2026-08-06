@@ -69,6 +69,13 @@ type workerConfig struct {
 	// means os.TempDir(). It only needs setting when this worker runs inside
 	// a container against the host's Docker daemon — see requireRunRoot.
 	RunRoot string
+	// PanelBaseURL is ANTHROPIC_BASE_URL: the gateway the *panel* agent CLI
+	// dials from inside the sandbox, as opposed to LLMBaseURL, which is the
+	// judge's. The worker never dials it itself — the claude-code adapter
+	// forwards it into the sandbox — but it has to read it, because whether
+	// it is set is what decides if the shipped opus/haiku panel is still the
+	// right default. See panelModels.
+	PanelBaseURL string
 }
 
 func main() {
@@ -177,7 +184,24 @@ func configFromEnv() (workerConfig, error) {
 		LLMStrongModel:  os.Getenv("LLM_STRONG_MODEL"),
 		LLMFastModel:    os.Getenv("LLM_FAST_MODEL"),
 		RunRoot:         runRoot,
+		PanelBaseURL:    os.Getenv("ANTHROPIC_BASE_URL"),
 	}, nil
+}
+
+// panelModels resolves the model ids the eval panel should use, returning
+// empty strings when the shipped opus/haiku default is correct.
+//
+// Gated on PanelBaseURL, not on the model variables alone. LLM_STRONG_MODEL
+// and LLM_FAST_MODEL configure the judge, and an operator who set them purely
+// to pick a cheaper judge must keep the panel they already had — a changed
+// panel is recorded in model_panel and splits the score trend line. Only
+// ANTHROPIC_BASE_URL, the panel's own gateway, is evidence that the default
+// Claude Code aliases are the wrong thing to ask for.
+func panelModels(cfg workerConfig) (strong, fast string) {
+	if cfg.PanelBaseURL == "" {
+		return "", ""
+	}
+	return cfg.LLMStrongModel, cfg.LLMFastModel
 }
 
 // requireHostSharedRoots refuses to start a containerized worker that has not
@@ -306,7 +330,23 @@ func run(cfg workerConfig) error {
 
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
 
-	r := &realRunner{driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot}
+	panelStrong, panelFast := panelModels(cfg)
+	if cfg.PanelBaseURL != "" && (panelStrong == "" || panelFast == "") {
+		// A warning rather than a refusal: a passthrough proxy in front of
+		// Anthropic accepts "opus" happily. The panel health probe is the
+		// authority, and it now fails the job with the models named.
+		log.Warn().
+			Str("anthropic_base_url", cfg.PanelBaseURL).
+			Msg("skael-worker: ANTHROPIC_BASE_URL is set but LLM_STRONG_MODEL/LLM_FAST_MODEL are not, " +
+				"so the eval panel will ask that gateway for the default Claude Code aliases opus and haiku. " +
+				"A gateway that namespaces its model identifiers (OpenRouter uses anthropic/claude-opus-4) " +
+				"rejects those and every panel member fails its health probe")
+	}
+
+	r := &realRunner{
+		driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot,
+		panelStrong: panelStrong, panelFast: panelFast, panelBase: cfg.PanelBaseURL,
+	}
 
 	w, err := worker.New(cfg.Config, httpAPI, r)
 	if err != nil {
@@ -386,6 +426,9 @@ type realRunner struct {
 	gateway     llm.Gateway
 	concurrency int
 	runRoot     string
+	panelStrong string
+	panelFast   string
+	panelBase   string
 }
 
 func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
@@ -404,14 +447,17 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Msg("skael-worker: claimed job")
 
 	deps := whetstone.EvalDeps{
-		Store:         st,
-		Driver:        r.driver,
-		Gateway:       r.gateway,
-		Adapters:      agent.Get,
-		Now:           time.Now,
-		Sleep:         time.Sleep,
-		EngineVersion: version,
-		WorkspaceRoot: r.runRoot,
+		Store:            st,
+		Driver:           r.driver,
+		Gateway:          r.gateway,
+		Adapters:         agent.Get,
+		Now:              time.Now,
+		Sleep:            time.Sleep,
+		EngineVersion:    version,
+		WorkspaceRoot:    r.runRoot,
+		PanelStrongModel: r.panelStrong,
+		PanelFastModel:   r.panelFast,
+		PanelBaseURL:     r.panelBase,
 	}
 
 	req := evalRequestFrom(in, r.concurrency)

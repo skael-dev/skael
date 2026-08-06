@@ -97,6 +97,9 @@ Each of these has already caused a real bug or a wasted debugging session.
 - **`ReasonScan` and `ReasonOwnership` are persisted wire names**, in `hold_reasons` and in `version_approvals.reason`. Renaming one makes every in-flight hold permanently unclearable.
 - **Ownership never gates reads and never re-gates a released version.** Deleting a user, removing a rule, or transferring a namespace changes who reviews future changes and nothing else. A skill that worked yesterday keeps working for everyone who synced it.
 - **Unowned does not hold a publish** — only a *matched rule* does. That is what makes an upgrade a no-op for an existing install: protection switches on per namespace when someone writes their first rule. Do not "fix" this into holding every unowned publish; it floods the review queue on upgrade day.
+- **There are two independent model axes, with two different gateways.** The *judge* runs in-process through `llm.Gateway`, is asked for a model by class (never by name), and is pointed somewhere by `LLM_BASE_URL`. The *panel* — the agents that attempt the tasks — runs a CLI inside the sandbox and is pointed somewhere by `ANTHROPIC_BASE_URL`, which the claude-code adapter forwards in. `runner.DefaultPanel()` asks for the bare aliases `opus`/`haiku`, which only Anthropic's own API resolves, so a BYOK gateway that namespaces its ids 404s every panel member. That is why setting `ANTHROPIC_BASE_URL` (and *not* `LLM_BASE_URL`) is what switches the panel's models over to `LLM_STRONG_MODEL`/`LLM_FAST_MODEL`. Wiring the panel to the judge's gateway is the easy mistake; `TestPanelModels` in `cmd/skael-worker` guards it.
+- **The panel's two model overrides apply together or not at all.** Substituting only one slot yields a panel with one working member and one that 404s — which is not an error but a *complete run* that scores, reports `PanelComplete: false`, and therefore can never release the version it was meant to clear, having spent a full tier to find out. Keeping both members on the same footing means a half-configured gateway fails both health probes and is caught by `checkPanelHealth` before an eval row is even created.
+- **`llm.ClassFast` is never requested in production code** — every real judge call asks for `ClassStrong`. `LLM_FAST_MODEL` therefore does nothing for the judge today; its only live effect is selecting the panel's floor member behind a custom gateway. Anyone who set it to something cheap "because it did nothing" will now see it evaluated, and `RobustnessGap` move.
 - **`platform.MigrateUpTo` exists so a migration is tested against a database populated at the prior version.** A test that opens a fully-migrated database and then "upgrades" it passes with the migration deleted — which is exactly what both pre-existing migration tests here did.
 
 ## Server env vars
@@ -152,8 +155,9 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `WORKER_CONCURRENCY` | no | `1` | Must be a positive integer |
 | `LLM_BASE_URL` | no | `https://api.anthropic.com` | Point the judge gateway at an OpenRouter-compatible endpoint |
 | `LLM_AUTH_STYLE` | no | `x-api-key` | Either `x-api-key` (Anthropic) or `bearer`. Any other value fails startup |
-| `LLM_STRONG_MODEL` | no | `claude-opus-5` | Judge model |
-| `LLM_FAST_MODEL` | no | `claude-haiku-4-5-20251001` | Cheaper model for the gateway's fast path |
+| `LLM_STRONG_MODEL` | no | `claude-opus-5` | Judge model. **Also** the eval panel's strong member when `ANTHROPIC_BASE_URL` is set — see below |
+| `LLM_FAST_MODEL` | no | `claude-haiku-4-5-20251001` | Cheaper model for the gateway's fast path. **Also** the eval panel's floor member when `ANTHROPIC_BASE_URL` is set |
+| `ANTHROPIC_BASE_URL` | no | — | The *panel's* gateway, forwarded into every sandbox by the claude-code adapter — not to be confused with `LLM_BASE_URL`, which is the *judge's*. Setting it switches the panel's models over to `LLM_STRONG_MODEL`/`LLM_FAST_MODEL` |
 
 Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, `WORKER_CONCURRENCY`, or `LLM_AUTH_STYLE` fails startup with the offending value named.
 
