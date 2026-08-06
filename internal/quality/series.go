@@ -30,8 +30,8 @@ const unknownJudge = "\x00unknown-judge"
 type SeriesPoint struct {
 	Version        int       `json:"version"`
 	Headline       float64   `json:"headline_score"`
-	HeadlineCILow  float64   `json:"headline_ci_low"`
-	HeadlineCIHigh float64   `json:"headline_ci_high"`
+	HeadlineCILow  float64   `json:"headline_ci_low,omitempty"`
+	HeadlineCIHigh float64   `json:"headline_ci_high,omitempty"`
 	Verified       bool      `json:"verified"`
 	ScoredAt       time.Time `json:"scored_at"`
 }

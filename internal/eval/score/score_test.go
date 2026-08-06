@@ -216,52 +216,6 @@ func TestByClass_AnUnhealthyMatchIsNotFound(t *testing.T) {
 	}
 }
 
-func TestBootstrap_IsDeterministicForASeedAndBracketsTheMean(t *testing.T) {
-	samples := []float64{70, 72, 68, 75, 71, 69, 73, 74}
-	lo1, hi1, err := score.Bootstrap(samples, 1000, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lo2, hi2, err := score.Bootstrap(samples, 1000, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A confidence interval that changes between two readings of the same data
-	// is not a confidence interval anyone can quote.
-	if lo1 != lo2 || hi1 != hi2 {
-		t.Errorf("bootstrap is not deterministic for a fixed seed: [%v,%v] vs [%v,%v]", lo1, hi1, lo2, hi2)
-	}
-	if !(lo1 < 71.5 && hi1 > 71.5) {
-		t.Errorf("interval [%v,%v] does not contain the sample mean", lo1, hi1)
-	}
-	if _, _, err := score.Bootstrap(nil, 1000, 7); err == nil {
-		t.Error("Bootstrap returned an interval for no samples")
-	}
-}
-
-func TestBootstrap_IsInvariantToInputOrder(t *testing.T) {
-	// The same multiset in two different arrival orders — the shape a caller
-	// appending outcomes from concurrent goroutines under a mutex actually
-	// produces — must give the same interval for the same seed. Bootstrap
-	// resamples by index (rng.Intn(n)), so without an internal sort a
-	// different order changes which value each draw picks even though the
-	// seed and the set of values are identical.
-	ascending := []float64{68, 69, 70, 71, 72, 73, 74, 75}
-	descending := []float64{75, 74, 73, 72, 71, 70, 69, 68}
-
-	lo1, hi1, err := score.Bootstrap(ascending, 1000, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lo2, hi2, err := score.Bootstrap(descending, 1000, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lo1 != lo2 || hi1 != hi2 {
-		t.Errorf("bootstrap depends on input order: [%v,%v] (ascending) vs [%v,%v] (descending)", lo1, hi1, lo2, hi2)
-	}
-}
-
 func TestMedian_HandlesBothParities(t *testing.T) {
 	if m, _ := score.Median([]float64{3, 1, 2}); m != 2 {
 		t.Errorf("median = %v, want 2", m)

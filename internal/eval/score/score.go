@@ -154,7 +154,6 @@ type PanelEntry struct {
 	Pillars       Pillars
 	Effectiveness float64
 	Drift         drift.Agg
-	Grade         string
 	// Healthy is false when the member's adapter failed its probe. Such a member
 	// contributes nothing rather than a zero.
 	Healthy bool

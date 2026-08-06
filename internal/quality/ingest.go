@@ -18,7 +18,13 @@ type Record struct {
 	SkillID string
 	Version int
 
-	Headline       float64
+	Headline float64
+	// HeadlineCILow and HeadlineCIHigh are no longer populated: the report's
+	// bootstrapped confidence interval was removed because it described the
+	// mean while the headline is the minimum, and at a two-member panel it
+	// could only ever reproduce [min, max]. The fields and their columns are
+	// kept so historical rows still decode and no migration is needed; new
+	// rows carry zeroes and the API omits them.
 	HeadlineCILow  float64
 	HeadlineCIHigh float64
 
@@ -168,8 +174,6 @@ func FromReport(r *report.Report) (Record, error) {
 
 	return Record{
 		Headline:                 r.Headline,
-		HeadlineCILow:            r.HeadlineCI[0],
-		HeadlineCIHigh:           r.HeadlineCI[1],
 		Pillars:                  pillarsJSON,
 		PanelMatrix:              panelMatrix,
 		RobustnessGap:            r.RobustnessGap,

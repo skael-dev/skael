@@ -229,10 +229,16 @@ func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
 
 // TestWriteAndLoad_RoundTripsKind asserts the Kind field survives Write then
 // Load, not just Split. Kind distinguishes a happy-path task from an edge
-// case or a negative-trigger task, and a later stage weights them
-// differently when scoring — a lost Kind would mis-score silently rather
-// than error, so it needs its own assertion rather than riding along on the
-// Split-round-trip test.
+// case or a negative-trigger task, and a lost Kind would silently mislabel
+// the report rather than error, so it needs its own assertion rather than
+// riding along on the Split-round-trip test.
+//
+// This comment used to claim "a later stage weights them differently when
+// scoring". Nothing does: Kind reaches report.TaskInput and is rendered as a
+// pill, and no scoring path reads it. A negative-trigger task — where the
+// skill is supposed *not* to fire — therefore counts toward Reliability
+// exactly like a happy-path task. That may be worth changing, but the claim
+// was describing an intention rather than the code.
 //
 // The second half proves the assertion actually discriminates: it breaks the
 // on-disk tag Kind is carried by (the meta.yaml "kind:" key) and confirms

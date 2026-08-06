@@ -393,18 +393,50 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		judgeKappa     *float64
 		judgeLabeledBy string
 	)
-	if d.Gateway != nil {
-		if calSet, cerr := score.Calibration(); cerr == nil {
-			if j, jerr := score.NewJudge(score.JudgeOptions{Gateway: d.Gateway, Spec: sp}); jerr == nil {
-				if result, rerr := score.Calibrate(ctx, j, calSet); rerr == nil {
-					k := result.Kappa
-					judgeKappa = &k
-					judgeLabeledBy = result.LabeledBy
-					judgeTrusted = result.JudgeTrusted()
+	// Every way this can fail ends in the same place — Uplift falls back to
+	// pass rates — so each one says why. Nested `if err == nil` with no else
+	// made a missing gateway, a failed judge construction, and a judge that
+	// calibrated below the κ floor indistinguishable in the report: all three
+	// surfaced only as "uplift source: passrate-fallback", which is the fact
+	// but not the reason.
+	//
+	// None of these is fatal. A run without a trusted judge is still a real
+	// measurement on the deterministic pillars, which is why the fallback
+	// exists at all.
+	judgeUnavailable := ""
+	switch {
+	case d.Gateway == nil:
+		judgeUnavailable = "no LLM gateway is configured"
+	default:
+		calSet, cerr := score.Calibration()
+		j, jerr := score.NewJudge(score.JudgeOptions{Gateway: d.Gateway, Spec: sp})
+		switch {
+		case cerr != nil:
+			judgeUnavailable = fmt.Sprintf("the calibration set could not be loaded: %v", cerr)
+		case jerr != nil:
+			judgeUnavailable = fmt.Sprintf("the judge could not be constructed: %v", jerr)
+		default:
+			result, rerr := score.Calibrate(ctx, j, calSet)
+			switch {
+			case rerr != nil:
+				judgeUnavailable = fmt.Sprintf("calibration did not complete: %v", rerr)
+			default:
+				k := result.Kappa
+				judgeKappa = &k
+				judgeLabeledBy = result.LabeledBy
+				judgeTrusted = result.JudgeTrusted()
+				if judgeTrusted {
 					judge = j
+				} else {
+					judgeUnavailable = fmt.Sprintf(
+						"the judge calibrated at κ=%.2f, below the %.2f floor (labels by %s)",
+						result.Kappa, score.KappaFloor, result.LabeledBy)
 				}
 			}
 		}
+	}
+	if judgeUnavailable != "" {
+		ui.Warn("whetstone eval: scoring Uplift from pass rates rather than the judge — %s", judgeUnavailable)
 	}
 
 	// Trigger firing is measured on the primary panel member only, not on
@@ -503,6 +535,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// the report, and it must not say "judge" while even one scored member's
 	// Uplift silently came from the pass-rate fallback.
 	var scoredMembers, judgeMembers int
+	// baselineWipeout records that some member's baseline passed no task at
+	// all — see where it is set for why that makes Uplift degenerate.
+	var baselineWipeout bool
 	for _, m := range panel {
 		if !scheduled[m] {
 			continue
@@ -596,6 +631,19 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			metaPartial = metaPartial || blPartial
 			if !skillPartial && blPartial {
 				metaPartialReason = blPartialReason
+			}
+
+			// A baseline that passed nothing anywhere makes Uplift carry no
+			// information of its own. UpliftFromPassRates is
+			// 0.5+(skill-baseline)/2, so at baseline 0 it collapses to
+			// 0.5+Reliability/2 — a rescaling of a pillar Effectiveness
+			// already weighs, now multiplied in a second time under a second
+			// exponent. Worth saying out loud, because it is also the shape a
+			// broken baseline harness produces: nothing distinguishes "these
+			// tasks are impossible without the skill" from "the baseline never
+			// really ran".
+			if baselinePassRate == 0 && len(baselineTasks) > 0 {
+				baselineWipeout = true
 			}
 
 			upliftVal = score.UpliftFromPassRates(reliability, baselinePassRate)
@@ -707,7 +755,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy, JudgeModel: judgeModel,
 		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
-		StartedAt: startedAt, FinishedAt: now(),
+		BaselineWipeout: baselineWipeout,
+		StartedAt:       startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err

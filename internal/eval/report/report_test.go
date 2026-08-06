@@ -28,7 +28,6 @@ func demoReport() *report.Report {
 		},
 		PanelComplete:  true,
 		Headline:       61.4,
-		HeadlineCI:     [2]float64{57.1, 65.9},
 		UpliftSource:   score.UpliftJudge,
 		JudgeKappa:     &k,
 		JudgeLabeledBy: "author",

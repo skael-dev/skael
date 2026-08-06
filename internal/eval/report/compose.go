@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,13 +10,21 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// bootstrapIters and bootstrapSeed fix Compose's confidence interval so the
-// same inputs always produce the same report — see score.Bootstrap's own
-// doc for why the seed is explicit rather than a shared global generator.
-const (
-	bootstrapIters = 2000
-	bootstrapSeed  = 1
-)
+// The headline used to carry a bootstrapped 95% confidence interval. It was
+// removed rather than repaired, for two independent reasons.
+//
+// It described the wrong statistic: the interval was bootstrapped over the
+// *mean* of member effectiveness while the headline is the *minimum*, so the
+// published number did not sit inside — or even at the centre of — its own
+// stated interval.
+//
+// And at the panel sizes this product actually runs it could not carry
+// information at all. With two members, resampling with replacement yields
+// means of only {min, midpoint, max} at probabilities {0.25, 0.5, 0.25}, so
+// the 2.5th and 97.5th percentiles land in the min and max blocks every time:
+// the "95% CI" was identically [min, max] of the two member scores, for any
+// input whatsoever. A real report published [0.0, 69.6] against a headline of
+// 0.0 that way.
 
 // MemberInput is one panel member's raw measurements, from which Compose
 // derives Effectiveness and drift aggregation.
@@ -98,10 +107,18 @@ type ComposeInput struct {
 	// rather than counted as a miss.
 	TriggerUnknown int
 	Unevaluable    int
-	// UnevaluableDetail is passed through to the report as given: Compose
-	// does not aggregate it per-run or de-duplicate it. The caller owns
-	// assembling this list from whatever per-run observations it holds.
+	// UnevaluableDetail is the list of reasons checks could not be performed.
+	// Compose de-duplicates it, collapsing repeats into "… (×N)" and capping
+	// the result — see dedupeDetail.
+	//
+	// It used to be passed through verbatim on the stated grounds that the
+	// caller owned assembling it. No caller ever did, and one real report
+	// rendered 326 list items drawn from about a dozen distinct messages,
+	// which is not a list anyone reads. De-duplicating here rather than at the
+	// call site means every producer gets it.
 	UnevaluableDetail []string
+	// BaselineWipeout is passed through to Report.BaselineWipeout — see there.
+	BaselineWipeout bool
 
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -124,6 +141,10 @@ func Compose(in ComposeInput) (*Report, error) {
 	var (
 		matrix  score.Matrix
 		members []MemberReport
+		// Set when any member's adherence could not be measured, so the report
+		// can say so once at the top rather than leaving a reader to notice a
+		// missing column.
+		driftUnmeasurable bool
 	)
 	for _, mi := range in.Members {
 		// Validated regardless of health: Effectiveness's own validation is
@@ -160,13 +181,21 @@ func Compose(in ComposeInput) (*Report, error) {
 
 			if len(mi.Drift) > 0 {
 				agg, err := drift.Aggregate(mi.Drift)
-				if err != nil {
+				switch {
+				case errors.Is(err, drift.ErrUnmeasurable):
+					// Not a defect: too many contract checks could not be
+					// performed for this member's adherence to mean anything.
+					// Leave Drift absent — a zero would read as "followed the
+					// contract not at all", which is a claim nothing here
+					// measured — and let the report say so instead.
+					mr.DriftUnmeasurable = true
+					driftUnmeasurable = true
+				case err != nil:
 					return nil, fmt.Errorf("report.Compose: member %s/%s: %w", mi.Member.Agent, mi.Member.Model, err)
+				default:
+					entry.Drift = agg
+					mr.Drift = agg
 				}
-				entry.Drift = agg
-				entry.Grade = drift.Grade(agg.Mean, agg.Worst)
-				mr.Drift = agg
-				mr.DriftGrade = entry.Grade
 			}
 		}
 
@@ -175,17 +204,6 @@ func Compose(in ComposeInput) (*Report, error) {
 	}
 
 	headline, err := matrix.Headline()
-	if err != nil {
-		return nil, fmt.Errorf("report.Compose: %w", err)
-	}
-
-	var samples []float64
-	for _, e := range matrix.Entries {
-		if e.Healthy {
-			samples = append(samples, e.Effectiveness)
-		}
-	}
-	lo, hi, err := score.Bootstrap(samples, bootstrapIters, bootstrapSeed)
 	if err != nil {
 		return nil, fmt.Errorf("report.Compose: %w", err)
 	}
@@ -225,7 +243,8 @@ func Compose(in ComposeInput) (*Report, error) {
 		ModelPanel:        in.ModelPanel,
 		PanelComplete:     in.PanelComplete,
 		Headline:          headline,
-		HeadlineCI:        [2]float64{lo, hi},
+		DriftUnmeasurable: driftUnmeasurable,
+		BaselineWipeout:   in.BaselineWipeout,
 		UpliftSource:      upliftSource,
 		JudgeKappa:        in.JudgeKappa,
 		JudgeLabeledBy:    in.JudgeLabeledBy,
@@ -238,7 +257,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		TriggerSource:     in.TriggerSource,
 		TriggerUnknown:    in.TriggerUnknown,
 		Unevaluable:       in.Unevaluable,
-		UnevaluableDetail: in.UnevaluableDetail,
+		UnevaluableDetail: dedupeDetail(in.UnevaluableDetail, maxUnevaluableDetail),
 		StartedAt:         in.StartedAt,
 		FinishedAt:        in.FinishedAt,
 		Iterations:        in.Iterations,

@@ -34,7 +34,16 @@ type Event struct {
 	Type       EventType `json:"type"`
 	Name       string    `json:"name,omitempty"`
 	ArgsDigest string    `json:"args_digest,omitempty"`
-	Paths      []string  `json:"paths,omitempty"`
+	// Paths are the files this event touched. A parser records whatever the
+	// agent reported, which is typically an absolute path inside the sandbox
+	// container; the runner then calls Relativize so that everything reaching
+	// the drift engine is workspace-relative, because contract.MatchPath
+	// compares relative patterns and rejects an absolute candidate outright.
+	//
+	// A path left absolute here is therefore either outside the workspace
+	// entirely — which is a real finding and stays visible — or evidence that
+	// a code path skipped that relativisation.
+	Paths []string `json:"paths,omitempty"`
 	// ExitCode is a pointer so that a real exit code of 0 is distinguishable
 	// from "no exit code was reported". With a plain int and omitempty, every
 	// successful command would serialize as if it had never run.

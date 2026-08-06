@@ -54,6 +54,12 @@ type Observation struct {
 	// that never gets investigated.
 	Unevaluable       int
 	UnevaluableDetail []string
+	// Attempted counts every (rule × event) check Observe tried, whether it
+	// succeeded or was unevaluable. It exists to give Unevaluable a
+	// denominator: a handful of unevaluable checks among thousands is noise,
+	// while "every check failed" means the run measured nothing at all, and
+	// the raw count cannot tell those apart.
+	Attempted int
 }
 
 // Observe matches events against c.
@@ -92,6 +98,7 @@ func Observe(c *contract.Contract, events []trajectory.Event) (*Observation, err
 			if err != nil {
 				return nil, err
 			}
+			o.Attempted++
 			if unevaluable {
 				o.Unevaluable++
 				o.UnevaluableDetail = append(o.UnevaluableDetail, detail)
@@ -124,6 +131,7 @@ func Observe(c *contract.Contract, events []trajectory.Event) (*Observation, err
 			if err != nil {
 				return nil, err
 			}
+			o.Attempted++
 			if unevaluable {
 				o.Unevaluable++
 				o.UnevaluableDetail = append(o.UnevaluableDetail, detail)
