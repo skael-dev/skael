@@ -206,6 +206,12 @@ describe("QualityReport", () => {
     mockQuality({
       version: 3,
       headline_score: 74.2,
+      // Still sent by historical rows; the UI no longer renders either. The
+      // confidence interval bootstrapped the mean of member effectiveness
+      // while the headline is the minimum, and at the shipped two-member
+      // panel it could only ever reproduce [min, max]. The letter grade was
+      // the drift grade shown beside effectiveness — a second composite on a
+      // second scale. Both are asserted absent below.
       headline_ci_low: 70,
       headline_ci_high: 78,
       verified: true,
@@ -218,9 +224,11 @@ describe("QualityReport", () => {
     // Headline renders rounded, matching the badge (Math.round), not the
     // raw geometric-mean float.
     expect(await screen.findByText("74")).toBeInTheDocument();
-    expect(screen.getByText(/70.*78/)).toBeInTheDocument();
     expect(screen.getByText(/6\.5/)).toBeInTheDocument();
-    expect(screen.getByText("B")).toBeInTheDocument();
+    // Effectiveness is the single published score: no interval beside it and
+    // no letter grade, even when a historical record still carries both.
+    expect(screen.queryByText(/70.*78/)).not.toBeInTheDocument();
+    expect(screen.queryByText("B")).not.toBeInTheDocument();
   });
 
   it("says a null robustness gap was not measured, never zero", async () => {

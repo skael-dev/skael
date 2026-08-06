@@ -5,7 +5,7 @@ import { QualityTrend } from "./quality-trend";
 
 // The engine keeps a measurement that was never defined for a run distinct
 // from a measured zero, using a nullable field, in several places
-// (robustness_gap, drift_grade, judge evidence/kappa). Collapsing that
+// (robustness_gap, judge evidence/kappa). Collapsing that
 // distinction here would say "we checked and it was fine" about something
 // we never checked at all.
 function measurement(
@@ -96,7 +96,6 @@ type PanelMatrixEntry = {
   pillars?: Record<string, number>;
   effectiveness?: number;
   drift?: unknown;
-  drift_grade?: string;
   healthy?: boolean;
   detail?: string;
 };
@@ -133,7 +132,6 @@ function PanelMatrixTable({ data }: { data: unknown }) {
             <tr className="border-b border-border text-text-tertiary text-left">
               <th className="px-3 py-1.5 font-normal">Member</th>
               <th className="px-3 py-1.5 font-normal">Effectiveness</th>
-              <th className="px-3 py-1.5 font-normal">Drift grade</th>
               <th className="px-3 py-1.5 font-normal">Status</th>
             </tr>
           </thead>
@@ -151,9 +149,6 @@ function PanelMatrixTable({ data }: { data: unknown }) {
                     {unhealthy
                       ? "—"
                       : measurement(entry.effectiveness, formatDriftScale)}
-                  </td>
-                  <td className="px-3 py-1.5 text-text-primary">
-                    {entry.drift_grade ?? "not measured"}
                   </td>
                   <td className="px-3 py-1.5 text-text-secondary">
                     {unhealthy ? (
@@ -384,11 +379,12 @@ export function QualityReport({
           <span className="text-3xl font-mono text-text-primary">
             {Math.round(summary.headline_score)}
           </span>
-          {summary.headline_ci_low != null && summary.headline_ci_high != null && (
-            <span className="text-xs text-text-secondary">
-              CI {Math.round(summary.headline_ci_low)}–{Math.round(summary.headline_ci_high)}
-            </span>
-          )}
+          {/* The headline's confidence interval was removed: it bootstrapped
+              the mean of member effectiveness while the headline is the
+              minimum, and at the shipped two-member panel it could only ever
+              reproduce [min, max]. Historical rows still carry the stored
+              values, but rendering them for old versions and nothing for new
+              ones would read as a measurement that had gone missing. */}
         </div>
         <div className="mt-2">
           <EvalStatus skillName={skillName} quality={summary} latestVersion={latestVersion} />
@@ -408,10 +404,7 @@ export function QualityReport({
       </div>
 
       <div className="mb-6">
-        <h3 className="text-sm font-medium text-text-primary mb-2">Drift</h3>
-        <div className="text-sm text-text-secondary mb-2">
-          Grade: <span>{summary.drift_grade ?? "not measured"}</span>
-        </div>
+        <h3 className="text-sm font-medium text-text-primary mb-2">Contract adherence</h3>
         <DriftBreakdownTable data={summary.drift_breakdown} />
 
         {violations.length > 0 && (
