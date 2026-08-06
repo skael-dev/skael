@@ -215,6 +215,47 @@ describe("ReviewQueue", () => {
     expect(screen.getByText(/only an owner of this skill, or an instance admin/i)).toBeInTheDocument();
   });
 
+  // Regression: the shared reason input must not be gated by the coarse
+  // role-only `canDecide` prop alone. A member-role user who is listed in
+  // held.owners can legitimately clear the `ownership` reason — they must
+  // be able to type a reason and submit it, not have the approve button
+  // enabled while the input beside it stays locked.
+  it("lets a member-role namespace owner type a reason and approve the ownership hold", async () => {
+    mockUser({ role: "member" });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["ownership"],
+      outstanding: ["ownership"],
+      owners: [{ id: "user-001", name: "Admin User", email: "admin@test.com" }],
+      unowned: false,
+    } as Partial<HeldVersion>)]);
+    let capturedBody: unknown;
+    server.use(
+      http.post("/api/skills/:name/versions/:version/review", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ skill_name: "deploy-helper", version: 4 });
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(withQuery(<ReviewQueue />));
+
+    const approve = await screen.findByRole("button", { name: /approve/i });
+    expect(approve).toBeEnabled();
+
+    const reasonInput = screen.getByPlaceholderText(/reason \(recorded on the version\)/i);
+    expect(reasonInput).toBeEnabled();
+
+    await user.type(reasonInput, "I own this namespace, approving.");
+    await user.click(approve);
+
+    expect(capturedBody).toEqual({
+      action: "approve",
+      reason: "I own this namespace, approving.",
+      hold_reason: "ownership",
+    });
+  });
+
   it("renders the SKILL.md diff", async () => {
     mockReviewQueue([oneHeld({ clears: "a verified evaluation" })]);
     server.use(

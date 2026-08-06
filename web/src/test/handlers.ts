@@ -161,10 +161,11 @@ export const handlers = [
     return HttpResponse.json(mockScanReport);
   }),
 
-  // Ownership (Task 11) and version diff (Task 13) are both raw Chi routes,
-  // not in the generated SDK. Default to the "nothing to report" shape so
-  // tests that don't care about either don't have to mock them — matches
-  // the pattern already set for /quality/series above.
+  // Owners (Task 11, huma-registered and in the generated SDK) and version
+  // diff (Task 13, a raw Chi route not in the generated SDK) both default
+  // to the "nothing to report" shape so tests that don't care about either
+  // don't have to mock them — matches the pattern already set for
+  // /quality/series above.
   http.get("/api/skills/:name/owners", () => {
     return HttpResponse.json({ owners: [], unowned: true });
   }),

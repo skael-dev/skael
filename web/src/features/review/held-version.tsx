@@ -258,7 +258,18 @@ export function HeldVersion({
   const outstanding = held.outstanding ?? [];
   const perReason = holdReasons.length > 0;
 
-  const disabled = !canDecide || decide.isPending;
+  // The shared reason input must not be gated by the coarse `canDecide`
+  // prop (role-only: owner/admin) alone — a member-role user who is a
+  // listed namespace owner can legitimately clear the `ownership` reason
+  // (per canDecideReason below) but would otherwise be locked out of
+  // typing a reason for the very approval they're about to submit. In the
+  // per-reason case the input is enabled whenever ANY outstanding reason
+  // is decidable by this actor; the legacy single-control case keeps the
+  // original `canDecide` prop unchanged.
+  const anyOutstandingDecidable = perReason
+    ? outstanding.some((kind) => canDecideReason(kind, user, held).allowed)
+    : canDecide;
+  const disabled = !anyOutstandingDecidable || decide.isPending;
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
