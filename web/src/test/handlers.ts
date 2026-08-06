@@ -161,6 +161,18 @@ export const handlers = [
     return HttpResponse.json(mockScanReport);
   }),
 
+  // Ownership (Task 11) and version diff (Task 13) are both raw Chi routes,
+  // not in the generated SDK. Default to the "nothing to report" shape so
+  // tests that don't care about either don't have to mock them — matches
+  // the pattern already set for /quality/series above.
+  http.get("/api/skills/:name/owners", () => {
+    return HttpResponse.json({ owners: [], unowned: true });
+  }),
+
+  http.get("/api/skills/:name/versions/:version/diff", () => {
+    return HttpResponse.json({ against: 0, skill_md: "", files: [] });
+  }),
+
   // Default: no quality history. Tests exercising the trend override this
   // per-test with server.use(...).
   http.get("/api/skills/:name/quality/series", () => {

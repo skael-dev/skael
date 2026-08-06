@@ -26,7 +26,10 @@ function mockReviewQueue(held: Partial<HeldVersion>[]) {
   );
 }
 
-function oneHeld(overrides: Partial<{ clears: string }>): Partial<HeldVersion> {
+function oneHeld(
+  overrides: Partial<{ clears: string }> & Partial<HeldVersion>,
+): Partial<HeldVersion> {
+  const { clears, ...rest } = overrides;
   return {
     skill_name: "deploy-helper",
     version: 4,
@@ -42,7 +45,7 @@ function oneHeld(overrides: Partial<{ clears: string }>): Partial<HeldVersion> {
           file: "SKILL.md",
           line: 12,
           message: "pipe to shell",
-          clears: overrides.clears ?? "a verified evaluation, or an owner or admin approval",
+          clears: clears ?? "a verified evaluation, or an owner or admin approval",
         },
       ],
     },
@@ -61,6 +64,7 @@ function oneHeld(overrides: Partial<{ clears: string }>): Partial<HeldVersion> {
       ],
       summary: { critical: 0, high: 1, medium: 0, info: 0 },
     },
+    ...rest,
   };
 }
 
@@ -167,5 +171,79 @@ describe("ReviewQueue", () => {
     render(withQuery(<ReviewQueue />));
     expect(await screen.findByText("deploy-helper")).toBeInTheDocument();
     expect(screen.getByText(/no decision recorded/i)).toBeInTheDocument();
+  });
+
+  // ── Per-reason chips and controls (Task 19) ────────────────────────
+
+  it("shows one chip per outstanding reason", async () => {
+    mockReviewQueue([oneHeld({
+      clears: "a verified evaluation, or an owner or admin approval",
+      hold_reasons: ["scan", "ownership"],
+      outstanding: ["scan", "ownership"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText("deploy-helper")).toBeInTheDocument();
+    expect(screen.getAllByText(/— outstanding/i)).toHaveLength(2);
+  });
+
+  // A partly-cleared hold must NEVER read as released — this is the exact
+  // case the whole per-reason review model exists to render honestly.
+  it("shows a cleared reason as cleared while the version stays held", async () => {
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["scan", "ownership"],
+      outstanding: ["ownership"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText(/security finding/i)).toBeInTheDocument();
+    expect(screen.getByText(/security finding.*cleared/i)).toBeInTheDocument();
+    expect(screen.queryByText(/released/i)).not.toBeInTheDocument();
+  });
+
+  it("disables the approve control for a reason you cannot clear, with the reason", async () => {
+    mockUser({ role: "member" });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["ownership"],
+      outstanding: ["ownership"],
+      owners: [{ id: "user-someone-else", name: "Someone Else", email: "else@test.com" }],
+      unowned: false,
+    } as Partial<HeldVersion>)]);
+    render(withQuery(<ReviewQueue />));
+    const approve = await screen.findByRole("button", { name: /approve/i });
+    expect(approve).toBeDisabled();
+    expect(screen.getByText(/only an owner of this skill, or an instance admin/i)).toBeInTheDocument();
+  });
+
+  it("renders the SKILL.md diff", async () => {
+    mockReviewQueue([oneHeld({ clears: "a verified evaluation" })]);
+    server.use(
+      http.get("/api/skills/:name/versions/:version/diff", () => {
+        return HttpResponse.json({
+          against: 3,
+          skill_md: "--- v3/SKILL.md\n+++ v4/SKILL.md\n@@ -1,3 +1,3 @@\n-line two\n+line TWO\n context",
+          files: [],
+        });
+      }),
+    );
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText(/-line two/)).toBeInTheDocument();
+    expect(screen.getByText(/\+line TWO/)).toBeInTheDocument();
+  });
+
+  it("flags a non-SKILL.md file addition prominently", async () => {
+    mockReviewQueue([oneHeld({ clears: "a verified evaluation" })]);
+    server.use(
+      http.get("/api/skills/:name/versions/:version/diff", () => {
+        return HttpResponse.json({
+          against: 3,
+          skill_md: "",
+          files: [{ path: "scripts/setup.sh", status: "added" }],
+        });
+      }),
+    );
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText("scripts/setup.sh")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /new file outside skill\.md/i })).toBeInTheDocument();
   });
 });

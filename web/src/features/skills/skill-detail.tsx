@@ -16,6 +16,7 @@ import type { ScanReport } from "@/features/security/scan-findings";
 import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityReport } from "@/features/quality/quality-report";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
+import { OwnersCard } from "@/features/skills/owners-card";
 import { cn } from "@/lib/utils";
 
 // ── Tag colors (mirrors skill-card) ──────────────────────────────
@@ -678,6 +679,8 @@ function TabMetadata({ skill }: { skill: Skill }) {
           </div>
         </div>
       </div>
+
+      <OwnersCard skillName={skill.name} />
     </div>
   );
 }
