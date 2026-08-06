@@ -132,7 +132,7 @@ Ownership never gates reads, and it never re-gates a version that was already re
 
 `skael` (CLI), `skael-server`, `whetstone` (evaluation authoring — see [whetstone](/docs/whetstone)), and `skael-worker`. Each has its own archive on the [releases page](https://github.com/skael-dev/skael/releases/latest), named `<binary>_<version>_<os>_<arch>.tar.gz`.
 
-Homebrew still installs `skael` only. `whetstone` and `skael-worker` are binary downloads or `go install`; the server is Docker or a binary download, as before.
+Homebrew installs `skael` and `whetstone`, each from its own formula. `skael-worker` is a binary download; the server is Docker or a binary download, as before.
 
 ## Procedure
 
@@ -169,16 +169,16 @@ curl -fsSL https://github.com/skael-dev/skael/releases/download/v${VERSION}/skae
 sudo mv skael-server /usr/local/bin/skael-server
 ```
 
-:::note[Homebrew ships the CLI only]
-`brew install skael-dev/skael/skael` installs the `skael` CLI binary and nothing else. There is no Homebrew formula for `skael-server`, `whetstone`, or `skael-worker` — all three are binary downloads from GitHub releases (or `go install`). Use Docker or a binary download to upgrade the server.
+:::note[Homebrew ships the two CLIs only]
+`brew install skael-dev/skael/skael` installs the `skael` CLI and nothing else; `whetstone` has its own formula. There is no formula for `skael-server` or `skael-worker` — both are binary downloads from GitHub releases. Use Docker or a binary download to upgrade the server.
 :::
 
 **From source** — rebuild and replace:
 
 ```bash
 just build-server
-# or with go directly — installs the binary as `server` (release artifacts name it skael-server)
-go install github.com/skael-dev/skael/cmd/server@latest
+# or with go directly, from a clone
+go build -o skael-server ./cmd/server
 ```
 
 ### 4. Start and verify
@@ -224,8 +224,11 @@ curl -fsSL https://raw.githubusercontent.com/skael-dev/skael/main/install.sh | s
 **From source:**
 
 ```bash
-go install github.com/skael-dev/skael/cmd/skael@latest
+git clone https://github.com/skael-dev/skael.git
+cd skael && go build -o skael ./cmd/skael
 ```
+
+`go install <pkg>@latest` does not work for any binary in this repo: `go.mod` carries a `replace` directive, and `go install` refuses a module that has one. Building from a clone is unaffected.
 
 After upgrading the CLI, verify it can reach the server:
 

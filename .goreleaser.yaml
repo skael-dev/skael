@@ -178,6 +178,9 @@ release:
   footer: |
     **Full changelog**: https://github.com/skael-dev/skael/compare/{{ .PreviousTag }}...{{ .Tag }}
 
+# One formula per binary rather than one archive carrying several: install.sh
+# derives its download name from a single BINARY, and the docs describe each
+# archive as holding one binary, so bundling would ripple through both.
 brews:
   - name: skael
     ids:
@@ -193,3 +196,18 @@ brews:
       bin.install "skael"
     test: |
       system "#{bin}/skael", "version"
+
+  - name: whetstone
+    ids:
+      - whetstone
+    repository:
+      owner: skael-dev
+      name: homebrew-skael
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://skael.dev"
+    description: "Authoring and evaluation toolkit for AI agent skills"
+    license: "Apache-2.0"
+    install: |
+      bin.install "whetstone"
+    test: |
+      system "#{bin}/whetstone", "version"

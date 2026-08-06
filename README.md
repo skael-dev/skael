@@ -47,8 +47,11 @@ Platform is at `http://localhost:8080`. This brings up the server and database o
 brew install skael-dev/skael/skael
 
 # From source
-go install github.com/skael-dev/skael/cmd/skael@latest
+git clone https://github.com/skael-dev/skael.git
+cd skael && go build -o skael ./cmd/skael
 ```
+
+`go install github.com/skael-dev/skael/cmd/skael@latest` does not work: `go.mod` has a `replace` directive, and `go install <pkg>@version` refuses any module that carries one. Building from a clone is unaffected.
 
 ### Connect to your registry
 
@@ -152,7 +155,7 @@ Agents don't all measure the same thing, so events record how they were observed
 
 `whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval`, `repair`, and `suite check` need a Docker daemon and an LLM key.
 
-It isn't in the Homebrew formula: `brew install skael-dev/skael/skael` and the curl installer both give you `skael` only. Get `whetstone` and `skael-worker` from the release archives, `go install`, or `just build`.
+It has its own formula — `brew install skael-dev/skael/whetstone`. The `skael` formula and the curl installer give you `skael` only. `skael-worker` is a release-archive download or `just build`.
 
 ```bash
 whetstone init                    # create a .whetstone workspace in the current directory

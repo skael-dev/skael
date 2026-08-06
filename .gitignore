@@ -16,3 +16,8 @@ web/src/api/
 web/openapi.json
 web/node_modules/
 web/*.tsbuildinfo
+
+# GoReleaser output. Only CI publishes, but `goreleaser release --snapshot`
+# is the one way to check a formula without cutting a release, and it drops
+# every binary for every platform in here.
+dist/

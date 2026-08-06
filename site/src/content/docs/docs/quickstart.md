@@ -33,8 +33,11 @@ curl -fsSL skael.dev/install | sh
 brew install skael-dev/skael/skael
 
 # From source
-go install github.com/skael-dev/skael/cmd/skael@latest
+git clone https://github.com/skael-dev/skael.git
+cd skael && go build -o skael ./cmd/skael
 ```
+
+`go install github.com/skael-dev/skael/cmd/skael@latest` does not work — `go.mod` has a `replace` directive, and `go install <pkg>@version` refuses any module carrying one. Building from a clone is unaffected.
 
 ## 3. Connect
 

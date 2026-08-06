@@ -23,14 +23,17 @@ function useDebouncedValue<T>(value: T, ms: number): T {
 }
 
 // ── Onboarding empty state ────────────────────────────────────
+// "source" builds from a clone rather than `go install <pkg>@latest`, which
+// cannot work: go.mod carries a replace directive, and go install refuses a
+// module that has one.
 const INSTALL_COMMANDS: Record<string, string> = {
   curl: "curl -fsSL skael.dev/install | sh",
-  brew: "brew install skael",
-  go: "go install github.com/skael-dev/skael/cmd/skael@latest",
+  brew: "brew install skael-dev/skael/skael",
+  source: "git clone https://github.com/skael-dev/skael.git && cd skael && go build -o skael ./cmd/skael",
 };
 
 function Onboarding() {
-  const [installer, setInstaller] = useState<"curl" | "brew" | "go">("curl");
+  const [installer, setInstaller] = useState<"curl" | "brew" | "source">("curl");
   const [copied, setCopied] = useState(false);
 
   const cmd = INSTALL_COMMANDS[installer]!;
@@ -84,7 +87,7 @@ function Onboarding() {
             <div className="flex-1" />
             {/* Tab switcher */}
             <div className="flex border border-border rounded-[5px] overflow-hidden">
-              {(["curl", "brew", "go"] as const).map((k, i) => (
+              {(["curl", "brew", "source"] as const).map((k, i) => (
                 <button
                   key={k}
                   onClick={() => setInstaller(k)}
