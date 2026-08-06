@@ -129,6 +129,75 @@ func TestFirstPublishClaimsOwnership(t *testing.T) {
 	}
 }
 
+// O6 must only fire on a skill's first version. Gating on owner.Unowned alone
+// (without also checking this is version 1) means the first person to
+// publish an UPDATE to a pre-existing unowned skill — the exact situation on
+// an upgraded instance with 200 pre-existing skills and no ownership rules
+// yet — would silently become its sole owner, and the next contributor's
+// publish would be held for review. That breaks the "unowned does not hold a
+// publish" promise this feature depends on for upgrades being a no-op.
+func TestSecondPublishToUnownedSkillDoesNotClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	owners := &fakeOwners{state: gate.OwnerState{Evaluated: true, Unowned: true}}
+
+	pool := testutil.SetupTestDB(t)
+	store := skill.NewStore(pool)
+
+	storage, err := platform.NewLocalStorage(t.TempDir())
+	require.NoError(t, err)
+
+	member := &auth.User{ID: "00000000-0000-0000-0000-000000000003", Email: "carol@acme.com", Role: auth.RoleMember}
+
+	r := chi.NewMux()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			req = req.WithContext(auth.ContextWithUser(req.Context(), member))
+			next.ServeHTTP(w, req)
+		})
+	})
+	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
+	skill.RegisterRoutes(api, r, store, storage, skill.RouteOptions{Ownership: owners})
+
+	skillName := "legacy:preexisting"
+	createSkill(t, r, skillName, "a clean fixture")
+
+	publishVersion := func(body string) publishGateBody {
+		dir := t.TempDir()
+		skillMD := strings.Join([]string{
+			"---",
+			"name: " + skillName,
+			"description: a clean fixture",
+			"---",
+			"# " + skillName,
+			"",
+			body,
+		}, "\n")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skillMD), 0644))
+		archiveBytes, _, _, err := skill.Pack(dir)
+		require.NoError(t, err)
+
+		rr := postArchive(t, r, "/api/skills/"+skillName+"/versions", archiveBytes)
+		require.Equal(t, 201, rr.Code, "publish %q: %s", skillName, rr.Body.String())
+
+		var out publishGateBody
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+		return out
+	}
+
+	v1 := publishVersion("This is version one.")
+	require.Equal(t, 1, v1.Version.Version)
+	require.Len(t, owners.claimed, 1, "the FIRST version of a pre-existing unowned skill must still claim ownership")
+	require.Equal(t, skillName, owners.claimed[0])
+
+	v2 := publishVersion("This is version two.")
+	require.Equal(t, 2, v2.Version.Version)
+	require.Len(t, owners.claimed, 1,
+		"a SECOND publish to an already-unowned skill must NOT claim ownership — "+
+			"that would make an upgrade with pre-existing unowned skills silently mint an owner on the next update")
+}
+
 // O6's exception: if a rule already covers the name, the rule wins and the
 // publisher must NOT be claimed as owner — otherwise anyone publishes
 // payments:anything to get inside the payments namespace.

@@ -619,8 +619,13 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// O6. A new name claims its publisher — unless a rule already covers it,
 		// in which case the rule wins and this version is held like any other
 		// proposal. Without the exception, publishing payments:anything is a way
-		// to become an owner inside someone else's namespace.
-		if opts.Ownership != nil && owner.Unowned {
+		// to become an owner inside someone else's namespace. This must only
+		// fire on the skill's first version: gating on owner.Unowned alone would
+		// mean the first person to publish an UPDATE to any pre-existing unowned
+		// skill (e.g. on an upgraded instance with no ownership rules yet)
+		// silently becomes its sole owner, breaking the "upgrade is a no-op"
+		// promise. ver.Version == 1 mirrors import's newSkill check.
+		if opts.Ownership != nil && owner.Unowned && ver.Version == 1 {
 			if err := opts.Ownership.ClaimOnFirstPublish(ctx, input.Name, auth.UserFromContext(ctx)); err != nil {
 				// The version is already durable and served. Failing the publish
 				// here would be a worse outcome than an unowned skill, which is
