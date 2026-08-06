@@ -25,7 +25,20 @@ Every publish (and every import) runs a security scan for hardcoded secrets, pro
 
 - Findings that mean a credential or data is **leaving the machine** — a hardcoded secret, a reverse shell — are unappealable. The publish is rejected outright. No version is created, and nothing clears it: not an evaluation, not an admin.
 - Everything else that blocks (dangerous shell execution, prompt injection, other heuristic matches) doesn't reject the publish. It **holds** the version instead: the version is created with a real version number and a stored archive, but it isn't served — it's left out of the sync manifest, can't be installed or downloaded, and the skill's "latest version" pointer doesn't move to it.
-- A held version clears in one of two ways: a [quality score](/docs/quality) that comes back verified and at or above the configured floor, or an owner/admin running `skael review <name> <version> --approve --reason "..."`.
+A held version carries a **set** of hold reasons, and every one of them has to clear before it is served. There are two:
+
+- **`scan`** — an appealable security finding. Cleared by a [quality score](/docs/quality) that comes back verified, with a complete panel and no critical contract violations, at or above `QUALITY_FLOOR`; or by an instance admin running `skael review <name> <version> --approve --reason "..." --reason-kind scan`.
+- **`ownership`** — the publisher is not an owner of the name. Cleared by a [skill owner](/docs/ownership) or an instance admin.
+
+Neither can be used to launder the other. A quality score never clears `ownership`; a skill owner never clears `scan`. Rejecting any single reason rejects the whole version.
+
+## Skill ownership
+
+A set of pattern rules deciding who may publish to a skill name — an exact name, a `payments:*` namespace, or the bare `*`. One rule wins: exact beats longest prefix beats unowned, and matches replace rather than stack. A publish by someone outside the matched rule is held until an owner approves it.
+
+A name nobody has claimed doesn't hold anything, so an upgrade changes nothing until you write your first rule. Ownership never gates reads and never re-gates a version that already shipped.
+
+These are not the same as instance roles (`owner`, `admin`, `member`) — see [Skill ownership](/docs/ownership) and [Instance roles](/docs/production#instance-roles).
 
 ## Quality score
 
@@ -34,6 +47,8 @@ A number, 0-100, that says whether a skill actually works — not just whether i
 ## Publish gate
 
 The decision every publish and import goes through after scanning: allow it, allow it with a warning, hold it for review, or block it outright. It's what turns a scan finding into an outcome — see [Scanning](#scanning) above for what each outcome means in practice.
+
+A hold is a set of reasons rather than a single state, and [ownership](#skill-ownership) contributes one independently of scanning. A version can be held for both at once, and each is cleared separately by a different authority.
 
 ## Activations
 

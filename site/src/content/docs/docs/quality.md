@@ -95,7 +95,7 @@ The judge is also a calibrated instrument: its agreement with human labels (κ) 
 
 ## A skill needs a suite first
 
-Before a skill can be scored, it needs a registered evaluation suite — the set of tasks the panel will attempt. Generate one with [whetstone](/docs/cli), then register it:
+Before a skill can be scored, it needs a registered evaluation suite — the set of tasks the panel will attempt. Generate one with [whetstone](/docs/whetstone), then register it:
 
 ```bash
 whetstone suite gen <skill>
@@ -131,6 +131,14 @@ In the example above, four versions were scored the same way, so they form one l
 
 ## How this feeds back into publishing
 
-A version held for review by the publish gate clears automatically once it has a **verified** score at or above `QUALITY_FLOOR` (an operator-configured minimum, default `0` — any verified score with a complete panel and no contract violations clears it). Short of that, it takes an owner or admin running `skael review <name> <version> --approve --reason "..."`.
+A version held for review by the publish gate clears automatically once it has a **verified** score at or above `QUALITY_FLOOR` (an operator-configured minimum, default `0` — any verified score with a complete panel and no contract violations clears it). Short of that, it takes an **instance admin** — an account whose role is `owner` or `admin` — running `skael review <name> <version> --approve --reason-kind scan --reason "..."`.
+
+### A score clears one hold reason and only one
+
+A version can be held for two independent reasons: `scan` (a blocking security finding) and `ownership` (published to a name by someone who is not a skill owner of it). They are a set, not a state, and each has to be cleared on its own terms.
+
+**A quality score clears `scan`. It can never clear `ownership`.** No score, however high, releases a version the skill owners have not agreed to. If a score could clear an ownership hold, the whole review path would be decorative — anyone could publish into someone else's namespace and let a passing eval wave it through.
+
+The reverse holds too: a skill owner approving the `ownership` reason does not clear a `scan` finding. Only an instance admin does that. If a namespace owner could, the security gate would only be as strong as the least careful self-managed namespace on the instance.
 
 See [Scanning](/docs/concepts#scanning) for the rest of what the gate does, and [`skael review`](/docs/cli#skael-review-skill-name-version) / the [review queue API](/docs/api#review-queue) for acting on held versions.

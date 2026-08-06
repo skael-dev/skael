@@ -84,8 +84,8 @@ type DoctorReport struct {
 	Gateway string `json:"gateway"`
 	// GatewayDetail explains that choice, including why it is "none".
 	GatewayDetail string `json:"gateway_detail"`
-	// Docker reports whether a docker binary is on PATH. Informational for
-	// now: nothing in this phase runs a sandbox.
+	// Docker reports whether a docker binary is on PATH. Required by the
+	// commands that run a sandbox: eval, repair, and suite check.
 	Docker bool `json:"docker"`
 	// DockerPath is the resolved docker binary, empty when absent.
 	DockerPath string `json:"docker_path,omitempty"`
@@ -304,7 +304,7 @@ func (r *DoctorReport) render() {
 	if r.Docker {
 		ui.Success("docker: %s", r.DockerPath)
 	} else {
-		ui.Info("docker: not found (only needed once sandboxed evaluation lands)")
+		ui.Info("docker: not found (required by eval, repair, and suite check)")
 	}
 
 	ui.Info("agent adapters: %s", strings.Join(r.Adapters, ", "))

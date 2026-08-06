@@ -73,9 +73,14 @@ skael import <url|path>          # import skills from GitHub or a local director
 skael scan ./my-skill            # security scan before publishing
 skael search "review"            # find skills
 skael show my-skill              # skill details, versions, activations
+skael owners list                # every ownership rule and its members
+skael owners set payments:* alice@acme.com   # who may publish to a namespace
+skael owners show my-skill       # who owns this name, and which rule matched
+skael review show my-skill       # what changed, and what's still holding it
 skael review my-skill 3 --approve --reason "..."  # release a version held for review
 skael doctor                     # check your setup
 skael hook install               # set up activation tracking + auto-sync
+skael version                    # version, commit, build date
 ```
 
 Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
@@ -101,11 +106,31 @@ Every `skael publish` runs a security scan that checks for hardcoded secrets, pr
 
 **Blocked, permanently.** A finding that means credentials or data are leaving the machine — a hardcoded secret, a reverse shell — is unappealable. The publish is rejected with a 422, no version is created, and nothing clears it: not an evaluation, not `--override`, not an admin. The only fix is to remove it from the bundle. This is a per-rule property, not a per-category one: reading a credential path is *access* and is appealable; shipping the credential is not.
 
-**Held for review.** Everything else that blocks — dangerous execution, prompt injection, heuristic matches — creates the version but does not release it. The archive exists and has a version number, but `skills.latest_version` doesn't advance, so the skill never appears in the sync manifest, `skael add` reports it as not found, `skael sync` won't install it, and no client can download it. A held version clears one of two ways: a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel and no critical contract violations, or an explicit human decision — `skael review <name> <version> --approve --reason "..."`, owner or admin only, recorded server-side. An owner or admin can also short-circuit at publish time with `--override`.
+**Held for review.** Everything else that blocks — dangerous execution, prompt injection, heuristic matches — creates the version but does not release it. The archive exists and has a version number, but `skills.latest_version` doesn't advance, so the skill never appears in the sync manifest, `skael add` reports it as not found, `skael sync` won't install it, and no client can download it.
+
+A hold is a **set** of reasons, not a single state, and every one of them has to clear before the version is served. There are two. `scan` is an appealable security finding; it clears on a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel and no critical contract violations, or on an instance admin's decision. `ownership` means the publisher doesn't own the name; it clears on a decision by a skill owner or an instance admin.
+
+Neither can launder the other. A quality score clears `scan` and never `ownership` — if it could, the review path would be decorative. A skill owner clears `ownership` and never `scan` — if they could, the security gate would only be as strong as the least careful self-managed namespace. Rejecting any single reason rejects the whole version.
+
+An instance admin can short-circuit the **scan** reason at publish time with `--override`. It does not clear an ownership hold.
 
 `skael publish` runs the same scan locally first and applies the same decision, so it can tell you before the upload rather than after. It aborts only on what the server would block outright; an appealable finding is sent, held, and reported as held. `--skip-local-scan` skips the local check entirely and lets the server decide.
 
 One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
+
+## Skill ownership
+
+Ownership rules decide who may publish to a skill name. A rule is a pattern — an exact name, a `payments:*` namespace, or the bare `*` — plus the people who own everything it matches. A publish by anyone outside the matched rule is held with the `ownership` reason until one of them approves it.
+
+```bash
+skael owners set payments:* alice@acme.com bob@acme.com
+```
+
+One rule wins per name: an exact match beats the longest matching prefix, which beats unowned. Matches **replace** rather than stack, the same as CODEOWNERS — otherwise a namespace owner could never delegate a skill away, and delegating is the whole point of patterns. Delegation only ever narrows: a member of a rule can manage patterns inside it, never the namespace that contains it.
+
+**An unowned name doesn't hold anything.** Upgrading changes nothing until someone writes the first rule that covers a namespace; there is no flag day and no review queue full of things nobody asked to review. Publishing **version 1** of a brand-new name records you as its sole owner, unless a rule already covers it — that's what stops someone claiming a name inside your namespace by publishing to it.
+
+Ownership never gates reads, and never re-gates a version that already shipped. Removing a rule or deleting a user changes who reviews future changes and nothing else. Full detail: [skael.dev/docs/ownership](https://skael.dev/docs/ownership).
 
 `skael import <url|path>` brings skills into the registry from GitHub or a local directory, instead of authoring them from scratch:
 
@@ -117,7 +142,7 @@ skael import ./my-skills/code-review                                          # 
 
 It discovers skills at the source and prompts before importing each one — pass `--all` to import everything without prompting, or `--dry-run` to preview first. Each import runs the same security scan and publish gate described above, so an imported skill can be rejected or held for review exactly like one published with `skael publish`. Set `GITHUB_TOKEN` on the server to raise GitHub's API rate limit for larger repos.
 
-Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups.
+Every account is `owner` (the first one, singular), `admin`, or `member` — the default for new signups. These are **instance** roles, and they are not the same thing as [skill ownership](#skill-ownership), which decides who may publish to a given skill name. Where this README says "instance admin" it means the `owner` or `admin` role; where it says "skill owner" it means someone named by an ownership rule.
 
 Every agent that uses a skill reports activation events back to the platform. `skael doctor` shows you which agents have tracking installed.
 
@@ -125,7 +150,9 @@ Agents don't all measure the same thing, so events record how they were observed
 
 ## whetstone: authoring and linting skills
 
-`whetstone` is a separate, standalone CLI for drafting and linting skills before they're published. It's not the registry client — that's `skael` — and it works entirely on local files, with no server required.
+`whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval`, `repair`, and `suite check` need a Docker daemon and an LLM key.
+
+It isn't in the Homebrew formula: `brew install skael-dev/skael/skael` and the curl installer both give you `skael` only. Get `whetstone` and `skael-worker` from the release archives, `go install`, or `just build`.
 
 ```bash
 whetstone init                    # create a .whetstone workspace in the current directory
@@ -137,8 +164,17 @@ whetstone spec approve my-skill   # mark the latest stored spec version approved
 whetstone gen my-skill            # regenerate a skill bundle from its approved spec
 whetstone lint my-skill           # run spec conformance, quality, and injection lint over a bundle
 whetstone suite gen my-skill      # generate and write the evaluation suite for a skill
+whetstone suite check my-skill    # gate the suite on its own oracle and verifier
+whetstone suite push my-skill     # register the checked suite with the server
 whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
+whetstone eval my-skill           # run the model panel, score it, write the report
+whetstone drift my-skill          # per-member adherence breakdown for one eval
+whetstone report my-skill --open  # render the HTML report
+whetstone repair my-skill         # cluster failures, propose edits, re-evaluate
+whetstone version                 # version, commit, build date
 ```
+
+Full reference: [skael.dev/docs/whetstone](https://skael.dev/docs/whetstone).
 
 ## Running the eval worker
 
@@ -183,10 +219,12 @@ No suite means no score, ever — that's by design (see "Running the eval worker
 
 On publish, the server looks up the skill's registered suite and enqueues an evaluation job automatically. A version the gate holds still gets a version number and an archive, but isn't served until it clears.
 
-If a version is held, check the review queue (web UI's Review page, or `GET /api/review/queue` via the API) and clear it one of two ways:
+If a version is held, check the review queue (web UI's Review page, or `GET /api/review/queue` via the API). Every outstanding reason has to clear, and which one you're looking at decides who can clear it:
 
-- Wait for a verified evaluation to score at or above `QUALITY_FLOOR` — an eval run takes roughly 45-90 minutes.
-- Have an owner or admin approve it directly: `skael review <name> <version> --approve --reason "..."`.
+- **`scan`** — wait for a verified evaluation to score at or above `QUALITY_FLOOR` (an eval run takes roughly 45-90 minutes), or have an instance admin approve it: `skael review <name> <version> --approve --reason "..." --reason-kind scan`.
+- **`ownership`** — a skill owner or an instance admin approves it with `--reason-kind ownership`. No evaluation clears this one, however good the score.
+
+With only one reason outstanding you can leave `--reason-kind` off and it's inferred. `skael review show <name>` prints the diff against the currently-served version plus what's still holding it.
 
 ![The review queue — a held version with its scan findings, and what the gate says would clear each one](site/public/review-queue.png)
 
@@ -221,11 +259,15 @@ cmd/server/       → API server binary (Huma v2 + Chi + Postgres)
 cmd/skael/        → CLI binary (Cobra + Lipgloss)
 cmd/whetstone/    → Skill authoring/eval CLI binary
 cmd/skael-worker/ → Eval queue worker binary (claim/materialise/evaluate/report loop)
-internal/         → Server packages (skill, scan, analytics, auth, platform, server, import, sync, evalqueue, evalsuite, quality, worker)
+internal/         → Server packages (skill, scan, gate, ownership, quality, evalqueue,
+                    evalsuite, analytics, auth, platform, server, import, sync, worker)
+internal/eval/    → Evaluation engine (spec, generation, contracts, suite, runner,
+                    sandbox/docker, agent adapters, scoring, repair, report)
 cli/              → CLI packages (commands, client, config, agents, hooks)
-web/            → React 19 SPA (Vite 8, Tailwind 4, TanStack Query) — embedded into server binary
-examples/       → Example skills (hello-world, code-review, scanner demo)
-tests/e2e/      → End-to-end integration tests
+cli/whetstone/    → whetstone commands (authoring + evaluation)
+web/              → React 19 SPA (Vite 8, Tailwind 4, TanStack Query) — embedded into server binary
+examples/         → Example skills (hello-world, code-review, scanner demo)
+tests/e2e/        → End-to-end integration tests
 ```
 
 ### Key commands

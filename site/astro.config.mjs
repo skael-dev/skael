@@ -30,9 +30,11 @@ export default defineConfig({
           { label: 'Quickstart', slug: 'docs/quickstart' },
           { label: 'Core concepts', slug: 'docs/concepts' },
           { label: 'Quality scoring', slug: 'docs/quality' },
+          { label: 'Skill ownership', slug: 'docs/ownership' },
         ] },
         { label: 'Reference', items: [
           { label: 'CLI', slug: 'docs/cli' },
+          { label: 'whetstone', slug: 'docs/whetstone' },
           { label: 'HTTP API', slug: 'docs/api' },
           { label: 'Self-hosting', slug: 'docs/self-hosting' },
         ] },

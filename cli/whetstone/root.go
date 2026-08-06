@@ -1,7 +1,7 @@
 // Package whetstone implements the whetstone CLI: the authoring front end for
 // the skill specification, generation, lint, contract, and suite engine under
-// internal/eval. Commands that need a sandbox (eval, drift, repair, report)
-// are not here yet.
+// internal/eval, plus the evaluation commands (eval, drift, repair, report)
+// built on top of it.
 package whetstone
 
 import (
