@@ -50,6 +50,11 @@ type EvalDeps struct {
 	// Sleep defaults to time.Sleep; the runner's rate-limit backoff uses it.
 	Sleep         func(time.Duration)
 	EngineVersion string
+	// WorkspaceRoot is passed through to runner.Options.WorkspaceRoot — see
+	// there for why a containerized runner has to set it. Empty is correct
+	// for the interactive CLI, which always shares a filesystem with the
+	// daemon it starts sandboxes on.
+	WorkspaceRoot string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -217,6 +222,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Store: d.Store, Driver: d.Driver, Adapters: d.Adapters,
 		Concurrency: req.Concurrency, Untrusted: req.Untrusted,
 		Sleep: sleepFn, Logger: ui.Info,
+		WorkspaceRoot: d.WorkspaceRoot,
 	}
 	rn, err := runner.New(ro)
 	if err != nil {

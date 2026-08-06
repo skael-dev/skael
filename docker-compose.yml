@@ -26,13 +26,122 @@ services:
       timeout: 5s
       retries: 5
 
-# The eval worker is deliberately NOT a service here. It bind-mounts paths it
-# computes locally — the eval workspace and the agent credential directories —
-# into sandbox containers through the Docker socket. Those mounts are resolved
-# by the HOST daemon, so a worker running inside a container would hand the
-# daemon paths that only exist in its own filesystem, and every sandbox would
-# come up with empty mounts. Run skael-worker on the host instead:
-# https://skael.dev/docs/quality
+  # The eval worker starts sandbox containers as SIBLINGS of itself, through
+  # the host's Docker socket. It is not started by default — it needs an LLM
+  # key and a Docker socket the other services have no business holding — so
+  # it sits behind a profile:
+  #
+  #   docker compose --profile worker up
+  #
+  # Two things make running it in a container work, and both are required:
+  #
+  # 1. Every directory the worker hands the daemon is bind-mounted at the SAME
+  #    path on both sides. The daemon resolves bind sources on the HOST, and a
+  #    path under this container's own /tmp names nothing there — Docker's
+  #    answer to a missing bind source is to create an empty directory rather
+  #    than to fail. Two roots feed binds, so both are bound identically here:
+  #
+  #      WORKER_RUN_ROOT   session workspaces, mounted rw as the sandbox's
+  #                        working dir. Empty => no task.md, no skill, and the
+  #                        run scores as a skill that did nothing.
+  #      WORKER_WORK_ROOT  the materialized eval workspace; the suite's
+  #                        verifier/ under it is mounted ro at /verifier for
+  #                        grading. Empty => `sh /verifier/test.sh` finds no
+  #                        script and every task grades as a failure.
+  #
+  #    Neither can be a NAMED VOLUME: a named volume lives under Docker's own
+  #    storage, so the path inside the container is not a path on the host and
+  #    the bind breaks exactly as above. The worker refuses to start
+  #    containerized unless both are set.
+  #
+  # 2. Auth arrives as environment variables, never as a mounted credential
+  #    directory. The runner prefers an adapter's auth env vars over its auth
+  #    dirs and mounts nothing at all when one is set, which is what removes
+  #    the third class of host-path bind. Mounting ~/.claude is the one auth
+  #    style that stays host-only; every mode below works in a container.
+  #
+  # Pick ONE of the three auth setups in `environment:` below — A is active,
+  # B and C are commented out. In all three the judge authenticates with
+  # ANTHROPIC_API_KEY whatever gateway it points at, so that variable is
+  # always set; what changes is which endpoint it names and how the panel
+  # agent (the one attempting the tasks) is billed.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    profiles: ["worker"]
+    environment:
+      SKAEL_ENDPOINT: http://server:8080
+      # Left as plain interpolation rather than `${VAR:?...}`: compose
+      # interpolates every service, including ones whose profile is inactive,
+      # so a required-variable marker here fails `docker compose up` for
+      # everyone who never asked for a worker. skael-worker already refuses to
+      # start with a message naming exactly which of these is missing.
+      SKAEL_API_KEY: ${SKAEL_API_KEY:-}
+      # Must match the volumes below on BOTH sides of the colon.
+      WORKER_RUN_ROOT: ${SKAEL_RUN_ROOT:-/var/lib/skael/run}
+      WORKER_WORK_ROOT: ${SKAEL_WORK_ROOT:-/var/lib/skael/work}
+
+      # ----------------------------------------------------------------------
+      # A. Anthropic API key (active). Judge and panel both bill per call
+      #    against Anthropic directly. Nothing else is needed.
+      #
+      #      export ANTHROPIC_API_KEY=sk-ant-...
+      # ----------------------------------------------------------------------
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # ----------------------------------------------------------------------
+      # B. Claude subscription for the panel (Pro/Max), API key for the judge.
+      #    Uncomment CLAUDE_CODE_OAUTH_TOKEN. Generate it once on a machine
+      #    where you can log in interactively — `claude setup-token` — and
+      #    export the result; it is a token, so no ~/.claude mount is involved
+      #    and this works in a container exactly as it does on the host.
+      #
+      #      export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)
+      #
+      #    ANTHROPIC_API_KEY above stays set: the judge has no subscription
+      #    path and always bills per call. Both variables are forwarded into
+      #    the sandbox, and Claude Code decides between them by its own auth
+      #    precedence — so if subscription billing is the point, confirm it
+      #    against your Anthropic usage rather than assuming.
+      # ----------------------------------------------------------------------
+      # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # ----------------------------------------------------------------------
+      # C. OpenRouter for both judge and panel. Uncomment the five below and
+      #    set ANTHROPIC_API_KEY to your OpenRouter key — it is the judge's
+      #    key whatever gateway it points at.
+      #
+      #      export ANTHROPIC_API_KEY=sk-or-...
+      #      export OPENROUTER_API_KEY=sk-or-...
+      #
+      #    LLM_* configure the judge; the gateway posts to {base}/v1/messages,
+      #    so the base URL has no /v1 on it. ANTHROPIC_BASE_URL and
+      #    ANTHROPIC_AUTH_TOKEN are forwarded into the sandbox and are what
+      #    point the panel agent at OpenRouter too. OpenRouter model ids are
+      #    namespaced, unlike Anthropic's bare names.
+      #
+      #    Watch reasoning models for the judge: one that spends its whole
+      #    output budget on thinking tokens returns no text block, and the run
+      #    fails rather than scoring something empty.
+      # ----------------------------------------------------------------------
+      # LLM_BASE_URL: https://openrouter.ai/api
+      # LLM_AUTH_STYLE: bearer
+      # LLM_STRONG_MODEL: anthropic/claude-opus-4
+      # ANTHROPIC_BASE_URL: https://openrouter.ai/api
+      # ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:-}
+    volumes:
+      # Sibling containers, not Docker-in-Docker: this is the host's daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Identical host and container paths — see (1) above. Changing only one
+      # side of either, or swapping one for a named volume, reintroduces
+      # exactly the silent-empty-mount failure.
+      - ${SKAEL_RUN_ROOT:-/var/lib/skael/run}:${SKAEL_RUN_ROOT:-/var/lib/skael/run}
+      - ${SKAEL_WORK_ROOT:-/var/lib/skael/work}:${SKAEL_WORK_ROOT:-/var/lib/skael/work}
+    depends_on:
+      server:
+        condition: service_started
+
 volumes:
   skill-data:
   pg-data:

@@ -65,6 +65,10 @@ type workerConfig struct {
 	LLMAuthStyle   api.AuthStyle
 	LLMStrongModel string
 	LLMFastModel   string
+	// RunRoot is where per-session sandbox workspaces are created. Empty
+	// means os.TempDir(). It only needs setting when this worker runs inside
+	// a container against the host's Docker daemon — see requireRunRoot.
+	RunRoot string
 }
 
 func main() {
@@ -151,6 +155,12 @@ func configFromEnv() (workerConfig, error) {
 		return workerConfig{}, err
 	}
 
+	runRoot := os.Getenv("WORKER_RUN_ROOT")
+	workRoot := os.Getenv("WORKER_WORK_ROOT")
+	if err := requireHostSharedRoots(runRoot, workRoot, inContainer()); err != nil {
+		return workerConfig{}, err
+	}
+
 	return workerConfig{
 		Config: worker.Config{
 			Endpoint:     endpoint,
@@ -158,7 +168,7 @@ func configFromEnv() (workerConfig, error) {
 			WorkerID:     workerID,
 			Lease:        lease,
 			PollInterval: poll,
-			WorkRoot:     os.Getenv("WORKER_WORK_ROOT"),
+			WorkRoot:     workRoot,
 		},
 		AnthropicAPIKey: anthropicKey,
 		Concurrency:     concurrency,
@@ -166,7 +176,70 @@ func configFromEnv() (workerConfig, error) {
 		LLMAuthStyle:    authStyle,
 		LLMStrongModel:  os.Getenv("LLM_STRONG_MODEL"),
 		LLMFastModel:    os.Getenv("LLM_FAST_MODEL"),
+		RunRoot:         runRoot,
 	}, nil
+}
+
+// requireHostSharedRoots refuses to start a containerized worker that has not
+// been told where the directories it hands to the Docker daemon live.
+//
+// The worker starts sandbox containers through a Docker socket, and the daemon
+// resolves every bind source in its own filesystem — the host's. A container's
+// /tmp is not the host's /tmp, so such a path names nothing there, and
+// Docker's response to a bind source that does not exist is to create an empty
+// directory, not to fail.
+//
+// Two roots feed bind mounts, and both must therefore resolve identically on
+// both sides:
+//
+//   - WORKER_RUN_ROOT holds session workspaces, bind-mounted read-write as the
+//     sandbox's working directory. Empty means the sandbox starts with no
+//     task.md and no installed skill, and the run scores as a skill that did
+//     nothing.
+//   - WORKER_WORK_ROOT holds the materialized eval workspace, and the suite's
+//     verifier directory under it is bind-mounted read-only at /verifier for
+//     the grading step. Empty means `sh /verifier/test.sh` finds no script and
+//     every task grades as a failure.
+//
+// Nothing downstream can tell either apart from a genuinely bad skill, so both
+// have to be caught here rather than surfacing as a plausible-looking score.
+func requireHostSharedRoots(runRoot, workRoot string, containerized bool) error {
+	if !containerized {
+		return nil
+	}
+	var missing []string
+	if runRoot == "" {
+		missing = append(missing, "WORKER_RUN_ROOT")
+	}
+	if workRoot == "" {
+		missing = append(missing, "WORKER_WORK_ROOT")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"skael-worker: running inside a container without %s. Sandbox workspaces and the suite verifier "+
+			"are bind-mounted into containers started through the Docker socket, and the daemon resolves "+
+			"those paths on the host — a path under this container's own /tmp does not exist there, and "+
+			"Docker would silently mount an empty directory, scoring every skill as though it did nothing. "+
+			"Set each to a directory bind-mounted at the SAME path on both sides "+
+			"(e.g. `-v /var/lib/skael/run:/var/lib/skael/run` with WORKER_RUN_ROOT=/var/lib/skael/run)",
+		joinComma(missing))
+}
+
+// inContainer reports whether this process looks containerized. Docker writes
+// /.dockerenv into every container it creates; /run/.containerenv is Podman's
+// equivalent. Both are heuristics, which is why they only ever gate an error
+// that an explicit WORKER_RUN_ROOT already satisfies — a false positive is
+// cleared by setting the variable, and a false negative just restores the
+// previous behaviour.
+func inContainer() bool {
+	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // parseLLMAuthStyle resolves LLM_AUTH_STYLE. Empty defaults to
@@ -233,7 +306,7 @@ func run(cfg workerConfig) error {
 
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
 
-	r := &realRunner{driver: drv, gateway: gw, concurrency: cfg.Concurrency}
+	r := &realRunner{driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot}
 
 	w, err := worker.New(cfg.Config, httpAPI, r)
 	if err != nil {
@@ -312,6 +385,7 @@ type realRunner struct {
 	driver      sandbox.Driver
 	gateway     llm.Gateway
 	concurrency int
+	runRoot     string
 }
 
 func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
@@ -337,6 +411,7 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Now:           time.Now,
 		Sleep:         time.Sleep,
 		EngineVersion: version,
+		WorkspaceRoot: r.runRoot,
 	}
 
 	req := evalRequestFrom(in, r.concurrency)

@@ -147,7 +147,8 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `WORKER_ID` | no | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | no | `5m` | How long a claimed job's lease lasts before it's considered abandoned (Go duration) |
 | `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
-| `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under |
+| `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under. Never bind-mounted into a sandbox, so it does not need to be host-visible |
+| `WORKER_RUN_ROOT` | only in a container | `os.TempDir()` | Directory per-session sandbox workspaces are created under. These **are** bind-mounted into sandbox containers, so the path must resolve identically for the worker and for the daemon starting them. Required when containerized — the worker refuses to start without it |
 | `WORKER_CONCURRENCY` | no | `1` | Must be a positive integer |
 | `LLM_BASE_URL` | no | `https://api.anthropic.com` | Point the judge gateway at an OpenRouter-compatible endpoint |
 | `LLM_AUTH_STYLE` | no | `x-api-key` | Either `x-api-key` (Anthropic) or `bearer`. Any other value fails startup |
@@ -155,6 +156,15 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `LLM_FAST_MODEL` | no | `claude-haiku-4-5-20251001` | Cheaper model for the gateway's fast path |
 
 Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, `WORKER_CONCURRENCY`, or `LLM_AUTH_STYLE` fails startup with the offending value named.
+
+### Running the worker in a container
+
+Supported, and how `docker compose --profile worker up` runs it (`Dockerfile.worker`). The worker starts sandbox containers as *siblings* through a mounted `/var/run/docker.sock` — not Docker-in-Docker. Two constraints follow, and both are load-bearing:
+
+- **`WORKER_RUN_ROOT` must be bind-mounted at the same path on both sides** (`-v /var/lib/skael/run:/var/lib/skael/run`). Session workspaces are bind-mounted into each sandbox and the *host* daemon resolves that path. A container-local path names nothing on the host, and Docker creates a missing bind source as an empty directory rather than failing — so the sandbox starts with no task and no skill and scores as a skill that did nothing. `requireRunRoot` in `cmd/skael-worker` refuses to start containerized without it, because nothing downstream can distinguish that from a genuinely bad skill.
+- **Auth must arrive as environment variables, not as a mounted credential directory.** `runner.resolveAuth` prefers an adapter's `AuthEnv` over its `AuthDirs` and returns *no* mounts when any of them is set, which is what removes the other class of host-path bind. Mounting `~/.claude` is the one auth style that stays host-only — subscription-backed panel execution still works containerized via `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`), which is a token rather than a directory. `docker-compose.yml` carries all three supported setups (Anthropic key, subscription panel, OpenRouter) with two commented out.
+
+Kubernetes needs the same two things — a `hostPath` volume with `mountPath` equal to `path`, and the node's Docker socket. That second requirement is real: a node running containerd rather than Docker has no socket for this driver to talk to, so the worker belongs on a Docker node (or on the host) until a containerd/Kubernetes sandbox driver exists.
 
 Each of the events/read/write/suites classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
 

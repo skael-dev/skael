@@ -127,7 +127,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	}
 
 	taskDir := filepath.Join(in.SuiteDir, "tasks", k.TaskID)
-	ws, err = stageRunWorkspace(taskDir)
+	ws, err = stageRunWorkspace(taskDir, r.o.WorkspaceRoot)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}

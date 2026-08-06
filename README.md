@@ -34,7 +34,7 @@ Bundles Postgres, so there's nothing external to provision:
 docker compose up -d
 ```
 
-Platform is at `http://localhost:8080`. This brings up the server and database only — publishing, scanning and syncing work immediately. Skill evaluations additionally need a `skael-worker` running on the host; see [Running the eval worker](#running-the-eval-worker).
+Platform is at `http://localhost:8080`. This brings up the server and database only — publishing, scanning and syncing work immediately. Skill evaluations additionally need a `skael-worker`, on the host or in a container (`docker compose --profile worker up`); see [Running the eval worker](#running-the-eval-worker).
 
 > **Storage:** archives default to local disk (`STORAGE_PATH`). For Kubernetes/ephemeral hosts or multiple replicas, set `STORAGE_PATH=s3://bucket/prefix` to use S3-compatible object storage (AWS S3, MinIO, R2, Spaces) — see [Self-hosting](https://skael.dev/docs/self-hosting).
 
@@ -199,6 +199,21 @@ skael-worker
 ```
 
 `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and `ANTHROPIC_API_KEY` are the only strictly required variables — the worker exits at startup listing whichever are missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [CLAUDE.md](CLAUDE.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
+
+To run the worker in a container instead (Kubernetes, Coolify, or just keeping everything in Compose):
+
+```bash
+export SKAEL_API_KEY=<your-api-key>
+export ANTHROPIC_API_KEY=<your-anthropic-key>
+docker compose --profile worker up
+```
+
+It starts sandbox containers as *siblings* through the host's Docker socket rather than running a daemon of its own. That imposes two requirements, both already wired into `docker-compose.yml`:
+
+- `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume. Session workspaces and the suite's verifier are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
+- Auth must arrive as environment variables rather than a mounted `~/.claude`. All three setups work in a container — Anthropic API key, a Claude subscription for the panel via `CLAUDE_CODE_OAUTH_TOKEN`, or OpenRouter for both judge and panel. `docker-compose.yml` carries all three, with two commented out.
+
+See [Running the worker in a container](CLAUDE.md#running-the-worker-in-a-container).
 
 `ANTHROPIC_API_KEY` covers both the judge that scores each run and the claude-code panel agent that attempts the tasks — the worker forwards it into the sandbox as an environment variable. Set `CLAUDE_CODE_OAUTH_TOKEN` instead (generate it with `claude setup-token`) if you'd rather the panel run against your subscription than pay per API call; the judge still needs `ANTHROPIC_API_KEY` either way. Both the judge model and the gateway it talks to are configurable (OpenRouter or any Anthropic-compatible endpoint), with unchanged defaults if you set nothing. See [Quality scoring](https://skael.dev/docs/quality) for the details.
 

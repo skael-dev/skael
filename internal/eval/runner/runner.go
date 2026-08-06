@@ -25,6 +25,21 @@ type Options struct {
 	Untrusted      bool
 	AllowDomains   []string
 
+	// WorkspaceRoot is the directory session workspaces are created under.
+	// Empty means os.TempDir(), which is correct for every run whose sandbox
+	// containers are started by the same machine's Docker daemon.
+	//
+	// It exists for the one case where that is not true: a runner inside a
+	// container, talking to the host daemon over a mounted socket. A
+	// workspace is bind-mounted into each sandbox, and the daemon resolves
+	// that path in the *host's* filesystem — so a path under the runner's own
+	// /tmp names nothing on the host, and Docker silently creates an empty
+	// directory rather than failing. The sandbox then comes up with no task,
+	// which scores as a skill that did nothing. Setting this to a path that
+	// is bind-mounted at the *same* location on both sides makes the path
+	// mean the same thing to both, which is the whole requirement.
+	WorkspaceRoot string
+
 	// Sleep is time.Sleep by default; tests override it so a backoff test does
 	// not actually wait minutes.
 	Sleep func(time.Duration)
