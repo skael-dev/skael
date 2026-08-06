@@ -25,19 +25,24 @@ type LicenseInfo struct {
 
 type CapabilitiesResponse struct {
 	Edition  string       `json:"edition"`
+	Version  string       `json:"version"`
 	Features Features     `json:"features"`
 	License  *LicenseInfo `json:"license"`
 }
 
 type Capabilities struct {
 	edition  string
+	version  string
 	features map[string]bool
 	license  *LicenseInfo
 }
 
 func NewCapabilities() *Capabilities {
 	return &Capabilities{
-		edition:  "oss",
+		edition: "oss",
+		// Matches cmd/server's unstamped ldflags default, so a `go run` build
+		// reports the same string here that it logs at startup.
+		version:  "dev",
 		features: make(map[string]bool),
 	}
 }
@@ -54,9 +59,20 @@ func (c *Capabilities) SetLicense(l *LicenseInfo) {
 	c.license = l
 }
 
+// SetVersion records the build version reported by /api/capabilities. An empty
+// value is ignored rather than stored: an unstamped build should read "dev",
+// not blank.
+func (c *Capabilities) SetVersion(v string) {
+	if v == "" {
+		return
+	}
+	c.version = v
+}
+
 func (c *Capabilities) Response() CapabilitiesResponse {
 	return CapabilitiesResponse{
 		Edition: c.edition,
+		Version: c.version,
 		Features: Features{
 			Teams:             c.features["teams"],
 			RBAC:              c.features["rbac"],

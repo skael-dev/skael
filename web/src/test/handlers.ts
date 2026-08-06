@@ -13,6 +13,24 @@ import {
 } from "./fixtures";
 
 export const handlers = [
+  // Capabilities
+  http.get("/api/capabilities", () => {
+    return HttpResponse.json({
+      edition: "oss",
+      version: "0.10.0",
+      features: {
+        teams: false,
+        rbac: false,
+        sso: false,
+        audit: false,
+        governance: false,
+        custom_scan: false,
+        advanced_analytics: false,
+      },
+      license: null,
+    });
+  }),
+
   // Auth
   http.get("/api/auth/me", () => {
     return HttpResponse.json(mockUser);

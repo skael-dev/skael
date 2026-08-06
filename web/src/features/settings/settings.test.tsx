@@ -13,6 +13,26 @@ describe("Settings", () => {
     expect(screen.getByText("skael")).toBeInTheDocument();
   });
 
+  it("shows the platform version reported by the server", async () => {
+    renderWithProviders(<Settings />);
+
+    // The handler reports a bare "0.10.0"; the UI prefixes the v.
+    expect(await screen.findByText("v0.10.0")).toBeInTheDocument();
+  });
+
+  it("renders a dash for the version when capabilities fails", async () => {
+    server.use(
+      http.get("/api/capabilities", () => new HttpResponse(null, { status: 500 })),
+    );
+    renderWithProviders(<Settings />);
+
+    // Fail-soft: the settings page still renders, the version reads "—".
+    expect(await screen.findByText("Platform version")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("—")).toBeInTheDocument();
+    });
+  });
+
   it("API key list shows key names and prefixes", async () => {
     renderWithProviders(<Settings />);
 
