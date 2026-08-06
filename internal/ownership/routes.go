@@ -38,19 +38,33 @@ func validateMembers(ctx context.Context, users UserLookup, memberIDs []string) 
 	return nil
 }
 
-// ruleBody is the wire shape of a rule: id, pattern, and member ids.
+// ruleBody is the wire shape of a rule: id, pattern, and hydrated members.
+// Members carries {id, name, email} rather than bare ids so a client can
+// render the rule without a second round trip per member — the same
+// hydration GET /api/skills/{name}/owners already does via ownerRefBody.
 type ruleBody struct {
-	ID      string   `json:"id"`
-	Pattern string   `json:"pattern"`
-	Members []string `json:"members"`
+	ID      string         `json:"id"`
+	Pattern string         `json:"pattern"`
+	Members []ownerRefBody `json:"members"`
 }
 
-func toRuleBody(r *Rule) ruleBody {
-	members := r.Members
-	if members == nil {
-		members = []string{}
+// hydrateMembers resolves each member id in r through users, in order,
+// skipping any id whose account has gone rather than failing the whole list
+// — the same tolerance Resolver.ResolveForPublish gives a deleted member.
+func hydrateMembers(ctx context.Context, users UserLookup, r *Rule) []ownerRefBody {
+	members := make([]ownerRefBody, 0, len(r.Members))
+	for _, id := range r.Members {
+		row, err := users.GetByID(ctx, id)
+		if err != nil || row == nil {
+			continue
+		}
+		members = append(members, ownerRefBody{ID: row.ID, Name: row.Name, Email: row.Email})
 	}
-	return ruleBody{ID: r.ID, Pattern: r.Pattern, Members: members}
+	return members
+}
+
+func toRuleBody(ctx context.Context, users UserLookup, r *Rule) ruleBody {
+	return ruleBody{ID: r.ID, Pattern: r.Pattern, Members: hydrateMembers(ctx, users, r)}
 }
 
 // findByID returns the rule with id from rules, or nil if none matches.
@@ -95,7 +109,7 @@ func RegisterRoutes(api huma.API, store *Store, users UserLookup) {
 		}{}
 		out.Body.Rules = make([]ruleBody, len(rules))
 		for i := range rules {
-			out.Body.Rules[i] = toRuleBody(&rules[i])
+			out.Body.Rules[i] = toRuleBody(ctx, users, &rules[i])
 		}
 		return out, nil
 	})
@@ -153,7 +167,7 @@ func RegisterRoutes(api huma.API, store *Store, users UserLookup) {
 			}
 			return nil, fmt.Errorf("ownership: create rule: %w", err)
 		}
-		return &struct{ Body ruleBody }{Body: toRuleBody(r)}, nil
+		return &struct{ Body ruleBody }{Body: toRuleBody(ctx, users, r)}, nil
 	})
 
 	// -----------------------------------------------------------------
@@ -211,7 +225,7 @@ func RegisterRoutes(api huma.API, store *Store, users UserLookup) {
 			}
 			return nil, fmt.Errorf("ownership: update rule: %w", err)
 		}
-		return &struct{ Body ruleBody }{Body: toRuleBody(r)}, nil
+		return &struct{ Body ruleBody }{Body: toRuleBody(ctx, users, r)}, nil
 	})
 
 	// -----------------------------------------------------------------

@@ -5,7 +5,9 @@ import { renderWithProviders, screen, waitFor, userEvent } from "@/test/render";
 import { Ownership } from "./ownership";
 import { UserPicker } from "./user-picker";
 
-function mockRules(rules: Array<{ id: string; pattern: string; members: string[] }>) {
+type MockMember = { id: string; name: string; email: string };
+
+function mockRules(rules: Array<{ id: string; pattern: string; members: MockMember[] }>) {
   server.use(
     http.get("/api/ownership/rules", () => {
       return HttpResponse.json({ rules });
@@ -69,10 +71,21 @@ function mockSkillsWithOwners(
 }
 
 describe("Ownership settings page", () => {
-  it("lists rules with their members", async () => {
+  it("lists rules with their hydrated member names", async () => {
     mockRules([
-      { id: "rule-1", pattern: "payments:*", members: ["user-alice-001", "user-bob-002"] },
-      { id: "rule-2", pattern: "docs:readme", members: ["user-carol-003"] },
+      {
+        id: "rule-1",
+        pattern: "payments:*",
+        members: [
+          { id: "user-alice-001", name: "Alice Anderson", email: "alice@test.com" },
+          { id: "user-bob-002", name: "Bob Baker", email: "bob@test.com" },
+        ],
+      },
+      {
+        id: "rule-2",
+        pattern: "docs:readme",
+        members: [{ id: "user-carol-003", name: "Carol Chen", email: "carol@test.com" }],
+      },
     ]);
     mockSkillsWithOwners([]);
 
@@ -81,11 +94,11 @@ describe("Ownership settings page", () => {
     expect(await screen.findByText("payments:*")).toBeInTheDocument();
     expect(screen.getByText("docs:readme")).toBeInTheDocument();
 
-    // Members are rendered (as identifiers — the rules API returns member
-    // ids, not names) so a rule with members never reads as empty.
-    expect(screen.getByText(/user-ali/)).toBeInTheDocument();
-    expect(screen.getByText(/user-bob/)).toBeInTheDocument();
-    expect(screen.getByText(/user-car/)).toBeInTheDocument();
+    // Members are rendered by name, not as a truncated raw id — a rule with
+    // members must never make the reviewer chase a UUID to know who it is.
+    expect(screen.getByText("Alice Anderson")).toBeInTheDocument();
+    expect(screen.getByText("Bob Baker")).toBeInTheDocument();
+    expect(screen.getByText("Carol Chen")).toBeInTheDocument();
   });
 
   it("shows the unowned backlog count and links to the filtered list", async () => {
@@ -163,7 +176,13 @@ describe("Ownership settings page", () => {
         });
       }),
     );
-    mockRules([{ id: "rule-1", pattern: "payments:*", members: ["user-alice-001"] }]);
+    mockRules([
+      {
+        id: "rule-1",
+        pattern: "payments:*",
+        members: [{ id: "user-alice-001", name: "Alice Anderson", email: "alice@test.com" }],
+      },
+    ]);
     mockSkillsWithOwners([]);
 
     renderWithProviders(<Ownership />);

@@ -185,6 +185,46 @@ func TestUnknownMemberIsRejected(t *testing.T) {
 	}
 }
 
+// GET /api/ownership/rules must hydrate members with name and email, not
+// bare ids — a client (CLI, Settings UI) has no other way to show who a rule
+// covers without an id-by-id follow-up lookup.
+func TestListRulesHydratesMembers(t *testing.T) {
+	handler, store, users, _ := newOwnershipTestServer(t)
+	alice := seedAuthUser(t, users, "alice6@acme.com")
+	if _, err := store.Upsert(context.Background(), "payments:*", []string{alice.ID}, alice.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	member := &auth.User{ID: alice.ID, Email: alice.Email, Role: auth.RoleMember}
+	rr := doAs(t, handler, http.MethodGet, "/api/ownership/rules", nil, member)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+
+	var body struct {
+		Rules []struct {
+			Pattern string `json:"pattern"`
+			Members []struct {
+				ID    string `json:"id"`
+				Name  string `json:"name"`
+				Email string `json:"email"`
+			} `json:"members"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Rules) != 1 {
+		t.Fatalf("rules = %+v, want 1 rule", body.Rules)
+	}
+	if len(body.Rules[0].Members) != 1 || body.Rules[0].Members[0].Email != "alice6@acme.com" {
+		t.Fatalf("members = %+v, want [alice6@acme.com]", body.Rules[0].Members)
+	}
+	if body.Rules[0].Members[0].ID != alice.ID {
+		t.Fatalf("member id = %q, want %q", body.Rules[0].Members[0].ID, alice.ID)
+	}
+}
+
 // GET /api/skills/{name}/owners names the matching rule, so it is never a
 // mystery why someone does or does not have access.
 func TestSkillOwnersNamesTheMatchingRule(t *testing.T) {

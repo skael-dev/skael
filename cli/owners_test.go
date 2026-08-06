@@ -92,7 +92,10 @@ func TestOwnersSetSendsTheFullMemberList(t *testing.T) {
 			ruleBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "r1", "pattern": "payments:*", "members": []string{"u-alice", "u-bob"},
+				"id": "r1", "pattern": "payments:*", "members": []map[string]string{
+					{"id": "u-alice", "name": "Alice", "email": "alice@acme.com"},
+					{"id": "u-bob", "name": "Bob", "email": "bob@acme.com"},
+				},
 			})
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -135,14 +138,19 @@ func TestOwnersAddPreservesExistingMembers(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"rules": []map[string]any{
-					{"id": "r1", "pattern": "payments:*", "members": []string{"u-alice"}},
+					{"id": "r1", "pattern": "payments:*", "members": []map[string]string{
+						{"id": "u-alice", "name": "Alice", "email": "alice@acme.com"},
+					}},
 				},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/ownership/rules":
 			ruleBody = string(body)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "r1", "pattern": "payments:*", "members": []string{"u-alice", "u-bob"},
+				"id": "r1", "pattern": "payments:*", "members": []map[string]string{
+					{"id": "u-alice", "name": "Alice", "email": "alice@acme.com"},
+					{"id": "u-bob", "name": "Bob", "email": "bob@acme.com"},
+				},
 			})
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -202,7 +210,9 @@ func TestOwnersListJSONMode(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"rules": []map[string]any{
-					{"id": "r1", "pattern": "payments:*", "members": []string{"u-alice"}},
+					{"id": "r1", "pattern": "payments:*", "members": []map[string]string{
+						{"id": "u-alice", "name": "Alice", "email": "alice@acme.com"},
+					}},
 				},
 			})
 			return

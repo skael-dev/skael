@@ -92,6 +92,31 @@ func reportOwnersError(err error, code string) {
 	ui.Errorf("%s", err)
 }
 
+// memberLabels renders a rule's hydrated members as "email" (or "id" if the
+// account has since gone, mirroring the server's tolerance for a deleted
+// member) for human-readable output.
+func memberLabels(members []client.PublicUser) []string {
+	labels := make([]string, 0, len(members))
+	for _, m := range members {
+		if m.Email != "" {
+			labels = append(labels, m.Email)
+		} else {
+			labels = append(labels, m.ID)
+		}
+	}
+	return labels
+}
+
+// memberIDs extracts the user ids from a rule's hydrated members, for
+// building the []string a set/add/rm call sends to UpsertOwnershipRule.
+func memberIDs(members []client.PublicUser) []string {
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
 // resolveEmails maps each email to a user id, failing on the first unknown
 // one with the near matches the directory returned. A silent skip here would
 // write a rule missing an owner, which reads as success and protects nothing.
@@ -146,7 +171,7 @@ func runOwnersList(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, r := range rules {
-		fmt.Fprintf(os.Stdout, "  %-24s %s\n", r.Pattern, strings.Join(r.Members, ", "))
+		fmt.Fprintf(os.Stdout, "  %-24s %s\n", r.Pattern, strings.Join(memberLabels(r.Members), ", "))
 	}
 	fmt.Fprintf(os.Stdout, "\n  %d %s\n", len(rules), plural(len(rules), "rule", "rules"))
 	return nil
@@ -236,7 +261,7 @@ func runOwnersAdd(cmd *cobra.Command, args []string) error {
 	members := []string{}
 	for _, r := range rules {
 		if r.Pattern == pattern {
-			members = append(members, r.Members...)
+			members = append(members, memberIDs(r.Members)...)
 			break
 		}
 	}
@@ -303,8 +328,9 @@ func runOwnersRm(cmd *cobra.Command, args []string) error {
 	for _, id := range ids {
 		remove[id] = true
 	}
-	members := make([]string, 0, len(existing.Members))
-	for _, m := range existing.Members {
+	existingIDs := memberIDs(existing.Members)
+	members := make([]string, 0, len(existingIDs))
+	for _, m := range existingIDs {
 		if !remove[m] {
 			members = append(members, m)
 		}

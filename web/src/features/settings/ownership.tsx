@@ -58,7 +58,7 @@ export function canManage(actor: Actor | null, pattern: string, rules: RuleBody[
   if (actor.privileged) return true;
   for (const r of rules) {
     const members = r.members ?? [];
-    if (!members.includes(actor.userId)) continue;
+    if (!members.some((m) => m.id === actor.userId)) continue;
     if (r.pattern === pattern) return true; // member of the pattern's own rule
     if (strictlyContains(r.pattern, pattern)) return true; // member of an enclosing rule
   }
@@ -156,11 +156,11 @@ function RuleRow({
           ) : (
             members.map((m) => (
               <span
-                key={m}
-                title={m}
+                key={m.id}
+                title={m.email}
                 className="text-[11px] font-mono text-text-secondary bg-bg-tertiary px-1.5 py-0.5 rounded"
               >
-                {m.slice(0, 8)}
+                {m.name || m.email || m.id.slice(0, 8)}
               </span>
             ))
           )}
@@ -201,8 +201,9 @@ function ManageRuleDialog({
   const [labels, setLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    setMembers(rule?.members ?? []);
-    setLabels({});
+    const hydrated = rule?.members ?? [];
+    setMembers(hydrated.map((m) => m.id));
+    setLabels(Object.fromEntries(hydrated.map((m) => [m.id, m.name ? `${m.name} <${m.email}>` : m.email])));
   }, [rule]);
 
   const update = useMutation({

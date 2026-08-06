@@ -582,20 +582,21 @@ func (c *Client) GetManifest() ([]ManifestEntry, error) {
 	return entries, nil
 }
 
-// OwnershipRule is the client-side representation of an ownership rule: a
-// pattern and the user IDs that own everything it matches.
-type OwnershipRule struct {
-	ID      string   `json:"id"`
-	Pattern string   `json:"pattern"`
-	Members []string `json:"members"`
-}
-
 // PublicUser is the identity-only projection of a user account returned by
 // the directory search and the resolved-owners lookup.
 type PublicUser struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
+}
+
+// OwnershipRule is the client-side representation of an ownership rule: a
+// pattern and the users that own everything it matches, hydrated with name
+// and email so a caller never has to look each member up separately.
+type OwnershipRule struct {
+	ID      string       `json:"id"`
+	Pattern string       `json:"pattern"`
+	Members []PublicUser `json:"members"`
 }
 
 // SkillOwnersResult is the resolved owners for a skill name, and which rule
