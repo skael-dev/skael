@@ -70,6 +70,13 @@ type Version struct {
 	// the publisher to wait for a score would be telling them to wait
 	// forever.
 	Quality QualityState `json:"quality,omitempty"`
+	// HoldReasons are every reason kind this version was ever held for, in
+	// publish order. It does not shrink as reasons clear — it is the raw set
+	// recorded at publish time, not the outstanding subset — so a caller
+	// that already knows which reason it just cleared (e.g. because it named
+	// one explicitly) can compute what remains by subtracting it, but must
+	// not treat this field alone as "what still blocks release."
+	HoldReasons []string `json:"hold_reasons,omitempty"`
 }
 
 // QualityState is the publish response's report on the evaluation, if any,
@@ -370,12 +377,18 @@ func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Ve
 // Review calls POST /api/skills/{name}/versions/{version}/review to approve
 // or reject a version held by the publish gate. action must be "approve" or
 // "reject"; the server enforces owner/admin privilege and rejects any other
-// action. Returns the updated Version record.
-func (c *Client) Review(name string, version int, action, reason string) (*Version, error) {
+// action. holdReason names which held reason this decision targets — "scan"
+// or "ownership" — and may be empty, in which case the server infers it when
+// exactly one reason is outstanding and 422s naming all of them otherwise.
+// It carries ",omitempty" on the wire so an empty holdReason produces the
+// exact same request body every already-deployed caller sends today.
+// Returns the updated Version record.
+func (c *Client) Review(name string, version int, action, reason, holdReason string) (*Version, error) {
 	payload, err := json.Marshal(struct {
-		Action string `json:"action"`
-		Reason string `json:"reason"`
-	}{Action: action, Reason: reason})
+		Action     string `json:"action"`
+		Reason     string `json:"reason"`
+		HoldReason string `json:"hold_reason,omitempty"`
+	}{Action: action, Reason: reason, HoldReason: holdReason})
 	if err != nil {
 		return nil, fmt.Errorf("marshal review request: %w", err)
 	}
@@ -679,6 +692,76 @@ func (c *Client) SearchUsers(q string) ([]PublicUser, error) {
 		return nil, fmt.Errorf("decode search users response: %w", err)
 	}
 	return body.Users, nil
+}
+
+// HeldVersion is one version awaiting review, as returned by the review
+// queue. HoldReasons is every reason it was ever held for, in publish order;
+// Outstanding is the subset with no approval recorded yet — the two can
+// differ once one reason clears but the version stays held on another,
+// which is exactly the case `skael review` must render honestly rather than
+// collapse into a single "released" or "held" verdict.
+type HeldVersion struct {
+	SkillName   string          `json:"skill_name"`
+	Version     int             `json:"version"`
+	GateState   string          `json:"gate_state"`
+	HoldReasons []string        `json:"hold_reasons"`
+	Outstanding []string        `json:"outstanding"`
+	RulePattern string          `json:"rule_pattern,omitempty"`
+	Owners      []gate.OwnerRef `json:"owners"`
+	Unowned     bool            `json:"unowned"`
+}
+
+// ReviewQueue calls GET /api/review/queue and returns every version
+// currently held for review, newest first.
+func (c *Client) ReviewQueue() ([]HeldVersion, error) {
+	resp, err := c.do(http.MethodGet, "/api/review/queue", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Held []HeldVersion `json:"held"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode review queue response: %w", err)
+	}
+	return body.Held, nil
+}
+
+// FileChange is one file whose presence or size differs between a held
+// version and the currently served one.
+type FileChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+// VersionDiff is the response to GET
+// /api/skills/{name}/versions/{version}/diff: a unified diff of SKILL.md
+// against the currently served version, plus the changed non-SKILL.md files.
+// Against is the served version number the diff was computed against; 0
+// means no baseline exists yet (this is the skill's first version).
+type VersionDiff struct {
+	Against int          `json:"against"`
+	SkillMD string       `json:"skill_md"`
+	Files   []FileChange `json:"files"`
+}
+
+// DiffVersion calls GET /api/skills/{name}/versions/{version}/diff.
+func (c *Client) DiffVersion(name string, version int) (*VersionDiff, error) {
+	path := "/api/skills/" + url.PathEscape(name) + "/versions/" +
+		url.PathEscape(strconv.Itoa(version)) + "/diff"
+	resp, err := c.do(http.MethodGet, path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var out VersionDiff
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode version diff response: %w", err)
+	}
+	return &out, nil
 }
 
 // DownloadVersion calls GET /api/skills/{name}/versions/{v}/download and

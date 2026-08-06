@@ -125,6 +125,52 @@ func heldPublishBody() []byte {
 	return b
 }
 
+// heldForOwnershipBody builds the response a publish held solely for
+// ownership gets: no scan findings, but decision.ownership names the owners
+// who can clear it.
+func heldForOwnershipBody() []byte {
+	body := struct {
+		Version  int           `json:"version"`
+		Checksum string        `json:"checksum"`
+		Created  bool          `json:"created"`
+		Decision gate.Decision `json:"decision"`
+	}{
+		Version:  7,
+		Checksum: "abc123",
+		Created:  true,
+		Decision: gate.Decision{
+			Outcome:     gate.NeedsReview,
+			Reasons:     []gate.Reason{},
+			HoldReasons: []string{"ownership"},
+			Ownership: &gate.OwnershipDetail{
+				RulePattern: "payments:*",
+				Owners: []gate.OwnerRef{
+					{ID: "u1", Name: "Alice Chen", Email: "alice@acme.com"},
+					{ID: "u2", Name: "Bob Ruiz", Email: "bob@acme.com"},
+				},
+				Clears: "approval by an owner of this skill, or by an instance admin",
+			},
+		},
+	}
+	b, _ := json.Marshal(body)
+	return b
+}
+
+// The moment that decides whether people tolerate the feature: a publisher
+// who is not an owner must be told, by name, who can clear it and how.
+func TestPublishHeldForOwnershipNamesTheOwners(t *testing.T) {
+	srv := stubPublishServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write(heldForOwnershipBody())
+	})
+	defer srv.Close()
+
+	out := runPublishAgainst(t, srv, skillDir(t))
+
+	assert.Contains(t, out, "alice@acme.com")
+	assert.Contains(t, out, "skael review show my-skill")
+}
+
 func TestPublishRendersHeld(t *testing.T) {
 	srv := stubPublishServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)

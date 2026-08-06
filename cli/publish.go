@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
@@ -305,6 +306,24 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stdout, "    Clears: %s\n", r.Clears)
 		}
 		fmt.Fprintln(os.Stdout)
+
+		// The moment that decides whether people tolerate the feature: name
+		// the humans who can unblock this publish, so it reads as a next
+		// step rather than a wall.
+		d := ver.Decision
+		if d.Ownership != nil && containsReason(d.HoldReasons, gate.ReasonOwnership) {
+			ui.Warn("Held for review — you are not an owner of this skill")
+			names := make([]string, 0, len(d.Ownership.Owners))
+			for _, o := range d.Ownership.Owners {
+				names = append(names, fmt.Sprintf("%s <%s>", o.Name, o.Email))
+			}
+			ui.Summary("Owners", strings.Join(names, ", "))
+			if d.Ownership.RulePattern != "" {
+				ui.Summary("Via", fmt.Sprintf("rule %q", d.Ownership.RulePattern))
+			}
+			ui.Summary("Review", fmt.Sprintf("skael review show %s", name))
+		}
+
 		if ver.Quality.State == "pending" {
 			fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand instead:")
 		} else {
@@ -335,6 +354,17 @@ func printUnappealable(d gate.Decision) {
 		fmt.Fprintf(os.Stdout, "  %s:%d\t%s (%s, %s)\n    %s\n    Clears: %s\n",
 			r.File, r.Line, r.Rule, r.Class, r.Severity, r.Message, r.Clears)
 	}
+}
+
+// containsReason reports whether want is one of reasons. gate.Decision's
+// HoldReasons is a small unordered set, not something worth a map for.
+func containsReason(reasons []string, want string) bool {
+	for _, r := range reasons {
+		if r == want {
+			return true
+		}
+	}
+	return false
 }
 
 // encodeDecision writes a decision as the sole key of a JSON object, matching
