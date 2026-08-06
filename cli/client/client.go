@@ -569,6 +569,118 @@ func (c *Client) GetManifest() ([]ManifestEntry, error) {
 	return entries, nil
 }
 
+// OwnershipRule is the client-side representation of an ownership rule: a
+// pattern and the user IDs that own everything it matches.
+type OwnershipRule struct {
+	ID      string   `json:"id"`
+	Pattern string   `json:"pattern"`
+	Members []string `json:"members"`
+}
+
+// PublicUser is the identity-only projection of a user account returned by
+// the directory search and the resolved-owners lookup.
+type PublicUser struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// SkillOwnersResult is the resolved owners for a skill name, and which rule
+// (if any) produced them.
+type SkillOwnersResult struct {
+	RulePattern string       `json:"rule_pattern,omitempty"`
+	Owners      []PublicUser `json:"owners"`
+	Unowned     bool         `json:"unowned"`
+}
+
+// ListOwnershipRules calls GET /api/ownership/rules and returns every rule.
+func (c *Client) ListOwnershipRules() ([]OwnershipRule, error) {
+	resp, err := c.do(http.MethodGet, "/api/ownership/rules", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Rules []OwnershipRule `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode list ownership rules response: %w", err)
+	}
+	return body.Rules, nil
+}
+
+// UpsertOwnershipRule calls POST /api/ownership/rules, which creates a rule
+// for pattern or replaces the member list of one that already exists at that
+// pattern — the server's Upsert contract. members is always sent in full;
+// there is no partial-update form, because the server always replaces
+// wholesale.
+func (c *Client) UpsertOwnershipRule(pattern string, members []string) (*OwnershipRule, error) {
+	payload, err := json.Marshal(struct {
+		Pattern string   `json:"pattern"`
+		Members []string `json:"members"`
+	}{Pattern: pattern, Members: members})
+	if err != nil {
+		return nil, fmt.Errorf("marshal upsert ownership rule request: %w", err)
+	}
+
+	resp, err := c.do(http.MethodPost, "/api/ownership/rules", bytes.NewReader(payload), "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var rule OwnershipRule
+	if err := json.NewDecoder(resp.Body).Decode(&rule); err != nil {
+		return nil, fmt.Errorf("decode upsert ownership rule response: %w", err)
+	}
+	return &rule, nil
+}
+
+// DeleteOwnershipRule calls DELETE /api/ownership/rules/{id}.
+func (c *Client) DeleteOwnershipRule(id string) error {
+	resp, err := c.do(http.MethodDelete, "/api/ownership/rules/"+url.PathEscape(id), nil, "")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// SkillOwners calls GET /api/skills/{name}/owners and returns the resolved
+// owners for the skill name and the rule that matched.
+func (c *Client) SkillOwners(name string) (*SkillOwnersResult, error) {
+	resp, err := c.do(http.MethodGet, "/api/skills/"+url.PathEscape(name)+"/owners", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var out SkillOwnersResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode skill owners response: %w", err)
+	}
+	return &out, nil
+}
+
+// SearchUsers calls GET /api/users/search?q= and returns matching user
+// accounts, identity fields only.
+func (c *Client) SearchUsers(q string) ([]PublicUser, error) {
+	resp, err := c.do(http.MethodGet, "/api/users/search?q="+url.QueryEscape(q), nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Users []PublicUser `json:"users"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode search users response: %w", err)
+	}
+	return body.Users, nil
+}
+
 // DownloadVersion calls GET /api/skills/{name}/versions/{v}/download and
 // returns the raw archive bytes.
 func (c *Client) DownloadVersion(name string, version int) ([]byte, error) {
