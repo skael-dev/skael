@@ -9,6 +9,7 @@ import { SkillList } from "@/features/skills/skill-list";
 import { SkillDetail } from "@/features/skills/skill-detail";
 import { Analytics } from "@/features/analytics/analytics";
 import { Settings } from "@/features/settings/settings";
+import { Ownership } from "@/features/settings/ownership";
 import { ReviewQueue } from "@/features/review/review-queue";
 import { Quadrant } from "@/features/analytics/quadrant";
 import { NotFound } from "@/features/not-found";
@@ -57,6 +58,7 @@ export function App() {
             <Route path="/review" element={<ReviewQueue />} />
             <Route path="/quadrant" element={<Quadrant />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/ownership" element={<Ownership />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
