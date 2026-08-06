@@ -114,6 +114,11 @@ checksum:
   name_template: "checksums.txt"
 
 changelog:
+  # Release notes are written by hand and applied with `gh release edit
+  # --notes-file` after the pipeline publishes. An auto-generated commit list
+  # underneath them is noise: this repo squash-merges, so the list is a handful
+  # of PR titles that say far less than the notes above it already do.
+  disable: true
   sort: asc
   use: github
   groups:
@@ -171,7 +176,7 @@ release:
 
     ## What's in this release
   footer: |
-    **Full changelog**: https://github.com/skael-dev/skael/compare/...v{{.Version}}
+    **Full changelog**: https://github.com/skael-dev/skael/compare/{{ .PreviousTag }}...{{ .Tag }}
 
 brews:
   - name: skael
