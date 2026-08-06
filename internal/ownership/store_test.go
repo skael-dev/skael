@@ -8,20 +8,6 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
-func seedUser(t *testing.T, pool interface {
-	QueryRow(context.Context, string, ...any) interface{ Scan(...any) error }
-}, email string) string {
-	t.Helper()
-	var id string
-	err := pool.QueryRow(context.Background(),
-		`INSERT INTO users (email, name, password_hash, role)
-		 VALUES ($1, $1, 'x', 'member') RETURNING id`, email).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed user %s: %v", email, err)
-	}
-	return id
-}
-
 func TestStoreUpsertReplacesMembers(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.SetupTestDB(t)

@@ -18,12 +18,12 @@ func TestValidatePattern(t *testing.T) {
 		{"superpowers:brainstorming", true},
 		{"skill.name-v2", true},
 		{"", false},
-		{"Payments:*", false},   // uppercase
-		{"pay*ments", false},    // mid-string glob
-		{"payments:**", false},  // double glob
-		{"payments:?", false},   // no character classes
-		{"-leading", false},     // must start alnum
-		{"trailing-", false},    // must end alnum (before any *)
+		{"Payments:*", false},  // uppercase
+		{"pay*ments", false},   // mid-string glob
+		{"payments:**", false}, // double glob
+		{"payments:?", false},  // no character classes
+		{"-leading", false},    // must start alnum
+		{"trailing-", false},   // must end alnum (before any *)
 	}
 	for _, c := range cases {
 		err := ownership.ValidatePattern(c.pattern)
@@ -44,14 +44,14 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 
 	cases := []struct {
-		name  string
-		rule  string
-		want  []string
+		name string
+		rule string
+		want []string
 	}{
-		{"payments:refunds", "r2", []string{"carol"}},           // exact beats prefix
-		{"payments:invoices", "r1", []string{"alice", "bob"}},   // prefix
-		{"payments:refunds:eu:vat", "r3", []string{"dave"}},     // longest prefix wins
-		{"billing:dunning", "", nil},                            // unowned
+		{"payments:refunds", "r2", []string{"carol"}},         // exact beats prefix
+		{"payments:invoices", "r1", []string{"alice", "bob"}}, // prefix
+		{"payments:refunds:eu:vat", "r3", []string{"dave"}},   // longest prefix wins
+		{"billing:dunning", "", nil},                          // unowned
 	}
 	for _, c := range cases {
 		got := ownership.Resolve(c.name, rules)

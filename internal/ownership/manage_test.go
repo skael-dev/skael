@@ -17,11 +17,11 @@ func TestStrictlyContains(t *testing.T) {
 		{"payments:*", "payments:refunds:*", true},
 		{"*", "payments:*", true},
 		{"*", "anything", true},
-		{"payments:*", "payments:*", false},        // not strict
+		{"payments:*", "payments:*", false}, // not strict
 		{"payments:refunds", "payments:refunds", false},
 		{"payments:refunds", "payments:refunds:eu", false}, // exact contains nothing
 		{"payments:*", "billing:x", false},
-		{"payments:refunds", "payments:*", false},  // narrower cannot contain wider
+		{"payments:refunds", "payments:*", false}, // narrower cannot contain wider
 	}
 	for _, c := range cases {
 		if got := ownership.StrictlyContains(c.outer, c.inner); got != c.want {
