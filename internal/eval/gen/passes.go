@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
@@ -21,14 +22,25 @@ type bodyRes struct {
 	Body string `json:"body"`
 }
 
-// resourcesRes is the resources pass's response: every planned bundle file,
-// in one call. Paths are untrusted model output — assemble is what enforces
-// that none of them escape the bundle directory.
+// resourceFile is one bundle file's path (from the approved spec) and
+// content (from the model).
+type resourceFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// resourcesRes is the resources pass's aggregate result: every planned
+// bundle file, assembled from one gateway call per file (see runResources).
+// Paths come from the spec, not the model — assemble's traversal checks stay
+// in place regardless, as defense in depth.
 type resourcesRes struct {
-	Files []struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	} `json:"files"`
+	Files []resourceFile `json:"files"`
+}
+
+// resourceItemRes is a single planned file's content — the resources pass's
+// per-call response.
+type resourceItemRes struct {
+	Content string `json:"content"`
 }
 
 // descriptionRes is the description pass's response: the frontmatter
@@ -106,7 +118,7 @@ func bodyPrompt(s *spec.SkillSpec, outline outlineRes) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(robustnessRules)
+	b.WriteString(RobustnessRules())
 	b.WriteString("\n\nDo not use hedge words — \"consider\", \"if appropriate\", \"as needed\",\n")
 	b.WriteString("\"ideally\" — inside any numbered step; a step is a binding instruction, not a\n")
 	b.WriteString("suggestion.\n\n")
@@ -115,31 +127,46 @@ func bodyPrompt(s *spec.SkillSpec, outline outlineRes) string {
 	return b.String()
 }
 
-// runResources asks for the content of every planned bundle file in one
-// call, rather than one call per file: the files are small and related, and
-// one call lets the model keep cross-references between them consistent.
+// runResources asks for one file per call, not all of them in one: a spec
+// planning several substantial scripts pushes a single response past the
+// gateway's timeout. Each call still gets the whole plan as context, so
+// cross-file references stay consistent. Sequential on purpose — the token
+// cost is the same, and concurrent sessions would scramble progress output.
 func runResources(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (resourcesRes, error) {
-	return llm.CompleteJSON[resourcesRes](ctx, g, llm.Req{
-		Role:       "gen.resources",
-		Prompt:     resourcesPrompt(s),
-		Schema:     []byte(`{"type":"object","properties":{"files":{"type":"array"}},"required":["files"]}`),
-		ModelClass: llm.ClassStrong,
-	})
+	var res resourcesRes
+	for _, items := range [][]spec.ResourceItem{s.Resources.Scripts, s.Resources.References, s.Resources.Assets} {
+		for _, item := range items {
+			r, err := llm.CompleteJSON[resourceItemRes](ctx, g, llm.Req{
+				Role:       "gen.resources:" + item.Path,
+				Prompt:     resourceItemPrompt(s, item),
+				Schema:     []byte(`{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}`),
+				ModelClass: llm.ClassStrong,
+			})
+			if err != nil {
+				return resourcesRes{}, err
+			}
+			res.Files = append(res.Files, resourceFile{Path: item.Path, Content: r.Content})
+		}
+	}
+	return res, nil
 }
 
-func resourcesPrompt(s *spec.SkillSpec) string {
+func resourceItemPrompt(s *spec.SkillSpec, item spec.ResourceItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Write the content of every planned resource file for the skill %q.\n\n", s.Name)
-	b.WriteString("Planned files (write exactly these paths, no others):\n")
+	fmt.Fprintf(&b, "Write the content of one planned resource file for the skill %q.\n\n", s.Name)
+	b.WriteString("Full resource plan, for cross-file consistency — write only the one file\n")
+	b.WriteString("named below; the rest are written in separate calls:\n")
 	b.WriteString(renderResourcePlan(s.Resources))
 	b.WriteString("\n")
-	b.WriteString("Each path is relative to the bundle root and must stay a plain relative path\n")
-	b.WriteString("under scripts/, references/, or assets/ — no leading \"/\", no \"..\" segment, no\n")
-	b.WriteString("symlink. A script must be a self-contained, runnable file (e.g. a python3 or\n")
-	b.WriteString("bash script with a shebang); a reference or asset should be the file's literal\n")
+	fmt.Fprintf(&b, "Write: %s", item.Path)
+	if item.Purpose != "" {
+		fmt.Fprintf(&b, " (%s)", item.Purpose)
+	}
+	b.WriteString("\n\n")
+	b.WriteString("A script must be a self-contained, runnable file (e.g. a python3 or bash\n")
+	b.WriteString("script with a shebang); a reference or asset should be the file's literal\n")
 	b.WriteString("content, not a description of it.\n\n")
-	b.WriteString("Respond with JSON: {\"files\": [{\"path\": \"...\", \"content\": \"...\"}, ...]} — one\n")
-	b.WriteString("entry per planned file. No prose outside the JSON.\n")
+	b.WriteString("Respond with JSON: {\"content\": \"...\"}. No prose outside the JSON.\n")
 	return b.String()
 }
 
@@ -178,9 +205,23 @@ func descriptionPrompt(s *spec.SkillSpec) string {
 	b.WriteString("   naming the concrete nouns a user's request would contain — not a vague\n")
 	b.WriteString("   category. Skills under-trigger far more often than they over-trigger, so be\n")
 	b.WriteString("   assertive and unambiguous about when this applies.\n\n")
-	b.WriteString("The result must be at most 1024 bytes and contain no newline.\n\n")
+	fmt.Fprintf(&b, "The result must be at most %d bytes and contain no newline.\n\n", descriptionByteBudget(s))
 	b.WriteString("Respond with JSON: {\"description\": \"...\"}. No prose outside the JSON.\n")
 	return b.String()
+}
+
+// descriptionByteBudget is what's left of lint.MaxMetadataApproxTokens (a
+// token count, converted to bytes at the same bytes/4 approximation
+// lint.ApproxTokens uses) after the frontmatter's fixed overhead — the "---"
+// fences, the "name: <name>" line, and the "description: " key. Computed per
+// skill because the name's length is part of that overhead.
+func descriptionByteBudget(s *spec.SkillSpec) int {
+	overhead := len("---\n") + len("name: "+s.DirName()+"\n") + len("description: \n") + len("---\n")
+	budget := lint.MaxMetadataApproxTokens*4 - overhead
+	if budget < 0 {
+		budget = 0
+	}
+	return budget
 }
 
 // renderSteps renders a spec's steps as a numbered list a prompt can quote

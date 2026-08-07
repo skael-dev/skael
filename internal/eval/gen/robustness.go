@@ -1,9 +1,17 @@
 package gen
 
-// robustnessRules is injected into the body pass and mirrored by the quality
-// lints, so the generator writes under the same rules the linter enforces.
-// Divergence between the two would produce bundles that fail their own lint.
-const robustnessRules = `Write the skill body under these rules:
+import (
+	"fmt"
+
+	"github.com/skael-dev/skael/internal/eval/lint"
+)
+
+// RobustnessRules returns the rule text the body pass is written under. The
+// budget line is built from lint's own exported constants rather than
+// restated as prose, so the generator and the linter cannot state two
+// different numbers.
+func RobustnessRules() string {
+	return fmt.Sprintf(`Write the skill body under these rules:
 
 - Imperative, numbered steps. One action per step.
 - Every step states a verifiable postcondition — something a script could check.
@@ -14,14 +22,16 @@ const robustnessRules = `Write the skill body under these rules:
 - Assume zero conversation context: explicit relative paths, explicit tool names,
   self-contained input-to-output examples.
 - Use templates rather than prose descriptions of output formats.
-- Body under 500 lines and roughly 5000 tokens. Metadata under ~100 tokens.
+- Body under %d lines and roughly %d tokens. Metadata under ~%d tokens. Keep
+  declarative material — rules, notes, examples, troubleshooting, a
+  glossary — in a clearly headed section (e.g. "## Rules and constraints");
+  if the body is running long, that detail belongs in references/, not
+  crammed into the step-by-step procedure.
 - End with a terminal fallback: "if a checkpoint cannot be satisfied after one
   retry, stop and report state".
 - Never write "consider", "if appropriate", "as needed", or "ideally" inside a
   step. Steps are binding instructions, not suggestions.
 - Give a step a one-line rationale ("do X - otherwise Y") where it aids
   compliance. Reasoning-annotated instructions are followed more reliably than
-  bare ALWAYS/NEVER directives.`
-
-// RobustnessRules returns the rule text the body pass is written under.
-func RobustnessRules() string { return robustnessRules }
+  bare ALWAYS/NEVER directives.`, lint.MaxBodyLines, lint.MaxBodyApproxTokens, lint.MaxMetadataApproxTokens)
+}

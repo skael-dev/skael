@@ -1,8 +1,10 @@
 // Package gen writes a skill bundle — SKILL.md plus scripts/, references/,
 // and assets/ — from an approved spec.SkillSpec. Four model passes (outline,
-// body, resources, description) draft the content; a final, deterministic
-// assembly step writes it to disk under the same rules the quality linter
-// enforces, so a generated bundle passes its own lint by construction.
+// body, resources, description) draft the content; assembly writes it to
+// disk, then a lint-and-revise loop (revise.go) asks the body or description
+// pass to fix whatever lint.Run finds, up to two attempts. The bundle is
+// always returned with a nil error — the CLI's own lint gate, not this loop,
+// decides whether generation succeeded.
 package gen
 
 import (
@@ -21,13 +23,14 @@ type Bundle struct {
 	Files []string
 }
 
-// Generate writes a skill bundle for s into outDir. It runs four gateway
-// passes in order — outline, body, resources, description — then assembles
-// the result deterministically with no further model call.
+// Generate writes a skill bundle for s into outDir. It runs the outline and
+// body passes, then one resources-pass call per planned resource file (see
+// runResources), then the description pass, then assembles the result and
+// runs reviseUntilClean to fix what lint finds.
 //
-// Resource paths in the resources pass come from the model and are untrusted
-// input: assemble refuses any path that is absolute or escapes the bundle
-// directory, rather than silently cleaning it.
+// Resource paths come from the approved spec, not the model: only a file's
+// content is requested per call. assemble still refuses any path that is
+// absolute or escapes the bundle directory, as defense in depth.
 func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, outDir string) (*Bundle, error) {
 	outline, err := runOutline(ctx, g, s)
 	if err != nil {
@@ -49,9 +52,10 @@ func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, outDir stri
 		return nil, fmt.Errorf("gen: description pass: %w", err)
 	}
 
-	b, err := assemble(s, outDir, body.Body, description.Description, resources)
+	bodyText, descText := body.Body, description.Description
+	b, err := reviseUntilClean(ctx, g, s, outDir, &bodyText, &descText, resources)
 	if err != nil {
-		return nil, fmt.Errorf("gen: assembling bundle: %w", err)
+		return nil, err
 	}
 	return b, nil
 }

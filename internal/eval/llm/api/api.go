@@ -185,6 +185,14 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 
 	resp, err := g.opts.HTTPClient.Do(req)
 	if err != nil {
+		// http.Client.Timeout expiry surfaces as a *url.Error wrapping
+		// context.DeadlineExceeded — the same sentinel agentcli's own deadline
+		// wraps, so a caller can branch on llm.ErrTimeout regardless of which
+		// gateway served the call. Not retryable: a second attempt burns
+		// another full timeout for the same result.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.Res{}, false, fmt.Errorf("api: timeout: no response within %s: %w", g.opts.HTTPClient.Timeout, llm.ErrTimeout)
+		}
 		return llm.Res{}, true, fmt.Errorf("api: post: %w", err)
 	}
 	defer resp.Body.Close()

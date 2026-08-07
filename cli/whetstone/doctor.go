@@ -48,6 +48,8 @@ const (
 	// 404s and authoring fails with a confusing "no endpoints found".
 	strongModelEnv = "LLM_STRONG_MODEL"
 	fastModelEnv   = "LLM_FAST_MODEL"
+	// timeoutEnv overrides authoringTimeout without a rebuild.
+	timeoutEnv = "WHETSTONE_LLM_TIMEOUT"
 )
 
 // maxGatewayRetries bounds retries of transient upstream failures. Generation
@@ -55,14 +57,37 @@ const (
 // acceptable.
 const maxGatewayRetries = 3
 
-// authoringTimeout bounds a single gateway call. Both gateway packages
-// default to three minutes, which is too short for this CLI's longest call:
-// suite drafting asks for ten task packages, each with a prompt, an oracle
-// script, and a verifier script, in one response. Running `whetstone new`
-// against a real CLI killed that call at exactly the three-minute mark, twice,
-// after every earlier pass had succeeded. Authoring is interactive and
-// one-shot, so waiting longer costs far less than discarding the run.
+// authoringTimeout is the default bound on a single gateway call, overridable
+// with WHETSTONE_LLM_TIMEOUT. Both gateway packages default to three minutes,
+// which is too short for this CLI's longest call: suite drafting asks for ten
+// task packages, each with a prompt, an oracle script, and a verifier script,
+// in one response. Running `whetstone new` against a real CLI killed that
+// call at exactly the three-minute mark, twice, after every earlier pass had
+// succeeded. Authoring is interactive and one-shot, so waiting longer costs
+// far less than discarding the run. The resources pass no longer needs a
+// large timeout itself — it asks for one file per call rather than every
+// planned file in one response — but suite drafting still can, so the
+// default stays high with an escape hatch for whatever the next long call
+// turns out to be.
 const authoringTimeout = 10 * time.Minute
+
+// resolveTimeout reads timeoutEnv, defaulting to authoringTimeout. A
+// malformed value fails loudly and names the offending value, matching the
+// worker's own env-duration convention (parseDurationEnv in
+// cmd/skael-worker/main.go) rather than silently falling back — the CLI is
+// interactive, so a typo is better caught here than discovered as an
+// unexpectedly short (or long) run.
+func resolveTimeout() (time.Duration, error) {
+	v := os.Getenv(timeoutEnv)
+	if v == "" {
+		return authoringTimeout, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("whetstone: %s %q is not a valid duration: %w", timeoutEnv, v, err)
+	}
+	return d, nil
+}
 
 // versionProbeTimeout bounds the `<cli> --version` call doctor makes. A
 // diagnostic that hangs is worse than one that reports nothing.
@@ -84,6 +109,9 @@ type DoctorReport struct {
 	Gateway string `json:"gateway"`
 	// GatewayDetail explains that choice, including why it is "none".
 	GatewayDetail string `json:"gateway_detail"`
+	// LLMTimeout is the resolved per-call gateway timeout — authoringTimeout
+	// unless WHETSTONE_LLM_TIMEOUT overrides it.
+	LLMTimeout string `json:"llm_timeout"`
 	// Docker reports whether a docker binary is on PATH. Required by the
 	// commands that run a sandbox: eval, repair, and suite check.
 	Docker bool `json:"docker"`
@@ -151,14 +179,22 @@ func chooseGateway() gatewayChoice {
 }
 
 // newGateway builds the gateway chooseGateway selected, sharing the store's
-// completion cache so a re-run of a generation step costs nothing.
+// completion cache so a re-run of a generation step costs nothing. The
+// return value is wrapped in a progressGateway, so every command that calls
+// newGateway prints a line per model call without any change of its own.
 func newGateway(cache llm.Cache) (llm.Gateway, error) {
+	timeout, err := resolveTimeout()
+	if err != nil {
+		return nil, err
+	}
+
+	var gw llm.Gateway
 	switch c := chooseGateway(); c.Kind {
 	case gatewaySubscription:
-		return agentcli.New(agentcli.Options{
+		gw, err = agentcli.New(agentcli.Options{
 			Binary:     c.Binary,
 			Cache:      cache,
-			Timeout:    authoringTimeout,
+			Timeout:    timeout,
 			MaxRetries: maxGatewayRetries,
 		})
 	case gatewayAPI:
@@ -168,19 +204,23 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 			authStyle = api.AuthStyleBearer
 			key = token
 		}
-		return api.New(api.Options{
+		gw, err = api.New(api.Options{
 			BaseURL:     os.Getenv(apiBaseURLEnv),
 			APIKey:      key,
 			AuthStyle:   authStyle,
 			StrongModel: os.Getenv(strongModelEnv),
 			FastModel:   os.Getenv(fastModelEnv),
 			Cache:       cache,
-			HTTPClient:  &http.Client{Timeout: authoringTimeout},
+			HTTPClient:  &http.Client{Timeout: timeout},
 			MaxRetries:  maxGatewayRetries,
 		})
 	default:
 		return nil, fmt.Errorf("no LLM gateway available: %s (run `whetstone doctor`)", c.Detail)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &progressGateway{inner: gw}, nil
 }
 
 var doctorJudge bool
@@ -205,9 +245,18 @@ var doctorCmd = &cobra.Command{
 // RunDoctor collects the environment report. It returns an error only when
 // the report itself could not be produced — a missing CLI, a missing docker,
 // and an unusable gateway are all reported in the report, because the command
-// exists to be run when something is already broken.
+// exists to be run when something is already broken. A malformed
+// WHETSTONE_LLM_TIMEOUT is the one exception: unlike a missing CLI, there is
+// no resolved value left to report, so it is returned as an error rather than
+// folded into the report.
 func RunDoctor(ctx context.Context, withJudge bool) (*DoctorReport, error) {
 	rep := &DoctorReport{}
+
+	timeout, err := resolveTimeout()
+	if err != nil {
+		return nil, err
+	}
+	rep.LLMTimeout = timeout.String()
 
 	if bin, err := agentcli.Detect(); err == nil {
 		rep.AgentCLI = bin
@@ -300,6 +349,7 @@ func (r *DoctorReport) render() {
 	} else {
 		ui.Success("gateway: %s — %s", r.Gateway, r.GatewayDetail)
 	}
+	ui.Info("llm timeout: %s (override with %s)", r.LLMTimeout, timeoutEnv)
 
 	if r.Docker {
 		ui.Success("docker: %s", r.DockerPath)

@@ -1,10 +1,12 @@
 package lint_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/lint"
+	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
 func TestQuality_CleanBundleHasNoErrors(t *testing.T) {
@@ -130,17 +132,44 @@ func TestQuality_ShortMetadataIsUnderTokenBudget(t *testing.T) {
 }
 
 func TestQuality_ModuleCapIsEnforced(t *testing.T) {
+	// 3 scripts + 1 asset = 4 capacity modules, over MaxModules (3). The single
+	// reference must not count toward this cap.
 	dir := writeBundle(t, "pdf-extract", map[string]string{
 		"SKILL.md":        goodSkill,
 		"scripts/a.py":    "x",
 		"scripts/b.py":    "x",
-		"references/c.md": "x",
-		"assets/d.tmpl":   "x",
+		"scripts/c.py":    "x",
+		"references/d.md": "x",
+		"assets/e.tmpl":   "x",
 	})
 
 	got, _ := lint.Quality(dir)
 	if !hasRule(got, "too-many-modules") {
-		t.Errorf("4 modules not flagged: %v", rules(got))
+		t.Errorf("4 capacity modules not flagged: %v", rules(got))
+	}
+	if hasRule(got, "too-many-references") {
+		t.Errorf("a single reference file was flagged as too many: %v", rules(got))
+	}
+}
+
+// TestQuality_ReferenceCapIsIndependentOfModuleCap proves references/ has its
+// own cap and does not count against MaxModules — a reference split out of an
+// over-long body adds no capability, only lower context cost.
+func TestQuality_ReferenceCapIsIndependentOfModuleCap(t *testing.T) {
+	files := map[string]string{"SKILL.md": goodSkill, "scripts/a.py": "x"}
+	// One past the cap, derived rather than hardcoded: this test's whole point
+	// is the cap, so raising the constant must not quietly stop exercising it.
+	for i := 0; i <= spec.MaxReferences; i++ {
+		files[fmt.Sprintf("references/r%d.md", i)] = "x"
+	}
+	dir := writeBundle(t, "pdf-extract", files)
+
+	got, _ := lint.Quality(dir)
+	if !hasRule(got, "too-many-references") {
+		t.Errorf("%d references not flagged: %v", spec.MaxReferences+1, rules(got))
+	}
+	if hasRule(got, "too-many-modules") {
+		t.Errorf("one script plus references was flagged as too many capacity modules: %v", rules(got))
 	}
 }
 
@@ -168,6 +197,70 @@ func TestQuality_DescriptionWithoutTriggerLanguageIsAWarning(t *testing.T) {
 	got, _ := lint.Quality(dir)
 	if !hasRule(got, "description-no-trigger") {
 		t.Errorf("description without 'use when' not flagged: %v", rules(got))
+	}
+}
+
+// realRulesAndConstraints is the "## Rules and constraints" numbered list
+// from a real generated bundle (~/ws/.whetstone/skills/sdd-to-epics-issues,
+// via `whetstone gen`), quoted verbatim. It is what exposed stepLine's
+// original bug: a declarative rule list is not a sequence of executable
+// steps, but every "N. " line in it was scored as one anyway, flagging 9 of
+// the 10 rules as step-without-postcondition. A synthetic minimal fixture
+// would not have caught this — the false positive only shows up against a
+// heading and a list shape a real generation pass actually produces.
+const realRulesAndConstraints = "## Rules and constraints\n\n" +
+	"1. Every epic and issue cites >= 1 section id in `out/sections.json`; every issue has >= 1 verbatim `evidence` string inside a cited section's line span. Ungrounded work goes to `out/open_questions.json`. *(critical, s5/s6)*\n" +
+	"2. No requirement, interface, data model, NFR target, or acceptance threshold appears in an issue without supporting `evidence`; unsupported ones become open questions with a non-empty `assumption_if_unblocked`. *(critical, s6)*\n" +
+	"3. No tracker API or CLI call that creates, updates, or closes work items. Files only. *(critical, s11)*\n" +
+	"4. No writes, moves, or deletes outside `out/`; the source document is byte-identical at s12 to its s1 record. *(critical, s1/s12)*\n" +
+	"5. Every issue is independently assignable: self-contained `context`, >= 1 Given/When/Then criterion in order, `estimate_days` <= `config.max_issue_days`. *(major, s6)*\n" +
+	"6. The `blocked_by` graph is acyclic and every edge names an issue id in `out/issues.json`. *(major, s6)*\n" +
+	"7. No `out/BACKLOG.md` or `out/export.*.json` before `validate_backlog.py` exits 0 in both default and `--traceability` modes. *(major, s10/s11)*\n" +
+	"8. No issue whose only cited sections are non-goal or deferred-phase sections. *(major, s6)*\n" +
+	"9. Every issue title starts with an imperative verb, is <= 90 characters, and names exactly one deliverable. *(minor, s6)*\n" +
+	"10. No hand-editing of `out/*.json` to make validation pass; regenerate from the producing step and let `resources/schemas/backlog.schema.json` validate it. *(major, s7)*\n"
+
+// realTerminalFallback is the same bundle's closing paragraph, quoted
+// verbatim. It states the stop-and-report concept clearly but matches none of
+// terminalFallback's original four fixed phrasings, which is why a correctly
+// written fallback was flagged as missing one.
+const realTerminalFallback = "\n**Terminal fallback:** If a checkpoint cannot be satisfied after one retry, stop. " +
+	"Do not advance to later steps, do not render `out/BACKLOG.md`, and do not hand-edit an artifact to make the gate pass. " +
+	"Report to the user: which step and checkpoint failed, the failing command and its exit code, the error entries verbatim from the relevant report, and which artifacts under `out/` currently exist.\n"
+
+func TestQuality_RealRulesListDoesNotFlagStepWithoutPostcondition(t *testing.T) {
+	body := "---\nname: pdf-extract\ndescription: Use when a PDF is mentioned.\n---\n\n" +
+		"# Overview\n\nSome prose.\n\n" + realRulesAndConstraints
+	dir := writeBundle(t, "pdf-extract", map[string]string{"SKILL.md": body})
+
+	got, _ := lint.Quality(dir)
+	if hasRule(got, "step-without-postcondition") {
+		t.Errorf("declarative rules list was scored as steps: %v", rules(got))
+	}
+}
+
+// TestQuality_ANumberedProcedureStillFlagsStepWithoutPostcondition proves the
+// heading-awareness fix in checkSteps doesn't blanket-disable the rule: a
+// numbered procedure under a non-declarative heading must still be checked.
+func TestQuality_ANumberedProcedureStillFlagsStepWithoutPostcondition(t *testing.T) {
+	body := "---\nname: pdf-extract\ndescription: Use when a PDF is mentioned.\n---\n\n" +
+		"## Workflow\n\n1. Run scripts/extract.py.\n"
+	dir := writeBundle(t, "pdf-extract", map[string]string{"SKILL.md": body})
+
+	got, _ := lint.Quality(dir)
+	if !hasRule(got, "step-without-postcondition") {
+		t.Errorf("a real numbered procedure was not flagged: %v", rules(got))
+	}
+}
+
+func TestQuality_RealTerminalFallbackParagraphSatisfiesTheRule(t *testing.T) {
+	body := "---\nname: pdf-extract\ndescription: Use when a PDF is mentioned.\n---\n\n" +
+		"1. Run scripts/extract.py. Postcondition: out/ exists.\n" + realTerminalFallback
+	dir := writeBundle(t, "pdf-extract", map[string]string{"SKILL.md": body})
+
+	got, _ := lint.Quality(dir)
+	if hasRule(got, "no-terminal-fallback") {
+		t.Errorf("a real terminal-fallback paragraph was flagged as missing one: %v", rules(got))
 	}
 }
 

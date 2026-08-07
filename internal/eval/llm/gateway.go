@@ -10,8 +10,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
+
+// ErrTimeout reports that a gateway call exceeded its configured timeout —
+// distinct from context cancellation, which is the caller giving up rather
+// than the gateway's own deadline firing. Both gateway implementations wrap
+// this so a caller can branch on it with errors.Is regardless of which
+// gateway is in use.
+var ErrTimeout = errors.New("llm: gateway timed out")
 
 // ModelClass routes a call to a capability tier rather than a model name, so
 // gateways can map tiers onto whatever the local subscription offers.
