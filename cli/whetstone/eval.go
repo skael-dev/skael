@@ -365,8 +365,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// "passrate-fallback". None is fatal; the deterministic pillars are still
 	// a real measurement.
 	judgeUnavailable := ""
-	switch {
-	case d.Gateway == nil:
+	switch d.Gateway {
+	case nil:
 		judgeUnavailable = "no LLM gateway is configured"
 	default:
 		calSet, cerr := score.Calibration()
