@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/runner"
@@ -144,7 +145,21 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	// a flat "N non-void tasks" floor would pass suites BuildPlan then rejects,
 	// after the suite is already pushed. Its message names the failing split.
 	if _, err := runner.BuildPlan(runner.Tier(in.Tier), in.Panel, s, void); err != nil {
-		return nil, fmt.Errorf("derive: the derived suite is too thin to evaluate: %w", err)
+		// A too-thin suite is never packed or pushed, so this error message is
+		// the only record of which tasks were void and why — evalqueue.Explain
+		// points a reader at "the suite's checks" for exactly this failure,
+		// and there is no suite to have checks. Names every void reason here
+		// instead, and logs it too, since a worker operator has no other trace
+		// of the derive that never produced a job-visible suite.
+		var voidSummaries []string
+		for _, c := range checks {
+			if c.Void {
+				voidSummaries = append(voidSummaries, c.TaskID+": "+c.Reason)
+			}
+		}
+		d.o.Logger("derive: too thin, %d of %d tasks void: %s", len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "))
+		return nil, fmt.Errorf("derive: the derived suite is too thin to evaluate (%d of %d tasks void: %s): %w",
+			len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "), err)
 	}
 
 	archive, err := evalsuite.PackDir(suiteDir)

@@ -546,6 +546,54 @@ func TestDerive_AGenerationDropBecomesAVoidCheck(t *testing.T) {
 	}
 }
 
+// TestDerive_TooThinErrorNamesTheVoidTasks proves the void/drop information
+// Finding 2 flagged as lost survives even though a too-thin suite is never
+// packed or pushed: the error names each void task and reason, and the same
+// summary is logged.
+func TestDerive_TooThinErrorNamesTheVoidTasks(t *testing.T) {
+	var logged []string
+	d, err := derive.New(derive.Options{
+		Gateway:   newFakeGateway(t, voidEveryHoldoutTask),
+		Driver:    &recordingDriver{behaviour: voidEveryHoldoutTask},
+		StageRoot: t.TempDir(),
+		Logger:    func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("derive.New: %v", err)
+	}
+
+	_, derr := d.Derive(context.Background(), derive.Input{
+		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
+	})
+	if derr == nil {
+		t.Fatal("Derive accepted a suite with no eligible holdout tasks")
+	}
+
+	// Every holdout task is voided by voidEveryHoldoutTask; t01 is one of
+	// them, so the error must name it and its gate reason.
+	var wantVoidID string
+	for id := range holdoutTaskIDs {
+		wantVoidID = id
+		break
+	}
+	if !strings.Contains(derr.Error(), wantVoidID) {
+		t.Errorf("error %q does not name void task %q", derr.Error(), wantVoidID)
+	}
+	if !strings.Contains(derr.Error(), "of ") || !strings.Contains(derr.Error(), " tasks void") {
+		t.Errorf("error %q does not summarise the void count", derr.Error())
+	}
+
+	var loggedVoid bool
+	for _, l := range logged {
+		if strings.Contains(l, "too thin") && strings.Contains(l, wantVoidID) {
+			loggedVoid = true
+		}
+	}
+	if !loggedVoid {
+		t.Errorf("logged = %v, want an entry naming the void tasks", logged)
+	}
+}
+
 func TestBuildPlan_IgnoresAVoidIDWithNoMatchingTask(t *testing.T) {
 	// TierSmoke is dev-only and needs 5 eligible dev tasks.
 	s := &suite.Suite{Tasks: []suite.TaskPkg{
