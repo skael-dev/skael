@@ -951,3 +951,54 @@ func TestReport_SecondRunAgainstAStoredDerivedSuiteIsStillDerived(t *testing.T) 
 		t.Fatal("a re-run against a stored derived suite was recorded as authored")
 	}
 }
+
+// The tier is validated before any lookup, so a bad one needs no fixture: an
+// unknown tier is bad input whether or not the skill exists.
+func TestRerunEval_RejectsAnUnknownTier(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	srv.createSkill(t, "demo")
+
+	rr := srv.postJSON(t, "/api/skills/demo/evals", map[string]any{"tier": "banana"})
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422 — an unknown tier reached the queue: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRerunEval_RejectsAnUnknownTierBeforeTouchingTheSkill(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+
+	// No skill created: bad input must not depend on a database round-trip.
+	rr := srv.postJSON(t, "/api/skills/nope/evals", map[string]any{"tier": "banana"})
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422 (not 404) — the tier is validated first", rr.Code)
+	}
+}
+
+// Every known tier must pass validation. These still 404 on the missing
+// published version, which proves they got past the tier check — a 422 here
+// would mean a valid tier was rejected.
+func TestRerunEval_AcceptsEveryKnownTier(t *testing.T) {
+	for _, tier := range []string{"smoke", "full", "deep"} {
+		t.Run(tier, func(t *testing.T) {
+			srv := newTestServerAsAdmin(t)
+			srv.createSkill(t, "demo")
+
+			rr := srv.postJSON(t, "/api/skills/demo/evals", map[string]any{"tier": tier})
+			if rr.Code == http.StatusUnprocessableEntity {
+				t.Errorf("tier %s was rejected as unknown: %s", tier, rr.Body.String())
+			}
+		})
+	}
+}
+
+// Omitting the tier must keep meaning "full". Validating with a Huma enum tag
+// instead of by hand would make the omitted value invalid and break this.
+func TestRerunEval_OmittedTierIsAccepted(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	srv.createSkill(t, "demo")
+
+	rr := srv.postJSON(t, "/api/skills/demo/evals", map[string]any{})
+	if rr.Code == http.StatusUnprocessableEntity {
+		t.Errorf("an omitted tier was rejected: %s", rr.Body.String())
+	}
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/skill"
@@ -581,6 +582,18 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		u := auth.UserFromContext(ctx)
 		if !u.IsPrivileged() {
 			return nil, huma.Error403Forbidden("rerun eval: privileged callers only")
+		}
+
+		// Validated here rather than with a Huma enum tag: an enum tag makes an
+		// omitted value invalid, which would break the "" -> full default
+		// below. Left unchecked, an unknown tier is stored on the job and only
+		// fails inside the worker at BuildPlan — after a claim, a lease and a
+		// materialised workspace have been spent on a job that could never run.
+		switch input.Body.Tier {
+		case "", string(runner.TierSmoke), string(runner.TierFull), string(runner.TierDeep):
+		default:
+			return nil, huma.Error422UnprocessableEntity(
+				fmt.Sprintf("unknown tier %q: want one of smoke, full, deep", input.Body.Tier))
 		}
 
 		sk, err := skills.GetByName(ctx, input.Name)
