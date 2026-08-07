@@ -90,11 +90,13 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 	// ws and raw are filled in as the session progresses; finish reads
 	// whatever they hold at call time, so artifacts are recorded even when
-	// the run ends before invoke completes.
+	// the run ends before invoke completes. verifierOut is declared here
+	// (rather than at the verifier call site) so finish can close over it.
 	var (
-		ws       string
-		raw      []byte
-		skipDirs []string
+		ws          string
+		raw         []byte
+		skipDirs    []string
+		verifierOut tailWriter
 	)
 
 	finish := func(status string, ferr error) Outcome {
@@ -106,9 +108,9 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		if artifactDir != "" && ws != "" {
 			g := Grading{
 				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
-				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(), Reason: out.Reason,
 			}
-			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs, verifierOut.Bytes()); wErr != nil {
 				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
 				// Events are the only artifact scoring and resume read back;
 				// losing them must not be recorded as a completed
@@ -232,6 +234,8 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
 		Network:   sandbox.NetNone,
 		Timeout:   suite.VerifierTimeout,
+		Stdout:    &verifierOut,
+		Stderr:    &verifierOut,
 	})
 	if err != nil {
 		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))
@@ -246,6 +250,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	exitCode := vres.ExitCode
 	out.VerifierExit = &exitCode
 	if vres.ExitCode != 0 {
+		out.Reason = distilReason(verifierOut.Bytes())
 		return finish(store.StatusFailed, nil)
 	}
 	return finish(store.StatusOK, nil)
@@ -306,7 +311,8 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 			// SkillDir, so excluding it keeps every copy of the bundle out
 			// of outputs/ regardless of which distractors were installed.
 			skipDirs := []string{a.Caps().SkillDir}
-			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
+			// A trigger probe has no verifier, so there is no output to log.
+			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs, nil); wErr != nil {
 				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
 				// Same rule as executeRun: a probe's events are the only
 				// evidence resumeProbeOutcome can recover, so losing them
@@ -436,8 +442,9 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		Err:          err,
 	}
 
-	if meta, mErr := loadArtifactMeta(rec.Outcome.ArtifactDir); mErr == nil {
-		out.Meta = meta
+	if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
+		out.Meta = g.Meta
+		out.Reason = g.Reason
 		return out
 	}
 

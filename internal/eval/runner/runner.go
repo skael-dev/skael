@@ -70,6 +70,11 @@ type Outcome struct {
 	// fields (VisibleSkills feeds trigger precision) must check this first.
 	MetaPartial       bool
 	MetaPartialReason string
+	// Reason is the one line the verifier gave for rejecting the run,
+	// distilled from its output. Empty when the verifier passed, never ran,
+	// or printed nothing. It is the only part of a failed run that says why,
+	// so it is carried into the report rather than left in the artifact.
+	Reason string
 }
 
 // ProbeOutcome is what one trigger probe observed. It deliberately carries no
