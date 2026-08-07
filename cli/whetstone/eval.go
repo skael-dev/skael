@@ -396,7 +396,10 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			}
 		}
 	}
-	if judgeUnavailable != "" {
+	// The judge only ever moves Uplift. With no baseline planned, Uplift is
+	// a structural tie either way, so announcing the fallback reports a
+	// consequence that does not exist.
+	if judgeUnavailable != "" && BaselinePlanned(*plan) {
 		ui.Warn("whetstone eval: scoring Uplift from pass rates rather than the judge — %s", judgeUnavailable)
 	}
 

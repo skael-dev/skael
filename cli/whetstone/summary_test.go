@@ -6,7 +6,9 @@ import (
 
 	whetstone "github.com/skael-dev/skael/cli/whetstone"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/score"
+	"github.com/skael-dev/skael/internal/eval/store"
 )
 
 func failingReport() *report.Report {
@@ -78,5 +80,20 @@ func TestRenderEvalSummary_PassingRunListsNoFailures(t *testing.T) {
 	}
 	if !strings.Contains(got, "1 of 1") {
 		t.Errorf("summary does not report the pass count:\n%s", got)
+	}
+}
+
+func TestBaselinePlanned_FollowsThePlansRunKeys(t *testing.T) {
+	withBaseline := runner.Plan{Runs: []store.RunKey{
+		{TaskID: "t1", Condition: runner.CondSkill},
+		{TaskID: "t1", Condition: runner.CondBaseline},
+	}}
+	if !whetstone.BaselinePlanned(withBaseline) {
+		t.Error("a plan containing a baseline run was reported as having none")
+	}
+
+	skillOnly := runner.Plan{Runs: []store.RunKey{{TaskID: "t1", Condition: runner.CondSkill}}}
+	if whetstone.BaselinePlanned(skillOnly) {
+		t.Error("a plan with no baseline run was reported as having one")
 	}
 }
