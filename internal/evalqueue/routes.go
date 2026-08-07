@@ -545,6 +545,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 					PanelComplete:            rec.PanelComplete,
 					Headline:                 rec.Headline,
 					CriticalForbidViolations: rec.CriticalForbidViolations,
+					SuiteDerived:             rec.SuiteDerived,
 				}, opts.QualityFloor); err != nil {
 				_ = sp.Rollback(ctx)
 				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: reconsider held version failed")

@@ -150,6 +150,74 @@ func TestReconsiderRejectsAnUnknownVersion(t *testing.T) {
 	assert.False(t, released)
 }
 
+// TestReconsider_DerivedScoreDoesNotClearAScanHold: a derived suite is
+// written from the skill's own SKILL.md. Letting a score against it clear a
+// scanner finding would let a skill write the exam it is graded on in order
+// to get past the gate.
+func TestReconsider_DerivedScoreDoesNotClearAScanHold(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+	releaser := skill.NewReleaser(store)
+
+	sk := newGateSkill(t, store, ctx, "derived-no-release")
+	v, err := store.CreateVersion(ctx, sk.ID, "p", "c", "", "d", "c",
+		json.RawMessage(`{}`), nil, scanResultWith(t, gate.ClassExecution, "high"), "t",
+		gate.Decision{Outcome: gate.NeedsReview, HoldReasons: []string{gate.ReasonScan}})
+	require.NoError(t, err)
+
+	_, released, err := releaser.Reconsider(ctx, store.Pool(), "derived-no-release", v.Version,
+		skill.QualityEvidence{Verified: true, PanelComplete: true, Headline: 95, SuiteDerived: true}, 0)
+	require.NoError(t, err)
+	assert.False(t, released, "a derived-suite score released a held version")
+
+	ver, err := store.GetVersion(ctx, "derived-no-release", v.Version)
+	require.NoError(t, err)
+	assert.Equal(t, "needs_review", ver.GateState)
+}
+
+func TestReconsider_AuthoredScoreStillClearsAScanHold(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+	releaser := skill.NewReleaser(store)
+
+	sk := newGateSkill(t, store, ctx, "authored-still-clears")
+	v, err := store.CreateVersion(ctx, sk.ID, "p", "c", "", "d", "c",
+		json.RawMessage(`{}`), nil, scanResultWith(t, gate.ClassExecution, "high"), "t",
+		gate.Decision{Outcome: gate.NeedsReview, HoldReasons: []string{gate.ReasonScan}})
+	require.NoError(t, err)
+
+	_, released, err := releaser.Reconsider(ctx, store.Pool(), "authored-still-clears", v.Version,
+		skill.QualityEvidence{Verified: true, PanelComplete: true, Headline: 95, SuiteDerived: false}, 0)
+	require.NoError(t, err)
+	assert.True(t, released, "an authored score no longer releases a held version")
+}
+
+// TestReconsider_DerivedScoreStillLeavesOwnershipAlone asserts unchanged
+// behaviour, so the new branch cannot quietly acquire a side effect on the
+// other hold reason.
+func TestReconsider_DerivedScoreStillLeavesOwnershipAlone(t *testing.T) {
+	_, store, ctx := gateFixture(t)
+	releaser := skill.NewReleaser(store)
+
+	sk := newGateSkill(t, store, ctx, "derived-ownership-alone")
+	v, err := store.CreateVersion(ctx, sk.ID, "p", "c", "", "d", "c",
+		json.RawMessage(`{}`), nil, json.RawMessage(`{}`), "t",
+		gate.Decision{Outcome: gate.NeedsReview, HoldReasons: []string{gate.ReasonOwnership}})
+	require.NoError(t, err)
+
+	_, released, err := releaser.Reconsider(ctx, store.Pool(), "derived-ownership-alone", v.Version,
+		skill.QualityEvidence{Verified: true, PanelComplete: true, Headline: 95, SuiteDerived: true}, 0)
+	require.NoError(t, err)
+	assert.False(t, released, "a derived score released an ownership hold")
+
+	var count int
+	err = store.Pool().QueryRow(ctx, `
+		SELECT count(*) FROM version_approvals a
+		JOIN skill_versions v ON v.id = a.version_id
+		JOIN skills s ON s.id = v.skill_id
+		WHERE s.name = $1 AND v.version = $2`, "derived-ownership-alone", v.Version).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "a derived score recorded an approval")
+}
+
 // TestStoredScanKeepsTheFindingClass is the guard on the whole release path.
 // Reconsider re-decides from the scan report stored at publish time. If Class
 // did not survive that round trip, gate.Decide would see an unrecognised class
