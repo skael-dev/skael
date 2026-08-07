@@ -567,19 +567,24 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		suiteRef := input.Body.SuiteRef
 		if suiteRef == "" {
-			// The whole point of storage: re-run against the skill's *stored*
-			// suite, never a freshly generated one — a new suite is a
-			// different measurement and the two scores would not be
-			// comparable.
 			rec, err := suites.LatestForSkill(ctx, input.Name)
-			if err != nil {
-				if errors.Is(err, evalsuite.ErrNotFound) {
-					return nil, huma.Error404NotFound(fmt.Sprintf("no eval suite registered for skill %q", input.Name))
-				}
+			switch {
+			case errors.Is(err, evalsuite.ErrNotFound):
+				// No suite registered. Submit with an empty ref and let the
+				// worker derive one: it is the only process with an LLM key
+				// and a Docker socket, and requiring an authored suite made
+				// evaluation unreachable for every imported skill.
+				suiteRef = ""
+			case err != nil:
 				log.Error().Err(err).Str("skill", input.Name).Msg("evalqueue: suite lookup failed")
 				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			default:
+				// The whole point of storage: re-run against the skill's
+				// *stored* suite, never a freshly generated one — a new
+				// suite is a different measurement and the two scores would
+				// not be comparable.
+				suiteRef = rec.Ref
 			}
-			suiteRef = rec.Ref
 		} else {
 			// A caller-named ref must be validated: eval_suites.ref is
 			// globally unique across skills and eval_jobs.suite_ref carries

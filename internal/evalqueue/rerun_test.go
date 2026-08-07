@@ -270,6 +270,120 @@ func fixtureBundle(t *testing.T) []byte {
 	return archive
 }
 
+// newRerunEnv, publishSkill, post, latestJob, pushSuite and
+// createSkillWithoutPublishing below are thin aliases over the fixtures
+// above, named to match the task brief's test bodies without duplicating the
+// server wiring they already do.
+
+func newRerunEnv(t *testing.T) *rerunTestServer {
+	t.Helper()
+	return newRerunTestServerAsAdmin(t)
+}
+
+// publishSkill creates and publishes a minimal skill, then drains the
+// publish-triggered job so it isn't mistaken for the job under test.
+func (s *rerunTestServer) publishSkill(t *testing.T, name string) {
+	t.Helper()
+	s.createSkill(t, name)
+	rr := s.publish(t, name, fixtureBundle(t))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("publishSkill(%s): %d: %s", name, rr.Code, rr.Body)
+	}
+	s.drainQueue(t)
+}
+
+func (s *rerunTestServer) pushSuite(t *testing.T, name string) string {
+	t.Helper()
+	return s.registerSuite(t, name)
+}
+
+func (s *rerunTestServer) createSkillWithoutPublishing(t *testing.T, name string) {
+	t.Helper()
+	s.createSkill(t, name)
+}
+
+// post issues a raw-body JSON POST, for tests asserting on a specific
+// request body rather than one built from a Go value.
+func (s *rerunTestServer) post(t *testing.T, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.handler.ServeHTTP(rr, req)
+	return rr
+}
+
+// latestJob returns the most recently created eval job for a skill.
+func (s *rerunTestServer) latestJob(t *testing.T, name string) evalqueue.Job {
+	t.Helper()
+	sk, err := s.skills.GetByName(context.Background(), name)
+	if err != nil || sk == nil {
+		t.Fatalf("latestJob(%s): GetByName: sk=%v err=%v", name, sk, err)
+	}
+	jobs, err := s.queue.ListBySkill(context.Background(), sk.ID)
+	if err != nil {
+		t.Fatalf("latestJob(%s): ListBySkill: %v", name, err)
+	}
+	if len(jobs) == 0 {
+		t.Fatalf("latestJob(%s): no jobs found", name)
+	}
+	return jobs[0]
+}
+
+func TestRerunEval_EnqueuesWithAnEmptyRefWhenNoSuiteExists(t *testing.T) {
+	// An imported skill has no suite. Refusing here is what made evaluation
+	// unreachable for every skill not authored through whetstone.
+	env := newRerunEnv(t)
+	env.publishSkill(t, "imported-skill")
+
+	res := env.post(t, "/api/skills/imported-skill/evals", `{}`)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", res.Code, res.Body)
+	}
+
+	job := env.latestJob(t, "imported-skill")
+	if job.SuiteRef != "" {
+		t.Fatalf("job suite_ref = %q, want empty so the worker derives one", job.SuiteRef)
+	}
+}
+
+func TestRerunEval_UsesTheStoredSuiteWhenOneExists(t *testing.T) {
+	// Derivation is paid for once: the second run finds the suite the first
+	// one pushed, which is also what keeps the two scores comparable.
+	env := newRerunEnv(t)
+	env.publishSkill(t, "authored-skill")
+	ref := env.pushSuite(t, "authored-skill")
+
+	env.post(t, "/api/skills/authored-skill/evals", `{}`)
+
+	job := env.latestJob(t, "authored-skill")
+	if job.SuiteRef != ref {
+		t.Fatalf("job suite_ref = %q, want the stored suite %q", job.SuiteRef, ref)
+	}
+}
+
+func TestRerunEval_StillRejectsAnUnknownExplicitRef(t *testing.T) {
+	env := newRerunEnv(t)
+	env.publishSkill(t, "demo")
+
+	res := env.post(t, "/api/skills/demo/evals", `{"suite_ref":"no-such-ref"}`)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404 for a named ref that does not exist", res.Code)
+	}
+}
+
+func TestRerunEval_StillRejectsAnUnpublishedSkill(t *testing.T) {
+	// A skill with no released version has nothing to evaluate; deriving a
+	// suite for it would not change that.
+	env := newRerunEnv(t)
+	env.createSkillWithoutPublishing(t, "empty")
+
+	res := env.post(t, "/api/skills/empty/evals", `{}`)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404 for a skill with no published version", res.Code)
+	}
+}
+
 func TestRerun_UsesTheStoredSuiteAndTheRequestedPanel(t *testing.T) {
 	srv := newRerunTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
@@ -303,16 +417,18 @@ func TestRerun_UsesTheStoredSuiteAndTheRequestedPanel(t *testing.T) {
 	}
 }
 
-func TestRerun_404WhenNoSuiteIsRegistered(t *testing.T) {
+// Superseded by TestRerunEval_EnqueuesWithAnEmptyRefWhenNoSuiteExists: a
+// missing suite used to 404 here, which made evaluation unreachable for
+// every skill not authored through whetstone. It now enqueues with an empty
+// suite_ref instead.
+func TestRerun_202WhenNoSuiteIsRegistered(t *testing.T) {
 	srv := newRerunTestServerAsAdmin(t)
 	srv.createSkill(t, "nosuite")
 	srv.publish(t, "nosuite", fixtureBundle(t))
+	srv.drainQueue(t)
 	resp := srv.postJSON(t, "/api/skills/nosuite/evals", map[string]any{})
-	if resp.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
-	}
-	if !strings.Contains(resp.Body.String(), "suite") {
-		t.Fatalf("the error does not tell the caller what is missing: %s", resp.Body)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body)
 	}
 }
 
