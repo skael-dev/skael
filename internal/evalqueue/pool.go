@@ -276,6 +276,17 @@ func (p *PoolExecutor) Complete(ctx context.Context, id JobID, workerID string) 
 	return nil
 }
 
+// SetSuiteRef records the ref a derive job's worker actually measured
+// against. Only a job submitted with no suite_ref should ever call this —
+// the report handler enforces that, not this query.
+func (p *PoolExecutor) SetSuiteRef(ctx context.Context, id JobID, ref string) error {
+	_, err := p.db.Exec(ctx, `UPDATE eval_jobs SET suite_ref = $1, updated_at = now() WHERE id = $2`, ref, string(id))
+	if err != nil {
+		return fmt.Errorf("evalqueue: set suite ref: %w", err)
+	}
+	return nil
+}
+
 // Fail returns the job to the pool while attempts remain and marks it failed
 // once they do not. The cause is always recorded: a job that failed three
 // times with no reason recorded is a support ticket.

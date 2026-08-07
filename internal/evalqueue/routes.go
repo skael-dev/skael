@@ -412,9 +412,42 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
 				"report eval job: report skill %q does not match job skill %q", rep.Skill, j.SkillName))
 		}
-		if rep.SuiteRef != j.SuiteRef {
+		// A job submitted with no suite_ref had its suite derived by the
+		// worker, so the report names a ref the job row could not. It is
+		// validated here instead: refs are globally unique across skills
+		// and eval_jobs.suite_ref carries no foreign key, so an unchecked
+		// ref would attribute a score computed against another skill's
+		// tasks to this one.
+		derived := false
+		switch {
+		case j.SuiteRef == "":
+			sr, err := suites.Get(ctx, rep.SuiteRef)
+			if errors.Is(err, evalsuite.ErrNotFound) {
+				return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
+					"report eval job: report suite_ref %q is not a registered suite", rep.SuiteRef))
+			}
+			if err != nil {
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: suite lookup failed")
+				return nil, huma.Error500InternalServerError("report eval job: internal error")
+			}
+			if sr.SkillName != j.SkillName {
+				return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
+					"report eval job: suite %q belongs to skill %q, not %q", rep.SuiteRef, sr.SkillName, j.SkillName))
+			}
+			derived = true
+		case rep.SuiteRef != j.SuiteRef:
 			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
 				"report eval job: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, j.SuiteRef))
+		default:
+			// A re-run against a suite derived earlier still measures the
+			// skill against its own claims. Checking only the empty-ref
+			// case would call every run after the first one authored.
+			sr, err := suites.Get(ctx, rep.SuiteRef)
+			if err != nil {
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: suite lookup failed")
+				return nil, huma.Error500InternalServerError("report eval job: internal error")
+			}
+			derived = sr.Origin == evalsuite.OriginDerived
 		}
 		// An empty or "dev" engine_version defeats report.Comparable's check
 		// for whether two scores come from the same worker build — a
@@ -447,6 +480,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		rec.Version = j.Version
 		rec.JobID = string(j.ID)
 		rec.ScoredAt = time.Now()
+		rec.SuiteDerived = derived
 
 		// f/g. Persist the quality record and mark the job done in a single
 		// transaction. Without this, a transient failure between the two
@@ -465,6 +499,17 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			return nil, huma.Error500InternalServerError("report eval job: internal error")
 		}
 		defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+		if j.SuiteRef == "" {
+			if err := suites.MarkDerived(ctx, tx, rep.SuiteRef); err != nil {
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: mark suite derived failed")
+				return nil, huma.Error500InternalServerError("report eval job: internal error")
+			}
+			if err := q.WithExecutor(tx).SetSuiteRef(ctx, j.ID, rep.SuiteRef); err != nil {
+				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: record derived suite ref failed")
+				return nil, huma.Error500InternalServerError("report eval job: internal error")
+			}
+		}
 
 		if err := qual.WithExecutor(tx).Upsert(ctx, rec); err != nil {
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: upsert quality record failed")

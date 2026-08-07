@@ -16,6 +16,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/gate"
@@ -32,6 +33,7 @@ type testServer struct {
 	handler http.Handler
 	skills  *skill.Store
 	queue   *evalqueue.PoolExecutor
+	suites  *evalsuite.Registry
 	pool    *pgxpool.Pool
 }
 
@@ -70,7 +72,7 @@ func newTestServerWithRole(t *testing.T, role string) *testServer {
 		QualityFloor: testQualityFloor,
 	})
 
-	return &testServer{handler: r, skills: skillStore, queue: q, pool: pool}
+	return &testServer{handler: r, skills: skillStore, queue: q, suites: suiteRegistry, pool: pool}
 }
 
 // newTestServer is authenticated as a plain member.
@@ -92,6 +94,41 @@ func (s *testServer) createSkill(t *testing.T, name string) string {
 		t.Fatalf("createSkill(%s): %v", name, err)
 	}
 	return sk.ID
+}
+
+// pushSuite registers a fixture suite for skillName in the registry and
+// returns its content-addressed ref. Any report-route test that names a
+// suite_ref must have a real registered suite behind it, now that the report
+// handler looks the ref up rather than trusting a bare string match.
+func (s *testServer) pushSuite(t *testing.T, skillName string) string {
+	t.Helper()
+	dir := t.TempDir()
+	sp := &suite.Suite{
+		Tasks: []suite.TaskPkg{{
+			ID:       "t1",
+			Kind:     "happy",
+			Split:    "holdout",
+			PromptMD: "# Task\n\nDo the thing for " + skillName + ".\n",
+			Oracle:   "#!/bin/sh\necho ok\n",
+			Verifier: "#!/bin/sh\nexit 0\n",
+		}},
+		Triggers: suite.TriggerSet{
+			Positive: []string{"do the thing"},
+			Negative: []string{"do something unrelated"},
+		},
+	}
+	if err := sp.Write(dir); err != nil {
+		t.Fatalf("pushSuite: Write: %v", err)
+	}
+	archive, err := evalsuite.PackDir(dir)
+	if err != nil {
+		t.Fatalf("pushSuite: PackDir: %v", err)
+	}
+	rec, err := s.suites.Put(context.Background(), skillName, archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "test@example.com", nil)
+	if err != nil {
+		t.Fatalf("pushSuite: Put: %v", err)
+	}
+	return rec.Ref
 }
 
 func (s *testServer) submitJob(t *testing.T, skillID, skillName string, version int, suiteRef string) string {
@@ -272,7 +309,8 @@ func TestClaimRoute_CarriesThePanelTheJobWasSubmittedWith(t *testing.T) {
 func TestReportRoute_WritesAVerifiedScore(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, ref)
 
 	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
 	var claimed struct {
@@ -284,7 +322,7 @@ func TestReportRoute_WritesAVerifiedScore(t *testing.T) {
 		t.Fatalf("claim response = %s", claim.Body)
 	}
 
-	rep := reportFixture("deploy-helper", "sha256:abc", 72.5)
+	rep := reportFixture("deploy-helper", ref, 72.5)
 	resp := srv.postReport(t, jobID, claimed.ClaimToken, rep)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
@@ -359,11 +397,12 @@ func TestReportRoute_RejectsAReportForAnotherSkill(t *testing.T) {
 func TestReportRoute_RejectsDevEngineVersion(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, ref)
 	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
 	token := claimToken(t, claim)
 
-	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 99, "dev", time.Now()))
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", ref, 99, "dev", time.Now()))
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422: %s", resp.Code, resp.Body)
 	}
@@ -372,11 +411,12 @@ func TestReportRoute_RejectsDevEngineVersion(t *testing.T) {
 func TestReportRoute_RejectsEmptyEngineVersion(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, ref)
 	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
 	token := claimToken(t, claim)
 
-	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 99, "", time.Now()))
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", ref, 99, "", time.Now()))
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422: %s", resp.Code, resp.Body)
 	}
@@ -389,7 +429,8 @@ func TestReportRoute_RejectsEmptyEngineVersion(t *testing.T) {
 func TestReportRoute_ScoredAtIsServerSideNotReportSupplied(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, ref)
 	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
 	token := claimToken(t, claim)
 
@@ -397,7 +438,7 @@ func TestReportRoute_ScoredAtIsServerSideNotReportSupplied(t *testing.T) {
 	// Zero finished_at: an omitted field would marshal as the Go zero value,
 	// 0001-01-01. If the server trusted it, this score would sort before
 	// every other score forever.
-	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", "sha256:abc", 42, "0.9.1", time.Time{}))
+	resp := srv.postReport(t, jobID, token, reportFixtureWith("deploy-helper", ref, 42, "0.9.1", time.Time{}))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
 	}
@@ -442,11 +483,12 @@ func TestCancelRoute_CancelsAQueuedJob(t *testing.T) {
 func TestCancelRoute_409OnAFinishedJob(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, ref)
 	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
 	token := claimToken(t, claim)
 
-	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 50))
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", ref, 50))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("setup: report failed: %d: %s", resp.Code, resp.Body)
 	}
@@ -622,10 +664,11 @@ func TestReportRoute_ClearingScoreReleasesAHeldVersion(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
 	version := srv.heldVersion(t, skillID, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", version, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", version, ref)
 
 	token := srv.claimOnly(t, jobID)
-	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 82))
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", ref, 82))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
 	}
@@ -694,10 +737,11 @@ func TestReportRoute_ShortScoreLeavesTheVersionHeld(t *testing.T) {
 	srv := newTestServerAsAdmin(t)
 	skillID := srv.createSkill(t, "deploy-helper")
 	version := srv.heldVersion(t, skillID, "deploy-helper")
-	jobID := srv.submitJob(t, skillID, "deploy-helper", version, "sha256:abc")
+	ref := srv.pushSuite(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", version, ref)
 
 	token := srv.claimOnly(t, jobID)
-	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", "sha256:abc", 40))
+	resp := srv.postReport(t, jobID, token, reportFixture("deploy-helper", ref, 40))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
 	}
@@ -718,5 +762,171 @@ func TestReportRoute_ShortScoreLeavesTheVersionHeld(t *testing.T) {
 	}
 	if job := srv.getJob(t, jobID); job.Status != "done" {
 		t.Fatalf("job status = %q, want done", job.Status)
+	}
+}
+
+// reportEnv is the fixture for the derive-suite report tests: a running
+// server, so a test can push suites through its registry and inspect their
+// origin the way the report handler does.
+type reportEnv struct {
+	*testServer
+	skills map[string]string // skill name -> id, created on first use
+}
+
+func newReportEnv(t *testing.T) *reportEnv {
+	t.Helper()
+	return &reportEnv{testServer: newTestServerAsAdmin(t), skills: map[string]string{}}
+}
+
+func (e *reportEnv) skillID(t *testing.T, skillName string) string {
+	t.Helper()
+	if id, ok := e.skills[skillName]; ok {
+		return id
+	}
+	id := e.createSkill(t, skillName)
+	e.skills[skillName] = id
+	return id
+}
+
+// claimedJob is a job already claimed by a fake worker, ready to report
+// against.
+type claimedJob struct {
+	id    string
+	token string
+}
+
+type jobOpt func(*evalqueue.Job)
+
+// withSuiteRef sets the ref a job is submitted with; "" is a derive job.
+func withSuiteRef(ref string) jobOpt {
+	return func(j *evalqueue.Job) { j.SuiteRef = ref }
+}
+
+func (e *reportEnv) enqueueJob(t *testing.T, skillName string, opts ...jobOpt) *claimedJob {
+	t.Helper()
+	j := evalqueue.Job{SkillID: e.skillID(t, skillName), SkillName: skillName, Version: 1}
+	for _, opt := range opts {
+		opt(&j)
+	}
+	id, err := e.queue.Submit(context.Background(), j)
+	if err != nil {
+		t.Fatalf("enqueueJob: Submit: %v", err)
+	}
+	return &claimedJob{id: string(id), token: e.claimOnly(t, string(id))}
+}
+
+func (e *reportEnv) markDerived(t *testing.T, ref string) {
+	t.Helper()
+	if err := e.suites.MarkDerived(context.Background(), e.pool, ref); err != nil {
+		t.Fatalf("markDerived: %v", err)
+	}
+}
+
+func (e *reportEnv) report(t *testing.T, job *claimedJob, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	return e.postReport(t, job.id, job.token, body)
+}
+
+func (e *reportEnv) latestQuality(t *testing.T, skillName string, version int) *quality.Record {
+	t.Helper()
+	q := quality.NewStore(e.pool)
+	rec, err := q.Latest(context.Background(), e.skillID(t, skillName), version)
+	if err != nil {
+		t.Fatalf("latestQuality: %v", err)
+	}
+	if rec == nil {
+		t.Fatalf("latestQuality: no row for %s v%d", skillName, version)
+	}
+	return rec
+}
+
+// reportJSON builds a report body naming suiteRef, above the test floor so
+// clearing behavior never confounds these tests.
+func reportJSON(t *testing.T, skillName, suiteRef string) []byte {
+	t.Helper()
+	return reportFixture(skillName, suiteRef, 80)
+}
+
+func TestReport_AcceptsTheDerivedRefAndStampsOrigin(t *testing.T) {
+	env := newReportEnv(t)
+	job := env.enqueueJob(t, "demo", withSuiteRef(""))
+	ref := env.pushSuite(t, "demo")
+
+	res := env.report(t, job, reportJSON(t, "demo", ref))
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", res.Code, res.Body)
+	}
+
+	rec, err := env.suites.Get(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Get suite: %v", err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Fatalf("origin = %q, want derived", rec.Origin)
+	}
+}
+
+func TestReport_RejectsARefBelongingToAnotherSkill(t *testing.T) {
+	// eval_jobs.suite_ref carries no foreign key and refs are globally
+	// unique, so an unchecked ref would attribute a score computed against
+	// another skill's tasks and verifiers to this one.
+	env := newReportEnv(t)
+	job := env.enqueueJob(t, "demo", withSuiteRef(""))
+	otherRef := env.pushSuite(t, "other-skill")
+
+	res := env.report(t, job, reportJSON(t, "demo", otherRef))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422 for a ref belonging to another skill", res.Code)
+	}
+}
+
+func TestReport_RejectsARefThatDoesNotExist(t *testing.T) {
+	env := newReportEnv(t)
+	job := env.enqueueJob(t, "demo", withSuiteRef(""))
+
+	res := env.report(t, job, reportJSON(t, "demo", "no-such-ref"))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422 for an unknown ref", res.Code)
+	}
+}
+
+func TestReport_StillRejectsAMismatchOnANamedJob(t *testing.T) {
+	// The existing invariant is unchanged for a job that named its suite.
+	env := newReportEnv(t)
+	ref := env.pushSuite(t, "demo")
+	job := env.enqueueJob(t, "demo", withSuiteRef(ref))
+
+	res := env.report(t, job, reportJSON(t, "demo", "something-else"))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422", res.Code)
+	}
+}
+
+func TestReport_RecordsSuiteDerivedOnTheQualityRow(t *testing.T) {
+	env := newReportEnv(t)
+	job := env.enqueueJob(t, "demo", withSuiteRef(""))
+	ref := env.pushSuite(t, "demo")
+
+	env.report(t, job, reportJSON(t, "demo", ref))
+
+	rec := env.latestQuality(t, "demo", 1)
+	if !rec.SuiteDerived {
+		t.Fatal("quality row does not record that the suite was derived")
+	}
+}
+
+func TestReport_SecondRunAgainstAStoredDerivedSuiteIsStillDerived(t *testing.T) {
+	// The job now names a ref, so "job.SuiteRef == ''" alone would call this
+	// authored. The suite's own origin is what carries it forward.
+	env := newReportEnv(t)
+	ref := env.pushSuite(t, "demo")
+	env.markDerived(t, ref)
+	job := env.enqueueJob(t, "demo", withSuiteRef(ref))
+
+	env.report(t, job, reportJSON(t, "demo", ref))
+
+	rec := env.latestQuality(t, "demo", 1)
+	if !rec.SuiteDerived {
+		t.Fatal("a re-run against a stored derived suite was recorded as authored")
 	}
 }
