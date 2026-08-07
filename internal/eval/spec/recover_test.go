@@ -8,37 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/llm"
+	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
-
-// fakeGateway records requests and returns scripted responses.
-type fakeGateway struct {
-	reply      string
-	replies    []string
-	calls      int
-	lastPrompt string
-}
-
-func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
-	g.calls++
-	g.lastPrompt = r.Prompt
-
-	var resp string
-	if len(g.replies) > 0 {
-		if g.calls <= len(g.replies) {
-			resp = g.replies[g.calls-1]
-		}
-	} else {
-		resp = g.reply
-	}
-
-	return llm.Res{Text: resp, Model: "fake"}, nil
-}
-
-func (g *fakeGateway) ModelFor(_ llm.ModelClass) string {
-	return "fake"
-}
 
 // writeFile creates a file at dir/name with the given content, creating
 // intermediate directories as needed.
@@ -138,17 +110,18 @@ func TestRecover_UsesBundleContentInThePrompt(t *testing.T) {
 	writeFile(t, dir, "SKILL.md", "---\nname: pdf-split\ndescription: Split PDFs\n---\n\nRun scripts/split.sh.\n")
 	writeFile(t, dir, "scripts/split.sh", "#!/bin/bash\nqpdf --split-pages \"$1\" out/page.pdf\n")
 
-	g := &fakeGateway{reply: validSpecJSON(t)}
+	g := fake.New(validSpecJSON(t))
 	if _, err := spec.Recover(context.Background(), g, "pdf-split", dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 
 	// The whole point of reading the bundle rather than just SKILL.md is that
 	// a skill's real behaviour often lives in its scripts.
-	if !strings.Contains(g.lastPrompt, "qpdf --split-pages") {
+	prompt := g.Calls()[len(g.Calls())-1].Prompt
+	if !strings.Contains(prompt, "qpdf --split-pages") {
 		t.Fatal("prompt does not include scripts/ content")
 	}
-	if !strings.Contains(g.lastPrompt, "Run scripts/split.sh.") {
+	if !strings.Contains(prompt, "Run scripts/split.sh.") {
 		t.Fatal("prompt does not include the SKILL.md body")
 	}
 }
@@ -158,7 +131,7 @@ func TestRecover_NamesTheSkillFromTheRegistry(t *testing.T) {
 	// which strips everything up to the last colon, so "superpowers:brainstorming"
 	// is legal even though the raw name is not kebab-case.
 	dir := newMinimalBundle(t)
-	g := &fakeGateway{reply: validSpecJSONNamed(t, "something-else")}
+	g := fake.New(validSpecJSONNamed(t, "something-else"))
 
 	sp, err := spec.Recover(context.Background(), g, "superpowers:brainstorming", dir)
 	if err != nil {
@@ -173,15 +146,15 @@ func TestRecover_RepairsAnInvalidDraft(t *testing.T) {
 	// The second call is conditional. An invalid draft gets one repair pass,
 	// told exactly what was wrong.
 	dir := newMinimalBundle(t)
-	g := &fakeGateway{replies: []string{invalidSpecJSON(t), validSpecJSON(t)}}
+	g := fake.New(invalidSpecJSON(t), validSpecJSON(t))
 
 	if _, err := spec.Recover(context.Background(), g, "demo", dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if g.calls != 2 {
-		t.Fatalf("gateway called %d times, want 2 (draft + repair)", g.calls)
+	if n := len(g.Calls()); n != 2 {
+		t.Fatalf("gateway called %d times, want 2 (draft + repair)", n)
 	}
-	if !strings.Contains(g.lastPrompt, "postcondition") {
+	if !strings.Contains(g.Calls()[1].Prompt, "postcondition") {
 		t.Fatal("repair prompt does not name the validation failure")
 	}
 }
@@ -190,13 +163,13 @@ func TestRecover_ValidDraftCostsOneCall(t *testing.T) {
 	// Interview's unconditional second call is a design critique. Recovering
 	// an existing skill has no design to improve, so it is not paid for.
 	dir := newMinimalBundle(t)
-	g := &fakeGateway{reply: validSpecJSON(t)}
+	g := fake.New(validSpecJSON(t))
 
 	if _, err := spec.Recover(context.Background(), g, "demo", dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if g.calls != 1 {
-		t.Fatalf("gateway called %d times for a valid draft, want 1", g.calls)
+	if n := len(g.Calls()); n != 1 {
+		t.Fatalf("gateway called %d times for a valid draft, want 1", n)
 	}
 }
 
@@ -204,17 +177,18 @@ func TestRecover_TruncatesAFatBundle(t *testing.T) {
 	dir := newMinimalBundle(t)
 	writeFile(t, dir, "references/huge.md", strings.Repeat("x", 200_000))
 
-	g := &fakeGateway{reply: validSpecJSON(t)}
+	g := fake.New(validSpecJSON(t))
 	if _, err := spec.Recover(context.Background(), g, "demo", dir); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if len(g.lastPrompt) > 80_000 {
-		t.Fatalf("prompt is %d bytes; a fat bundle must not crowd out the instructions", len(g.lastPrompt))
+	prompt := g.Calls()[len(g.Calls())-1].Prompt
+	if len(prompt) > 80_000 {
+		t.Fatalf("prompt is %d bytes; a fat bundle must not crowd out the instructions", len(prompt))
 	}
 }
 
 func TestRecover_MissingSkillMDIsAnError(t *testing.T) {
-	g := &fakeGateway{reply: validSpecJSON(t)}
+	g := fake.New(validSpecJSON(t))
 	if _, err := spec.Recover(context.Background(), g, "demo", t.TempDir()); err == nil {
 		t.Fatal("Recover accepted a bundle with no SKILL.md")
 	}
