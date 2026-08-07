@@ -195,6 +195,7 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			Checks:      checks,
 			SpecVersion: rec.SpecVersion,
 			Spec:        rec.Spec,
+			Origin:      string(rec.Origin),
 		}}, nil
 	})
 
@@ -211,6 +212,11 @@ type getSuiteMetaBody struct {
 	Checks      []suiteCheck    `json:"checks"`
 	SpecVersion int             `json:"spec_version"`
 	Spec        json.RawMessage `json:"spec,omitempty"`
+	// Origin is how this suite came to exist ("authored" or "derived"), so a
+	// caller can decide void-tolerance from the suite itself rather than from
+	// whether this particular run was the one that derived it — see
+	// worker.RunInput.AllowVoid.
+	Origin string `json:"origin"`
 }
 
 type getSuiteMetaOutput struct {

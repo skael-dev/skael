@@ -66,10 +66,13 @@ type RunInput struct {
 	Tier     string
 	Panel    evalqueue.Panel
 
-	// AllowVoid excludes void tasks instead of refusing the run. Set only on
-	// the derive path: a derived suite asks for 18 tasks precisely so the ones
-	// its own oracle gate voids are absorbed, and there is no author to go
-	// repair them. An authored suite keeps the stricter contract.
+	// AllowVoid excludes void tasks instead of refusing the run. Sourced from
+	// the suite's own recorded origin (evalsuite.Origin), not from whether
+	// this run derived the suite: a derived suite asks for 18 tasks precisely
+	// so the ones its own oracle gate voids are absorbed, and there is no
+	// author to go repair them — that stays true on a retry or any later run
+	// against an already-derived suite. An authored suite keeps the stricter
+	// contract regardless of which run is asking.
 	AllowVoid bool
 
 	// WorkspaceDir already contains an initialised whetstone workspace with
@@ -89,6 +92,11 @@ type Runner interface {
 type SuiteMeta struct {
 	Checks []evalsuite.Check
 	Spec   *spec.SkillSpec
+	// Origin is how the suite came to exist. It is the source of truth for
+	// void-tolerance (RunInput.AllowVoid): a property of the suite, not of
+	// which run happened to derive it — a retry or any later run against an
+	// already-derived suite must still tolerate its voids.
+	Origin evalsuite.Origin
 }
 
 // API is the server surface the worker needs, so a test can fake it.
@@ -246,7 +254,6 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	}
 
 	suiteRef := job.SuiteRef
-	derivedHere := suiteRef == ""
 	if suiteRef == "" {
 		// No suite was registered when this job was submitted. Derive one,
 		// push it, and continue down the ordinary path: re-downloading what
@@ -314,7 +321,11 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
-		AllowVoid: derivedHere,
+		// Sourced from the suite's own recorded origin, not from whether this
+		// run was the one that derived it: a retry or any later run against
+		// an already-derived suite (job.SuiteRef non-empty from the start)
+		// must still tolerate the voids that suite was built to absorb.
+		AllowVoid: meta.Origin == evalsuite.OriginDerived,
 	})
 
 	cancel()

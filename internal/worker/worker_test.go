@@ -130,6 +130,10 @@ type fakeAPI struct {
 	// exercises Materialize's frontmatter-reconstruction fallback, same as
 	// before this field existed.
 	spec *spec.SkillSpec
+	// origin is what SuiteMeta reports as the suite's origin. Zero value ("")
+	// is neither OriginDerived nor OriginAuthored, so AllowVoid is false by
+	// default — a test that cares must set it explicitly.
+	origin evalsuite.Origin
 
 	// job, when set, is claimed once by Claim before the queue is consulted —
 	// a shorthand for tests that only care about a single job, so they don't
@@ -210,7 +214,7 @@ func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error
 }
 
 func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, error) {
-	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec}, nil
+	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec, Origin: f.origin}, nil
 }
 
 func (f *fakeAPI) PushSuite(_ context.Context, in worker.PushSuiteInput) (string, error) {
@@ -513,11 +517,17 @@ func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
 // A derived suite is gated by its own oracles with nobody to repair a task
 // that fails, which is why it asks for 18 rather than 10. That surplus only
 // helps if the run then excludes the void tasks instead of refusing outright.
+//
+// AllowVoid is sourced from the suite's recorded origin (SuiteMeta.Origin),
+// not from whether this particular run was the one that derived it — see
+// TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite for the
+// retry/follow-up case that distinction exists to fix.
 func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 	derivedRef := fixtureSuiteRef(t)
 	api := &fakeAPI{
 		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
 		pushRef: derivedRef,
+		origin:  evalsuite.OriginDerived,
 	}
 	r := &fakeRunner{reportSuiteRef: derivedRef}
 	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
@@ -528,11 +538,12 @@ func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 	}
 
 	// An authored suite has an author who can go fix a void task, so the
-	// stricter contract stays.
+	// stricter contract stays regardless of which run is asking.
 	authoredRef := fixtureSuiteRef(t)
 	api2 := &fakeAPI{
 		job:           &evalqueue.Job{ID: "j2", SkillName: "demo", Version: 1, SuiteRef: authoredRef, Tier: "full"},
 		suiteArchives: map[string][]byte{authoredRef: fixtureSuiteArchive(t)},
+		origin:        evalsuite.OriginAuthored,
 	}
 	r2 := &fakeRunner{reportSuiteRef: authoredRef}
 	if _, err := newTestWorker(t, api2, r2, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
@@ -540,6 +551,33 @@ func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 	}
 	if r2.input().AllowVoid {
 		t.Fatal("an authored suite's run was allowed to exclude void tasks")
+	}
+}
+
+// TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite proves the
+// retry/follow-up fix: RecordDerivedSuite now stamps eval_jobs.suite_ref at
+// push time, before the panel runs, so a retry after a mid-run failure (or
+// any later eval against a previously-derived suite) sees a non-empty
+// job.SuiteRef from the start — the old `derivedHere := suiteRef == ""`
+// computation would then set AllowVoid: false and refuse deterministically
+// on voids that were fine to accept the first time. AllowVoid must instead
+// come from the suite's own recorded origin, which SuiteMeta reports on
+// every run, not just the one that derived it.
+func TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		// SuiteRef is already populated, as it would be on a retry or a
+		// fresh follow-up eval — this is the case that was broken.
+		job:           &evalqueue.Job{ID: "j3", SkillName: "demo", Version: 1, SuiteRef: derivedRef, Tier: "full"},
+		suiteArchives: map[string][]byte{derivedRef: fixtureSuiteArchive(t)},
+		origin:        evalsuite.OriginDerived,
+	}
+	r := &fakeRunner{reportSuiteRef: derivedRef}
+	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !r.input().AllowVoid {
+		t.Fatal("a run against an already-derived suite (non-empty job.SuiteRef) was not allowed to exclude void tasks")
 	}
 }
 
