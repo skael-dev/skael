@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 )
@@ -119,6 +121,25 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 		return SuiteMeta{}, err
 	}
 	return SuiteMeta{Checks: checks, Spec: sp}, nil
+}
+
+// PushSuite uploads a derived suite through POST /api/eval/suites and returns
+// its content-addressed ref. spec_version is 0: a derived spec was never
+// saved to a workspace store, so it has no version to name.
+func (h *HTTPAPI) PushSuite(_ context.Context, skill string, archive []byte, checks []evalsuite.Check, sp *spec.SkillSpec) (string, error) {
+	wire := make([]client.EvalSuiteCheck, len(checks))
+	for i, c := range checks {
+		wire[i] = client.EvalSuiteCheck{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
+	}
+	specJSON, err := json.Marshal(sp)
+	if err != nil {
+		return "", fmt.Errorf("worker: marshal derived spec: %w", err)
+	}
+	out, err := h.c.UploadEvalSuite(skill, 0, wire, specJSON, archive)
+	if err != nil {
+		return "", err
+	}
+	return out.Ref, nil
 }
 
 // asLeaseLost converts a 409 Conflict — the server's signal that a claim no
