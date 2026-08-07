@@ -101,8 +101,7 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 		return nil, fmt.Errorf("derive: recover spec: %w", err)
 	}
 
-	// Drops are discarded here; Task 3 wires them into the derive result.
-	s, _, err := suite.GenerateN(ctx, d.o.Gateway, sp, taskCount)
+	s, dropped, err := suite.GenerateN(ctx, d.o.Gateway, sp, taskCount)
 	if err != nil {
 		return nil, fmt.Errorf("derive: generate suite: %w", err)
 	}
@@ -120,6 +119,19 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	checks, err := d.gate(ctx, s, sp, suiteDir)
 	if err != nil {
 		return nil, err
+	}
+
+	// A stub that never became a task has no archive entry to gate, so it
+	// reaches the record here rather than from the gate. Void already means
+	// "planned but does not count", which is exactly its state — so a thin
+	// suite's gate voids and generation drops read as one list.
+	for _, dr := range dropped {
+		checks = append(checks, evalsuite.Check{
+			TaskID: dr.TaskID,
+			OK:     false,
+			Void:   true,
+			Reason: "generation failed: " + dr.Reason,
+		})
 	}
 
 	void := make(map[string]bool, len(checks))

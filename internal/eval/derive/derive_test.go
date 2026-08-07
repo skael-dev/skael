@@ -93,7 +93,8 @@ func voidEveryThirdTask(id string) (int, int, int) {
 // fakeGatewayConfig is set up through fakeGatewayOption functions before the
 // gateway is constructed.
 type fakeGatewayConfig struct {
-	setupTask string
+	setupTask     string
+	failExpansion string
 }
 
 type fakeGatewayOption func(*fakeGatewayConfig)
@@ -102,6 +103,12 @@ type fakeGatewayOption func(*fakeGatewayConfig)
 // task, so a test can exercise a derived task that ships its own fixtures.
 func withGeneratedSetup(id string) fakeGatewayOption {
 	return func(c *fakeGatewayConfig) { c.setupTask = id }
+}
+
+// withFailedExpansion makes the fake gateway error on the expansion of the
+// named task, standing in for a truncated or unparseable response.
+func withFailedExpansion(id string) fakeGatewayOption {
+	return func(c *fakeGatewayConfig) { c.failExpansion = id }
 }
 
 // fakeGateway is an llm.Gateway that answers derive's three calls: spec.recover
@@ -149,6 +156,9 @@ func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 		id, err := expandTargetID(r.Prompt)
 		if err != nil {
 			return llm.Res{}, err
+		}
+		if g.cfg.failExpansion != "" && id == g.cfg.failExpansion {
+			return llm.Res{}, fmt.Errorf("fakeGateway: expansion of %s failed", id)
 		}
 		return llm.Res{Text: expandedTaskJSON(g.cfg, id), Model: "fake"}, nil
 	default:
@@ -505,6 +515,48 @@ func TestDerive_StagesUnderTheConfiguredRunRoot(t *testing.T) {
 		if !strings.HasPrefix(ws, root) {
 			t.Fatalf("oracle workspace %q is outside the run root", ws)
 		}
+	}
+}
+
+func TestDerive_AGenerationDropBecomesAVoidCheck(t *testing.T) {
+	dropped := taskID(2)
+	d := newTestDeriver(t, allTasksPass, withFailedExpansion(dropped))
+
+	res, err := d.Derive(context.Background(), derive.Input{
+		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
+	})
+	if err != nil {
+		t.Fatalf("a single failed expansion killed the derive: %v", err)
+	}
+
+	var found *evalsuite.Check
+	for i := range res.Checks {
+		if res.Checks[i].TaskID == dropped {
+			found = &res.Checks[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("the dropped task produced no check")
+	}
+	if !found.Void || found.OK {
+		t.Errorf("check = %+v, want Void true and OK false", *found)
+	}
+	if !strings.Contains(found.Reason, "generation failed") {
+		t.Errorf("Reason = %q, want it to name a generation failure", found.Reason)
+	}
+}
+
+func TestBuildPlan_IgnoresAVoidIDWithNoMatchingTask(t *testing.T) {
+	// TierSmoke is dev-only and needs 5 eligible dev tasks.
+	s := &suite.Suite{Tasks: []suite.TaskPkg{
+		{ID: "kept1", Split: "dev"}, {ID: "kept2", Split: "dev"},
+		{ID: "kept3", Split: "dev"}, {ID: "kept4", Split: "dev"},
+		{ID: "kept5", Split: "dev"},
+	}}
+	void := map[string]bool{"never-generated": true}
+
+	if _, err := runner.BuildPlan(runner.TierSmoke, runner.DefaultPanel(), s, void); err != nil {
+		t.Fatalf("a void id naming no task broke planning: %v", err)
 	}
 }
 
