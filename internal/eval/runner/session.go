@@ -230,7 +230,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	vres, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
-		Argv:      []string{"sh", "/verifier/test.sh"},
+		Argv:      []string{"bash", "/verifier/test.sh"},
 		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
 		Network:   sandbox.NetNone,
 		Timeout:   suite.VerifierTimeout,
