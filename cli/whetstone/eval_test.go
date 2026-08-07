@@ -528,6 +528,41 @@ func TestRunEvalWith_AnErroredRunDoesNotAbortTheEval(t *testing.T) {
 	}
 }
 
+// TestRunEvalWith_VerifierFailureReasonReachesTheReport proves the reason a
+// task failed survives the full path from the verifier's own FAIL: output,
+// through firstFailureReason, into the report's ConditionReport — every
+// other test either starts from a hand-built ConditionReport or stops at
+// runner.Outcome.Reason, neither of which would have caught a break in the
+// wiring between the two.
+func TestRunEvalWith_VerifierFailureReasonReachesTheReport(t *testing.T) {
+	d, req := evalHarnessFull(t)
+	d.Driver = failingVerifierDriver{taskID: "t00"}
+
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+
+	var found bool
+	for _, tr := range r.Tasks {
+		if tr.TaskID != "t00" {
+			continue
+		}
+		for _, c := range tr.Conditions {
+			if c.Condition != runner.CondSkill {
+				continue
+			}
+			found = true
+			if c.Reason != "row_count should be 2" {
+				t.Errorf("ConditionReport.Reason = %q, want the verifier's FAIL: line", c.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("report has no skill ConditionReport for task t00")
+	}
+}
+
 func TestRunEvalWith_JSONOutputCarriesTheRequiredKeys(t *testing.T) {
 	d, req := evalHarness(t)
 	ui.JSONMode = true
@@ -558,7 +593,7 @@ func TestRunEvalWith_JSONOutputCarriesTheRequiredKeys(t *testing.T) {
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatalf("--json output is not a single JSON object: %v\n%s", err, out)
 	}
-	for _, key := range []string{"eval_id", "skill", "tier", "suite_ref", "headline", "panel_complete", "uplift_source"} {
+	for _, key := range []string{"eval_id", "skill", "tier", "suite_ref", "headline", "panel_complete", "uplift_source", "failed_tasks"} {
 		if _, ok := obj[key]; !ok {
 			t.Errorf("--json output missing required key %q: %v", key, obj)
 		}
@@ -730,6 +765,28 @@ func (fakeDriver) Snapshot(context.Context, sandbox.ImageRef) (sandbox.SnapshotR
 }
 func (fakeDriver) Run(context.Context, sandbox.RunSpec) (sandbox.RunResult, error) {
 	return sandbox.RunResult{ExitCode: 0}, nil
+}
+
+// failingVerifierDriver wraps fakeDriver and fails the verifier step for one
+// task, writing a FAIL: line the way every generated verifier does — see
+// TestRunEvalWith_VerifierFailureReasonReachesTheReport.
+type failingVerifierDriver struct {
+	fakeDriver
+	taskID string
+}
+
+func (d failingVerifierDriver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult, error) {
+	if len(rs.Argv) > 0 && rs.Argv[len(rs.Argv)-1] == "/verifier/test.sh" {
+		for _, m := range rs.Mounts {
+			if strings.Contains(m.HostPath, d.taskID) {
+				if rs.Stdout != nil {
+					_, _ = rs.Stdout.Write([]byte("checking\nFAIL: row_count should be 2\n"))
+				}
+				return sandbox.RunResult{ExitCode: 1}, nil
+			}
+		}
+	}
+	return d.fakeDriver.Run(ctx, rs)
 }
 
 // fakeAdapter is an agent.Adapter that reports a step matching the fixture

@@ -442,10 +442,16 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		Err:          err,
 	}
 
-	if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
-		out.Meta = g.Meta
-		out.Reason = g.Reason
-		return out
+	// filepath.Join("", gradingFileName) resolves to the bare relative name,
+	// read against the process's cwd rather than failing — guard against
+	// that rather than let an unset ArtifactDir accidentally pick up a
+	// stray grading.json in whatever directory whetstone eval was run from.
+	if rec.Outcome.ArtifactDir != "" {
+		if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
+			out.Meta = g.Meta
+			out.Reason = g.Reason
+			return out
+		}
 	}
 
 	out.Meta = agent.Meta{

@@ -56,19 +56,38 @@ func RenderEvalSummary(rep *report.Report, evalID int64, skill string, baselineP
 type taskFailure struct{ taskID, reason string }
 
 // taskTally counts the skill condition only: the baseline exists to be
-// compared against, and a baseline failure is not a defect in the skill.
+// compared against, and a baseline failure is not a defect in the skill. A
+// task with a multi-member panel carries one skill ConditionReport per
+// member (see the per-member loop in RunEvalWith), so it is tallied once per
+// TaskID, not once per condition: it passes only if every member's skill run
+// passed, consistent with the headline being the panel's weakest-member
+// score. A task both members failed keeps a single failure line — one of the
+// reasons, not one line each, matching firstFailureReason's own budget.
 func taskTally(rep *report.Report) (passed, total int, failures []taskFailure) {
 	for _, t := range rep.Tasks {
+		var present bool
+		allPassed := true
+		var reason string
 		for _, c := range t.Conditions {
 			if c.Condition != runner.CondSkill {
 				continue
 			}
-			total++
-			if c.Passes > 0 {
-				passed++
-			} else {
-				failures = append(failures, taskFailure{taskID: t.TaskID, reason: c.Reason})
+			present = true
+			if c.Passes <= 0 {
+				allPassed = false
+				if reason == "" {
+					reason = c.Reason
+				}
 			}
+		}
+		if !present {
+			continue
+		}
+		total++
+		if allPassed {
+			passed++
+		} else {
+			failures = append(failures, taskFailure{taskID: t.TaskID, reason: reason})
 		}
 	}
 	sort.Slice(failures, func(i, j int) bool { return failures[i].taskID < failures[j].taskID })

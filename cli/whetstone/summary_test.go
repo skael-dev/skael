@@ -83,6 +83,32 @@ func TestRenderEvalSummary_PassingRunListsNoFailures(t *testing.T) {
 	}
 }
 
+// A 2-member panel appends one skill ConditionReport per member for the same
+// task. If one member passes and the other fails, the task must not be
+// double-counted, and must be listed as a single failure — "every member
+// must pass" is the correct semantics, matching the headline's
+// weakest-member score.
+func TestTaskTally_DedupesAcrossPanelMembersRequiringEveryMemberToPass(t *testing.T) {
+	rep := failingReport()
+	rep.Members = append(rep.Members, report.MemberReport{
+		Member:  report.PanelMember{Agent: "claude-code", Model: "haiku", Class: "fast"},
+		Pillars: score.Pillars{TriggerF1: 1, Reliability: 1, Uplift: 0.5, Efficiency: 1},
+		Healthy: true,
+	})
+	rep.Tasks[0].Conditions = []report.ConditionReport{
+		{Condition: "skill", Model: "opus", Passes: 0, Runs: 1, Reason: "ragged_rows entries need line and field_count"},
+		{Condition: "skill", Model: "haiku", Passes: 1, Runs: 1},
+	}
+
+	got := whetstone.RenderEvalSummary(rep, 5, "csv-to-markdown", false)
+	if !strings.Contains(got, "0 of 1") {
+		t.Errorf("summary double-counted a task split across panel members:\n%s", got)
+	}
+	if strings.Count(got, "edge-ragged-rows-pad") != 1 {
+		t.Errorf("summary listed the failing task more than once:\n%s", got)
+	}
+}
+
 func TestBaselinePlanned_FollowsThePlansRunKeys(t *testing.T) {
 	withBaseline := runner.Plan{Runs: []store.RunKey{
 		{TaskID: "t1", Condition: runner.CondSkill},

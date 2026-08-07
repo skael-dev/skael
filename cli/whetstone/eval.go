@@ -784,7 +784,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			return nil, err
 		}
 	} else {
-		fmt.Print(RenderEvalSummary(rep, evalID, req.Skill, BaselinePlanned(*plan)))
+		// Every other whetstone human-facing output goes to stderr so --json
+		// stdout stays clean and parseable; this must match.
+		fmt.Fprint(os.Stderr, RenderEvalSummary(rep, evalID, req.Skill, BaselinePlanned(*plan)))
 	}
 
 	return rep, nil
