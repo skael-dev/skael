@@ -27,6 +27,7 @@ type RecordOutput struct {
 	DriftBreakdown           json.RawMessage `json:"drift_breakdown"`
 	Verified                 bool            `json:"verified"`
 	PanelComplete            bool            `json:"panel_complete"`
+	SuiteDerived             bool            `json:"suite_derived"`
 	SuiteRef                 string          `json:"suite_ref"`
 	EngineVersion            string          `json:"engine_version"`
 	ModelPanel               json.RawMessage `json:"model_panel"`

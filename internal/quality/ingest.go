@@ -37,6 +37,9 @@ type Record struct {
 
 	Verified      bool
 	PanelComplete bool
+	// SuiteDerived is set from the job row, not the report body — see
+	// FromReportRaw for why Verified and Version follow the same rule.
+	SuiteDerived bool
 
 	SuiteRef      string
 	EngineVersion string
