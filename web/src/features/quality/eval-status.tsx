@@ -28,6 +28,28 @@ function DerivedSuiteBadge() {
   );
 }
 
+// last_error is one column carrying two things when evalqueue.Explain
+// recognises the failure (routes.go): a plain-language lead sentence, a
+// blank line, then the raw Go error chain. Rendered inline that reads as one
+// run-on line, so the raw chain sits behind a <details> toggle instead —
+// same disclosure pattern as quality-trend.tsx's "not comparable" scores. An
+// unrecognised failure has no "\n\n" (Explain's contract: passed through
+// unchanged) and renders as-is, no toggle.
+function LastFailedError({ lastError }: { lastError: string }) {
+  const sep = lastError.indexOf("\n\n");
+  if (sep === -1) {
+    return <span className="text-danger">Last eval failed: {lastError}</span>;
+  }
+  const lead = lastError.slice(0, sep);
+  const raw = lastError.slice(sep + 2);
+  return (
+    <details className="text-danger">
+      <summary className="inline cursor-pointer">Last eval failed: {lead}</summary>
+      <p className="mt-1 whitespace-pre-wrap text-text-tertiary">{raw}</p>
+    </details>
+  );
+}
+
 function elapsed(since: string): string {
   const mins = Math.floor((Date.now() - new Date(since).getTime()) / 60_000);
   if (mins < 1) return "just started";
@@ -110,9 +132,7 @@ export function EvalStatus({
         </span>
       )}
       {quality?.suite_derived && !hideDerivedBadge && <DerivedSuiteBadge />}
-      {lastFailed?.last_error && (
-        <span className="text-danger">Last eval failed: {lastFailed.last_error}</span>
-      )}
+      {lastFailed?.last_error && <LastFailedError lastError={lastFailed.last_error} />}
       <span className="inline-flex items-center gap-1.5">
         <button
           onClick={() => run("smoke")}

@@ -131,6 +131,33 @@ describe("EvalStatus", () => {
     expect(await screen.findByText(/sandbox image missing/i)).toBeInTheDocument();
   });
 
+  // last_error is one column carrying a plain-language lead and the raw Go
+  // error chain, separated by a blank line (evalqueue's fail handler). The
+  // raw chain must not render as running text next to the lead — it belongs
+  // behind the <details> toggle, collapsed by default.
+  it("leads with the plain-language sentence and keeps the raw chain out of the running text", async () => {
+    const lastError =
+      "This skill's evaluation suite had too few usable tasks to score. See the suite's checks for which tasks were void and why.\n\n" +
+      "worker: derive suite for x: derive: the derived suite is too thin to evaluate: runner: tier full needs 7 dev tasks, the suite has 3";
+    mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: lastError, enqueued_at: "2026-08-01T00:00:00Z" }]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    expect(await screen.findByText(/too few usable tasks to score/i)).toBeInTheDocument();
+    // The raw chain exists in the DOM (inside <details>) but is not visible
+    // collapsed — this is the run-on-line regression check.
+    const summary = screen.getByText(/too few usable tasks to score/i);
+    expect(summary.textContent).not.toMatch(/runner: tier full needs/);
+  });
+
+  it("renders an unrecognised failure as-is, with no toggle", async () => {
+    const lastError = "worker: something nobody has classified yet";
+    mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: lastError, enqueued_at: "2026-08-01T00:00:00Z" }]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    expect(await screen.findByText(/something nobody has classified yet/i)).toBeInTheDocument();
+    expect(document.querySelector("details")).not.toBeInTheDocument();
+  });
+
   // EvalStatus has no production call site outside QualityReport today
   // (which passes hideDerivedBadge to avoid a duplicate). This protects the
   // prop's default (false/undefined) so a future standalone usage still
