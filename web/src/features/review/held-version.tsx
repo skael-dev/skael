@@ -347,7 +347,7 @@ export function HeldVersion({
       <div className="px-4 py-3 border-t border-border bg-bg-secondary flex flex-col gap-2">
         <div className="flex items-center gap-3 flex-wrap">
           <button
-            onClick={run}
+            onClick={() => run()}
             disabled={!canDecide || evalPending}
             title={!canDecide ? decideDisabledReason : undefined}
             className="text-xs text-accent hover:underline disabled:opacity-50"

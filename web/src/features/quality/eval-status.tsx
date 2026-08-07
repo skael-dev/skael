@@ -97,7 +97,7 @@ export function EvalStatus({
 
   const lastFailed = jobs.find((j) => j.status === "failed");
   const stale = quality != null && quality.version < latestVersion;
-  const label = quality == null ? "Run eval" : "Re-run eval";
+  const rerun = quality != null;
 
   return (
     <span className="inline-flex items-center gap-2 text-[11px] text-text-secondary">
@@ -113,14 +113,25 @@ export function EvalStatus({
       {lastFailed?.last_error && (
         <span className="text-danger">Last eval failed: {lastFailed.last_error}</span>
       )}
-      <button
-        onClick={run}
-        disabled={!canRun || isPending}
-        title={!canRun ? RUN_EVAL_DISABLED_REASON : undefined}
-        className="text-accent hover:underline disabled:opacity-50"
-      >
-        {isPending ? "Queueing…" : label}
-      </button>
+      <span className="inline-flex items-center gap-1.5">
+        <button
+          onClick={() => run("smoke")}
+          disabled={!canRun || isPending}
+          title={!canRun ? RUN_EVAL_DISABLED_REASON : "5 tasks on one model"}
+          className="text-accent hover:underline disabled:opacity-50"
+        >
+          {isPending ? "Queueing…" : rerun ? "Re-run quick check (smoke)" : "Quick check (smoke)"}
+        </button>
+        <span className="text-text-tertiary">·</span>
+        <button
+          onClick={() => run()}
+          disabled={!canRun || isPending}
+          title={!canRun ? RUN_EVAL_DISABLED_REASON : "the releasable score"}
+          className="text-accent hover:underline disabled:opacity-50"
+        >
+          {isPending ? "Queueing…" : rerun ? "Re-run full evaluation" : "Full evaluation"}
+        </button>
+      </span>
       {!canRun && <span className="text-text-tertiary">{RUN_EVAL_DISABLED_REASON}</span>}
       {isError && (
         <span className="text-xs text-danger flex items-center gap-1">

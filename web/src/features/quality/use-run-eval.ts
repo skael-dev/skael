@@ -14,7 +14,10 @@ import { rerunEval } from "@/api/sdk.gen";
 export function useRunEval(skillName: string, version?: number) {
   const qc = useQueryClient();
   const mutation = useMutation({
-    mutationFn: async () => {
+    // Tier is omitted rather than defaulted here: the server already defaults
+    // it to "full", and sending a default from the client would mean two
+    // places decide the same thing.
+    mutationFn: async (tier?: string) => {
       // A held version never advances latest_version, so omitting version
       // here would either 404 (first publish held, latest_version === 0)
       // or evaluate the wrong (previous released) version. When the caller
@@ -23,7 +26,7 @@ export function useRunEval(skillName: string, version?: number) {
       // omit it to let the server default to the current latest.
       const res = await rerunEval({
         path: { name: skillName },
-        body: version ? { version } : {},
+        body: { ...(version ? { version } : {}), ...(tier ? { tier } : {}) },
       });
       if (res.error) throw new Error(res.error.detail ?? "Failed to queue eval");
       return res.data;
@@ -33,7 +36,7 @@ export function useRunEval(skillName: string, version?: number) {
     },
   });
   return {
-    run: () => mutation.mutate(),
+    run: (tier?: string) => mutation.mutate(tier),
     isPending: mutation.isPending,
     isError: mutation.isError,
     error: (mutation.error as Error) ?? null,

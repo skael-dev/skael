@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
@@ -107,7 +107,8 @@ describe("EvalStatus", () => {
   it("offers to run an eval when there is no score and no job", async () => {
     mockEvals([]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
-    expect(await screen.findByRole("button", { name: /run eval/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /quick check/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /full evaluation/i })).toBeInTheDocument();
   });
 
   it("names both versions and offers a re-run when the score is stale", async () => {
@@ -120,7 +121,8 @@ describe("EvalStatus", () => {
       />,
     ));
     expect(await screen.findByText(/scored on v3 · current v7/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /re-run eval/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-run quick check/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-run full evaluation/i })).toBeInTheDocument();
   });
 
   it("surfaces a failed job's error", async () => {
@@ -169,10 +171,48 @@ describe("EvalStatus", () => {
     );
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
 
-    const button = await screen.findByRole("button", { name: /run eval/i });
+    const button = await screen.findByRole("button", { name: /full evaluation/i });
     await user.click(button);
 
     expect(await screen.findByText(/failed|queue is full/i)).toBeInTheDocument();
+  });
+
+  it("sends the chosen tier when running an eval", async () => {
+    let sent: Record<string, unknown> | undefined;
+    server.use(
+      http.post("/api/skills/:name/evals", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ job_id: "job-1" }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    mockEvals([]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    const button = await screen.findByRole("button", { name: /quick check/i });
+    await user.click(button);
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).toMatchObject({ tier: "smoke" });
+  });
+
+  it("omits the tier when none is chosen, so the server default applies", async () => {
+    let sent: Record<string, unknown> | undefined;
+    server.use(
+      http.post("/api/skills/:name/evals", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ job_id: "job-1" }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    mockEvals([]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    const button = await screen.findByRole("button", { name: /full evaluation/i });
+    await user.click(button);
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).not.toHaveProperty("tier");
   });
 });
 
