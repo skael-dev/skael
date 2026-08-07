@@ -170,8 +170,9 @@ func (s *testServer) postReport(t *testing.T, jobID, token string, rep []byte) *
 }
 
 type jobStatus struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	LastError string `json:"last_error"`
 }
 
 func (s *testServer) getJob(t *testing.T, jobID string) jobStatus {
@@ -519,6 +520,44 @@ func TestFailRoute_RequeuesWithRetriesRemaining(t *testing.T) {
 	job := srv.getJob(t, jobID)
 	if job.Status != "queued" {
 		t.Fatalf("job status = %q, want queued (retries remain)", job.Status)
+	}
+}
+
+// TestFailRoute_StoresThePlainLanguageLeadAndTheRawChain proves the
+// Explain wiring in the fail handler (routes.go) actually reaches the
+// stored job, not just Explain in isolation: a recognised raw error chain
+// must persist as last_error with the plain-language sentence first and the
+// original chain still present, since the handler concatenates them for a
+// single column with no separate plain-language field.
+func TestFailRoute_StoresThePlainLanguageLeadAndTheRawChain(t *testing.T) {
+	srv := newTestServerAsAdmin(t)
+	skillID := srv.createSkill(t, "deploy-helper")
+	jobID := srv.submitJob(t, skillID, "deploy-helper", 2, "sha256:abc")
+	claim := srv.postJSON(t, "/api/eval/jobs/claim", map[string]any{"worker_id": "w1", "lease_seconds": 600})
+	token := claimToken(t, claim)
+
+	// Reused from failure_test.go's "suite too thin" case, which Explain
+	// recognises.
+	raw := "worker: derive suite for x: derive: the derived suite is too thin to evaluate: runner: tier full needs 7 dev tasks, the suite has 3"
+	body, err := json.Marshal(map[string]string{"error": raw})
+	if err != nil {
+		t.Fatalf("marshal fail body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+jobID+"/fail", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Claim-Token", token)
+	rr := httptest.NewRecorder()
+	srv.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+
+	job := srv.getJob(t, jobID)
+	if !strings.HasPrefix(job.LastError, "This skill's evaluation suite had too few usable tasks to score") {
+		t.Fatalf("last_error = %q, want it to lead with the plain-language sentence", job.LastError)
+	}
+	if !strings.Contains(job.LastError, raw) {
+		t.Fatalf("last_error = %q, want it to still contain the raw chain %q", job.LastError, raw)
 	}
 }
 
