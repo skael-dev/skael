@@ -764,15 +764,24 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	if ui.JSONMode {
+		type jsonFailure struct {
+			TaskID string `json:"task_id"`
+			Reason string `json:"reason,omitempty"`
+		}
+		_, _, failures := taskTally(rep)
+		failed := make([]jsonFailure, 0, len(failures))
+		for _, f := range failures {
+			failed = append(failed, jsonFailure{TaskID: f.taskID, Reason: f.reason})
+		}
 		if err := ui.PrintJSON(map[string]any{
 			"eval_id": evalID, "skill": req.Skill, "tier": string(req.Tier), "suite_ref": suiteRef,
 			"headline": rep.Headline, "panel_complete": rep.PanelComplete, "uplift_source": string(rep.UpliftSource),
+			"failed_tasks": failed,
 		}); err != nil {
 			return nil, err
 		}
 	} else {
-		ui.Success("eval %d for %s: %.1f effectiveness (tier=%s panel_complete=%v uplift=%s)",
-			evalID, req.Skill, rep.Headline, req.Tier, rep.PanelComplete, rep.UpliftSource)
+		fmt.Print(RenderEvalSummary(rep, evalID, req.Skill, BaselinePlanned(*plan)))
 	}
 
 	return rep, nil
