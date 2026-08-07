@@ -237,10 +237,10 @@
     {{if .Conditions}}
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th><th>Why it failed</th></tr></thead>
       <tbody>
         {{range .Conditions}}
-        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td></tr>
+        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td><td>{{.Reason}}</td></tr>
         {{end}}
       </tbody>
     </table>
