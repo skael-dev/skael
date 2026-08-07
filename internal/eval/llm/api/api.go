@@ -24,7 +24,7 @@ var ErrNoAPIKey = errors.New("api: an API key is required")
 const (
 	defaultBaseURL = "https://api.anthropic.com"
 	apiVersion     = "2023-06-01"
-	defaultMaxTok  = 8192
+	defaultMaxTok  = 32768
 	defaultTimeout = 3 * time.Minute
 )
 
@@ -107,8 +107,9 @@ type response struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
-	Model string `json:"model"`
-	Error *struct {
+	Model      string `json:"model"`
+	StopReason string `json:"stop_reason"`
+	Error      *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
@@ -232,6 +233,14 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		if b.Type == "text" {
 			sb.WriteString(b.Text)
 		}
+	}
+	if parsed.StopReason == "max_tokens" {
+		// A cut-off text block is still non-empty, so returning it as a
+		// success would hand the caller a truncated JSON string it can only
+		// blame on the model. Not retryable: MaxTokens is fixed per request,
+		// so a retry hits the identical ceiling and truncates identically —
+		// burning another call to learn nothing new.
+		return llm.Res{}, false, fmt.Errorf("api: response truncated at max_tokens (%d); raise the cap or shorten the request", defaultMaxTok)
 	}
 	if sb.Len() == 0 {
 		// A well-formed 200 with no text block is the caller's completion

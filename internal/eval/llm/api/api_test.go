@@ -565,6 +565,62 @@ func TestComplete_HonoursHTTPClientTimeout(t *testing.T) {
 	}
 }
 
+// TestComplete_TruncatedByMaxTokensIsAnError pins that a 200 with
+// stop_reason "max_tokens" is reported as truncation, not returned as a
+// success built from the partial text — the caller (llm.ExtractJSON) would
+// otherwise blame the model for malformed JSON when the response was cut off
+// by our own cap.
+func TestComplete_TruncatedByMaxTokensIsAnError(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"a\": 1, \"b\":"}],"model":"m","stop_reason":"max_tokens"}`)
+	})
+
+	_, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded on a response truncated by max_tokens")
+	}
+	if !strings.Contains(err.Error(), "truncat") {
+		t.Errorf("err = %v, want it to name the truncation", err)
+	}
+}
+
+// TestComplete_EndTurnWithNormalTextStillSucceeds proves the truncation check
+// only fires on stop_reason "max_tokens" and does not disturb a healthy
+// response.
+func TestComplete_EndTurnWithNormalTextStillSucceeds(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"ok\":true}"}],"model":"m","stop_reason":"end_turn"}`)
+	})
+
+	res, err := gateway(t, s.URL).Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if res.Text != `{"ok":true}` {
+		t.Errorf("Text = %q, want the healthy response text", res.Text)
+	}
+}
+
+// TestComplete_TruncatedByMaxTokensIsNotRetried pins the retry classification:
+// a truncated response against a fixed max_tokens ceiling will truncate
+// identically on a retry, so retrying just burns a second expensive call
+// before reporting the same, now-doubly-misleading error.
+func TestComplete_TruncatedByMaxTokensIsNotRetried(t *testing.T) {
+	var calls int32
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"{\"a\": 1, \"b\":"}],"model":"m","stop_reason":"max_tokens"}`)
+	})
+
+	g := gateway(t, s.URL, func(o *api.Options) { o.MaxRetries = 2 })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded on a response truncated by max_tokens")
+	}
+	if calls != 1 {
+		t.Errorf("made %d calls for a max_tokens truncation, want exactly 1 — it should not be retried", calls)
+	}
+}
+
 type memCache struct{ m map[string]string }
 
 func (c *memCache) Get(k string) (string, bool, error) { v, ok := c.m[k]; return v, ok, nil }
