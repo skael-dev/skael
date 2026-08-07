@@ -242,4 +242,7 @@ func TestHTML_EscapesTheReason(t *testing.T) {
 	if strings.Contains(buf.String(), "<script>alert(1)</script>") {
 		t.Error("the reason was not escaped")
 	}
+	if !strings.Contains(buf.String(), "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Error("the reason was not escaped")
+	}
 }
