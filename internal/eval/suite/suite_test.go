@@ -369,7 +369,7 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 				Kind:     "edge",
 				Split:    "holdout",
 				PromptMD: "# Prompt\n\nDo the thing precisely.\n",
-				EnvFrag:  "FROM ubuntu:24.04\nRUN apt-get update\n",
+				Setup:    "mkdir -p data\nprintf 'a,b\\n' > data/in.csv\n",
 				Oracle:   "#!/bin/sh\necho solved > solved.txt\nexit 0\n",
 				Verifier: "#!/bin/sh\ntest -f solved.txt\n",
 			},
@@ -408,8 +408,8 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 	if loaded.PromptMD != want.PromptMD {
 		t.Errorf("PromptMD = %q, want %q", loaded.PromptMD, want.PromptMD)
 	}
-	if loaded.EnvFrag != want.EnvFrag {
-		t.Errorf("EnvFrag = %q, want %q", loaded.EnvFrag, want.EnvFrag)
+	if loaded.Setup != want.Setup {
+		t.Errorf("Setup = %q, want %q", loaded.Setup, want.Setup)
 	}
 	if loaded.Oracle != want.Oracle {
 		t.Errorf("Oracle = %q, want %q", loaded.Oracle, want.Oracle)
@@ -426,16 +426,16 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 	}
 }
 
-// TestWriteAndLoad_RoundTripsEnvFrag covers EnvFrag specifically: the on-disk
-// layout only writes environment/Dockerfile.frag when EnvFrag is non-empty,
+// TestWriteAndLoad_RoundTripsSetup covers Setup specifically: the on-disk
+// layout only writes environment/setup.sh when Setup is non-empty,
 // so both the non-empty and the empty case need their own assertions, and
 // the non-empty case needs proof that Load is actually reading that exact
 // file rather than happening to return the right string some other way.
-func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
-	const frag = "FROM ubuntu:24.04\nRUN apt-get update\n"
+func TestWriteAndLoad_RoundTripsSetup(t *testing.T) {
+	const frag = "mkdir -p data\nprintf 'a,b\\n' > data/in.csv\n"
 
 	s := &suite.Suite{Tasks: []suite.TaskPkg{
-		{ID: "with-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v", EnvFrag: frag},
+		{ID: "with-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v", Setup: frag},
 		{ID: "without-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v"},
 	}}
 
@@ -444,15 +444,15 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	envPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag")
+	envPath := filepath.Join(dir, "tasks", "with-env", "environment", "setup.sh")
 	if _, err := os.Stat(envPath); err != nil {
-		t.Fatalf("environment fragment not written for a task with non-empty EnvFrag: %v", err)
+		t.Fatalf("setup script not written for a task with non-empty Setup: %v", err)
 	}
-	// A task with an empty EnvFrag must get no environment/ directory at all —
+	// A task with an empty Setup must get no environment/ directory at all —
 	// not an empty stray file, no directory.
 	noEnvDir := filepath.Join(dir, "tasks", "without-env", "environment")
 	if _, err := os.Stat(noEnvDir); !os.IsNotExist(err) {
-		t.Fatalf("environment/ was written for a task with an empty EnvFrag (stat err = %v)", err)
+		t.Fatalf("environment/ was written for a task with an empty Setup (stat err = %v)", err)
 	}
 
 	got, err := suite.Load(dir)
@@ -464,21 +464,21 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 		byID[task.ID] = task
 	}
 
-	if byID["with-env"].EnvFrag != frag {
-		t.Errorf("EnvFrag = %q after round trip, want %q", byID["with-env"].EnvFrag, frag)
+	if byID["with-env"].Setup != frag {
+		t.Errorf("Setup = %q after round trip, want %q", byID["with-env"].Setup, frag)
 	}
-	if byID["without-env"].EnvFrag != "" {
-		t.Errorf("EnvFrag = %q for a task that never had one, want empty", byID["without-env"].EnvFrag)
+	if byID["without-env"].Setup != "" {
+		t.Errorf("Setup = %q for a task that never had one, want empty", byID["without-env"].Setup)
 	}
 
 	// Discrimination: prove the round trip depends on the exact path
-	// environment/Dockerfile.frag, rather than the assertion above passing by
-	// accident (e.g. EnvFrag defaulting to the zero value that happens to be
+	// environment/setup.sh, rather than the assertion above passing by
+	// accident (e.g. Setup defaulting to the zero value that happens to be
 	// empty and the non-empty case being read from somewhere else). Rename
 	// the file the layout doc says Load must read, and confirm the round
 	// trip now comes back empty instead of quietly finding the content
 	// elsewhere.
-	mutatedPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag.bak")
+	mutatedPath := filepath.Join(dir, "tasks", "with-env", "environment", "setup.sh.bak")
 	if err := os.Rename(envPath, mutatedPath); err != nil {
 		t.Fatalf("renaming fragment for the discrimination check: %v", err)
 	}
@@ -490,11 +490,11 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 	var mutatedFrag string
 	for _, task := range mutated.Tasks {
 		if task.ID == "with-env" {
-			mutatedFrag = task.EnvFrag
+			mutatedFrag = task.Setup
 		}
 	}
 	if mutatedFrag != "" {
-		t.Errorf("EnvFrag = %q after moving environment/Dockerfile.frag away, want empty — Load "+
+		t.Errorf("Setup = %q after moving environment/setup.sh away, want empty — Load "+
 			"must depend on that exact path, not incidentally recover the content some other way",
 			mutatedFrag)
 	}

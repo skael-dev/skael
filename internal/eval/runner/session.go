@@ -22,6 +22,36 @@ import (
 )
 
 // findTask returns the task with id from the plan's task list.
+// runTaskSetup runs the task's setup script in ws, under the same NetNone
+// policy and the same bound as the verifier — it is a suite-authored script
+// of the same kind, and it must not be able to fetch anything either. A task
+// with no setup script costs no run.
+func (r *Runner) runTaskSetup(ctx context.Context, image sandbox.ImageRef, ws string, task suite.TaskPkg) error {
+	if strings.TrimSpace(task.Setup) == "" {
+		return nil
+	}
+	if err := suite.StageSetup(ws, task); err != nil {
+		return err
+	}
+	res, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
+		Image:     image,
+		Workspace: ws,
+		Argv:      []string{"bash", suite.SetupScript},
+		Network:   sandbox.NetNone,
+		Timeout:   suite.VerifierTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("runner: running task setup for %s: %w", task.ID, err)
+	}
+	if res.TimedOut {
+		return fmt.Errorf("runner: task setup for %s exceeded %s", task.ID, suite.VerifierTimeout)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("runner: task setup for %s failed (exit %d)", task.ID, res.ExitCode)
+	}
+	return nil
+}
+
 func findTask(tasks []suite.TaskPkg, id string) (suite.TaskPkg, bool) {
 	for _, t := range tasks {
 		if t.ID == id {
@@ -136,6 +166,15 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 			r.o.Logger("runner: removing workspace %s: %v", ws, rmErr)
 		}
 	}()
+
+	// The task's input files are created inside the sandbox before the agent
+	// starts: a task prompt that names a file has nothing else in the run
+	// that creates it. Setup failing is the task's defect, not the skill's,
+	// so it ends the session as an error rather than as a failed measurement
+	// that would be scored against the skill.
+	if err := r.runTaskSetup(ctx, in.Image, ws, task); err != nil {
+		return finish(store.StatusError, err)
+	}
 
 	// The skill installs only for the skill condition. A baseline workspace
 	// carrying the skill would make Uplift measure nothing. skipDirs mirrors

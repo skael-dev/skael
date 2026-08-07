@@ -46,9 +46,6 @@ type EnvSpec struct {
 	Skill string
 	// Deps are baked into a per-skill layer over the base image.
 	Deps spec.DepsDecl
-	// EnvFrag is a task-declared Dockerfile fragment. It is model-authored, so
-	// it is validated rather than trusted — see imagespec.ValidateFragment.
-	EnvFrag string
 	// BaseTag is the base image to layer over. Empty means the built-in default.
 	BaseTag string
 }

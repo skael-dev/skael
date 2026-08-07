@@ -107,13 +107,6 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	}
 	s.Split(splitSeed)
 
-	// Stripped before the suite is written, not just excluded from the gate:
-	// whatever lands in suiteDir is what PackDir ships, and cli/whetstone's
-	// RunEvalWith refuses an entire suite that carries a single
-	// environment/Dockerfile.frag. Voiding the task in Checks while packing its
-	// fragment anyway would make every derived suite with one unevaluatable.
-	fragged := stripEnvFrags(s)
-
 	suiteDir, err := os.MkdirTemp("", "derive-suite-*")
 	if err != nil {
 		return nil, fmt.Errorf("derive: temp dir: %w", err)
@@ -123,7 +116,7 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 		return nil, fmt.Errorf("derive: write suite: %w", err)
 	}
 
-	checks, err := d.gate(ctx, s, sp, suiteDir, fragged)
+	checks, err := d.gate(ctx, s, sp, suiteDir)
 	if err != nil {
 		return nil, err
 	}
@@ -148,35 +141,8 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	return &Result{Archive: archive, Checks: checks, Spec: sp}, nil
 }
 
-// stripEnvFrags clears every task's EnvFrag and returns the IDs of the tasks
-// that carried one, so the caller can void them.
-func stripEnvFrags(s *suite.Suite) map[string]bool {
-	fragged := map[string]bool{}
-	for i := range s.Tasks {
-		if s.Tasks[i].EnvFrag != "" {
-			fragged[s.Tasks[i].ID] = true
-			s.Tasks[i].EnvFrag = ""
-		}
-	}
-	return fragged
-}
-
 // gate runs the oracle gate and converts its results to registry checks.
-// Tasks that carried a per-task Dockerfile fragment (fragged, from
-// stripEnvFrags) are voided rather than run: the single prepared image cannot
-// apply one, and running the task without its dependency would blame the skill
-// for a missing tool. whetstone refuses the whole suite in that case, which is
-// right for an author who can go fix it and wrong here, where there is nobody
-// to ask.
-func (d *Deriver) gate(ctx context.Context, s *suite.Suite, sp *spec.SkillSpec, suiteDir string, fragged map[string]bool) ([]evalsuite.Check, error) {
-	runnable := &suite.Suite{Triggers: s.Triggers}
-	for _, t := range s.Tasks {
-		if fragged[t.ID] {
-			continue
-		}
-		runnable.Tasks = append(runnable.Tasks, t)
-	}
-
+func (d *Deriver) gate(ctx context.Context, s *suite.Suite, sp *spec.SkillSpec, suiteDir string) ([]evalsuite.Check, error) {
 	// untrusted:false matches runner.New's default and every other
 	// docker-driver caller. The oracle and verifier scripts here are
 	// model-generated from a third party's SKILL.md, which is the same trust
@@ -192,7 +158,7 @@ func (d *Deriver) gate(ctx context.Context, s *suite.Suite, sp *spec.SkillSpec, 
 		return nil, err
 	}
 
-	results, err := suite.Check(ctx, runnable, suite.CheckOptions{
+	results, err := suite.Check(ctx, s, suite.CheckOptions{
 		Driver: gd, Image: image, SuiteDir: suiteDir,
 		Timeout: suite.VerifierTimeout, StageRoot: d.o.StageRoot,
 		Concurrency: 4, Logger: d.o.Logger,
@@ -205,12 +171,6 @@ func (d *Deriver) gate(ctx context.Context, s *suite.Suite, sp *spec.SkillSpec, 
 	for _, r := range results {
 		checks = append(checks, evalsuite.Check{
 			TaskID: r.TaskID, OK: !r.Void, Void: r.Void, Reason: r.Reason,
-		})
-	}
-	for id := range fragged {
-		checks = append(checks, evalsuite.Check{
-			TaskID: id, OK: false, Void: true,
-			Reason: "the task declares environment/Dockerfile.frag, which a single prepared image cannot apply",
 		})
 	}
 	return checks, nil

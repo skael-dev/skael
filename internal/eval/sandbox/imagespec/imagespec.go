@@ -68,9 +68,6 @@ func DepsDigest(e sandbox.EnvSpec) (string, error) {
 	if err := ValidateDeps(e.Deps); err != nil {
 		return "", err
 	}
-	if err := ValidateFragment(e.EnvFrag); err != nil {
-		return "", err
-	}
 
 	h := sha256.New()
 	base := e.BaseTag
@@ -86,7 +83,6 @@ func DepsDigest(e sandbox.EnvSpec) (string, error) {
 		sort.Strings(vals)
 		fmt.Fprintf(h, "%s\x00%s\x00", group.name, strings.Join(vals, "\x1f"))
 	}
-	fmt.Fprintf(h, "frag\x00%s\x00", e.EnvFrag)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -104,9 +100,6 @@ func Tag(e sandbox.EnvSpec) (string, error) {
 // arbitrary code during an image build.
 func Render(e sandbox.EnvSpec) (string, error) {
 	if err := ValidateDeps(e.Deps); err != nil {
-		return "", err
-	}
-	if err := ValidateFragment(e.EnvFrag); err != nil {
 		return "", err
 	}
 
@@ -129,10 +122,6 @@ func Render(e sandbox.EnvSpec) (string, error) {
 	}
 	if len(e.Deps.Npm) > 0 {
 		fmt.Fprintf(&b, "USER root\nRUN npm install -g %s\nUSER runner\n", strings.Join(sorted(e.Deps.Npm), " "))
-	}
-	if frag := strings.TrimSpace(e.EnvFrag); frag != "" {
-		b.WriteString(frag)
-		b.WriteString("\n")
 	}
 	return b.String(), nil
 }

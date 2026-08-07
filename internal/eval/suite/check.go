@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,6 +141,20 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 		return res.ExitCode, nil
 	}
 
+	// Setup runs in both workspaces, not just this one: the bare run's whole
+	// question is whether the verifier rejects an *unsolved* workspace, and a
+	// bare workspace missing the task's own inputs would be rejected for a
+	// different reason, which answers nothing.
+	setupExit, err := runSetup(run, task, solved)
+	if err != nil {
+		return r, err
+	}
+	if setupExit != 0 {
+		r.Void = true
+		r.Reason = fmt.Sprintf("the setup script failed (exit %d); the task's inputs cannot be created", setupExit)
+		return r, nil
+	}
+
 	o.Logger("check %s: running oracle", task.ID)
 	if r.OracleExit, err = run(solved, "oracle/solve.sh"); err != nil {
 		return r, err
@@ -159,6 +174,14 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 		return r, err
 	}
 	defer func() { _ = os.RemoveAll(bare) }()
+	if setupExit, err = runSetup(run, task, bare); err != nil {
+		return r, err
+	}
+	if setupExit != 0 {
+		r.Void = true
+		r.Reason = fmt.Sprintf("the setup script failed (exit %d); the task's inputs cannot be created", setupExit)
+		return r, nil
+	}
 	o.Logger("check %s: running verifier against a bare workspace", task.ID)
 	if r.BareVerifierExit, err = run(bare, "verifier/test.sh"); err != nil {
 		return r, err
@@ -173,6 +196,44 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 		r.Void, r.Reason = true, "the verifier passes without the oracle having run, so it measures nothing"
 	}
 	return r, nil
+}
+
+// SetupScript is the task-relative path of the setup script, shared with the
+// runner so the two stages cannot disagree about where it lives.
+const SetupScript = "environment/setup.sh"
+
+// StageSetup writes a task's setup script into ws at SetupScript.
+//
+// It writes from the loaded TaskPkg rather than relying on the staged copy of
+// the task directory, which decouples the name that runs from the name on
+// disk: a suite written before setup.sh existed holds the same shell under
+// the old Dockerfile.frag name, loadSetup reads it, and this puts it where
+// both the gate and the runner look. Without that, such a suite would stage a
+// workspace with no setup.sh in it and fail on a missing file.
+func StageSetup(ws string, task TaskPkg) error {
+	if strings.TrimSpace(task.Setup) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "environment"), dirMode); err != nil {
+		return fmt.Errorf("suite: creating environment directory for %q: %w", task.ID, err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "environment", "setup.sh"), []byte(task.Setup), scriptMode); err != nil {
+		return fmt.Errorf("suite: staging setup script for %q: %w", task.ID, err)
+	}
+	return nil
+}
+
+// runSetup stages and runs a task's setup script in ws, or reports success
+// without a run when the task has none — most tasks need no fixtures, and a
+// container per task to run nothing is pure cost.
+func runSetup(run func(ws, script string) (int, error), task TaskPkg, ws string) (int, error) {
+	if strings.TrimSpace(task.Setup) == "" {
+		return 0, nil
+	}
+	if err := StageSetup(ws, task); err != nil {
+		return 0, err
+	}
+	return run(ws, SetupScript)
 }
 
 // stageWorkspace copies a task package (or an already-staged workspace) into

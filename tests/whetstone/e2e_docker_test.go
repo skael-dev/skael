@@ -499,20 +499,13 @@ var stubClaudeOnce sync.Once
 // arguments and prints the recorded fixture to stdout. It returns the tag to
 // pass as WHETSTONE_BASE_TAG.
 //
-// This is not the mechanism the suite's own environment/Dockerfile.frag
-// fragment implies it would be: TaskPkg.EnvFrag round-trips through
-// suite.Write/Load and is validated by imagespec.ValidateFragment, but
-// neither cli/whetstone/eval.go nor cli/whetstone/suitecheck.go ever copies a
-// task's EnvFrag into the sandbox.EnvSpec passed to Driver.Prepare — grep
-// confirms the only two production call sites construct EnvSpec from Skill,
-// Deps, and BaseTag alone. A task-declared environment fragment is
-// consequently dead in every real `eval` and `suite check` run today; it is
-// only exercised by imagespec's own unit tests and the suite package's
-// write/load round trip. Building a derived base image and pointing
-// WHETSTONE_BASE_TAG at it sidesteps that gap rather than fixing it — fixing
-// it means deciding how a per-task fragment should combine into the one
-// image a whole skill's panel shares, which is a design question outside
-// this task's scope. See the report for the finding written up in full.
+// A derived base image is the right mechanism here and not a workaround for
+// a missing one: replacing the `claude` binary is a property of the image the
+// whole panel shares, not of any one task. What a *task* needs is its own
+// input files, and that is what suite.TaskPkg.Setup is for — a shell script
+// run in the workspace, not an image layer. The two are deliberately
+// separate; a per-task image layer never existed, which is why the
+// environment/Dockerfile.frag that once stood in for both was removed.
 func stubClaudeBaseTag(t *testing.T) string {
 	t.Helper()
 	stubClaudeOnce.Do(func() {

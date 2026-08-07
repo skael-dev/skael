@@ -93,16 +93,15 @@ func voidEveryThirdTask(id string) (int, int, int) {
 // fakeGatewayConfig is set up through fakeGatewayOption functions before the
 // gateway is constructed.
 type fakeGatewayConfig struct {
-	envFragTask string
+	setupTask string
 }
 
 type fakeGatewayOption func(*fakeGatewayConfig)
 
-// withGeneratedEnvFrag makes the fake gateway emit a Dockerfile fragment on
-// the named task, so a test can exercise the oracle gate's voiding of tasks
-// the single prepared image cannot serve.
-func withGeneratedEnvFrag(id string) fakeGatewayOption {
-	return func(c *fakeGatewayConfig) { c.envFragTask = id }
+// withGeneratedSetup makes the fake gateway emit a setup script on the named
+// task, so a test can exercise a derived task that ships its own fixtures.
+func withGeneratedSetup(id string) fakeGatewayOption {
+	return func(c *fakeGatewayConfig) { c.setupTask = id }
 }
 
 // fakeGateway is an llm.Gateway that answers derive's two calls: spec.recover
@@ -186,13 +185,13 @@ func draftScript(id string) string {
 
 // draftedSuiteJSON drafts derivedTaskCount task packages with deterministic
 // IDs, plus a trigger set large enough for tier "full"'s 16 probes (8
-// positive, 8 negative). cfg.envFragTask, if set, gets a Dockerfile fragment.
+// positive, 8 negative). cfg.setupTask, if set, gets a setup script.
 func draftedSuiteJSON(cfg fakeGatewayConfig) string {
 	type task struct {
 		ID       string `json:"id"`
 		Kind     string `json:"kind"`
 		PromptMD string `json:"prompt_md"`
-		EnvFrag  string `json:"env_frag,omitempty"`
+		Setup    string `json:"setup,omitempty"`
 		Oracle   string `json:"oracle"`
 		Verifier string `json:"verifier"`
 	}
@@ -201,13 +200,13 @@ func draftedSuiteJSON(cfg fakeGatewayConfig) string {
 	tasks := make([]task, 0, derivedTaskCount)
 	for i := 1; i <= derivedTaskCount; i++ {
 		id := taskID(i)
-		var envFrag string
-		if id == cfg.envFragTask {
-			envFrag = "FROM ubuntu:22.04\nRUN apt-get update && apt-get install -y jq\n"
+		var setup string
+		if id == cfg.setupTask {
+			setup = draftScript(id)
 		}
 		tasks = append(tasks, task{
 			ID: id, Kind: kinds[i%len(kinds)], PromptMD: fmt.Sprintf("Do task %s.", id),
-			EnvFrag: envFrag, Oracle: draftScript(id), Verifier: draftScript(id),
+			Setup: setup, Oracle: draftScript(id), Verifier: draftScript(id),
 		})
 	}
 
@@ -283,6 +282,8 @@ func (d *recordingDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.Ru
 	oracleExit, verifierExit, bareExit := behaviour(id)
 
 	switch script {
+	case suite.SetupScript:
+		return sandbox.RunResult{ExitCode: 0}, nil
 	case "oracle/solve.sh":
 		d.mu.Lock()
 		d.oracleRan[rs.Workspace] = true
@@ -381,11 +382,14 @@ func TestDerive_ProducesAnArchiveChecksAndSpec(t *testing.T) {
 	}
 }
 
-func TestDerive_VoidsTasksCarryingAnEnvFrag(t *testing.T) {
-	// A per-task Dockerfile fragment cannot be applied by the single prepared
-	// image. Dropping the fragment would run the task without its dependency
-	// and blame the skill, so the task is voided instead.
-	d := newTestDeriver(t, allTasksPass, withGeneratedEnvFrag("t03"))
+// A derived task that ships a setup script is ordinary: the gate runs the
+// script, the task is not void, and the script survives into the packed
+// archive so the eval that later runs against it creates the same inputs.
+// This replaces the behaviour where such a task was voided and its script
+// stripped, which cost a derived suite a task for something the engine can
+// simply run.
+func TestDerive_RunsAndPacksATaskSetupScript(t *testing.T) {
+	d := newTestDeriver(t, allTasksPass, withGeneratedSetup("t03"))
 	res, err := d.Derive(context.Background(), derive.Input{
 		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
 	})
@@ -393,16 +397,11 @@ func TestDerive_VoidsTasksCarryingAnEnvFrag(t *testing.T) {
 		t.Fatalf("Derive: %v", err)
 	}
 	for _, c := range res.Checks {
-		if c.TaskID == "t03" && !c.Void {
-			t.Fatal("task with an env_frag was not voided")
+		if c.TaskID == "t03" && c.Void {
+			t.Fatalf("a task with a setup script was voided: %s", c.Reason)
 		}
 	}
 
-	// Voiding the task in Checks is only half of it: the fragment must not be
-	// in the archive either. cli/whetstone's RunEvalWith refuses an entire
-	// suite that carries a single environment/Dockerfile.frag, so a packed
-	// fragment makes the whole derived suite unevaluatable — the outcome
-	// voiding was meant to avoid.
 	dir := t.TempDir()
 	if err := evalsuite.Unpack(res.Archive, dir); err != nil {
 		t.Fatalf("unpack derived archive: %v", err)
@@ -411,21 +410,17 @@ func TestDerive_VoidsTasksCarryingAnEnvFrag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load derived suite: %v", err)
 	}
+	var found bool
 	for _, task := range loaded.Tasks {
-		if task.EnvFrag != "" {
-			t.Fatalf("task %s still carries an environment fragment in the packed archive", task.ID)
+		if task.ID == "t03" {
+			found = task.Setup != ""
 		}
 	}
-	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.Name() == "Dockerfile.frag" {
-			t.Fatalf("the packed archive contains %s", path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk derived archive: %v", err)
+	if !found {
+		t.Fatal("the packed archive dropped the task's setup script")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks", "t03", suite.SetupScript)); err != nil {
+		t.Fatalf("the packed archive has no %s: %v", suite.SetupScript, err)
 	}
 }
 

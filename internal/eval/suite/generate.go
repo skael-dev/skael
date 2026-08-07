@@ -21,7 +21,7 @@ const suiteSchema = `{
         "id":        {"type": "string"},
         "kind":      {"enum": ["happy", "variant", "edge", "negative-trigger"]},
         "prompt_md": {"type": "string"},
-        "env_frag":  {"type": "string"},
+        "setup":     {"type": "string"},
         "oracle":    {"type": "string"},
         "verifier":  {"type": "string"}
       },
@@ -43,7 +43,7 @@ type generateResult struct {
 		ID       string `json:"id"`
 		Kind     string `json:"kind"`
 		PromptMD string `json:"prompt_md"`
-		EnvFrag  string `json:"env_frag,omitempty"`
+		Setup    string `json:"setup,omitempty"`
 		Oracle   string `json:"oracle"`
 		Verifier string `json:"verifier"`
 	} `json:"tasks"`
@@ -91,7 +91,7 @@ func GenerateN(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, n int) (*S
 			ID:       t.ID,
 			Kind:     t.Kind,
 			PromptMD: t.PromptMD,
-			EnvFrag:  t.EnvFrag,
+			Setup:    t.Setup,
 			Oracle:   t.Oracle,
 			Verifier: t.Verifier,
 		})
@@ -140,6 +140,12 @@ func draftPrompt(s *spec.SkillSpec, n int) string {
 	b.WriteString("- \"id\": a short, unique, filesystem-safe slug — it becomes a directory name.\n")
 	b.WriteString("- \"kind\": one of \"happy\", \"variant\", \"edge\", \"negative-trigger\".\n")
 	b.WriteString("- \"prompt_md\": the task prompt given to the agent under test.\n")
+	b.WriteString("- \"setup\": optional. A shell script (written to environment/setup.sh) that " +
+		"creates the task's input files, run in the workspace before the agent and before the " +
+		"oracle. If the prompt refers to a file, this is the only thing that creates it — the " +
+		"oracle and the verifier must read those inputs, never write them. Omit it for a task " +
+		"that needs no input files. Use only ordinary shell (mkdir, heredocs, printf); it is " +
+		"not a Dockerfile, and a package the task needs belongs in the skill spec's deps.\n")
 	b.WriteString("- \"oracle\": a shell script (written to oracle/solve.sh) that is a reference " +
 		"solution to the task. It must pass the task's own verifier — if it doesn't, the task " +
 		"itself is void rather than the skill under test being blamed, so every task needs one.\n")
