@@ -30,6 +30,7 @@ import (
 	_ "github.com/skael-dev/skael/internal/eval/agent/cursor"
 	_ "github.com/skael-dev/skael/internal/eval/agent/opencode"
 
+	"github.com/skael-dev/skael/internal/eval/derive"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
 	"github.com/skael-dev/skael/internal/eval/report"
@@ -278,6 +279,18 @@ func joinComma(ss []string) string {
 	return out
 }
 
+// deriverOptions builds the deriver's configuration from the worker's own.
+// Split out from run() so the RunRoot -> StageRoot wiring is testable: nothing
+// else exercises it, and getting it wrong voids every task silently.
+func deriverOptions(cfg workerConfig, drv sandbox.Driver, gw llm.Gateway) derive.Options {
+	return derive.Options{
+		Gateway:   gw,
+		Driver:    drv,
+		StageRoot: cfg.RunRoot,
+		Logger:    func(format string, args ...any) { log.Info().Msgf(format, args...) },
+	}
+}
+
 // run wires the real dependencies (Docker sandbox, API gateway, adapter
 // registry) and runs the worker loop until a signal cancels it.
 func run(cfg workerConfig) error {
@@ -326,7 +339,12 @@ func run(cfg workerConfig) error {
 		panelStrong: panelStrong, panelFast: panelFast, panelBase: cfg.PanelBaseURL,
 	}
 
-	w, err := worker.New(cfg.Config, httpAPI, r)
+	der, err := derive.New(deriverOptions(cfg, drv, gw))
+	if err != nil {
+		return fmt.Errorf("skael-worker: suite deriver: %w", err)
+	}
+
+	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{d: der})
 	if err != nil {
 		return fmt.Errorf("skael-worker: %w", err)
 	}
@@ -461,6 +479,25 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Msg("skael-worker: job completed")
 
 	return rep, nil
+}
+
+// realDeriver adapts derive.Deriver to worker.Deriver. The two Input types are
+// separate because internal/worker must not import internal/eval/derive —
+// that is what keeps the run loop testable with no LLM and no Docker.
+type realDeriver struct{ d *derive.Deriver }
+
+func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worker.DeriveResult, error) {
+	panel, err := runner.ParsePanel(in.Panel.Agents, in.Panel.Models)
+	if err != nil {
+		return nil, fmt.Errorf("skael-worker: derive: %w", err)
+	}
+	res, err := r.d.Derive(ctx, derive.Input{
+		Skill: in.Skill, Bundle: in.Bundle, Tier: in.Tier, Panel: panel,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &worker.DeriveResult{Archive: res.Archive, Checks: res.Checks, Spec: res.Spec}, nil
 }
 
 // evalRequestFrom maps a worker.RunInput — what the queue handed the worker

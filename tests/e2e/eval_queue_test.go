@@ -354,7 +354,7 @@ func (e *evalEnv) newWorker(t *testing.T, r worker.Runner) *worker.Worker {
 	w, err := worker.New(worker.Config{
 		WorkerID: "eval-e2e-worker",
 		WorkRoot: t.TempDir(),
-	}, api, r)
+	}, api, r, nil)
 	require.NoError(t, err)
 	return w
 }
