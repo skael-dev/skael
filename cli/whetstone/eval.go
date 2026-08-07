@@ -535,6 +535,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			ti := getTask(t.TaskID)
 			ti.Conditions = append(ti.Conditions, report.ConditionReport{
 				Condition: runner.CondSkill, Model: m.Model, Passes: t.C, Runs: t.N,
+				Reason: firstFailureReason(g.skill[t.TaskID]),
 			})
 		}
 
@@ -587,6 +588,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 				ti := getTask(t.TaskID)
 				ti.Conditions = append(ti.Conditions, report.ConditionReport{
 					Condition: runner.CondBaseline, Model: m.Model, Passes: t.C, Runs: t.N,
+					Reason: firstFailureReason(g.baseline[t.TaskID]),
 				})
 			}
 			metaPartial = metaPartial || blPartial
@@ -858,6 +860,21 @@ func tokenTotals(byTask map[string][]runner.Outcome) []float64 {
 		}
 	}
 	return out
+}
+
+// firstFailureReason returns the reason from the first outcome of a task that
+// the verifier rejected. One line per task is the budget for a summary; the
+// remaining attempts are in each run's verifier.log.
+func firstFailureReason(outs []runner.Outcome) string {
+	for _, o := range outs {
+		if o.Reason == "" {
+			continue
+		}
+		if o.VerifierExit == nil || *o.VerifierExit != 0 {
+			return o.Reason
+		}
+	}
+	return ""
 }
 
 // loadTranscript reads a run's recorded transcript, or "" if it cannot be

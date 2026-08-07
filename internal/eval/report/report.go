@@ -63,6 +63,10 @@ type ConditionReport struct {
 	Model     string          `json:"model"`
 	Passes    int             `json:"passes"`
 	Runs      int             `json:"runs"`
+	// Reason is the verifier's own account of why this condition failed,
+	// empty when it passed. Without it a report can state that a task failed
+	// but never why, which is the difference between a score and a finding.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RunDrift is one run's drift measurement. It embeds drift.Result rather
