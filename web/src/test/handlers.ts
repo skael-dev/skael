@@ -210,6 +210,17 @@ export const handlers = [
     return HttpResponse.json({ detail: "not scored" }, { status: 404 });
   }),
 
+  // Default: a suite with no void checks. QualityReport fetches this for
+  // every scored version's suite_ref, so tests that don't care about suite
+  // coverage would otherwise need to mock it individually.
+  http.get("/api/eval/suites/:ref/meta", () => {
+    return HttpResponse.json({
+      checks: [],
+      origin: "authored",
+      spec_version: 1,
+    });
+  }),
+
   http.put("/api/skills/review", () => {
     return HttpResponse.json({ reviewed: 2 });
   }),

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
+import { getEvalSuiteMeta, getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
 import { EvalStatus } from "./eval-status";
 import { QualityTrend } from "./quality-trend";
 
@@ -307,6 +307,55 @@ function DriftBreakdownTable({ data }: { data: unknown }) {
   );
 }
 
+// A suite's checks (evalsuite.suiteCheck, internal/evalsuite/routes.go) list
+// every task the suite defined, including ones dropped during derive-time
+// generation — those come back void:true with a reason instead of silently
+// shrinking the suite. task_id/reason are model- or worker-authored text,
+// so they're rendered as plain text (React's default escaping), never
+// through dangerouslySetInnerHTML.
+type SuiteCheck = {
+  task_id: string;
+  ok: boolean;
+  void?: boolean;
+  reason?: string;
+};
+
+function SuiteCoverage({ suiteRef }: { suiteRef: string }) {
+  const suiteMetaQuery = useQuery({
+    queryKey: ["eval-suite-meta", suiteRef],
+    queryFn: async () => {
+      const res = await getEvalSuiteMeta({ path: { ref: suiteRef } });
+      if (!res.data) throw new Error("Failed to load suite meta");
+      return res.data;
+    },
+  });
+
+  const checks = (suiteMetaQuery.data?.checks ?? []) as SuiteCheck[];
+  const voidChecks = checks.filter((c) => c.void === true);
+
+  // A full suite needs no explanation; a permanent "18 of 18" line is noise
+  // that trains people to ignore the row that matters.
+  if (voidChecks.length === 0) return null;
+
+  const usable = checks.length - voidChecks.length;
+
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-medium text-text-primary mb-2">Suite coverage</h3>
+      <div className="text-sm text-text-secondary">
+        {usable} of {checks.length} tasks usable
+      </div>
+      <ul className="mt-1 text-[11px] text-text-tertiary list-disc list-inside">
+        {voidChecks.map((c) => (
+          <li key={c.task_id}>
+            {c.task_id}: {c.reason ?? "no reason given"}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function QualityReport({
   skillName,
   latestVersion,
@@ -482,6 +531,8 @@ export function QualityReport({
           </div>
         </>
       )}
+
+      {summary.suite_ref && <SuiteCoverage suiteRef={summary.suite_ref} />}
 
       <div className="text-[11px] text-text-tertiary">
         Scored v{summary.version} · suite {summary.suite_ref ?? "—"}

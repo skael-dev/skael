@@ -525,6 +525,72 @@ describe("QualityReport", () => {
     await screen.findByText("90");
     expect(screen.queryAllByText(/derived suite/i)).toHaveLength(0);
   });
+
+  // Task 3 turned a derive-time drop into a void check on the suite rather
+  // than a silently smaller suite. Nothing under web/src read that `checks`
+  // array before this — these two guard the count and the reason text.
+  it("reports how many of a suite's tasks were usable", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: false, void: true, reason: "generation failed: api: response truncated at max_tokens (32768)" },
+            { task_id: "t3", ok: false, void: true, reason: "oracle did not pass its own verifier" },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    expect(await screen.findByText(/1 of 3 tasks usable/i)).toBeInTheDocument();
+  });
+
+  it("says why a task was unusable", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: false, void: true, reason: "generation failed: api: response truncated at max_tokens (32768)" },
+            { task_id: "t3", ok: false, void: true, reason: "oracle did not pass its own verifier" },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    expect(await screen.findByText(/truncated at max_tokens/i)).toBeInTheDocument();
+  });
+
+  it("renders nothing about suite coverage when the suite has no void tasks", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: true, void: false },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    await screen.findByText("90");
+    expect(screen.queryByText(/tasks usable/i)).not.toBeInTheDocument();
+  });
 });
 
 function mockSeries(series: Series[]) {
