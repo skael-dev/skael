@@ -7,6 +7,10 @@ import { rerunEval } from "@/api/sdk.gen";
 // real compute and takes 45-90 minutes, so the caller renders a disabled
 // button while the mutation is in flight rather than letting a double click
 // queue two.
+//
+// A skill with no registered suite gets one derived first — an extra LLM pass
+// and a Docker oracle gate before the panel starts — so the first run on an
+// imported skill is longer still.
 export function useRunEval(skillName: string, version?: number) {
   const qc = useQueryClient();
   const mutation = useMutation({

@@ -159,6 +159,7 @@ const DEFAULT_RECORD: RecordOutput = {
   pillar_breakdown: {},
   scored_at: "2026-08-01T00:00:00Z",
   skill_id: "skill-1",
+  suite_derived: false,
   suite_ref: "sha256:abcdef0123456789",
   tier: "standard",
   verified: true,
@@ -433,6 +434,24 @@ describe("QualityReport", () => {
     render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
     expect(await screen.findByText(/could not load the detailed report/i)).toBeInTheDocument();
     expect(screen.queryByText(/detailed report not available/i)).not.toBeInTheDocument();
+  });
+
+  // suite_derived (internal/skill/release.go) marks a score computed against
+  // a machine-generated suite rather than one the skill's author wrote. The
+  // badge renders wherever the summary is shown — here, and again inside
+  // EvalStatus nested below — so getAllByText rather than getByText.
+  it("labels a score from a derived suite", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_derived: true });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    await screen.findByText("90");
+    expect((await screen.findAllByText(/derived suite/i)).length).toBeGreaterThan(0);
+  });
+
+  it("does not label a score from an authored suite", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_derived: false });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    await screen.findByText("90");
+    expect(screen.queryAllByText(/derived suite/i)).toHaveLength(0);
   });
 });
 

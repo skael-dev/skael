@@ -379,6 +379,14 @@ export function QualityReport({
           <span className="text-3xl font-mono text-text-primary">
             {Math.round(summary.headline_score)}
           </span>
+          {summary.suite_derived && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border border-accent/40 text-accent bg-accent/10"
+              title="This skill had no evaluation suite, so one was generated from its own SKILL.md. Treat the score as a quality signal, not a review approval."
+            >
+              Derived suite
+            </span>
+          )}
           {/* The headline's confidence interval was removed: it bootstrapped
               the mean of member effectiveness while the headline is the
               minimum, and at the shipped two-member panel it could only ever

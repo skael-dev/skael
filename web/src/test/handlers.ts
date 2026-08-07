@@ -198,6 +198,13 @@ export const handlers = [
     return HttpResponse.json({ series: [] });
   }),
 
+  // Default: never scored. HeldVersion (Task 10) queries this to know
+  // whether the score holding a version came from a derived suite; most
+  // review-queue tests don't care and would otherwise need to mock it too.
+  http.get("/api/skills/:name/quality", () => {
+    return HttpResponse.json({ detail: "not scored" }, { status: 404 });
+  }),
+
   http.put("/api/skills/review", () => {
     return HttpResponse.json({ reviewed: 2 });
   }),

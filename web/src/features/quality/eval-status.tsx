@@ -13,6 +13,21 @@ const ACTIVE = new Set(["queued", "running"]);
 const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
 const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
 
+// A held-for-review score that came from a machine-derived suite (no
+// authored SKILL.md suite existed) cannot clear a scan hold — see
+// internal/skill/release.go. A reviewer looking at a high score needs to
+// know that up front, not discover it after approving.
+function DerivedSuiteBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border border-accent/40 text-accent bg-accent/10"
+      title="This skill had no evaluation suite, so one was generated from its own SKILL.md. Treat the score as a quality signal, not a review approval."
+    >
+      Derived suite
+    </span>
+  );
+}
+
 function elapsed(since: string): string {
   const mins = Math.floor((Date.now() - new Date(since).getTime()) / 60_000);
   if (mins < 1) return "just started";
@@ -20,13 +35,21 @@ function elapsed(since: string): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m elapsed`;
 }
 
+// QualitySummary itself carries no suite_derived field, but every caller in
+// this codebase actually passes a RecordOutput (a superset) through this
+// prop — get-skill-quality's wire response is RecordOutput, not
+// QualitySummary. Widened here rather than changing the prop's declared
+// type wholesale, since QualitySummary is also used by call sites that
+// genuinely don't have it.
+type QualityWithSuiteDerived = QualitySummary & { suite_derived?: boolean };
+
 export function EvalStatus({
   skillName,
   quality,
   latestVersion,
 }: {
   skillName: string;
-  quality?: QualitySummary | null;
+  quality?: QualityWithSuiteDerived | null;
   latestVersion: number;
 }) {
   const { user } = useAuth();
@@ -79,6 +102,7 @@ export function EvalStatus({
             : `Scored on v${quality.version}`}
         </span>
       )}
+      {quality?.suite_derived && <DerivedSuiteBadge />}
       {lastFailed?.last_error && (
         <span className="text-danger">Last eval failed: {lastFailed.last_error}</span>
       )}

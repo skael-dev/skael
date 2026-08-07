@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ShieldQuestion } from "lucide-react";
-import { reviewSkillVersion } from "@/api/sdk.gen";
+import { getSkillQuality, reviewSkillVersion } from "@/api/sdk.gen";
 import type { HeldVersion as HeldVersionType, Reason } from "@/api/types.gen";
 import { useAuth } from "@/app/auth-provider";
 import { ScanFindings, type ScanReport } from "@/features/security/scan-findings";
@@ -248,6 +248,24 @@ export function HeldVersion({
     queryFn: () => fetchVersionDiff(held.skill_name, held.version),
   });
 
+  // A verified score clears the `scan` hold kind only when it came from an
+  // authored suite (internal/skill/release.go) — a derived one (no suite
+  // existed, so one was generated from the SKILL.md being reviewed) never
+  // clears it, appealable only via an owner/admin approval. A reviewer
+  // staring at a high number needs to know that before they skip straight
+  // past it.
+  const qualityQuery = useQuery({
+    queryKey: ["skill-quality", held.skill_name],
+    queryFn: async () => {
+      const res = await getSkillQuality({ path: { name: held.skill_name } });
+      if (res.response?.status === 404) return null;
+      return res.data ?? null;
+    },
+    retry: false,
+  });
+  const scanOutstanding = (held.outstanding ?? []).includes("scan");
+  const derivedSuiteBlocksHold = scanOutstanding && qualityQuery.data?.suite_derived === true;
+
   const rawDecision = held.gate_decision;
   const decision = isGateDecision(rawDecision) ? rawDecision : null;
   const malformedDecision = rawDecision != null && !isGateDecision(rawDecision);
@@ -303,6 +321,16 @@ export function HeldVersion({
       {malformedDecision && (
         <div className="border-b border-border px-4 py-3 text-[11px] text-text-tertiary italic">
           No decision recorded.
+        </div>
+      )}
+
+      {derivedSuiteBlocksHold && (
+        <div className="border-b border-border px-4 py-3 bg-accent/5 text-[11px] text-text-secondary leading-relaxed">
+          <p>
+            This score came from a derived suite, so it{" "}
+            <strong className="text-accent">cannot release this hold</strong>.
+            Approve as an owner, or push an authored suite and re-run the evaluation.
+          </p>
         </div>
       )}
 
