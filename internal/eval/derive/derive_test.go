@@ -104,12 +104,12 @@ func withGeneratedSetup(id string) fakeGatewayOption {
 	return func(c *fakeGatewayConfig) { c.setupTask = id }
 }
 
-// fakeGateway is an llm.Gateway that answers derive's two calls: spec.recover
-// (an already-valid spec, so no repair call is spent) and suite.draft (a
-// fixed-size suite whose task IDs holdoutTaskIDs and voidEveryThirdTask both
-// key off). Dispatch is on Req.Role rather than call order, so a change in
-// how many calls a path costs does not silently reshuffle which response goes
-// where.
+// fakeGateway is an llm.Gateway that answers derive's three calls: spec.recover
+// (an already-valid spec, so no repair call is spent), suite.outline (a
+// fixed-size stub list whose task IDs holdoutTaskIDs and voidEveryThirdTask
+// both key off), and suite.expand (one task package per stub). Dispatch is on
+// Req.Role rather than call order, so a change in how many calls a path costs
+// does not silently reshuffle which response goes where.
 type fakeGateway struct {
 	mu    sync.Mutex
 	calls []llm.Req
@@ -143,11 +143,30 @@ func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	switch r.Role {
 	case "spec.recover":
 		return llm.Res{Text: recoveredSpecJSON(), Model: "fake"}, nil
-	case "suite.draft":
-		return llm.Res{Text: draftedSuiteJSON(g.cfg), Model: "fake"}, nil
+	case "suite.outline":
+		return llm.Res{Text: outlinedSuiteJSON(), Model: "fake"}, nil
+	case "suite.expand":
+		id, err := expandTargetID(r.Prompt)
+		if err != nil {
+			return llm.Res{}, err
+		}
+		return llm.Res{Text: expandedTaskJSON(g.cfg, id), Model: "fake"}, nil
 	default:
 		return llm.Res{}, fmt.Errorf("fakeGateway: unexpected role %q", r.Role)
 	}
+}
+
+// expandTargetID recovers which stub an expand prompt is for, by matching one
+// of the derived task IDs against the prompt text — expandPrompt names the id
+// it was asked to write.
+func expandTargetID(prompt string) (string, error) {
+	for i := 1; i <= derivedTaskCount; i++ {
+		id := taskID(i)
+		if strings.Contains(prompt, id) {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("fakeGateway: no known task id found in expand prompt")
 }
 
 func (g *fakeGateway) ModelFor(llm.ModelClass) string { return "fake" }
@@ -183,31 +202,22 @@ func draftScript(id string) string {
 	return "#!/bin/bash\n" + taskMarker + id + "\nexit 0\n"
 }
 
-// draftedSuiteJSON drafts derivedTaskCount task packages with deterministic
-// IDs, plus a trigger set large enough for tier "full"'s 16 probes (8
-// positive, 8 negative). cfg.setupTask, if set, gets a setup script.
-func draftedSuiteJSON(cfg fakeGatewayConfig) string {
-	type task struct {
-		ID       string `json:"id"`
-		Kind     string `json:"kind"`
-		PromptMD string `json:"prompt_md"`
-		Setup    string `json:"setup,omitempty"`
-		Oracle   string `json:"oracle"`
-		Verifier string `json:"verifier"`
+// outlinedSuiteJSON outlines derivedTaskCount stubs with deterministic IDs,
+// plus a trigger set large enough for tier "full"'s 16 probes (8 positive, 8
+// negative). Task IDs must match taskID exactly — holdoutTaskIDs and
+// voidEveryThirdTask both key off them.
+func outlinedSuiteJSON() string {
+	type stub struct {
+		ID     string `json:"id"`
+		Kind   string `json:"kind"`
+		Intent string `json:"intent"`
 	}
 	kinds := []string{"happy", "variant", "edge", "negative-trigger"}
 
-	tasks := make([]task, 0, derivedTaskCount)
+	stubs := make([]stub, 0, derivedTaskCount)
 	for i := 1; i <= derivedTaskCount; i++ {
 		id := taskID(i)
-		var setup string
-		if id == cfg.setupTask {
-			setup = draftScript(id)
-		}
-		tasks = append(tasks, task{
-			ID: id, Kind: kinds[i%len(kinds)], PromptMD: fmt.Sprintf("Do task %s.", id),
-			Setup: setup, Oracle: draftScript(id), Verifier: draftScript(id),
-		})
+		stubs = append(stubs, stub{ID: id, Kind: kinds[i%len(kinds)], Intent: fmt.Sprintf("Do task %s.", id)})
 	}
 
 	positive := make([]string, 8)
@@ -218,16 +228,39 @@ func draftedSuiteJSON(cfg fakeGatewayConfig) string {
 	}
 
 	out := struct {
-		Tasks    []task `json:"tasks"`
+		Tasks    []stub `json:"tasks"`
 		Triggers struct {
 			Positive []string `json:"positive"`
 			Negative []string `json:"negative"`
 		} `json:"triggers"`
-	}{Tasks: tasks}
+	}{Tasks: stubs}
 	out.Triggers.Positive = positive
 	out.Triggers.Negative = negative
 
 	b, err := json.Marshal(out)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// expandedTaskJSON expands one stub into a task package. cfg.setupTask, if it
+// matches id, gets a setup script.
+func expandedTaskJSON(cfg fakeGatewayConfig, id string) string {
+	type task struct {
+		PromptMD string `json:"prompt_md"`
+		Setup    string `json:"setup,omitempty"`
+		Oracle   string `json:"oracle"`
+		Verifier string `json:"verifier"`
+	}
+	var setup string
+	if id == cfg.setupTask {
+		setup = draftScript(id)
+	}
+	b, err := json.Marshal(task{
+		PromptMD: fmt.Sprintf("Do task %s.", id),
+		Setup:    setup, Oracle: draftScript(id), Verifier: draftScript(id),
+	})
 	if err != nil {
 		panic(err)
 	}

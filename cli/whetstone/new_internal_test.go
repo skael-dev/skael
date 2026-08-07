@@ -41,16 +41,24 @@ const (
 	descriptionPass = `{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF, a report, or table extraction."}`
 )
 
+// suiteExpandTask is one expansion response, reused for both of suiteOutline's
+// stubs — fake.New serves responses strictly by call order, not by request
+// content, so an identical response for every expand slot is what keeps the
+// concurrent fan-out's non-deterministic ordering harmless here.
+const suiteExpandTask = `{"prompt_md": "extract the tables", "oracle": "#!/bin/sh\nexit 0\n", ` +
+	`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`
+
 // newScript returns every scripted gateway response a full `new` run
 // consumes, in order: two interview passes, three generation passes, one
-// suite draft. specDraft plans no resource files, so the generator makes no
+// suite outline call plus one expansion per outlined stub (suiteOutline
+// names two). specDraft plans no resource files, so the generator makes no
 // resources-pass call at all — there is no fourth generation response to
 // script.
 func newScript(body string) []string {
 	return []string{
 		specDraft, specDraft,
 		outlinePass, body, descriptionPass,
-		suiteDraft,
+		suiteOutline, suiteExpandTask, suiteExpandTask,
 	}
 }
 

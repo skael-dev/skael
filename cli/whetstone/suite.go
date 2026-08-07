@@ -55,9 +55,12 @@ func RunSuiteGen(ctx context.Context, skill string) error {
 
 // generateSuite drafts, splits, and writes a suite. Shared with `new`.
 func generateSuite(ctx context.Context, st *store.Store, g llm.Gateway, sp *spec.SkillSpec) error {
-	s, err := suite.Generate(ctx, g, sp)
+	s, dropped, err := suite.Generate(ctx, g, sp)
 	if err != nil {
 		return err
+	}
+	for _, d := range dropped {
+		ui.Warn("whetstone suite gen: task %s could not be generated — %s", d.TaskID, d.Reason)
 	}
 	s.Split(splitSeed)
 

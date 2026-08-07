@@ -3,27 +3,44 @@ package whetstone
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/contract"
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// suiteDraft is one scripted gateway response in suite.Generate's schema. The
-// fake gateway is how this runs with no subscription, no API key, and no
-// network.
-const suiteDraft = `{
+// suiteOutline is the outline-phase response for suite.Generate's two-phase
+// draft: two stubs, expanded below by suiteExpandGateway.
+const suiteOutline = `{
   "tasks": [
-    {"id": "happy", "kind": "happy", "prompt_md": "extract the tables",
-     "oracle": "#!/bin/sh\nexit 0\n", "verifier": "#!/bin/sh\ntest -f out/tables.csv\n"},
-    {"id": "variant", "kind": "variant", "prompt_md": "pull the tables out",
-     "oracle": "#!/bin/sh\nexit 0\n", "verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}
+    {"id": "happy", "kind": "happy", "intent": "extract the tables"},
+    {"id": "variant", "kind": "variant", "intent": "pull the tables out"}
   ],
   "triggers": {"positive": ["extract this PDF"], "negative": ["extract this zip"]}
 }`
+
+// suiteExpandGateway routes suite.outline to suiteOutline and every
+// suite.expand call to the package matching the stub id named in its prompt.
+// The fake gateway is how this runs with no subscription, no API key, and no
+// network.
+func suiteExpandGateway() *fake.Gateway {
+	return fake.NewFunc(func(r llm.Req) (string, error) {
+		if r.Role == "suite.outline" {
+			return suiteOutline, nil
+		}
+		if strings.Contains(r.Prompt, "id: happy") {
+			return `{"prompt_md": "extract the tables", "oracle": "#!/bin/sh\nexit 0\n", ` +
+				`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`, nil
+		}
+		return `{"prompt_md": "pull the tables out", "oracle": "#!/bin/sh\nexit 0\n", ` +
+			`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`, nil
+	})
+}
 
 // TestNewPipelineWritesTheEvalSidecar covers the two steps of `new` that no
 // other test and no manual run reaches without a live gateway: compiling the
@@ -66,7 +83,7 @@ func TestNewPipelineWritesTheEvalSidecar(t *testing.T) {
 		t.Errorf("the written contract does not load back: %v", err)
 	}
 
-	if err := generateSuite(context.Background(), st, fake.New(suiteDraft), sp); err != nil {
+	if err := generateSuite(context.Background(), st, suiteExpandGateway(), sp); err != nil {
 		t.Fatalf("generateSuite: %v", err)
 	}
 

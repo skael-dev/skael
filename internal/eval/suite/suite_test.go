@@ -2,6 +2,7 @@ package suite_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,34 +15,11 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// fakeGateway is a minimal llm.Gateway for tests that only care what prompt
-// was sent, not the fuller call-recording fake.Gateway does — GenerateN's
-// tests assert on prompt content only.
-type fakeGateway struct {
-	reply      string
-	lastPrompt string
-}
-
-func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
-	g.lastPrompt = r.Prompt
-	return llm.Res{Text: g.reply, Model: "fake"}, nil
-}
-
-func (g *fakeGateway) ModelFor(llm.ModelClass) string { return "fake-strong" }
-
 // testSpec is a minimal skill spec, distinct from suiteSpec only in name —
 // GenerateN's tests care about the prompt's task count, not the spec's
 // content.
 func testSpec() *spec.SkillSpec {
 	return suiteSpec()
-}
-
-// minimalSuiteJSON is the smallest generateResult that parses: one task with
-// every required field, and empty trigger lists.
-func minimalSuiteJSON(t *testing.T) string {
-	t.Helper()
-	return `{"tasks":[{"id":"t0","kind":"happy","prompt_md":"p","oracle":"o","verifier":"v"}],` +
-		`"triggers":{"positive":[],"negative":[]}}`
 }
 
 func suiteSpec() *spec.SkillSpec {
@@ -54,58 +32,79 @@ func suiteSpec() *spec.SkillSpec {
 	}
 }
 
-// tenTasks scripts a suite response with ten core tasks and a trigger set.
-func tenTasks() string {
+// outlineFixture builds an outline response with n stubs, ids task-0..task-(n-1),
+// kinds cycling happy/variant/edge, and a one-item trigger set.
+func outlineFixture(n int) string {
 	var b []byte
 	b = append(b, `{"tasks":[`...)
-	for i := 0; i < 10; i++ {
+	kinds := []string{"happy", "variant", "edge"}
+	for i := 0; i < n; i++ {
 		if i > 0 {
 			b = append(b, ',')
 		}
-		kind := "variant"
-		if i == 0 {
-			kind = "happy"
-		}
-		b = append(b, `{"id":"t`...)
-		b = append(b, byte('0'+i))
-		b = append(b, `","kind":"`+kind+`","prompt_md":"Extract the tables.","oracle":"#!/bin/sh\nexit 0\n","verifier":"#!/bin/sh\ntest -s out/tables.csv\n"}`...)
+		kind := kinds[i%len(kinds)]
+		b = append(b, fmt.Sprintf(`{"id":"task-%d","kind":"%s","intent":"do the thing"}`, i, kind)...)
 	}
-	b = append(b, `],"triggers":{"positive":["p1","p2","p3","p4","p5","p6","p7","p8"],`...)
-	b = append(b, `"negative":["n1","n2","n3","n4","n5","n6","n7","n8"]}}`...)
+	b = append(b, `],"triggers":{"positive":["p1"],"negative":["n1"]}}`...)
 	return string(b)
 }
 
+// twoPhase adapts the old single-response fixtures to outline+expand: the
+// outline call gets the stub list, every expansion gets the same package.
+func twoPhase(t *testing.T, n int) *fake.Gateway {
+	t.Helper()
+	return fake.NewFunc(func(r llm.Req) (string, error) {
+		if r.Role == "suite.outline" {
+			return outlineFixture(n), nil
+		}
+		return `{"prompt_md":"Extract the tables.","setup":"","oracle":"#!/bin/sh\nexit 0\n",` +
+			`"verifier":"#!/bin/sh\ntest -s out/tables.csv\n"}`, nil
+	})
+}
+
 func TestGenerateN_AsksForTheRequestedCount(t *testing.T) {
-	g := &fakeGateway{reply: minimalSuiteJSON(t)}
-	if _, err := suite.GenerateN(context.Background(), g, testSpec(), 18); err != nil {
+	g := twoPhase(t, 18)
+	if _, _, err := suite.GenerateN(context.Background(), g, testSpec(), 18); err != nil {
 		t.Fatalf("GenerateN: %v", err)
 	}
-	if !strings.Contains(g.lastPrompt, "18 task packages") {
-		t.Fatalf("prompt does not ask for 18 tasks:\n%s", g.lastPrompt)
+	var outlinePrompt string
+	for _, c := range g.Calls() {
+		if c.Role == "suite.outline" {
+			outlinePrompt = c.Prompt
+		}
+	}
+	if !strings.Contains(outlinePrompt, "18 task stubs") {
+		t.Fatalf("outline prompt does not ask for 18 tasks:\n%s", outlinePrompt)
 	}
 }
 
 func TestGenerate_StillAsksForTen(t *testing.T) {
 	// The authored path's size is unchanged; GenerateN is additive.
-	g := &fakeGateway{reply: minimalSuiteJSON(t)}
-	if _, err := suite.Generate(context.Background(), g, testSpec()); err != nil {
+	g := twoPhase(t, 10)
+	if _, _, err := suite.Generate(context.Background(), g, testSpec()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if !strings.Contains(g.lastPrompt, "10 task packages") {
-		t.Fatalf("prompt does not ask for 10 tasks:\n%s", g.lastPrompt)
+	var outlinePrompt string
+	for _, c := range g.Calls() {
+		if c.Role == "suite.outline" {
+			outlinePrompt = c.Prompt
+		}
+	}
+	if !strings.Contains(outlinePrompt, "10 task stubs") {
+		t.Fatalf("outline prompt does not ask for 10 tasks:\n%s", outlinePrompt)
 	}
 }
 
 func TestGenerate_ProducesTasksAndTriggers(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if len(s.Tasks) != 10 {
 		t.Errorf("got %d tasks, want 10", len(s.Tasks))
 	}
-	if len(s.Triggers.Positive) != 8 || len(s.Triggers.Negative) != 8 {
-		t.Errorf("trigger set = %d positive / %d negative, want 8 and 8",
+	if len(s.Triggers.Positive) != 1 || len(s.Triggers.Negative) != 1 {
+		t.Errorf("trigger set = %d positive / %d negative, want 1 and 1",
 			len(s.Triggers.Positive), len(s.Triggers.Negative))
 	}
 }
@@ -114,7 +113,7 @@ func TestGenerate_EveryTaskHasAnOracleAndVerifier(t *testing.T) {
 	// The oracle gate is what separates a broken task from a broken skill. A
 	// task with no oracle can never be validated, so it would silently blame
 	// the skill for its own defects.
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +128,7 @@ func TestGenerate_EveryTaskHasAnOracleAndVerifier(t *testing.T) {
 }
 
 func TestSplit_Is70_30AndDeterministic(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	s.Split(42)
 
 	var dev, holdout int
@@ -149,7 +148,7 @@ func TestSplit_Is70_30AndDeterministic(t *testing.T) {
 
 	// Same seed must produce the same split, or a re-run silently changes which
 	// tasks the repair loop was allowed to see.
-	again, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	again, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	again.Split(42)
 	for i := range s.Tasks {
 		if s.Tasks[i].Split != again.Tasks[i].Split {
@@ -191,7 +190,7 @@ func TestSplit_HoldoutIsNonEmptyForSmallSuites(t *testing.T) {
 // one set, and finally checks the union of dev+holdout IDs is exactly the
 // original ID set — neither short nor long.
 func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +244,7 @@ func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
 }
 
 func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	s.Split(7)
 
 	dir := t.TempDir()
@@ -255,9 +254,9 @@ func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
 
 	// Layout per the SkillsBench convention.
 	for _, rel := range []string{
-		filepath.Join("tasks", "t0", "task.md"),
-		filepath.Join("tasks", "t0", "oracle", "solve.sh"),
-		filepath.Join("tasks", "t0", "verifier", "test.sh"),
+		filepath.Join("tasks", "task-0", "task.md"),
+		filepath.Join("tasks", "task-0", "oracle", "solve.sh"),
+		filepath.Join("tasks", "task-0", "verifier", "test.sh"),
 		"triggers.yaml",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
@@ -298,7 +297,7 @@ func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
 // Load then returns the wrong value, rather than the field surviving by
 // accident (e.g. because the zero value happens to match).
 func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +315,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 
 	var loadedT0 *suite.TaskPkg
 	for i := range got.Tasks {
-		if got.Tasks[i].ID == "t0" {
+		if got.Tasks[i].ID == "task-0" {
 			loadedT0 = &got.Tasks[i]
 		}
 	}
@@ -330,7 +329,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 	// Now break the tag Kind rides on and confirm Load no longer returns the
 	// original value — proving the assertion above is not a false positive
 	// that would pass even if Kind were silently dropped.
-	metaPath := filepath.Join(dir, "tasks", "t0", "meta.yaml")
+	metaPath := filepath.Join(dir, "tasks", "task-0", "meta.yaml")
 	if err := os.WriteFile(metaPath, []byte("kind: mutated\nsplit: dev\n"), 0o644); err != nil {
 		t.Fatalf("mutating meta.yaml: %v", err)
 	}
@@ -341,7 +340,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 	}
 	var mutatedT0 *suite.TaskPkg
 	for i := range mutated.Tasks {
-		if mutated.Tasks[i].ID == "t0" {
+		if mutated.Tasks[i].ID == "task-0" {
 			mutatedT0 = &mutated.Tasks[i]
 		}
 	}
@@ -501,14 +500,14 @@ func TestWriteAndLoad_RoundTripsSetup(t *testing.T) {
 }
 
 func TestWrite_ScriptsAreExecutable(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	dir := t.TempDir()
 	if err := s.Write(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, rel := range []string{"oracle/solve.sh", "verifier/test.sh"} {
-		info, err := os.Stat(filepath.Join(dir, "tasks", "t0", rel))
+		info, err := os.Stat(filepath.Join(dir, "tasks", "task-0", rel))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -101,7 +101,8 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 		return nil, fmt.Errorf("derive: recover spec: %w", err)
 	}
 
-	s, err := suite.GenerateN(ctx, d.o.Gateway, sp, taskCount)
+	// Drops are discarded here; Task 3 wires them into the derive result.
+	s, _, err := suite.GenerateN(ctx, d.o.Gateway, sp, taskCount)
 	if err != nil {
 		return nil, fmt.Errorf("derive: generate suite: %w", err)
 	}
