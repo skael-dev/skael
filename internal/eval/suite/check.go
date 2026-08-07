@@ -46,6 +46,13 @@ type CheckOptions struct {
 	Timeout     time.Duration
 	Concurrency int
 	Logger      func(format string, args ...any)
+	// StageRoot is where per-run task workspaces are created. Empty means
+	// os.TempDir(), which is correct for whetstone on an author's host. A
+	// containerized caller MUST set it to a path bind-mounted identically on
+	// both sides: these directories are bind-mounted into sibling containers,
+	// and Docker creates a missing bind source as an empty directory rather
+	// than failing — so a container-local path voids every task silently.
+	StageRoot string
 }
 
 // Check runs the oracle gate over every task.
@@ -113,7 +120,7 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 	// SAME directory (see the comment below). Sharing that one is not a bug;
 	// it is the only way to ask "does this task's verifier accept this task's
 	// own reference solution."
-	solved, err := stageWorkspace(src)
+	solved, err := stageWorkspace(src, o.StageRoot)
 	if err != nil {
 		return r, err
 	}
@@ -147,7 +154,7 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 		return r, err
 	}
 
-	bare, err := stageWorkspace(src)
+	bare, err := stageWorkspace(src, o.StageRoot)
 	if err != nil {
 		return r, err
 	}
@@ -174,8 +181,11 @@ func checkOne(ctx context.Context, task TaskPkg, o CheckOptions) (CheckResult, e
 // along with everything else; a later skill run must not get oracle/ or
 // verifier/ in its workspace, but keeping that true is a different call
 // site's responsibility, not this function's.
-func stageWorkspace(src string) (string, error) {
-	dst, err := os.MkdirTemp("", "whetstone-check-")
+//
+// root is CheckOptions.StageRoot; os.MkdirTemp("", …) already means
+// os.TempDir(), so an empty root needs no special case.
+func stageWorkspace(src, root string) (string, error) {
+	dst, err := os.MkdirTemp(root, "whetstone-check-")
 	if err != nil {
 		return "", err
 	}

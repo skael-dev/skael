@@ -53,20 +53,31 @@ type generateResult struct {
 	} `json:"triggers"`
 }
 
-// Generate drafts an evaluation suite for s in a single gateway call: roughly
-// ten core task packages — a happy path, paraphrase variants, and edge
-// cases — each shipping its own oracle and verifier, plus a trigger set of
-// positive and hard-negative example prompts.
+// defaultTaskCount is the authored path's suite size.
+const defaultTaskCount = 10
+
+// Generate drafts a suite of the default size. See GenerateN.
+func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (*Suite, error) {
+	return GenerateN(ctx, g, s, defaultTaskCount)
+}
+
+// GenerateN drafts an evaluation suite for s in a single gateway call: n core
+// task packages — a happy path, paraphrase variants, and edge cases — each
+// shipping its own oracle and verifier, plus a trigger set of positive and
+// hard-negative example prompts. The derived-suite path asks for more than
+// the authored default because it has no author to fix a task the oracle
+// gate voids — the extra tasks are the headroom that lets a machine-generated
+// suite still satisfy runner.BuildPlan after voids.
 //
 // Every task must ship an oracle: it is the reference solution the task's
 // own verifier must pass. Without one a broken task is indistinguishable
 // from a broken skill, so this is asked for explicitly rather than left
 // optional. Splitting into dev/holdout and writing to disk are separate
 // steps (Split, Write) so a caller can inspect the draft first.
-func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (*Suite, error) {
+func GenerateN(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, n int) (*Suite, error) {
 	res, err := llm.CompleteJSON[generateResult](ctx, g, llm.Req{
 		Role:       "suite.draft",
-		Prompt:     draftPrompt(s),
+		Prompt:     draftPrompt(s, n),
 		Schema:     []byte(suiteSchema),
 		ModelClass: llm.ClassStrong,
 	})
@@ -99,7 +110,7 @@ func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (*Suite, er
 // explicitly that every task needs an oracle and a verifier that can fail,
 // and that trigger negatives must be adjacent-domain near-misses rather than
 // obviously irrelevant prompts.
-func draftPrompt(s *spec.SkillSpec) string {
+func draftPrompt(s *spec.SkillSpec, n int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Draft an evaluation suite for the skill %q.\n\n", s.Name)
 	fmt.Fprintf(&b, "Purpose: %s\n", s.Purpose)
@@ -124,8 +135,8 @@ func draftPrompt(s *spec.SkillSpec) string {
 		}
 	}
 
-	b.WriteString("\nProduce about 10 task packages: a happy-path task, paraphrase variants, " +
-		"and edge cases. Each task must carry:\n")
+	fmt.Fprintf(&b, "\nProduce about %d task packages: a happy-path task, paraphrase variants, "+
+		"and edge cases. Each task must carry:\n", n)
 	b.WriteString("- \"id\": a short, unique, filesystem-safe slug — it becomes a directory name.\n")
 	b.WriteString("- \"kind\": one of \"happy\", \"variant\", \"edge\", \"negative-trigger\".\n")
 	b.WriteString("- \"prompt_md\": the task prompt given to the agent under test.\n")

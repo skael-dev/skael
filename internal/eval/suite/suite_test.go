@@ -5,12 +5,44 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
+
+// fakeGateway is a minimal llm.Gateway for tests that only care what prompt
+// was sent, not the fuller call-recording fake.Gateway does — GenerateN's
+// tests assert on prompt content only.
+type fakeGateway struct {
+	reply      string
+	lastPrompt string
+}
+
+func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
+	g.lastPrompt = r.Prompt
+	return llm.Res{Text: g.reply, Model: "fake"}, nil
+}
+
+func (g *fakeGateway) ModelFor(llm.ModelClass) string { return "fake-strong" }
+
+// testSpec is a minimal skill spec, distinct from suiteSpec only in name —
+// GenerateN's tests care about the prompt's task count, not the spec's
+// content.
+func testSpec() *spec.SkillSpec {
+	return suiteSpec()
+}
+
+// minimalSuiteJSON is the smallest generateResult that parses: one task with
+// every required field, and empty trigger lists.
+func minimalSuiteJSON(t *testing.T) string {
+	t.Helper()
+	return `{"tasks":[{"id":"t0","kind":"happy","prompt_md":"p","oracle":"o","verifier":"v"}],` +
+		`"triggers":{"positive":[],"negative":[]}}`
+}
 
 func suiteSpec() *spec.SkillSpec {
 	return &spec.SkillSpec{
@@ -41,6 +73,27 @@ func tenTasks() string {
 	b = append(b, `],"triggers":{"positive":["p1","p2","p3","p4","p5","p6","p7","p8"],`...)
 	b = append(b, `"negative":["n1","n2","n3","n4","n5","n6","n7","n8"]}}`...)
 	return string(b)
+}
+
+func TestGenerateN_AsksForTheRequestedCount(t *testing.T) {
+	g := &fakeGateway{reply: minimalSuiteJSON(t)}
+	if _, err := suite.GenerateN(context.Background(), g, testSpec(), 18); err != nil {
+		t.Fatalf("GenerateN: %v", err)
+	}
+	if !strings.Contains(g.lastPrompt, "18 task packages") {
+		t.Fatalf("prompt does not ask for 18 tasks:\n%s", g.lastPrompt)
+	}
+}
+
+func TestGenerate_StillAsksForTen(t *testing.T) {
+	// The authored path's size is unchanged; GenerateN is additive.
+	g := &fakeGateway{reply: minimalSuiteJSON(t)}
+	if _, err := suite.Generate(context.Background(), g, testSpec()); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(g.lastPrompt, "10 task packages") {
+		t.Fatalf("prompt does not ask for 10 tasks:\n%s", g.lastPrompt)
+	}
 }
 
 func TestGenerate_ProducesTasksAndTriggers(t *testing.T) {
