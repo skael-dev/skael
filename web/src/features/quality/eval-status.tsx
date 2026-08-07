@@ -47,10 +47,17 @@ export function EvalStatus({
   skillName,
   quality,
   latestVersion,
+  hideDerivedBadge,
 }: {
   skillName: string;
   quality?: QualityWithSuiteDerived | null;
   latestVersion: number;
+  // The parent (quality-report.tsx) already renders its own DerivedSuiteBadge
+  // next to the headline score. Without this, a suite_derived score shows
+  // the pill twice in the same viewport — here again, next to "Scored on
+  // vN". Defaults to false/undefined so a standalone EvalStatus (no such
+  // parent badge) still shows it.
+  hideDerivedBadge?: boolean;
 }) {
   const { user } = useAuth();
   const canRun = user != null && RUN_EVAL_ROLES.has(user.role);
@@ -102,7 +109,7 @@ export function EvalStatus({
             : `Scored on v${quality.version}`}
         </span>
       )}
-      {quality?.suite_derived && <DerivedSuiteBadge />}
+      {quality?.suite_derived && !hideDerivedBadge && <DerivedSuiteBadge />}
       {lastFailed?.last_error && (
         <span className="text-danger">Last eval failed: {lastFailed.last_error}</span>
       )}

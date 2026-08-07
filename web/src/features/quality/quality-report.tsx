@@ -395,7 +395,12 @@ export function QualityReport({
               ones would read as a measurement that had gone missing. */}
         </div>
         <div className="mt-2">
-          <EvalStatus skillName={skillName} quality={summary} latestVersion={latestVersion} />
+          <EvalStatus
+            skillName={skillName}
+            quality={summary}
+            latestVersion={latestVersion}
+            hideDerivedBadge
+          />
         </div>
       </div>
 

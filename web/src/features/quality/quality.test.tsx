@@ -129,6 +129,36 @@ describe("EvalStatus", () => {
     expect(await screen.findByText(/sandbox image missing/i)).toBeInTheDocument();
   });
 
+  // EvalStatus has no production call site outside QualityReport today
+  // (which passes hideDerivedBadge to avoid a duplicate). This protects the
+  // prop's default (false/undefined) so a future standalone usage still
+  // shows the badge on its own.
+  it("shows its own derived-suite badge when not told to hide it", async () => {
+    mockEvals([]);
+    render(withQuery(
+      <EvalStatus
+        skillName="s"
+        quality={{ version: 3, headline_score: 90, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z", suite_derived: true }}
+        latestVersion={3}
+      />,
+    ));
+    expect(await screen.findByText(/derived suite/i)).toBeInTheDocument();
+  });
+
+  it("suppresses its own derived-suite badge when hideDerivedBadge is set", async () => {
+    mockEvals([]);
+    render(withQuery(
+      <EvalStatus
+        skillName="s"
+        quality={{ version: 3, headline_score: 90, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z", suite_derived: true }}
+        latestVersion={3}
+        hideDerivedBadge
+      />,
+    ));
+    await screen.findByText(/scored on v3/i);
+    expect(screen.queryByText(/derived suite/i)).not.toBeInTheDocument();
+  });
+
   it("surfaces an enqueue failure so a silent click isn't mistaken for a no-op", async () => {
     const user = userEvent.setup();
     mockEvals([]);
@@ -437,14 +467,16 @@ describe("QualityReport", () => {
   });
 
   // suite_derived (internal/skill/release.go) marks a score computed against
-  // a machine-generated suite rather than one the skill's author wrote. The
-  // badge renders wherever the summary is shown — here, and again inside
-  // EvalStatus nested below — so getAllByText rather than getByText.
-  it("labels a score from a derived suite", async () => {
+  // a machine-generated suite rather than one the skill's author wrote.
+  // QualityReport renders the badge itself next to the headline and passes
+  // hideDerivedBadge to the nested EvalStatus, so it must appear exactly
+  // once on the composed page, not once per component that knows about
+  // suite_derived.
+  it("labels a score from a derived suite exactly once", async () => {
     mockQuality({ version: 3, headline_score: 90, suite_derived: true });
     render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
     await screen.findByText("90");
-    expect((await screen.findAllByText(/derived suite/i)).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/derived suite/i)).toBeInTheDocument();
   });
 
   it("does not label a score from an authored suite", async () => {
