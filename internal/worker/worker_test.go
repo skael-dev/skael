@@ -481,12 +481,19 @@ func TestNew_FailsFastOnAnUnusableWorkRoot(t *testing.T) {
 }
 
 func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
+	// pushRef must be a real suite.Ref of the fixture tree: fakeAPI.FetchSuite
+	// always returns the fixture archive regardless of which ref is asked
+	// for, and Materialize's WantSuiteRef check now runs against suiteRef
+	// (what PushSuite returned) on the derive path too, so a placeholder
+	// like "derived-ref" would fail materialization before this test ever
+	// reaches its own assertions.
+	derivedRef := fixtureSuiteRef(t)
 	api := &fakeAPI{
 		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
-		pushRef: "derived-ref", // what PushSuite returns
+		pushRef: derivedRef, // what PushSuite returns
 	}
 	der := &fakeDeriver{}
-	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: "derived-ref"}, der)
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: derivedRef}, der)
 
 	if _, err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
@@ -497,7 +504,7 @@ func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
 	if api.pushedSkill != "demo" {
 		t.Fatalf("pushed suite for %q, want demo", api.pushedSkill)
 	}
-	if api.reported == nil || api.reported.SuiteRef != "derived-ref" {
+	if api.reported == nil || api.reported.SuiteRef != derivedRef {
 		t.Fatalf("report suite_ref = %q, want the derived ref", api.reported.SuiteRef)
 	}
 }
@@ -533,10 +540,13 @@ func TestRunOnce_FailsCleanlyWithNoDeriver(t *testing.T) {
 
 func TestRunOnce_ReportMustMatchTheDerivedRef(t *testing.T) {
 	// The invariant still holds; it is just checked against the ref the worker
-	// derived rather than the empty one it claimed.
+	// derived rather than the empty one it claimed. pushRef must still be a
+	// real suite.Ref (see TestRunOnce_DerivesWhenTheJobHasNoSuiteRef) so this
+	// fails on the intended report/derived-ref mismatch, not on Materialize's
+	// unrelated WantSuiteRef check rejecting a placeholder first.
 	api := &fakeAPI{
 		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: ""},
-		pushRef: "derived-ref",
+		pushRef: fixtureSuiteRef(t),
 	}
 	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: "something-else"}, &fakeDeriver{})
 

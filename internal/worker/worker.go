@@ -263,12 +263,13 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	st, err := Materialize(workDir, MaterializeInput{
 		Skill: job.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
 		Checks: meta.Checks, Spec: meta.Spec,
-		// job.SuiteRef, not suiteRef: a derived ref was computed one request
-		// ago from the exact bytes PushSuite stored content-addressably, so
-		// re-verifying it here would only re-hash what is already known
-		// correct. This check exists to catch a wrong or stale claim in
-		// job.SuiteRef, which is empty on the derive path — nothing to check.
-		WantSuiteRef: job.SuiteRef,
+		// suiteRef, not job.SuiteRef: FetchSuite is a separate round trip
+		// from whichever call produced suiteRef (PushSuite on the derive
+		// path, the claimed job otherwise), and this is what verifies that
+		// round trip actually delivered the same content — not an echo of
+		// the value that produced it. job.SuiteRef is empty on the derive
+		// path and would silently disable the check for every derived job.
+		WantSuiteRef: suiteRef,
 	})
 	if err != nil {
 		return fmt.Errorf("worker: materialize workspace: %w", err)
