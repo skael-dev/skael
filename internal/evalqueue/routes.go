@@ -275,7 +275,16 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			return nil, huma.Error403Forbidden("fail eval job: invalid claim")
 		}
 
-		if err := q.Fail(ctx, j.ID, j.WorkerID, input.Body.Error); err != nil {
+		// last_error is the only column a failure has to land in — there is
+		// no separate plain-language column to add without a migration — so
+		// the sentence leads and the raw chain follows, kept for whoever has
+		// to debug the worker. A dedicated column would be the better long
+		// term shape.
+		cause := Explain(input.Body.Error)
+		if cause != input.Body.Error {
+			cause = cause + "\n\n" + input.Body.Error
+		}
+		if err := q.Fail(ctx, j.ID, j.WorkerID, cause); err != nil {
 			if errors.Is(err, ErrLeaseLost) {
 				return nil, huma.Error409Conflict("fail eval job: lease lost")
 			}
