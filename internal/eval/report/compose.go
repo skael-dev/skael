@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,13 +10,11 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// bootstrapIters and bootstrapSeed fix Compose's confidence interval so the
-// same inputs always produce the same report — see score.Bootstrap's own
-// doc for why the seed is explicit rather than a shared global generator.
-const (
-	bootstrapIters = 2000
-	bootstrapSeed  = 1
-)
+// The headline used to carry a bootstrapped 95% CI, removed rather than
+// repaired: it bootstrapped the *mean* of member effectiveness while the
+// headline is the *minimum*, and at a two-member panel resampling yields means
+// of only {min, midpoint, max}, so the interval was identically [min, max] for
+// any input.
 
 // MemberInput is one panel member's raw measurements, from which Compose
 // derives Effectiveness and drift aggregation.
@@ -98,10 +97,12 @@ type ComposeInput struct {
 	// rather than counted as a miss.
 	TriggerUnknown int
 	Unevaluable    int
-	// UnevaluableDetail is passed through to the report as given: Compose
-	// does not aggregate it per-run or de-duplicate it. The caller owns
-	// assembling this list from whatever per-run observations it holds.
+	// UnevaluableDetail is the list of reasons checks could not be performed.
+	// Compose de-duplicates and caps it (see dedupeDetail) rather than leaving
+	// that to callers, none of which did it.
 	UnevaluableDetail []string
+	// BaselineWipeout is passed through to Report.BaselineWipeout — see there.
+	BaselineWipeout bool
 
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -124,6 +125,10 @@ func Compose(in ComposeInput) (*Report, error) {
 	var (
 		matrix  score.Matrix
 		members []MemberReport
+		// Set when any member's adherence could not be measured, so the report
+		// can say so once at the top rather than leaving a reader to notice a
+		// missing column.
+		driftUnmeasurable bool
 	)
 	for _, mi := range in.Members {
 		// Validated regardless of health: Effectiveness's own validation is
@@ -160,13 +165,19 @@ func Compose(in ComposeInput) (*Report, error) {
 
 			if len(mi.Drift) > 0 {
 				agg, err := drift.Aggregate(mi.Drift)
-				if err != nil {
+				switch {
+				case errors.Is(err, drift.ErrUnmeasurable):
+					// Not a defect. Leave Drift absent: a zero would read as
+					// "followed the contract not at all", which nothing here
+					// measured.
+					mr.DriftUnmeasurable = true
+					driftUnmeasurable = true
+				case err != nil:
 					return nil, fmt.Errorf("report.Compose: member %s/%s: %w", mi.Member.Agent, mi.Member.Model, err)
+				default:
+					entry.Drift = agg
+					mr.Drift = agg
 				}
-				entry.Drift = agg
-				entry.Grade = drift.Grade(agg.Mean, agg.Worst)
-				mr.Drift = agg
-				mr.DriftGrade = entry.Grade
 			}
 		}
 
@@ -175,17 +186,6 @@ func Compose(in ComposeInput) (*Report, error) {
 	}
 
 	headline, err := matrix.Headline()
-	if err != nil {
-		return nil, fmt.Errorf("report.Compose: %w", err)
-	}
-
-	var samples []float64
-	for _, e := range matrix.Entries {
-		if e.Healthy {
-			samples = append(samples, e.Effectiveness)
-		}
-	}
-	lo, hi, err := score.Bootstrap(samples, bootstrapIters, bootstrapSeed)
 	if err != nil {
 		return nil, fmt.Errorf("report.Compose: %w", err)
 	}
@@ -225,7 +225,8 @@ func Compose(in ComposeInput) (*Report, error) {
 		ModelPanel:        in.ModelPanel,
 		PanelComplete:     in.PanelComplete,
 		Headline:          headline,
-		HeadlineCI:        [2]float64{lo, hi},
+		DriftUnmeasurable: driftUnmeasurable,
+		BaselineWipeout:   in.BaselineWipeout,
 		UpliftSource:      upliftSource,
 		JudgeKappa:        in.JudgeKappa,
 		JudgeLabeledBy:    in.JudgeLabeledBy,
@@ -238,7 +239,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		TriggerSource:     in.TriggerSource,
 		TriggerUnknown:    in.TriggerUnknown,
 		Unevaluable:       in.Unevaluable,
-		UnevaluableDetail: in.UnevaluableDetail,
+		UnevaluableDetail: dedupeDetail(in.UnevaluableDetail, maxUnevaluableDetail),
 		StartedAt:         in.StartedAt,
 		FinishedAt:        in.FinishedAt,
 		Iterations:        in.Iterations,

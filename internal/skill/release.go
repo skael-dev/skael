@@ -22,6 +22,10 @@ type QualityEvidence struct {
 	PanelComplete            bool
 	Headline                 float64
 	CriticalForbidViolations int
+	// SuiteDerived reports that this score came from a machine-derived suite:
+	// tasks generated from the skill's own SKILL.md. It is a usable quality
+	// signal and an unusable security gate — see Reconsider.
+	SuiteDerived bool
 }
 
 // Releaser re-runs the publish decision for a held version once a quality
@@ -61,6 +65,19 @@ func (r *Releaser) Reconsider(
 		return gate.Decision{}, false, fmt.Errorf("skill.Releaser.Reconsider: %s v%d not found", skillName, version)
 	}
 	if ver.GateState != "needs_review" {
+		return gate.Decision{}, false, nil
+	}
+
+	// A derived suite grades the skill against its own claims, so a high score
+	// partly means "this skill is self-consistent". Clearing a scanner finding
+	// on that evidence would let a skill write its own exam. The score is
+	// still recorded and still shown; it just does not open the gate.
+	if rec.SuiteDerived {
+		log.Info().
+			Str("skill", skillName).
+			Int("version", version).
+			Float64("headline", rec.Headline).
+			Msg("held version stays held: the score came from a derived suite, which cannot clear a scan hold")
 		return gate.Decision{}, false, nil
 	}
 

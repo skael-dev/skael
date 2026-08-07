@@ -210,6 +210,63 @@ func TestComplete_TimeoutIsEnforcedEvenWhenTheCLIForksAChild(t *testing.T) {
 	}
 }
 
+// TestComplete_DeadlineIsReportedAsErrTimeout extends the same "hang" fixture
+// TestComplete_TimeoutIsEnforcedEvenWhenTheCLIForksAChild uses, but asserts
+// the shape of the error rather than just that Complete returns one: before
+// this, a deadline and a real crash both surfaced as bare "signal: killed",
+// indistinguishable from each other or from an OS OOM kill.
+func TestComplete_DeadlineIsReportedAsErrTimeout(t *testing.T) {
+	g, _ := newGateway(t, "hang", func(o *agentcli.Options) {
+		o.Timeout = 300 * time.Millisecond
+		o.MaxRetries = 0
+	})
+
+	_, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded against a CLI that produced no output")
+	}
+	if !errors.Is(err, llm.ErrTimeout) {
+		t.Fatalf("error does not wrap llm.ErrTimeout: %v", err)
+	}
+	if !strings.Contains(err.Error(), "300ms") {
+		t.Errorf("error does not name the configured timeout: %v", err)
+	}
+}
+
+// TestComplete_ParentCancellationIsNotReportedAsATimeout is the other half of
+// the classification: a caller cancelling (Ctrl-C, SIGTERM) and the gateway's
+// own deadline firing both SIGKILL the same process group and so produce the
+// same process-level error — only the two contexts distinguish them.
+// TestComplete_ContextCancellationIsRespected only checks that cancellation
+// errors at all, not which sentinel it carries; this pins that a caller
+// cancellation must never look like llm.ErrTimeout, since a caller acting on
+// that sentinel (e.g. suggesting WHETSTONE_LLM_TIMEOUT) would be giving
+// nonsense advice for a Ctrl-C.
+func TestComplete_ParentCancellationIsNotReportedAsATimeout(t *testing.T) {
+	g, _ := newGateway(t, "hang", func(o *agentcli.Options) {
+		o.Timeout = 5 * time.Second // long enough that only the parent cancel fires first
+		o.MaxRetries = 0
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := g.Complete(ctx, llm.Req{Role: "x", Prompt: "y"})
+	if err == nil {
+		t.Fatal("Complete succeeded against a cancelled context")
+	}
+	if errors.Is(err, llm.ErrTimeout) {
+		t.Errorf("parent cancellation reported as a gateway timeout: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error does not wrap context.Canceled: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Complete took %s to return; parent cancellation was not respected before the gateway's own timeout", elapsed)
+	}
+}
+
 // TestComplete_RefusalMentioningTransientWordsIsNotRetried covers the false
 // positive found in the original word-scan classifier: a refusal (is_error
 // true, but the process itself exits 0 — the CLI still considers this a

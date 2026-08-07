@@ -26,6 +26,17 @@ func NewExec(d Driver, base RunSpec) *Executor { return &Executor{d: d, base: ba
 // instead.
 func (e *Executor) Workspace() string { return e.base.Workspace }
 
+// WorkDir reports where the workspace appears *inside* the container, which is
+// what an agent's reported paths are relative to. Workspace above is the host
+// path the same directory is mounted from — a caller relativising agent paths
+// needs this one.
+func (e *Executor) WorkDir() string {
+	if e.base.WorkDir == "" {
+		return DefaultWorkDir
+	}
+	return e.base.WorkDir
+}
+
 // Env reports the environment variables ("NAME=value") a session run through
 // this executor will see, the same way Workspace reports where it runs — a
 // caller that needs to verify credential forwarding reads it from here rather

@@ -35,7 +35,14 @@ type MemberReport struct {
 	Pillars       score.Pillars `json:"pillars"`
 	Effectiveness float64       `json:"effectiveness"`
 	Drift         drift.Agg     `json:"drift"`
-	DriftGrade    string        `json:"drift_grade"`
+	// DriftUnmeasurable is true when too many checks could not be performed for
+	// adherence to mean anything, in which case Drift is absent rather than
+	// zero — a zero would read as "followed the contract not at all".
+	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
+	// DriftGrade is no longer set: it was a second composite on a second scale
+	// beside Effectiveness. Retained as an always-empty omitempty field, which
+	// it already was for unhealthy members, so decoders keep working.
+	DriftGrade string `json:"drift_grade,omitempty"`
 	// Healthy is false when the member's adapter failed its probe. Such a
 	// member contributes nothing to the headline rather than a zero.
 	Healthy bool   `json:"healthy"`
@@ -56,6 +63,10 @@ type ConditionReport struct {
 	Model     string          `json:"model"`
 	Passes    int             `json:"passes"`
 	Runs      int             `json:"runs"`
+	// Reason is the verifier's own account of why this condition failed,
+	// empty when it passed. Without it a report can state that a task failed
+	// but never why, which is the difference between a score and a finding.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RunDrift is one run's drift measurement. It embeds drift.Result rather
@@ -125,8 +136,18 @@ type Report struct {
 	ModelPanel    []PanelMember `json:"model_panel"`
 	PanelComplete bool          `json:"panel_complete"`
 
-	Headline   float64    `json:"headline"`
-	HeadlineCI [2]float64 `json:"headline_ci"`
+	// Headline is the single published 0–100 score: the minimum Effectiveness
+	// across healthy panel members.
+	Headline float64 `json:"headline"`
+	// DriftUnmeasurable is true when at least one member's adherence could not
+	// be measured, so a reader knows a missing drift figure is an absent
+	// measurement rather than a zero.
+	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
+	// BaselineWipeout is true when some member's baseline passed no task at
+	// all, which makes Uplift a rescaling of Reliability rather than
+	// independent evidence — and is also what a broken baseline harness looks
+	// like.
+	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 
 	UpliftSource score.UpliftSource `json:"uplift_source"`
 	// JudgeKappa is nil when no judge was calibrated for this run, as opposed

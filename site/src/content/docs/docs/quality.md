@@ -79,6 +79,7 @@ A complete OpenRouter setup, covering both the judge and the panel:
 LLM_BASE_URL=https://openrouter.ai/api
 LLM_AUTH_STYLE=bearer
 LLM_STRONG_MODEL=anthropic/claude-opus-4
+LLM_FAST_MODEL=anthropic/claude-3.5-haiku
 ANTHROPIC_API_KEY=<your OpenRouter key>
 
 ANTHROPIC_BASE_URL=https://openrouter.ai/api
@@ -86,6 +87,12 @@ ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
 ```
 
 OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`).
+
+`LLM_STRONG_MODEL` and `LLM_FAST_MODEL` do double duty here. They are the judge's two models, and — because `ANTHROPIC_BASE_URL` is set — they are also the panel's, filling its strong and floor slots. Without that, the panel would keep asking your gateway for Claude Code's bare aliases `opus` and `haiku`, which a gateway that namespaces its identifiers answers with a 404; every panel member then fails its health probe and the run refuses with those model names in the error.
+
+Set both, not one. They apply together or not at all, deliberately: a panel with one working member and one that 404s is not an error but a *complete* run, and it scores, reports `panel_complete: false`, and so can never release a version held for review — after paying for a full tier to get there. Keeping both slots on the same footing means a half-configured gateway fails fast instead.
+
+Pointing only `LLM_BASE_URL` at a gateway, and leaving `ANTHROPIC_BASE_URL` unset, moves the judge alone: the panel keeps running `opus`/`haiku` against Anthropic directly, which is what you want when only the judge is BYOK.
 
 You are not limited to Claude models. OpenRouter's Anthropic-compatible endpoint accepts the same request shape whatever model you route to, so `google/gemini-2.5-flash-lite` and the rest of its catalogue work for the judge too. Reasoning models are the one thing to watch: if a model spends its whole output budget on thinking tokens, the reply carries no text block and the run fails rather than scoring something empty. Give those a larger budget or pick a non-reasoning model for the judge.
 

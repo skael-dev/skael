@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -177,7 +178,7 @@ func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 	})
 
 	skill.RegisterReviewQueueRoutes(api, skillStore, nil)
-	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
+	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore, evalsuite.RouteOptions{Claims: evalPool})
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: floor,
@@ -245,13 +246,72 @@ func (e *evalEnv) createSkill(t *testing.T, name string) {
 	require.NoError(t, err)
 }
 
+// publishSkill creates and publishes a minimal skill under name with no
+// authored eval suite, mirroring how an imported skill arrives — no
+// whetstone run, nothing under eval_suites for it yet.
+func publishSkill(t *testing.T, srv *evalEnv, name string) {
+	t.Helper()
+	srv.createSkill(t, name)
+	srv.publish(t, name, fixtureBundle(t))
+}
+
+// claimJob claims the next queued eval job over HTTP, exactly as
+// cmd/skael-worker's poll loop does, and returns it along with the lease
+// token the report call must present back.
+func claimJob(t *testing.T, srv *evalEnv) (client.EvalJob, string) {
+	t.Helper()
+	job, token, ok, err := srv.c.ClaimEvalJob("eval-e2e-worker", 0)
+	require.NoError(t, err)
+	require.True(t, ok, "no claimable job")
+	return *job, token
+}
+
+// reportJob posts rep as the completed outcome of jobID, using the claim
+// token a prior claimJob returned.
+func reportJob(t *testing.T, srv *evalEnv, jobID, token string, rep []byte) {
+	t.Helper()
+	require.NoError(t, srv.c.PostEvalReport(jobID, token, rep))
+}
+
+// reportFor builds the minimal report.Report the server's report handler
+// accepts for skillName against suiteRef — no members or tasks, since
+// nothing here checks them (see quality.FromReport).
+func reportFor(t *testing.T, skillName, suiteRef string) []byte {
+	t.Helper()
+	now := time.Now()
+	rep := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		Skill:         skillName,
+		SpecVersion:   1,
+		Tier:          "full",
+		SuiteRef:      suiteRef,
+		EngineVersion: "test",
+		Headline:      70.0,
+		StartedAt:     now,
+		FinishedAt:    now,
+	}
+	b, err := json.Marshal(rep)
+	require.NoError(t, err)
+	return b
+}
+
+// latestQuality fetches the full quality record for skillName at version,
+// via the per-version endpoint — the one that actually carries SuiteDerived
+// through to the caller.
+func latestQuality(t *testing.T, srv *evalEnv, skillName string, version int) qualityResult {
+	t.Helper()
+	var out qualityResult
+	srv.getJSON(t, fmt.Sprintf("/api/skills/%s/quality/%d", skillName, version), &out)
+	return out
+}
+
 // pushSuite uploads archive as skillName's eval suite, along with a single
 // passing oracle-gate check for the fixture's one task ("t1" — see
 // fixtureSuiteArchive), and returns the stored suite's ref.
 func (e *evalEnv) pushSuite(t *testing.T, skillName string, archive []byte) string {
 	t.Helper()
 	checks := []client.EvalSuiteCheck{{TaskID: "t1", OK: true}}
-	up, err := e.c.UploadEvalSuite(skillName, 1, checks, nil, archive)
+	up, err := e.c.UploadEvalSuite(client.EvalSuiteUploadRequest{Skill: skillName, SpecVersion: 1, Checks: checks, Archive: archive})
 	require.NoError(t, err)
 	return up.Ref
 }
@@ -310,9 +370,10 @@ func (e *evalEnv) rerun(t *testing.T, skillName string, models []string) string 
 
 // qualityResult is the subset of a quality record this scenario checks.
 type qualityResult struct {
-	Headline float64 `json:"headline_score"`
-	Verified bool    `json:"verified"`
-	SuiteRef string  `json:"suite_ref"`
+	Headline     float64 `json:"headline_score"`
+	Verified     bool    `json:"verified"`
+	SuiteRef     string  `json:"suite_ref"`
+	SuiteDerived bool    `json:"suite_derived"`
 }
 
 // getQuality fetches the most recent quality score for skillName.
@@ -354,7 +415,7 @@ func (e *evalEnv) newWorker(t *testing.T, r worker.Runner) *worker.Worker {
 	w, err := worker.New(worker.Config{
 		WorkerID: "eval-e2e-worker",
 		WorkRoot: t.TempDir(),
-	}, api, r)
+	}, api, r, nil)
 	require.NoError(t, err)
 	return w
 }
@@ -500,5 +561,40 @@ func TestEvalQueue_PublishToVerifiedScore(t *testing.T) {
 	}
 	if hist[0].SuiteRef != hist[1].SuiteRef {
 		t.Fatal("the re-run used a different suite; the two scores are not comparable")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: a skill with no authored suite still evaluates, end to end. The
+// server enqueues with an empty suite_ref rather than 404ing, and a worker
+// that derives a suite pushes it before reporting — simulated here by
+// pushSuite/reportJob directly, since this test is about the queue/suite/
+// quality wiring, not about running the real LLM+Docker deriver.
+// ---------------------------------------------------------------------------
+
+func TestEvalQueue_SkillWithNoSuiteEnqueuesADeriveJob(t *testing.T) {
+	// The whole point: a skill that never went through whetstone can be
+	// evaluated from the UI.
+	srv := startServer(t)
+	publishSkill(t, srv, "imported-skill")
+	// deliberately no pushSuite
+
+	jobID := srv.rerun(t, "imported-skill", nil)
+
+	job, token := claimJob(t, srv)
+	if job.ID != jobID {
+		t.Fatalf("claimed job id = %q, want %q", job.ID, jobID)
+	}
+	if job.SuiteRef != "" {
+		t.Fatalf("claimed job suite_ref = %q, want empty", job.SuiteRef)
+	}
+
+	// A worker with a derived suite in hand pushes it, then reports against it.
+	ref := srv.pushSuite(t, "imported-skill", fixtureSuiteArchive(t))
+	reportJob(t, srv, job.ID, token, reportFor(t, "imported-skill", ref))
+
+	rec := latestQuality(t, srv, "imported-skill", 1)
+	if !rec.SuiteDerived {
+		t.Fatal("the score was not recorded as derived")
 	}
 }

@@ -18,8 +18,8 @@ type RecordOutput struct {
 	SkillID                  string          `json:"skill_id"`
 	Version                  int             `json:"version"`
 	Headline                 float64         `json:"headline_score"`
-	HeadlineCILow            float64         `json:"headline_ci_low"`
-	HeadlineCIHigh           float64         `json:"headline_ci_high"`
+	HeadlineCILow            float64         `json:"headline_ci_low,omitempty"`
+	HeadlineCIHigh           float64         `json:"headline_ci_high,omitempty"`
 	Pillars                  json.RawMessage `json:"pillar_breakdown"`
 	PanelMatrix              json.RawMessage `json:"panel_matrix"`
 	RobustnessGap            *float64        `json:"robustness_gap,omitempty"`
@@ -27,6 +27,7 @@ type RecordOutput struct {
 	DriftBreakdown           json.RawMessage `json:"drift_breakdown"`
 	Verified                 bool            `json:"verified"`
 	PanelComplete            bool            `json:"panel_complete"`
+	SuiteDerived             bool            `json:"suite_derived"`
 	SuiteRef                 string          `json:"suite_ref"`
 	EngineVersion            string          `json:"engine_version"`
 	ModelPanel               json.RawMessage `json:"model_panel"`

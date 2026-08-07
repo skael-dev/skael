@@ -22,12 +22,18 @@ const (
 // and a workspace that carries it is not measuring the skill, it is handing
 // the agent the answer. The verifier is mounted separately, after the
 // session ends, so the agent cannot read it either.
-func stageRunWorkspace(taskDir string) (_ string, err error) {
+//
+// root is Options.WorkspaceRoot: empty means os.TempDir(), and a non-empty
+// value is a directory the caller has arranged to be visible at the same path
+// to whatever daemon starts the sandbox containers.
+func stageRunWorkspace(taskDir, root string) (_ string, err error) {
 	// ws is deliberately a plain local, not the named return: an error return
 	// below sets the named result to "", and a defer reading that instead of
 	// this variable would call os.RemoveAll("") — a no-op — rather than
 	// cleaning up the directory MkdirTemp actually created.
-	ws, err := os.MkdirTemp("", "skael-run-*")
+	//
+	// MkdirTemp treats "" as os.TempDir(), so the default needs no branch.
+	ws, err := os.MkdirTemp(root, "skael-run-*")
 	if err != nil {
 		return "", fmt.Errorf("runner: creating workspace: %w", err)
 	}

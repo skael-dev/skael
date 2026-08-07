@@ -180,7 +180,11 @@ func (g *Gateway) Complete(ctx context.Context, r llm.Req) (llm.Res, error) {
 }
 
 func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
-	ctx, cancel := context.WithTimeout(ctx, g.opts.Timeout)
+	// parent is kept so a caller cancelling (Ctrl-C, SIGTERM) can still be
+	// told apart from this gateway's own deadline firing: both cancel ctx,
+	// but only one of them is llm.ErrTimeout.
+	parent := ctx
+	ctx, cancel := context.WithTimeout(parent, g.opts.Timeout)
 	defer cancel()
 
 	model := g.modelFor(r.ModelClass)
@@ -213,6 +217,17 @@ func (g *Gateway) run(ctx context.Context, r llm.Req) (llm.Res, error) {
 	var env envelope
 	if uerr := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &env); uerr != nil {
 		if runErr != nil {
+			// A SIGKILL from either cancellation source produces the same
+			// process-level error (see setupProcessGroup), so the two contexts
+			// are what distinguish them — check parent first, since ctx is
+			// derived from it and reports cancelled too once parent is.
+			if parent.Err() != nil {
+				return llm.Res{}, fmt.Errorf("agentcli: %s: %w", g.opts.Binary, parent.Err())
+			}
+			if ctx.Err() != nil {
+				return llm.Res{}, fmt.Errorf("agentcli: %s produced no response within %s: %w",
+					g.opts.Binary, g.opts.Timeout, llm.ErrTimeout)
+			}
 			stderrText := strings.TrimSpace(stderr.String())
 			return llm.Res{}, &execFailure{
 				msg:    fmt.Sprintf("agentcli: %s failed: %v (stderr: %s)", g.opts.Binary, runErr, stderrText),
@@ -280,6 +295,9 @@ var apiErrorPattern = regexp.MustCompile(`^API Error:\s*(\d{3})`)
 // triggered. If the real CLI is ever observed emitting one of these inside a
 // parsed envelope's result, add it back here with a test that pins the
 // observation, the same way apiErrorPattern was pinned.
+// "context deadline exceeded" here is the child CLI's own HTTP timeout on its
+// stderr, which is retryable — not this gateway's deadline, which is
+// llm.ErrTimeout and never is.
 var transientMarkers = []string{
 	"ECONNRESET",
 	"context deadline exceeded",

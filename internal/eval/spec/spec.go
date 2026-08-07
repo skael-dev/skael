@@ -41,9 +41,20 @@ const (
 	TierStrong ModelTier = "strong"
 )
 
-// MaxModules caps bundled resource files. SkillsBench found focused skills beat
-// exhaustive bundles, so this is a hard limit rather than a warning.
+// MaxModules caps scripts/ + assets/ — the resources that add capability.
+// SkillsBench found focused skills beat exhaustive bundles, so this is a hard
+// limit rather than a warning. references/ is capped separately (see
+// MaxReferences): a reference split out of an over-long body adds no
+// capability, only lower context cost, so it doesn't count against this cap.
 const MaxModules = 3
+
+// MaxReferences caps references/, independently of MaxModules — see there for
+// why the two are counted separately. Still bounded rather than unlimited, so
+// progressive disclosure doesn't become a way to bundle unlimited content.
+// Higher than MaxModules because offloading a long body is per-section: a real
+// skill needed five sections moved to fit, and a cap of three silently left it
+// over budget with nothing left to try.
+const MaxReferences = 6
 
 // MaxDescription is the Agent Skills spec limit on frontmatter description.
 const MaxDescription = 1024
@@ -90,9 +101,22 @@ type ResourcePlan struct {
 	Assets     []ResourceItem `yaml:"assets,omitempty" json:"assets,omitempty"`
 }
 
-// Count returns the total number of planned modules, for the MaxModules cap.
+// Count returns the total number of planned files across all three kinds —
+// how many resource-pass calls a plan costs, not a cap check.
 func (p ResourcePlan) Count() int {
 	return len(p.Scripts) + len(p.References) + len(p.Assets)
+}
+
+// CapacityCount returns the planned scripts/ + assets/ file count, checked
+// against MaxModules.
+func (p ResourcePlan) CapacityCount() int {
+	return len(p.Scripts) + len(p.Assets)
+}
+
+// ReferenceCount returns the planned references/ file count, checked against
+// MaxReferences.
+func (p ResourcePlan) ReferenceCount() int {
+	return len(p.References)
 }
 
 // DepsDecl lists packages baked into the per-skill sandbox image layer.

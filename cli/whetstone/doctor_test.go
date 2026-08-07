@@ -2,6 +2,7 @@ package whetstone_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/cli/whetstone"
@@ -81,6 +82,56 @@ func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 	}
 	if len(rep.Adapters) != len(want) {
 		t.Errorf("doctor reported %v, want %v", rep.Adapters, want)
+	}
+}
+
+// TestRunDoctor_ReportsTheDefaultLLMTimeout pins the unconfigured case: no
+// WHETSTONE_LLM_TIMEOUT set means the report shows authoringTimeout, not an
+// empty or zero value.
+func TestRunDoctor_ReportsTheDefaultLLMTimeout(t *testing.T) {
+	t.Setenv("PATH", "")
+	t.Setenv("WHETSTONE_LLM_TIMEOUT", "")
+
+	rep, err := whetstone.RunDoctor(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RunDoctor: %v", err)
+	}
+	if rep.LLMTimeout != "10m0s" {
+		t.Errorf("LLMTimeout = %q, want the default authoringTimeout %q", rep.LLMTimeout, "10m0s")
+	}
+}
+
+// TestRunDoctor_HonoursTheTimeoutOverride is the positive case: a valid
+// WHETSTONE_LLM_TIMEOUT must be what the report shows, since that is what
+// newGateway will actually apply.
+func TestRunDoctor_HonoursTheTimeoutOverride(t *testing.T) {
+	t.Setenv("PATH", "")
+	t.Setenv("WHETSTONE_LLM_TIMEOUT", "45s")
+
+	rep, err := whetstone.RunDoctor(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RunDoctor: %v", err)
+	}
+	if rep.LLMTimeout != "45s" {
+		t.Errorf("LLMTimeout = %q, want %q", rep.LLMTimeout, "45s")
+	}
+}
+
+// TestRunDoctor_RejectsAMalformedTimeout matches the worker's own
+// env-duration convention (CLAUDE.md: fail loudly, name the offending value)
+// rather than the server's silent-fallback style — an interactive CLI is
+// better served by catching a typo immediately than by silently reverting to
+// the default.
+func TestRunDoctor_RejectsAMalformedTimeout(t *testing.T) {
+	t.Setenv("PATH", "")
+	t.Setenv("WHETSTONE_LLM_TIMEOUT", "not-a-duration")
+
+	_, err := whetstone.RunDoctor(context.Background(), false)
+	if err == nil {
+		t.Fatal("RunDoctor accepted a malformed WHETSTONE_LLM_TIMEOUT")
+	}
+	if !strings.Contains(err.Error(), "not-a-duration") {
+		t.Errorf("error does not name the offending value: %v", err)
 	}
 }
 

@@ -199,3 +199,50 @@ func TestHTML_RendersWithNothingInIt(t *testing.T) {
 		t.Error("an empty report did not render")
 	}
 }
+
+func TestHTML_ShowsTheVerifiersReason(t *testing.T) {
+	rep := report.Report{
+		Skill: "csv-to-markdown", Tier: "smoke",
+		Tasks: []report.TaskReport{{
+			TaskID: "edge-ragged-rows-pad", Kind: "edge", Split: "dev",
+			Conditions: []report.ConditionReport{{
+				Condition: "skill", Model: "opus", Passes: 0, Runs: 1,
+				Reason: "ragged_rows entries need line and field_count",
+			}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := rep.HTML(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "ragged_rows entries need line and field_count") {
+		t.Error("the report does not show the verifier's reason")
+	}
+}
+
+// The reason is model-authored text. html/template escapes by default; this
+// pins that the template never marks it safe.
+func TestHTML_EscapesTheReason(t *testing.T) {
+	rep := report.Report{
+		Skill: "s", Tier: "smoke",
+		Tasks: []report.TaskReport{{
+			TaskID: "t1",
+			Conditions: []report.ConditionReport{{
+				Condition: "skill", Model: "opus", Passes: 0, Runs: 1,
+				Reason: `<script>alert(1)</script>`,
+			}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := rep.HTML(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "<script>alert(1)</script>") {
+		t.Error("the reason was not escaped")
+	}
+	if !strings.Contains(buf.String(), "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Error("the reason was not escaped")
+	}
+}

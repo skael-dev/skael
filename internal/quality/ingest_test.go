@@ -15,7 +15,7 @@ func TestFromReport_CarriesTheHeadlineAndPanelState(t *testing.T) {
 	r := &report.Report{
 		SchemaVersion: report.SchemaVersion, Skill: "deploy-helper", SpecVersion: 4,
 		Tier: "full", SuiteRef: "sha256:abc", EngineVersion: "0.9.1",
-		Headline: 72.5, HeadlineCI: [2]float64{68, 77}, PanelComplete: true,
+		Headline: 72.5, PanelComplete: true,
 		RobustnessGap: &gap,
 		ModelPanel:    []report.PanelMember{{Agent: "claude-code", Model: "opus", Class: "strong"}},
 		Members:       []report.MemberReport{{Healthy: true, DriftGrade: "B"}},
@@ -24,7 +24,7 @@ func TestFromReport_CarriesTheHeadlineAndPanelState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Headline != 72.5 || rec.HeadlineCILow != 68 || rec.HeadlineCIHigh != 77 {
+	if rec.Headline != 72.5 {
 		t.Fatalf("headline lost: %+v", rec)
 	}
 	if rec.RobustnessGap == nil || *rec.RobustnessGap != 0.18 {

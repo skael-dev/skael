@@ -18,7 +18,10 @@ type Record struct {
 	SkillID string
 	Version int
 
-	Headline       float64
+	Headline float64
+	// No longer populated — the report's confidence interval was removed. Kept
+	// so historical rows still decode and no migration is needed; new rows
+	// carry zeroes and the API omits them.
 	HeadlineCILow  float64
 	HeadlineCIHigh float64
 
@@ -34,6 +37,9 @@ type Record struct {
 
 	Verified      bool
 	PanelComplete bool
+	// SuiteDerived is set from the job row, not the report body — see
+	// FromReportRaw for why Verified and Version follow the same rule.
+	SuiteDerived bool
 
 	SuiteRef      string
 	EngineVersion string
@@ -168,8 +174,6 @@ func FromReport(r *report.Report) (Record, error) {
 
 	return Record{
 		Headline:                 r.Headline,
-		HeadlineCILow:            r.HeadlineCI[0],
-		HeadlineCIHigh:           r.HeadlineCI[1],
 		Pillars:                  pillarsJSON,
 		PanelMatrix:              panelMatrix,
 		RobustnessGap:            r.RobustnessGap,

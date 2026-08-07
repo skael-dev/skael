@@ -132,7 +132,7 @@ func startOwnershipServer(t *testing.T) *ownershipEnv {
 	// per-reason review route's owner check actually has something to ask.
 	skill.RegisterReviewQueueRoutes(api, skillStore, ownerResolver)
 
-	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
+	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore, evalsuite.RouteOptions{})
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser: skill.NewReleaser(skillStore),
 	})

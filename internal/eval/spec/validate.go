@@ -65,8 +65,11 @@ func (s *SkillSpec) Validate() []error {
 		errs = append(errs, fmt.Errorf("spec needs at least one positive trigger phrase"))
 	}
 
-	if n := s.Resources.Count(); n > MaxModules {
-		errs = append(errs, fmt.Errorf("resource plan plans %d modules, at most 3 are allowed", n))
+	if n := s.Resources.CapacityCount(); n > MaxModules {
+		errs = append(errs, fmt.Errorf("resource plan plans %d scripts/assets modules, at most %d are allowed", n, MaxModules))
+	}
+	if n := s.Resources.ReferenceCount(); n > MaxReferences {
+		errs = append(errs, fmt.Errorf("resource plan plans %d references, at most %d are allowed", n, MaxReferences))
 	}
 
 	for _, c := range s.Constraints {

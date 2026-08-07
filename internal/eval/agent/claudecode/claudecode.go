@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
+	"github.com/skael-dev/skael/internal/eval/lint"
 )
 
 // Adapter implements agent.Adapter for Claude Code.
@@ -62,6 +63,12 @@ func (a *Adapter) InstallSkill(workspace, bundlePath string) error {
 
 // copyTree copies a directory tree, refusing symlinks. A skill bundle is
 // untrusted input, and a symlink in it would escape the workspace.
+//
+// It installs shipped content only. The directory handed to it is the
+// authoring skill dir, which also holds the eval sidecar — including every
+// task's oracle/solve.sh. Copying that in puts the reference solution inside
+// the workspace of the agent being measured, defeating stageRunWorkspace's
+// deliberate exclusion of it one layer up.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -70,6 +77,12 @@ func copyTree(src, dst string) error {
 		rel, err := filepath.Rel(src, p)
 		if err != nil {
 			return err
+		}
+		if rel != "." && lint.Excluded(filepath.ToSlash(rel)) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		target := filepath.Join(dst, rel)
 

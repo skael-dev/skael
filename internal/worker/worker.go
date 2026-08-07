@@ -66,6 +66,15 @@ type RunInput struct {
 	Tier     string
 	Panel    evalqueue.Panel
 
+	// AllowVoid excludes void tasks instead of refusing the run. Sourced from
+	// the suite's own recorded origin (evalsuite.Origin), not from whether
+	// this run derived the suite: a derived suite asks for 18 tasks precisely
+	// so the ones its own oracle gate voids are absorbed, and there is no
+	// author to go repair them — that stays true on a retry or any later run
+	// against an already-derived suite. An authored suite keeps the stricter
+	// contract regardless of which run is asking.
+	AllowVoid bool
+
 	// WorkspaceDir already contains an initialised whetstone workspace with
 	// the skill bundle, the suite, and the suite's recorded checks.
 	WorkspaceDir string
@@ -83,6 +92,11 @@ type Runner interface {
 type SuiteMeta struct {
 	Checks []evalsuite.Check
 	Spec   *spec.SkillSpec
+	// Origin is how the suite came to exist. It is the source of truth for
+	// void-tolerance (RunInput.AllowVoid): a property of the suite, not of
+	// which run happened to derive it — a retry or any later run against an
+	// already-derived suite must still tolerate its voids.
+	Origin evalsuite.Origin
 }
 
 // API is the server surface the worker needs, so a test can fake it.
@@ -94,19 +108,60 @@ type API interface {
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
 	SuiteMeta(ctx context.Context, ref string) (SuiteMeta, error)
+	PushSuite(ctx context.Context, in PushSuiteInput) (string, error)
+}
+
+// PushSuiteInput is one derived-suite upload. JobID and ClaimToken are the
+// worker's proof that it holds the claim on a job with no suite of its own,
+// which is what lets the server record the suite as derived at push time
+// rather than trusting a worker-declared origin.
+type PushSuiteInput struct {
+	Skill      string
+	Archive    []byte
+	Checks     []evalsuite.Check
+	Spec       *spec.SkillSpec
+	JobID      evalqueue.JobID
+	ClaimToken string
+}
+
+// DeriveInput is what a Deriver needs to build a suite for one job. Tier and
+// Panel travel with it because the derived suite is gated by dry-running the
+// real planner against them.
+type DeriveInput struct {
+	Skill  string
+	Bundle []byte
+	Tier   string
+	Panel  evalqueue.Panel
+}
+
+// DeriveResult is a suite ready to push to the registry.
+type DeriveResult struct {
+	Archive []byte
+	Checks  []evalsuite.Check
+	Spec    *spec.SkillSpec
+}
+
+// Deriver builds a suite for a skill that has none. Injected for the same
+// reason Runner is: this package must stay testable with no LLM and no
+// Docker.
+type Deriver interface {
+	Derive(ctx context.Context, in DeriveInput) (*DeriveResult, error)
 }
 
 // Worker runs the claim/materialise/evaluate/report loop.
 type Worker struct {
-	cfg    Config
-	api    API
-	runner Runner
+	cfg     Config
+	api     API
+	runner  Runner
+	deriver Deriver
 }
 
 // New builds a Worker. cfg's zero-value fields are filled with defaults.
 // WorkRoot is created here (if missing) so a bad path fails at startup
-// rather than on every subsequent job.
-func New(cfg Config, api API, r Runner) (*Worker, error) {
+// rather than on every subsequent job. deriver may be nil — a worker
+// deployed without derivation still drains jobs that already name a suite;
+// it only fails a job that needs one.
+func New(cfg Config, api API, r Runner, deriver Deriver) (*Worker, error) {
 	if api == nil {
 		return nil, errors.New("worker: New requires a non-nil API")
 	}
@@ -117,7 +172,7 @@ func New(cfg Config, api API, r Runner) (*Worker, error) {
 	if err := os.MkdirAll(cfg.WorkRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("worker: New: WorkRoot %q: %w", cfg.WorkRoot, err)
 	}
-	return &Worker{cfg: cfg, api: api, runner: r}, nil
+	return &Worker{cfg: cfg, api: api, runner: r, deriver: deriver}, nil
 }
 
 // Loop calls RunOnce until ctx is cancelled, sleeping PollInterval when idle.
@@ -172,37 +227,16 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	}
 	defer os.RemoveAll(workDir)
 
-	bundle, err := w.api.FetchBundle(ctx, job.SkillName, job.Version)
-	if err != nil {
-		return fmt.Errorf("worker: fetch bundle: %w", err)
-	}
-	suiteArchive, err := w.api.FetchSuite(ctx, job.SuiteRef)
-	if err != nil {
-		return fmt.Errorf("worker: fetch suite: %w", err)
-	}
-	meta, err := w.api.SuiteMeta(ctx, job.SuiteRef)
-	if err != nil {
-		return fmt.Errorf("worker: fetch suite meta: %w", err)
-	}
-
-	st, err := Materialize(workDir, MaterializeInput{
-		Skill: job.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
-		Checks: meta.Checks, Spec: meta.Spec, WantSuiteRef: job.SuiteRef,
-	})
-	if err != nil {
-		return fmt.Errorf("worker: materialize workspace: %w", err)
-	}
-	defer st.Close()
-
-	tier := job.Tier
-	if tier == "" {
-		tier = w.cfg.Tier
-	}
-
 	// The heartbeat goroutine shares runCtx with the run: on ErrLeaseLost it
 	// cancels runCtx so the run is abandoned rather than left to finish and
 	// have its report posted against a claim that is no longer ours — by
 	// then another worker owns the job.
+	//
+	// Started here, before a single byte is fetched, rather than after
+	// Materialize: deriving a suite is two LLM calls plus 18 tasks × 3
+	// sandbox runs — minutes, comfortably past the 5-minute default
+	// WORKER_LEASE. Left where it used to sit, the lease could lapse mid
+	// derivation and strand the job.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -214,10 +248,84 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		w.heartbeatLoop(ctx, runCtx, cancel, job.ID, token, leaseLost)
 	}()
 
+	bundle, err := w.api.FetchBundle(runCtx, job.SkillName, job.Version)
+	if err != nil {
+		return fmt.Errorf("worker: fetch bundle: %w", err)
+	}
+
+	suiteRef := job.SuiteRef
+	if suiteRef == "" {
+		// No suite was registered when this job was submitted. Derive one,
+		// push it, and continue down the ordinary path: re-downloading what
+		// we just uploaded costs a round trip and keeps exactly one
+		// materialization path, including Materialize's own ref check.
+		if w.deriver == nil {
+			return fmt.Errorf("worker: job %s has no suite_ref and this worker has no deriver configured", job.ID)
+		}
+		res, err := w.deriver.Derive(runCtx, DeriveInput{
+			Skill: job.SkillName, Bundle: bundle, Tier: job.Tier, Panel: job.Panel,
+		})
+		if err != nil {
+			return fmt.Errorf("worker: derive suite for %s: %w", job.SkillName, err)
+		}
+		// job.ID and token travel with the push so the server can attribute it
+		// to the claim in flight and stamp the suite derived there and then. A
+		// suite that only becomes derived when the report lands is authored
+		// for as long as the run takes, and stays authored forever if the run
+		// never reports — a machine-generated suite that a later re-run could
+		// then use to clear a scan hold.
+		ref, err := w.api.PushSuite(runCtx, PushSuiteInput{
+			Skill: job.SkillName, Archive: res.Archive, Checks: res.Checks,
+			Spec: res.Spec, JobID: job.ID, ClaimToken: token,
+		})
+		if err != nil {
+			return fmt.Errorf("worker: push derived suite for %s: %w", job.SkillName, err)
+		}
+		log.Info().Str("job_id", string(job.ID)).Str("skill", job.SkillName).
+			Str("suite_ref", ref).Int("tasks", len(res.Checks)).
+			Msg("worker: derived a suite for a skill that had none")
+		suiteRef = ref
+	}
+
+	suiteArchive, err := w.api.FetchSuite(runCtx, suiteRef)
+	if err != nil {
+		return fmt.Errorf("worker: fetch suite: %w", err)
+	}
+	meta, err := w.api.SuiteMeta(runCtx, suiteRef)
+	if err != nil {
+		return fmt.Errorf("worker: fetch suite meta: %w", err)
+	}
+
+	st, err := Materialize(workDir, MaterializeInput{
+		Skill: job.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
+		Checks: meta.Checks, Spec: meta.Spec,
+		// suiteRef, not job.SuiteRef: FetchSuite is a separate round trip
+		// from whichever call produced suiteRef (PushSuite on the derive
+		// path, the claimed job otherwise), and this is what verifies that
+		// round trip actually delivered the same content — not an echo of
+		// the value that produced it. job.SuiteRef is empty on the derive
+		// path and would silently disable the check for every derived job.
+		WantSuiteRef: suiteRef,
+	})
+	if err != nil {
+		return fmt.Errorf("worker: materialize workspace: %w", err)
+	}
+	defer st.Close()
+
+	tier := job.Tier
+	if tier == "" {
+		tier = w.cfg.Tier
+	}
+
 	rep, runErr := w.runner.Run(runCtx, RunInput{
 		JobID: job.ID,
-		Skill: job.SkillName, Version: job.Version, SuiteRef: job.SuiteRef,
+		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
+		// Sourced from the suite's own recorded origin, not from whether this
+		// run was the one that derived it: a retry or any later run against
+		// an already-derived suite (job.SuiteRef non-empty from the start)
+		// must still tolerate the voids that suite was built to absorb.
+		AllowVoid: meta.Origin == evalsuite.OriginDerived,
 	})
 
 	cancel()
@@ -235,8 +343,8 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	if rep == nil {
 		return fmt.Errorf("worker: run returned no report and no error")
 	}
-	if rep.SuiteRef != job.SuiteRef {
-		return fmt.Errorf("worker: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, job.SuiteRef)
+	if rep.SuiteRef != suiteRef {
+		return fmt.Errorf("worker: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, suiteRef)
 	}
 
 	if err := w.api.PostReport(ctx, job.ID, token, rep); err != nil {

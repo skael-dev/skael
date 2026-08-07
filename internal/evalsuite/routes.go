@@ -35,6 +35,31 @@ type suiteBody struct {
 	// other way to recover it — see evalsuite.Record.Spec.
 	Spec          json.RawMessage `json:"spec,omitempty"`
 	ArchiveBase64 string          `json:"archive_base64" minLength:"1"`
+	// JobID and ClaimToken are the eval worker's proof that it is deriving
+	// this suite for a job it currently holds the claim on. Both empty is the
+	// ordinary authored push.
+	JobID      string `json:"job_id,omitempty"`
+	ClaimToken string `json:"claim_token,omitempty"`
+}
+
+// DeriveClaims is the eval-queue surface this route needs to attribute a push
+// to the job whose worker is deriving for it. It is an interface rather than
+// the concrete type because internal/evalqueue imports this package for its
+// own route wiring, so the reverse import is impossible; internal/server
+// bridges the two.
+type DeriveClaims interface {
+	// VerifyDerivePush reports whether jobID is a job for skillName that is
+	// currently claimed with token and was submitted with no suite of its own.
+	VerifyDerivePush(ctx context.Context, jobID, token, skillName string) (bool, error)
+	// RecordDerivedSuite records ref as jobID's suite, through q so it lands in
+	// the same transaction as the suite row itself.
+	RecordDerivedSuite(ctx context.Context, q Queryer, jobID, ref string) error
+}
+
+// RouteOptions carries optional collaborators. A nil Claims disables push-time
+// provenance entirely: every upload is recorded authored, as it was before.
+type RouteOptions struct {
+	Claims DeriveClaims
 }
 
 type suiteInput struct {
@@ -54,7 +79,7 @@ type suiteOutput struct {
 // RegisterRoutes wires up the eval suite registry HTTP endpoints onto the
 // provided Huma API and Chi router. The router is needed for the raw-response
 // download route, which streams bytes rather than returning JSON.
-func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skill.Store) {
+func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skill.Store, opts RouteOptions) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "upload-eval-suite",
 		Method:        http.MethodPost,
@@ -89,7 +114,41 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			uploadedBy = u.Email
 		}
 
-		rec, err := reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy, input.Body.Spec)
+		// A push that presents a job claim is the worker deriving a suite for
+		// a skill that has none. Recording that here, rather than waiting for
+		// the report, is what stops a run that never reports — a lost lease, a
+		// crashed worker — from leaving a machine-generated suite recorded as
+		// authored, which a later re-run's score could then use to clear a
+		// scan hold. The claim is verified, never believed: a push that
+		// presents one that does not check out is refused outright rather than
+		// quietly recorded as authored, since the only caller that sends one
+		// is a worker whose run is about to measure against it.
+		var rec *Record
+		if opts.Claims != nil && input.Body.JobID != "" {
+			ok, err := opts.Claims.VerifyDerivePush(ctx, input.Body.JobID, input.Body.ClaimToken, input.Body.Skill)
+			if err != nil {
+				log.Error().Err(err).Str("job_id", input.Body.JobID).Msg("evalsuite: verify derive claim failed")
+				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
+			}
+			if !ok {
+				return nil, huma.Error403Forbidden("upload eval suite: invalid claim for job " + input.Body.JobID)
+			}
+			jobID := input.Body.JobID
+			rec, err = reg.PutDerived(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy, input.Body.Spec,
+				func(ctx context.Context, q Queryer, ref string) error {
+					return opts.Claims.RecordDerivedSuite(ctx, q, jobID, ref)
+				})
+			if err != nil {
+				if errors.Is(err, ErrInvalidArchive) {
+					return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
+				}
+				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store derived suite failed")
+				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
+			}
+			return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil
+		}
+
+		rec, err = reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy, input.Body.Spec)
 		if err != nil {
 			if errors.Is(err, ErrInvalidArchive) {
 				return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
@@ -136,6 +195,7 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			Checks:      checks,
 			SpecVersion: rec.SpecVersion,
 			Spec:        rec.Spec,
+			Origin:      string(rec.Origin),
 		}}, nil
 	})
 
@@ -152,6 +212,11 @@ type getSuiteMetaBody struct {
 	Checks      []suiteCheck    `json:"checks"`
 	SpecVersion int             `json:"spec_version"`
 	Spec        json.RawMessage `json:"spec,omitempty"`
+	// Origin is how this suite came to exist ("authored" or "derived"), so a
+	// caller can decide void-tolerance from the suite itself rather than from
+	// whether this particular run was the one that derived it — see
+	// worker.RunInput.AllowVoid.
+	Origin string `json:"origin"`
 }
 
 type getSuiteMetaOutput struct {

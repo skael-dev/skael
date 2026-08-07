@@ -1,7 +1,8 @@
 {
   "headline_min": 58.0,
   "headline_max": 60.5,
-  "drift_grade": "C",
+  "adherence_min": 75.0,
+  "adherence_max": 76.5,
   "min_violations": 1,
   "violation_ids": ["no-writes-outside-out"],
   "unevaluable": 1,

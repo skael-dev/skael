@@ -28,7 +28,9 @@ func TestStageRunWorkspace_CleansUpOnError(t *testing.T) {
 
 	before := tempDirs(t, "skael-run-*")
 
-	_, err := stageRunWorkspace(taskDir)
+	// Empty root keeps this test asserting against os.TempDir(), which is
+	// what tempDirs lists.
+	_, err := stageRunWorkspace(taskDir, "")
 	if err == nil {
 		t.Fatal("stageRunWorkspace accepted an environment containing a symlink")
 	}

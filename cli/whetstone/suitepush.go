@@ -135,7 +135,9 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	}
 
 	c := client.New(req.Endpoint, req.APIKey)
-	resp, err := c.UploadEvalSuite(req.Skill, specVersion, checks, specJSON, archive)
+	resp, err := c.UploadEvalSuite(client.EvalSuiteUploadRequest{
+		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON, Archive: archive,
+	})
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}

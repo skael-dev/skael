@@ -16,10 +16,16 @@ import (
 // to "the agent said something" without failing anything.
 //
 // --verbose accompanies stream-json because the CLI requires it for streaming
-// output in print mode. --permission-mode acceptEdits is the minimum that lets
-// a skill do file and shell work without a prompt no one can answer: the
-// isolation is the sandbox's job, not the CLI's, and a session that stops to
-// ask is a session scored as a failure for the wrong reason.
+// output in print mode.
+//
+// --permission-mode bypassPermissions is what lets a skill do file *and* shell
+// work without a prompt no one can answer: the isolation is the sandbox's job,
+// not the CLI's, and a session that stops to ask is a session scored as a
+// failure for the wrong reason. It must not be narrowed back to acceptEdits,
+// which was here first and looks safer while being strictly worse — that mode
+// clears Edit and Write but still prompts for Bash, so a headless session had
+// every shell command denied, and any skill that runs a script scored zero on
+// every task with nothing in the report naming the cause.
 func Argv(s agent.InvokeSpec) ([]string, error) {
 	if strings.TrimSpace(s.Prompt) == "" {
 		return nil, errors.New("claudecode: invoke has no prompt")
@@ -31,7 +37,7 @@ func Argv(s agent.InvokeSpec) ([]string, error) {
 		"claude", "-p",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--permission-mode", "acceptEdits",
+		"--permission-mode", "bypassPermissions",
 		New().Caps().ModelFlag, s.Model,
 		s.Prompt,
 	}, nil

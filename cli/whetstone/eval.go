@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,6 +49,19 @@ type EvalDeps struct {
 	// Sleep defaults to time.Sleep; the runner's rate-limit backoff uses it.
 	Sleep         func(time.Duration)
 	EngineVersion string
+	// WorkspaceRoot is passed through to runner.Options.WorkspaceRoot — see
+	// there for why a containerized runner has to set it. Empty is correct
+	// for the interactive CLI, which always shares a filesystem with the
+	// daemon it starts sandboxes on.
+	WorkspaceRoot string
+	// PanelStrongModel and PanelFastModel override the shipped panel's model
+	// ids. Already-resolved values rather than env lookups, so RunEvalWith
+	// carries no policy — see panelModelsFromEnv.
+	PanelStrongModel string
+	PanelFastModel   string
+	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
+	// can name the endpoint that rejected its models.
+	PanelBaseURL string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -77,21 +89,6 @@ type EvalRequest struct {
 // driver with no base-image concept has nothing to ensure.
 type baseEnsurer interface {
 	EnsureBase(ctx context.Context, slim bool) error
-}
-
-// tasksWithEnvFrag returns a sorted slice of task IDs whose EnvFrag is non-empty.
-// A task-declared fragment needs a per-task image, which the runner's single
-// prepared image cannot provide; this function identifies tasks that declared
-// one so they can be rejected loudly rather than silently ignored.
-func tasksWithEnvFrag(s *suite.Suite) []string {
-	var ids []string
-	for _, task := range s.Tasks {
-		if strings.TrimSpace(task.EnvFrag) != "" {
-			ids = append(ids, task.ID)
-		}
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 // RunEvalWith runs one evaluation end to end: load the approved spec and
@@ -148,18 +145,6 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		s.Tasks = filtered
 	}
 
-	// A task-declared fragment needs a per-task image, which the runner's single
-	// prepared image cannot provide. Refuse rather than ignore it: an ignored
-	// fragment means the task runs without its dependency and fails as though the
-	// skill were at fault. The check runs after TaskFilter trimming so that a
-	// legitimate selective re-run that excludes the broken task is not blocked:
-	// a filtered-out task's fragment is never at risk of being silently ignored
-	// because that task never runs.
-	if ids := tasksWithEnvFrag(s); len(ids) > 0 {
-		return nil, fmt.Errorf("whetstone: tasks %s declare environment/Dockerfile.frag, which this engine does not apply; "+
-			"move the dependency into the skill spec's deps, or delete the fragment", strings.Join(ids, ", "))
-	}
-
 	// 2. The suite must have been gated, and cleanly.
 	checks, err := d.Store.SuiteChecks(req.Skill, suiteRef)
 	if err != nil {
@@ -185,7 +170,22 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	// 3. The model panel.
-	panel, err := runner.ParsePanel(req.Agents, req.Models)
+	//
+	// A caller that named a panel always wins; this only fills the default.
+	// The shipped default is the bare Claude Code aliases opus/haiku, which
+	// mean nothing to a gateway that namespaces its identifiers — so when the
+	// boundary resolved model ids for a custom gateway, build the default out
+	// of those instead. ParsePanel assigns Class positionally, so one agent
+	// with [strong, fast] yields exactly DefaultPanel's shape: a
+	// spec.TierStrong member followed by a spec.TierFloor one. The agent name
+	// comes from DefaultPanel rather than a second "claude-code" literal so
+	// the two cannot drift apart.
+	agents, models := req.Agents, req.Models
+	if len(agents) == 0 && len(models) == 0 && d.PanelStrongModel != "" && d.PanelFastModel != "" {
+		agents = []string{runner.DefaultPanel()[0].Agent}
+		models = []string{d.PanelStrongModel, d.PanelFastModel}
+	}
+	panel, err := runner.ParsePanel(agents, models)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +217,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Store: d.Store, Driver: d.Driver, Adapters: d.Adapters,
 		Concurrency: req.Concurrency, Untrusted: req.Untrusted,
 		Sleep: sleepFn, Logger: ui.Info,
+		WorkspaceRoot: d.WorkspaceRoot,
 	}
 	rn, err := runner.New(ro)
 	if err != nil {
@@ -233,6 +234,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	for _, h := range health {
 		healthy[h.Member] = h.OK
 		healthDetail[h.Member] = h.Detail
+	}
+	if err := checkPanelHealth(health, d.PanelBaseURL); err != nil {
+		return nil, err
 	}
 
 	// 7. Reuse a resumed eval row, or start a new one.
@@ -354,18 +358,49 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		judgeKappa     *float64
 		judgeLabeledBy string
 	)
-	if d.Gateway != nil {
-		if calSet, cerr := score.Calibration(); cerr == nil {
-			if j, jerr := score.NewJudge(score.JudgeOptions{Gateway: d.Gateway, Spec: sp}); jerr == nil {
-				if result, rerr := score.Calibrate(ctx, j, calSet); rerr == nil {
-					k := result.Kappa
-					judgeKappa = &k
-					judgeLabeledBy = result.LabeledBy
-					judgeTrusted = result.JudgeTrusted()
+	// Every way this can fail ends in the same place — Uplift falls back to
+	// pass rates — so each one says why. Nested `if err == nil` with no else
+	// made a missing gateway, a failed construction, and a judge below the κ
+	// floor indistinguishable: all three surfaced only as
+	// "passrate-fallback". None is fatal; the deterministic pillars are still
+	// a real measurement.
+	judgeUnavailable := ""
+	switch d.Gateway {
+	case nil:
+		judgeUnavailable = "no LLM gateway is configured"
+	default:
+		calSet, cerr := score.Calibration()
+		j, jerr := score.NewJudge(score.JudgeOptions{Gateway: d.Gateway, Spec: sp})
+		switch {
+		case cerr != nil:
+			judgeUnavailable = fmt.Sprintf("the calibration set could not be loaded: %v", cerr)
+		case jerr != nil:
+			judgeUnavailable = fmt.Sprintf("the judge could not be constructed: %v", jerr)
+		default:
+			result, rerr := score.Calibrate(ctx, j, calSet)
+			switch {
+			case rerr != nil:
+				judgeUnavailable = fmt.Sprintf("calibration did not complete: %v", rerr)
+			default:
+				k := result.Kappa
+				judgeKappa = &k
+				judgeLabeledBy = result.LabeledBy
+				judgeTrusted = result.JudgeTrusted()
+				if judgeTrusted {
 					judge = j
+				} else {
+					judgeUnavailable = fmt.Sprintf(
+						"the judge calibrated at κ=%.2f, below the %.2f floor (labels by %s)",
+						result.Kappa, score.KappaFloor, result.LabeledBy)
 				}
 			}
 		}
+	}
+	// The judge only ever moves Uplift. With no baseline planned, Uplift is
+	// a structural tie either way, so announcing the fallback reports a
+	// consequence that does not exist.
+	if judgeUnavailable != "" && BaselinePlanned(*plan) {
+		ui.Warn("whetstone eval: scoring Uplift from pass rates rather than the judge — %s", judgeUnavailable)
 	}
 
 	// Trigger firing is measured on the primary panel member only, not on
@@ -464,6 +499,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// the report, and it must not say "judge" while even one scored member's
 	// Uplift silently came from the pass-rate fallback.
 	var scoredMembers, judgeMembers int
+	// baselineWipeout records that some member's baseline passed no task at
+	// all — see where it is set for why that makes Uplift degenerate.
+	var baselineWipeout bool
 	for _, m := range panel {
 		if !scheduled[m] {
 			continue
@@ -500,6 +538,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			ti := getTask(t.TaskID)
 			ti.Conditions = append(ti.Conditions, report.ConditionReport{
 				Condition: runner.CondSkill, Model: m.Model, Passes: t.C, Runs: t.N,
+				Reason: firstFailureReason(g.skill[t.TaskID]),
 			})
 		}
 
@@ -552,11 +591,21 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 				ti := getTask(t.TaskID)
 				ti.Conditions = append(ti.Conditions, report.ConditionReport{
 					Condition: runner.CondBaseline, Model: m.Model, Passes: t.C, Runs: t.N,
+					Reason: firstFailureReason(g.baseline[t.TaskID]),
 				})
 			}
 			metaPartial = metaPartial || blPartial
 			if !skillPartial && blPartial {
 				metaPartialReason = blPartialReason
+			}
+
+			// At baseline 0, UpliftFromPassRates collapses to
+			// 0.5+Reliability/2 — a rescaling of a pillar Effectiveness
+			// already weighs. It is also the shape a broken baseline harness
+			// produces, which is why it is worth surfacing rather than just
+			// scoring.
+			if baselinePassRate == 0 && len(baselineTasks) > 0 {
+				baselineWipeout = true
 			}
 
 			upliftVal = score.UpliftFromPassRates(reliability, baselinePassRate)
@@ -668,7 +717,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy, JudgeModel: judgeModel,
 		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
-		StartedAt: startedAt, FinishedAt: now(),
+		BaselineWipeout: baselineWipeout,
+		StartedAt:       startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
@@ -717,15 +767,26 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	if ui.JSONMode {
+		type jsonFailure struct {
+			TaskID string `json:"task_id"`
+			Reason string `json:"reason,omitempty"`
+		}
+		_, _, failures := taskTally(rep)
+		failed := make([]jsonFailure, 0, len(failures))
+		for _, f := range failures {
+			failed = append(failed, jsonFailure{TaskID: f.taskID, Reason: f.reason})
+		}
 		if err := ui.PrintJSON(map[string]any{
 			"eval_id": evalID, "skill": req.Skill, "tier": string(req.Tier), "suite_ref": suiteRef,
 			"headline": rep.Headline, "panel_complete": rep.PanelComplete, "uplift_source": string(rep.UpliftSource),
+			"failed_tasks": failed,
 		}); err != nil {
 			return nil, err
 		}
 	} else {
-		ui.Success("eval %d for %s: %.1f effectiveness (tier=%s panel_complete=%v uplift=%s)",
-			evalID, req.Skill, rep.Headline, req.Tier, rep.PanelComplete, rep.UpliftSource)
+		// Every other whetstone human-facing output goes to stderr so --json
+		// stdout stays clean and parseable; this must match.
+		fmt.Fprint(os.Stderr, RenderEvalSummary(rep, evalID, req.Skill, BaselinePlanned(*plan)))
 	}
 
 	return rep, nil
@@ -813,6 +874,21 @@ func tokenTotals(byTask map[string][]runner.Outcome) []float64 {
 		}
 	}
 	return out
+}
+
+// firstFailureReason returns the reason from the first outcome of a task that
+// the verifier rejected. One line per task is the budget for a summary; the
+// remaining attempts are in each run's verifier.log.
+func firstFailureReason(outs []runner.Outcome) string {
+	for _, o := range outs {
+		if o.Reason == "" {
+			continue
+		}
+		if o.VerifierExit == nil || *o.VerifierExit != 0 {
+			return o.Reason
+		}
+	}
+	return ""
 }
 
 // loadTranscript reads a run's recorded transcript, or "" if it cannot be
@@ -937,9 +1013,15 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		gw = g
 	}
 
+	panelStrong, panelFast, panelBase := panelModelsFromEnv()
+	if w := warnUnconfiguredPanelModels(panelStrong, panelFast, panelBase); w != "" {
+		ui.Warn("%s", w)
+	}
+
 	d := EvalDeps{
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
+		PanelStrongModel: panelStrong, PanelFastModel: panelFast, PanelBaseURL: panelBase,
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

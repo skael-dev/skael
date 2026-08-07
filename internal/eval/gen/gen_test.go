@@ -28,12 +28,15 @@ func genSpec() *spec.SkillSpec {
 	}
 }
 
-// scripted returns the four gateway responses a full generation needs.
+// scripted returns the four gateway responses a full generation needs against
+// genSpec(), which plans exactly one resource file: outline, body, one
+// resources-pass call (content only — the path comes from the spec, not this
+// response), description.
 func scripted() []string {
 	return []string{
 		`{"sections":["Overview","Steps","Failure handling"]}`,
 		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n2. Run ` + "`scripts/validate.py out/tables.csv`" + `. Postcondition: exits 0.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
-		`{"files":[{"path":"scripts/extract.py","content":"#!/usr/bin/env python3\n\"\"\"Extract tables.\"\"\"\nimport sys\nif \"--help\" in sys.argv:\n    print(__doc__); sys.exit(0)\n"}]}`,
+		`{"content":"#!/usr/bin/env python3\n\"\"\"Extract tables.\"\"\"\nimport sys\nif \"--help\" in sys.argv:\n    print(__doc__); sys.exit(0)\n"}`,
 		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF, a report, or table extraction."}`,
 	}
 }
@@ -114,6 +117,8 @@ func TestGenerate_BodyPassCarriesTheRobustnessRules(t *testing.T) {
 	}
 
 	calls := g.Calls()
+	// genSpec() plans exactly one resource file, so the resources segment is
+	// one call: outline, body, 1 resources call, description.
 	if len(calls) != 4 {
 		t.Fatalf("made %d gateway calls, want 4 (outline, body, resources, description)", len(calls))
 	}
@@ -126,13 +131,13 @@ func TestGenerate_BodyPassCarriesTheRobustnessRules(t *testing.T) {
 }
 
 func TestGenerate_RefusesPathsOutsideTheBundle(t *testing.T) {
-	// The resources pass returns model-authored paths. A traversal would write
-	// outside the bundle directory, so it must be refused rather than cleaned.
-	responses := scripted()
-	responses[2] = `{"files":[{"path":"../../escape.sh","content":"#!/bin/sh\n"}]}`
+	// Resource paths come from the approved spec, not the model's response —
+	// a traversal planted there must still be refused rather than cleaned.
+	s := genSpec()
+	s.Resources.Scripts[0].Path = "../../escape.sh"
 
 	out := t.TempDir()
-	if _, err := gen.Generate(context.Background(), fake.New(responses...), genSpec(), out); err == nil {
+	if _, err := gen.Generate(context.Background(), fake.New(scripted()...), s, out); err == nil {
 		t.Fatal("Generate accepted a path traversal in a resource path")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(out), "escape.sh")); err == nil {
@@ -141,11 +146,104 @@ func TestGenerate_RefusesPathsOutsideTheBundle(t *testing.T) {
 }
 
 func TestGenerate_RefusesAbsolutePaths(t *testing.T) {
-	responses := scripted()
-	responses[2] = `{"files":[{"path":"/tmp/escape.sh","content":"x"}]}`
+	s := genSpec()
+	s.Resources.Scripts[0].Path = "/tmp/escape.sh"
 
-	if _, err := gen.Generate(context.Background(), fake.New(responses...), genSpec(), t.TempDir()); err == nil {
+	if _, err := gen.Generate(context.Background(), fake.New(scripted()...), s, t.TempDir()); err == nil {
 		t.Fatal("Generate accepted an absolute resource path")
+	}
+}
+
+// TestGenerate_OneCallPerPlannedResourceFile is the direct test for the
+// resources-pass split: a spec with several planned files must make one
+// gateway call per file, tagged by path, with each call's returned content
+// landing at its own planned path — not one call asked to emit every file's
+// content at once.
+func TestGenerate_OneCallPerPlannedResourceFile(t *testing.T) {
+	s := genSpec()
+	s.Resources = spec.ResourcePlan{
+		Scripts: []spec.ResourceItem{
+			{Path: "scripts/extract.py", Purpose: "extract"},
+			{Path: "scripts/validate.py", Purpose: "validate"},
+		},
+		References: []spec.ResourceItem{
+			{Path: "references/format.md", Purpose: "format notes"},
+		},
+	}
+
+	responses := []string{
+		`{"sections":["Overview","Steps","Failure handling"]}`,
+		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
+		`{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
+		`{"content":"#!/usr/bin/env python3\nprint(\"validate\")\n"}`,
+		`{"content":"# Format notes\n"}`,
+		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF."}`,
+	}
+	g := fake.New(responses...)
+
+	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	calls := g.Calls()
+	wantRoles := []string{
+		"gen.outline", "gen.body",
+		"gen.resources:scripts/extract.py", "gen.resources:scripts/validate.py",
+		"gen.resources:references/format.md", "gen.description",
+	}
+	if len(calls) != len(wantRoles) {
+		t.Fatalf("made %d gateway calls, want %d", len(calls), len(wantRoles))
+	}
+	for i, want := range wantRoles {
+		if calls[i].Role != want {
+			t.Errorf("call %d has role %q, want %q", i, calls[i].Role, want)
+		}
+	}
+
+	for path, want := range map[string]string{
+		"scripts/extract.py":   "print(\"extract\")",
+		"scripts/validate.py":  "print(\"validate\")",
+		"references/format.md": "# Format notes",
+	} {
+		content, err := os.ReadFile(filepath.Join(b.Dir, filepath.FromSlash(path)))
+		if err != nil {
+			t.Errorf("planned file %s not written: %v", path, err)
+			continue
+		}
+		if !strings.Contains(string(content), want) {
+			t.Errorf("%s content = %q, want it to contain %q", path, content, want)
+		}
+	}
+}
+
+// TestGenerate_NoPlannedResourcesMakesNoResourcesCall pins the other half of
+// the split: zero planned files must make zero resources-pass calls, not one
+// wasted call asking for an empty file list.
+func TestGenerate_NoPlannedResourcesMakesNoResourcesCall(t *testing.T) {
+	s := genSpec()
+	s.Resources = spec.ResourcePlan{}
+
+	responses := []string{
+		`{"sections":["Overview","Steps","Failure handling"]}`,
+		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
+		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF."}`,
+	}
+	g := fake.New(responses...)
+
+	if _, err := gen.Generate(context.Background(), g, s, t.TempDir()); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	calls := g.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("made %d gateway calls, want 3 (outline, body, description; no resources call)", len(calls))
+	}
+	wantRoles := []string{"gen.outline", "gen.body", "gen.description"}
+	for i, want := range wantRoles {
+		if calls[i].Role != want {
+			t.Errorf("call %d has role %q, want %q", i, calls[i].Role, want)
+		}
 	}
 }
 

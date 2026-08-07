@@ -424,6 +424,18 @@ type EvalSuiteUpload struct {
 	TaskCount int    `json:"task_count"`
 }
 
+// EvalSuiteUploadRequest is one suite upload. Spec may be nil; JobID and
+// ClaimToken are set only by the eval worker's derive path.
+type EvalSuiteUploadRequest struct {
+	Skill       string
+	SpecVersion int
+	Checks      []EvalSuiteCheck
+	Spec        json.RawMessage
+	Archive     []byte
+	JobID       string
+	ClaimToken  string
+}
+
 // UploadEvalSuite uploads an evaluation suite archive, together with the
 // oracle-gate check results recorded for it and the spec it was checked
 // against, to POST /api/eval/suites. archive is a gzip-compressed tar (see
@@ -434,19 +446,27 @@ type EvalSuiteUpload struct {
 // nil) — a published bundle never carries spec.yaml, so this is the only
 // channel a worker rebuilding a workspace from a downloaded bundle has to
 // recover it.
-func (c *Client) UploadEvalSuite(skill string, specVersion int, checks []EvalSuiteCheck, specJSON json.RawMessage, archive []byte) (*EvalSuiteUpload, error) {
+// JobID/ClaimToken are the eval worker's proof that it is deriving this suite
+// for a job it currently holds the claim on; the server stamps such a suite
+// as machine-derived at push time. An authored push from whetstone leaves both
+// empty.
+func (c *Client) UploadEvalSuite(req EvalSuiteUploadRequest) (*EvalSuiteUpload, error) {
 	payload, err := json.Marshal(struct {
 		Skill         string           `json:"skill"`
 		SpecVersion   int              `json:"spec_version"`
 		Checks        []EvalSuiteCheck `json:"checks"`
 		Spec          json.RawMessage  `json:"spec,omitempty"`
 		ArchiveBase64 string           `json:"archive_base64"`
+		JobID         string           `json:"job_id,omitempty"`
+		ClaimToken    string           `json:"claim_token,omitempty"`
 	}{
-		Skill:         skill,
-		SpecVersion:   specVersion,
-		Checks:        checks,
-		Spec:          specJSON,
-		ArchiveBase64: base64.StdEncoding.EncodeToString(archive),
+		Skill:         req.Skill,
+		SpecVersion:   req.SpecVersion,
+		Checks:        req.Checks,
+		Spec:          req.Spec,
+		ArchiveBase64: base64.StdEncoding.EncodeToString(req.Archive),
+		JobID:         req.JobID,
+		ClaimToken:    req.ClaimToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal upload eval suite request: %w", err)

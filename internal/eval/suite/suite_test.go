@@ -2,15 +2,25 @@ package suite_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
+
+// testSpec is a minimal skill spec, distinct from suiteSpec only in name —
+// GenerateN's tests care about the prompt's task count, not the spec's
+// content.
+func testSpec() *spec.SkillSpec {
+	return suiteSpec()
+}
 
 func suiteSpec() *spec.SkillSpec {
 	return &spec.SkillSpec{
@@ -22,37 +32,79 @@ func suiteSpec() *spec.SkillSpec {
 	}
 }
 
-// tenTasks scripts a suite response with ten core tasks and a trigger set.
-func tenTasks() string {
+// outlineFixture builds an outline response with n stubs, ids task-0..task-(n-1),
+// kinds cycling happy/variant/edge, and a one-item trigger set.
+func outlineFixture(n int) string {
 	var b []byte
 	b = append(b, `{"tasks":[`...)
-	for i := 0; i < 10; i++ {
+	kinds := []string{"happy", "variant", "edge"}
+	for i := 0; i < n; i++ {
 		if i > 0 {
 			b = append(b, ',')
 		}
-		kind := "variant"
-		if i == 0 {
-			kind = "happy"
-		}
-		b = append(b, `{"id":"t`...)
-		b = append(b, byte('0'+i))
-		b = append(b, `","kind":"`+kind+`","prompt_md":"Extract the tables.","oracle":"#!/bin/sh\nexit 0\n","verifier":"#!/bin/sh\ntest -s out/tables.csv\n"}`...)
+		kind := kinds[i%len(kinds)]
+		b = append(b, fmt.Sprintf(`{"id":"task-%d","kind":"%s","intent":"do the thing"}`, i, kind)...)
 	}
-	b = append(b, `],"triggers":{"positive":["p1","p2","p3","p4","p5","p6","p7","p8"],`...)
-	b = append(b, `"negative":["n1","n2","n3","n4","n5","n6","n7","n8"]}}`...)
+	b = append(b, `],"triggers":{"positive":["p1"],"negative":["n1"]}}`...)
 	return string(b)
 }
 
+// twoPhase adapts the old single-response fixtures to outline+expand: the
+// outline call gets the stub list, every expansion gets the same package.
+func twoPhase(t *testing.T, n int) *fake.Gateway {
+	t.Helper()
+	return fake.NewFunc(func(r llm.Req) (string, error) {
+		if r.Role == "suite.outline" {
+			return outlineFixture(n), nil
+		}
+		return `{"prompt_md":"Extract the tables.","setup":"","oracle":"#!/bin/sh\nexit 0\n",` +
+			`"verifier":"#!/bin/sh\ntest -s out/tables.csv\n"}`, nil
+	})
+}
+
+func TestGenerateN_AsksForTheRequestedCount(t *testing.T) {
+	g := twoPhase(t, 18)
+	if _, _, err := suite.GenerateN(context.Background(), g, testSpec(), 18); err != nil {
+		t.Fatalf("GenerateN: %v", err)
+	}
+	var outlinePrompt string
+	for _, c := range g.Calls() {
+		if c.Role == "suite.outline" {
+			outlinePrompt = c.Prompt
+		}
+	}
+	if !strings.Contains(outlinePrompt, "18 task stubs") {
+		t.Fatalf("outline prompt does not ask for 18 tasks:\n%s", outlinePrompt)
+	}
+}
+
+func TestGenerate_StillAsksForTen(t *testing.T) {
+	// The authored path's size is unchanged; GenerateN is additive.
+	g := twoPhase(t, 10)
+	if _, _, err := suite.Generate(context.Background(), g, testSpec()); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var outlinePrompt string
+	for _, c := range g.Calls() {
+		if c.Role == "suite.outline" {
+			outlinePrompt = c.Prompt
+		}
+	}
+	if !strings.Contains(outlinePrompt, "10 task stubs") {
+		t.Fatalf("outline prompt does not ask for 10 tasks:\n%s", outlinePrompt)
+	}
+}
+
 func TestGenerate_ProducesTasksAndTriggers(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if len(s.Tasks) != 10 {
 		t.Errorf("got %d tasks, want 10", len(s.Tasks))
 	}
-	if len(s.Triggers.Positive) != 8 || len(s.Triggers.Negative) != 8 {
-		t.Errorf("trigger set = %d positive / %d negative, want 8 and 8",
+	if len(s.Triggers.Positive) != 1 || len(s.Triggers.Negative) != 1 {
+		t.Errorf("trigger set = %d positive / %d negative, want 1 and 1",
 			len(s.Triggers.Positive), len(s.Triggers.Negative))
 	}
 }
@@ -61,7 +113,7 @@ func TestGenerate_EveryTaskHasAnOracleAndVerifier(t *testing.T) {
 	// The oracle gate is what separates a broken task from a broken skill. A
 	// task with no oracle can never be validated, so it would silently blame
 	// the skill for its own defects.
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +128,7 @@ func TestGenerate_EveryTaskHasAnOracleAndVerifier(t *testing.T) {
 }
 
 func TestSplit_Is70_30AndDeterministic(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	s.Split(42)
 
 	var dev, holdout int
@@ -96,7 +148,7 @@ func TestSplit_Is70_30AndDeterministic(t *testing.T) {
 
 	// Same seed must produce the same split, or a re-run silently changes which
 	// tasks the repair loop was allowed to see.
-	again, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	again, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	again.Split(42)
 	for i := range s.Tasks {
 		if s.Tasks[i].Split != again.Tasks[i].Split {
@@ -138,7 +190,7 @@ func TestSplit_HoldoutIsNonEmptyForSmallSuites(t *testing.T) {
 // one set, and finally checks the union of dev+holdout IDs is exactly the
 // original ID set — neither short nor long.
 func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +244,7 @@ func TestSplit_PartitionsWithoutDroppingOrDuplicating(t *testing.T) {
 }
 
 func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	s.Split(7)
 
 	dir := t.TempDir()
@@ -202,9 +254,9 @@ func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
 
 	// Layout per the SkillsBench convention.
 	for _, rel := range []string{
-		filepath.Join("tasks", "t0", "task.md"),
-		filepath.Join("tasks", "t0", "oracle", "solve.sh"),
-		filepath.Join("tasks", "t0", "verifier", "test.sh"),
+		filepath.Join("tasks", "task-0", "task.md"),
+		filepath.Join("tasks", "task-0", "oracle", "solve.sh"),
+		filepath.Join("tasks", "task-0", "verifier", "test.sh"),
 		"triggers.yaml",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
@@ -229,17 +281,23 @@ func TestWriteAndLoad_RoundTripsSkillsBenchLayout(t *testing.T) {
 
 // TestWriteAndLoad_RoundTripsKind asserts the Kind field survives Write then
 // Load, not just Split. Kind distinguishes a happy-path task from an edge
-// case or a negative-trigger task, and a later stage weights them
-// differently when scoring — a lost Kind would mis-score silently rather
-// than error, so it needs its own assertion rather than riding along on the
-// Split-round-trip test.
+// case or a negative-trigger task, and a lost Kind would silently mislabel
+// the report rather than error, so it needs its own assertion rather than
+// riding along on the Split-round-trip test.
+//
+// This comment used to claim "a later stage weights them differently when
+// scoring". Nothing does: Kind reaches report.TaskInput and is rendered as a
+// pill, and no scoring path reads it. A negative-trigger task — where the
+// skill is supposed *not* to fire — therefore counts toward Reliability
+// exactly like a happy-path task. That may be worth changing, but the claim
+// was describing an intention rather than the code.
 //
 // The second half proves the assertion actually discriminates: it breaks the
 // on-disk tag Kind is carried by (the meta.yaml "kind:" key) and confirms
 // Load then returns the wrong value, rather than the field surviving by
 // accident (e.g. because the zero value happens to match).
 func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
-	s, err := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, err := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +315,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 
 	var loadedT0 *suite.TaskPkg
 	for i := range got.Tasks {
-		if got.Tasks[i].ID == "t0" {
+		if got.Tasks[i].ID == "task-0" {
 			loadedT0 = &got.Tasks[i]
 		}
 	}
@@ -271,7 +329,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 	// Now break the tag Kind rides on and confirm Load no longer returns the
 	// original value — proving the assertion above is not a false positive
 	// that would pass even if Kind were silently dropped.
-	metaPath := filepath.Join(dir, "tasks", "t0", "meta.yaml")
+	metaPath := filepath.Join(dir, "tasks", "task-0", "meta.yaml")
 	if err := os.WriteFile(metaPath, []byte("kind: mutated\nsplit: dev\n"), 0o644); err != nil {
 		t.Fatalf("mutating meta.yaml: %v", err)
 	}
@@ -282,7 +340,7 @@ func TestWriteAndLoad_RoundTripsKind(t *testing.T) {
 	}
 	var mutatedT0 *suite.TaskPkg
 	for i := range mutated.Tasks {
-		if mutated.Tasks[i].ID == "t0" {
+		if mutated.Tasks[i].ID == "task-0" {
 			mutatedT0 = &mutated.Tasks[i]
 		}
 	}
@@ -310,7 +368,7 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 				Kind:     "edge",
 				Split:    "holdout",
 				PromptMD: "# Prompt\n\nDo the thing precisely.\n",
-				EnvFrag:  "FROM ubuntu:24.04\nRUN apt-get update\n",
+				Setup:    "mkdir -p data\nprintf 'a,b\\n' > data/in.csv\n",
 				Oracle:   "#!/bin/sh\necho solved > solved.txt\nexit 0\n",
 				Verifier: "#!/bin/sh\ntest -f solved.txt\n",
 			},
@@ -349,8 +407,8 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 	if loaded.PromptMD != want.PromptMD {
 		t.Errorf("PromptMD = %q, want %q", loaded.PromptMD, want.PromptMD)
 	}
-	if loaded.EnvFrag != want.EnvFrag {
-		t.Errorf("EnvFrag = %q, want %q", loaded.EnvFrag, want.EnvFrag)
+	if loaded.Setup != want.Setup {
+		t.Errorf("Setup = %q, want %q", loaded.Setup, want.Setup)
 	}
 	if loaded.Oracle != want.Oracle {
 		t.Errorf("Oracle = %q, want %q", loaded.Oracle, want.Oracle)
@@ -367,16 +425,16 @@ func TestWriteAndLoad_RoundTripsEveryTaskField(t *testing.T) {
 	}
 }
 
-// TestWriteAndLoad_RoundTripsEnvFrag covers EnvFrag specifically: the on-disk
-// layout only writes environment/Dockerfile.frag when EnvFrag is non-empty,
+// TestWriteAndLoad_RoundTripsSetup covers Setup specifically: the on-disk
+// layout only writes environment/setup.sh when Setup is non-empty,
 // so both the non-empty and the empty case need their own assertions, and
 // the non-empty case needs proof that Load is actually reading that exact
 // file rather than happening to return the right string some other way.
-func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
-	const frag = "FROM ubuntu:24.04\nRUN apt-get update\n"
+func TestWriteAndLoad_RoundTripsSetup(t *testing.T) {
+	const frag = "mkdir -p data\nprintf 'a,b\\n' > data/in.csv\n"
 
 	s := &suite.Suite{Tasks: []suite.TaskPkg{
-		{ID: "with-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v", EnvFrag: frag},
+		{ID: "with-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v", Setup: frag},
 		{ID: "without-env", Kind: "happy", Split: "dev", PromptMD: "p", Oracle: "o", Verifier: "v"},
 	}}
 
@@ -385,15 +443,15 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	envPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag")
+	envPath := filepath.Join(dir, "tasks", "with-env", "environment", "setup.sh")
 	if _, err := os.Stat(envPath); err != nil {
-		t.Fatalf("environment fragment not written for a task with non-empty EnvFrag: %v", err)
+		t.Fatalf("setup script not written for a task with non-empty Setup: %v", err)
 	}
-	// A task with an empty EnvFrag must get no environment/ directory at all —
+	// A task with an empty Setup must get no environment/ directory at all —
 	// not an empty stray file, no directory.
 	noEnvDir := filepath.Join(dir, "tasks", "without-env", "environment")
 	if _, err := os.Stat(noEnvDir); !os.IsNotExist(err) {
-		t.Fatalf("environment/ was written for a task with an empty EnvFrag (stat err = %v)", err)
+		t.Fatalf("environment/ was written for a task with an empty Setup (stat err = %v)", err)
 	}
 
 	got, err := suite.Load(dir)
@@ -405,21 +463,21 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 		byID[task.ID] = task
 	}
 
-	if byID["with-env"].EnvFrag != frag {
-		t.Errorf("EnvFrag = %q after round trip, want %q", byID["with-env"].EnvFrag, frag)
+	if byID["with-env"].Setup != frag {
+		t.Errorf("Setup = %q after round trip, want %q", byID["with-env"].Setup, frag)
 	}
-	if byID["without-env"].EnvFrag != "" {
-		t.Errorf("EnvFrag = %q for a task that never had one, want empty", byID["without-env"].EnvFrag)
+	if byID["without-env"].Setup != "" {
+		t.Errorf("Setup = %q for a task that never had one, want empty", byID["without-env"].Setup)
 	}
 
 	// Discrimination: prove the round trip depends on the exact path
-	// environment/Dockerfile.frag, rather than the assertion above passing by
-	// accident (e.g. EnvFrag defaulting to the zero value that happens to be
+	// environment/setup.sh, rather than the assertion above passing by
+	// accident (e.g. Setup defaulting to the zero value that happens to be
 	// empty and the non-empty case being read from somewhere else). Rename
 	// the file the layout doc says Load must read, and confirm the round
 	// trip now comes back empty instead of quietly finding the content
 	// elsewhere.
-	mutatedPath := filepath.Join(dir, "tasks", "with-env", "environment", "Dockerfile.frag.bak")
+	mutatedPath := filepath.Join(dir, "tasks", "with-env", "environment", "setup.sh.bak")
 	if err := os.Rename(envPath, mutatedPath); err != nil {
 		t.Fatalf("renaming fragment for the discrimination check: %v", err)
 	}
@@ -431,25 +489,25 @@ func TestWriteAndLoad_RoundTripsEnvFrag(t *testing.T) {
 	var mutatedFrag string
 	for _, task := range mutated.Tasks {
 		if task.ID == "with-env" {
-			mutatedFrag = task.EnvFrag
+			mutatedFrag = task.Setup
 		}
 	}
 	if mutatedFrag != "" {
-		t.Errorf("EnvFrag = %q after moving environment/Dockerfile.frag away, want empty — Load "+
+		t.Errorf("Setup = %q after moving environment/setup.sh away, want empty — Load "+
 			"must depend on that exact path, not incidentally recover the content some other way",
 			mutatedFrag)
 	}
 }
 
 func TestWrite_ScriptsAreExecutable(t *testing.T) {
-	s, _ := suite.Generate(context.Background(), fake.New(tenTasks()), suiteSpec())
+	s, _, _ := suite.Generate(context.Background(), twoPhase(t, 10), suiteSpec())
 	dir := t.TempDir()
 	if err := s.Write(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, rel := range []string{"oracle/solve.sh", "verifier/test.sh"} {
-		info, err := os.Stat(filepath.Join(dir, "tasks", "t0", rel))
+		info, err := os.Stat(filepath.Join(dir, "tasks", "task-0", rel))
 		if err != nil {
 			t.Fatal(err)
 		}

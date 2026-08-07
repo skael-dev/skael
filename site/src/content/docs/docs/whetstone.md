@@ -21,9 +21,13 @@ Everything lives in a `.whetstone` workspace. Commands walk up from the working 
 
 ## Installing it
 
-**whetstone is not in the Homebrew formula.** `brew install skael-dev/skael/skael` installs `skael` and nothing else. So does the curl installer. This trips people up, so: those two paths will never give you whetstone.
+whetstone has its own Homebrew formula, separate from `skael`. Installing the CLI does not install whetstone, and neither does the curl installer — that one is `skael`-only by design.
 
-Three ways to actually get it.
+**Homebrew.**
+
+```bash
+brew install skael-dev/skael/whetstone
+```
 
 **Release archive.** Every release ships `whetstone` as its own tarball, same os/arch matrix as the other binaries — `linux`, `darwin`, `windows` × `amd64`, `arm64`. `.tar.gz` everywhere except Windows, which is a `.zip`.
 
@@ -34,13 +38,18 @@ tar -xzf whetstone.tar.gz whetstone
 sudo mv whetstone /usr/local/bin/
 ```
 
-**Go install.**
+On Windows, download `whetstone_<version>_windows_amd64.zip` (or `_arm64`) from the [releases page](https://github.com/skael-dev/skael/releases) and put `whetstone.exe` somewhere on your `PATH`.
+
+**From source.**
 
 ```bash
-go install github.com/skael-dev/skael/cmd/whetstone@latest
+git clone https://github.com/skael-dev/skael.git
+cd skael && go build -o whetstone ./cmd/whetstone
 ```
 
-**From source.** `just build` puts all four binaries — `server`, `skael`, `whetstone`, `skael-worker` — in `bin/`.
+`just build` puts all four binaries — `skael-server`, `skael`, `whetstone`, `skael-worker` — in `bin/`.
+
+`go install github.com/skael-dev/skael/cmd/whetstone@latest` does **not** work, and will not until a future release. `go.mod` carries a `replace` directive pinning a transitive dependency, and `go install <pkg>@version` refuses any module that has one — it fails with "the go.mod file for the module … contains one or more replace directives". Building from a clone is unaffected, which is why the recipe above uses `go build`.
 
 Check it worked:
 

@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/skael-dev/skael/internal/evalsuite"
 )
 
 // ErrLeaseLost is returned when a heartbeat or fail targets a job that is no
@@ -272,6 +274,41 @@ func (p *PoolExecutor) Complete(ctx context.Context, id JobID, workerID string) 
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrLeaseLost
+	}
+	return nil
+}
+
+// SetSuiteRef records the ref a derive job's worker actually measured
+// against. Only a job submitted with no suite_ref should ever call this —
+// the report handler enforces that, not this query.
+func (p *PoolExecutor) SetSuiteRef(ctx context.Context, id JobID, ref string) error {
+	_, err := p.db.Exec(ctx, `UPDATE eval_jobs SET suite_ref = $1, updated_at = now() WHERE id = $2`, ref, string(id))
+	if err != nil {
+		return fmt.Errorf("evalqueue: set suite ref: %w", err)
+	}
+	return nil
+}
+
+// VerifyDerivePush answers the suite-upload route's one question: is this
+// push coming from the worker that currently holds jobID's claim, for a job
+// that was submitted with no suite of its own and names skillName? Anything
+// else — a forged token, a lapsed lease, a job that already names a suite, a
+// job for another skill — is false, so a push can never talk the server into
+// attributing a suite to a job it does not belong to.
+func (p *PoolExecutor) VerifyDerivePush(ctx context.Context, jobID, token, skillName string) (bool, error) {
+	j, ok, err := p.VerifyClaim(ctx, JobID(jobID), token)
+	if err != nil || !ok {
+		return false, err
+	}
+	return j.SuiteRef == "" && j.SkillName == skillName, nil
+}
+
+// RecordDerivedSuite is SetSuiteRef through a caller-supplied executor, so the
+// job's suite_ref lands in the same transaction as the suite row it names.
+func (p *PoolExecutor) RecordDerivedSuite(ctx context.Context, q evalsuite.Queryer, jobID, ref string) error {
+	_, err := q.Exec(ctx, `UPDATE eval_jobs SET suite_ref = $1, updated_at = now() WHERE id = $2`, ref, jobID)
+	if err != nil {
+		return fmt.Errorf("evalqueue: record derived suite: %w", err)
 	}
 	return nil
 }

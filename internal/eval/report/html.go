@@ -48,13 +48,11 @@ func gfmt(v float64) string {
 	return fmt.Sprintf("%g", v)
 }
 
-// deref renders the value behind a *float64 with its shortest exact decimal
-// representation, or the empty string for a nil pointer. It deliberately does
-// not go through round1: κ and the robustness gap are read at more than one
-// decimal of precision (e.g. κ = 0.41), and round1 would silently discard
-// that. Callers guard nil with {{if}} before reaching for the value itself;
-// this exists so a template pipeline never has to dereference a pointer
-// directly.
+// deref renders the value behind a *float64 at two decimal places, or the
+// empty string for nil. Two decimals rather than round1 because κ and the
+// robustness gap are read at more than one decimal (e.g. κ = 0.41); %g, which
+// this used before, prints all seventeen significant digits of a computed
+// ratio.
 //
 // deref itself is unitless — it renders both a [0,1] κ and a [0,100]-point
 // robustness gap identically. The template call site is responsible for
@@ -64,7 +62,7 @@ func deref(v *float64) string {
 	if v == nil {
 		return ""
 	}
-	return fmt.Sprintf("%g", *v)
+	return fmt.Sprintf("%.2f", *v)
 }
 
 // HTML renders r as a single self-contained HTML document: no external

@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
+import { getEvalSuiteMeta, getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
 import { EvalStatus } from "./eval-status";
 import { QualityTrend } from "./quality-trend";
 
 // The engine keeps a measurement that was never defined for a run distinct
 // from a measured zero, using a nullable field, in several places
-// (robustness_gap, drift_grade, judge evidence/kappa). Collapsing that
+// (robustness_gap, judge evidence/kappa). Collapsing that
 // distinction here would say "we checked and it was fine" about something
 // we never checked at all.
 function measurement(
@@ -96,7 +96,6 @@ type PanelMatrixEntry = {
   pillars?: Record<string, number>;
   effectiveness?: number;
   drift?: unknown;
-  drift_grade?: string;
   healthy?: boolean;
   detail?: string;
 };
@@ -133,7 +132,6 @@ function PanelMatrixTable({ data }: { data: unknown }) {
             <tr className="border-b border-border text-text-tertiary text-left">
               <th className="px-3 py-1.5 font-normal">Member</th>
               <th className="px-3 py-1.5 font-normal">Effectiveness</th>
-              <th className="px-3 py-1.5 font-normal">Drift grade</th>
               <th className="px-3 py-1.5 font-normal">Status</th>
             </tr>
           </thead>
@@ -151,9 +149,6 @@ function PanelMatrixTable({ data }: { data: unknown }) {
                     {unhealthy
                       ? "—"
                       : measurement(entry.effectiveness, formatDriftScale)}
-                  </td>
-                  <td className="px-3 py-1.5 text-text-primary">
-                    {entry.drift_grade ?? "not measured"}
                   </td>
                   <td className="px-3 py-1.5 text-text-secondary">
                     {unhealthy ? (
@@ -312,6 +307,55 @@ function DriftBreakdownTable({ data }: { data: unknown }) {
   );
 }
 
+// A suite's checks (evalsuite.suiteCheck, internal/evalsuite/routes.go) list
+// every task the suite defined, including ones dropped during derive-time
+// generation — those come back void:true with a reason instead of silently
+// shrinking the suite. task_id/reason are model- or worker-authored text,
+// so they're rendered as plain text (React's default escaping), never
+// through dangerouslySetInnerHTML.
+type SuiteCheck = {
+  task_id: string;
+  ok: boolean;
+  void?: boolean;
+  reason?: string;
+};
+
+function SuiteCoverage({ suiteRef }: { suiteRef: string }) {
+  const suiteMetaQuery = useQuery({
+    queryKey: ["eval-suite-meta", suiteRef],
+    queryFn: async () => {
+      const res = await getEvalSuiteMeta({ path: { ref: suiteRef } });
+      if (!res.data) throw new Error("Failed to load suite meta");
+      return res.data;
+    },
+  });
+
+  const checks = (suiteMetaQuery.data?.checks ?? []) as SuiteCheck[];
+  const voidChecks = checks.filter((c) => c.void === true);
+
+  // A full suite needs no explanation; a permanent "18 of 18" line is noise
+  // that trains people to ignore the row that matters.
+  if (voidChecks.length === 0) return null;
+
+  const usable = checks.length - voidChecks.length;
+
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-medium text-text-primary mb-2">Suite coverage</h3>
+      <div className="text-sm text-text-secondary">
+        {usable} of {checks.length} tasks usable
+      </div>
+      <ul className="mt-1 text-[11px] text-text-tertiary list-disc list-inside">
+        {voidChecks.map((c) => (
+          <li key={c.task_id}>
+            {c.task_id}: {c.reason ?? "no reason given"}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function QualityReport({
   skillName,
   latestVersion,
@@ -384,14 +428,28 @@ export function QualityReport({
           <span className="text-3xl font-mono text-text-primary">
             {Math.round(summary.headline_score)}
           </span>
-          {summary.headline_ci_low != null && summary.headline_ci_high != null && (
-            <span className="text-xs text-text-secondary">
-              CI {Math.round(summary.headline_ci_low)}–{Math.round(summary.headline_ci_high)}
+          {summary.suite_derived && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border border-accent/40 text-accent bg-accent/10"
+              title="This skill had no evaluation suite, so one was generated from its own SKILL.md. Treat the score as a quality signal, not a review approval."
+            >
+              Derived suite
             </span>
           )}
+          {/* The headline's confidence interval was removed: it bootstrapped
+              the mean of member effectiveness while the headline is the
+              minimum, and at the shipped two-member panel it could only ever
+              reproduce [min, max]. Historical rows still carry the stored
+              values, but rendering them for old versions and nothing for new
+              ones would read as a measurement that had gone missing. */}
         </div>
         <div className="mt-2">
-          <EvalStatus skillName={skillName} quality={summary} latestVersion={latestVersion} />
+          <EvalStatus
+            skillName={skillName}
+            quality={summary}
+            latestVersion={latestVersion}
+            hideDerivedBadge
+          />
         </div>
       </div>
 
@@ -408,10 +466,7 @@ export function QualityReport({
       </div>
 
       <div className="mb-6">
-        <h3 className="text-sm font-medium text-text-primary mb-2">Drift</h3>
-        <div className="text-sm text-text-secondary mb-2">
-          Grade: <span>{summary.drift_grade ?? "not measured"}</span>
-        </div>
+        <h3 className="text-sm font-medium text-text-primary mb-2">Contract adherence</h3>
         <DriftBreakdownTable data={summary.drift_breakdown} />
 
         {violations.length > 0 && (
@@ -476,6 +531,8 @@ export function QualityReport({
           </div>
         </>
       )}
+
+      {summary.suite_ref && <SuiteCoverage suiteRef={summary.suite_ref} />}
 
       <div className="text-[11px] text-text-tertiary">
         Scored v{summary.version} · suite {summary.suite_ref ?? "—"}

@@ -8,7 +8,51 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
+	"github.com/skael-dev/skael/internal/eval/store"
 )
+
+// TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd pins a regression:
+// filepath.Join("", gradingFileName) resolves to the bare relative filename,
+// which os.Open resolves against the process's cwd rather than failing. A
+// resumed run with no recorded ArtifactDir must fall back to the store's own
+// columns, not silently pick up an unrelated grading.json sitting in
+// whatever directory the test (or whetstone eval) happens to run from.
+func TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strayPath := filepath.Join(wd, gradingFileName)
+	if _, err := os.Stat(strayPath); err == nil {
+		t.Fatalf("refusing to run: %s already exists", strayPath)
+	}
+	if err := os.WriteFile(strayPath, []byte(`{"reason":"wrong task's reason leaking in"}`), 0o644); err != nil {
+		t.Fatalf("staging a stray grading.json in cwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(strayPath) })
+
+	rec := store.RunRecord{
+		Outcome: store.RunOutcome{
+			ArtifactDir:  "",
+			InputTokens:  10,
+			OutputTokens: 20,
+			DurationMS:   1000,
+			AgentVersion: "v1",
+		},
+	}
+
+	out := outcomeFromRecord(rec)
+
+	if out.Reason != "" {
+		t.Errorf("Reason = %q, want empty: the stray cwd grading.json must not have been read", out.Reason)
+	}
+	if !out.MetaPartial {
+		t.Error("MetaPartial = false, want true: an empty ArtifactDir must fall back to the store columns")
+	}
+	if out.Meta.InputTokens != 10 || out.Meta.OutputTokens != 20 {
+		t.Errorf("Meta = %+v, want the store columns carried through", out.Meta)
+	}
+}
 
 // TestAuthMounts_RewritesHomeAndDropsMissingEntries pins the fix for the
 // defect where auth directories were mounted at their host path on both

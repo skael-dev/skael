@@ -78,9 +78,41 @@ type Result struct {
 	// like a clean run.
 	Unevaluable       int      `json:"unevaluable,omitempty"`
 	UnevaluableDetail []string `json:"unevaluable_detail,omitempty"`
+	// Attempted is Observation.Attempted: the denominator Unevaluable is a
+	// share of.
+	Attempted int `json:"attempted,omitempty"`
+	// Unmeasurable is true when too large a share of this run's checks could
+	// not be performed for Adherence to mean anything; callers must then treat
+	// Adherence as absent rather than as a number. See UnmeasurableThreshold.
+	//
+	// Phrased negatively so the zero value is the ordinary case. A
+	// `Measurable bool` would make every hand-constructed Result, and every
+	// report.json written before this field existed, decode as unmeasurable
+	// and silently drop out of aggregation.
+	Unmeasurable bool `json:"unmeasurable,omitempty"`
 }
 
+// UnmeasurableThreshold is the share of a run's checks that may be unevaluable
+// before its Adherence stops meaning anything.
+//
+// Deliberately high: a few unevaluable checks are ordinary and the score should
+// absorb them. What it must not absorb is most checks failing, where the
+// components break in *both* directions at once — coverage falls to zero
+// because nothing matched, violation and order rise to a vacuous 1.0 because
+// nothing could be violated either — leaving a constant that reads like a
+// measurement.
+const UnmeasurableThreshold = 0.5
+
+// ErrUnmeasurable lets a caller tell "this member has no adherence to report"
+// apart from a genuine defect, and carry on composing the rest of the report.
+var ErrUnmeasurable = errors.New("drift.Aggregate: unmeasurable")
+
 // Score turns an Observation plus a judge-scored semantic rate into Adherence.
+//
+// Check Result.Unmeasurable before reading Adherence: a run whose checks were
+// mostly unevaluable reports it true, and its Adherence must then be treated
+// as absent rather than as a low score. Scoring it as zero would mislead as
+// badly as the vacuous near-perfect components it replaces.
 func Score(o *Observation, semantic float64, w Weights) (Result, error) {
 	if o == nil {
 		return Result{}, errors.New("drift.Score: no observation")
@@ -144,12 +176,23 @@ func Score(o *Observation, semantic float64, w Weights) (Result, error) {
 		w.Semantic*c.Semantic +
 		w.Focus*c.Focus)
 
+	// A run with nothing to check at all is measurable: a contract may be
+	// entirely semantic, which the components already treat as vacuously
+	// satisfied rather than as zero. Only an attempted-and-mostly-failed run
+	// is unmeasurable.
+	unmeasurable := false
+	if o.Attempted > 0 {
+		unmeasurable = float64(o.Unevaluable)/float64(o.Attempted) > UnmeasurableThreshold
+	}
+
 	return Result{
 		Components:        c,
 		Adherence:         adherence,
 		Drift:             100 - adherence,
 		Unevaluable:       o.Unevaluable,
 		UnevaluableDetail: o.UnevaluableDetail,
+		Attempted:         o.Attempted,
+		Unmeasurable:      unmeasurable,
 	}, nil
 }
 
@@ -204,11 +247,26 @@ type Agg struct {
 }
 
 // Aggregate summarises runs. Zero runs is an error, not a zero: an absent
-// measurement must not be indistinguishable from total failure.
+// measurement must not be indistinguishable from total failure. Unmeasurable
+// runs are dropped for the same reason — their Adherence is the constant the
+// weights produce when nothing could be checked, so averaging it in would drag
+// every sibling toward it.
 func Aggregate(rs []Result) (Agg, error) {
 	if len(rs) == 0 {
 		return Agg{}, errors.New("drift.Aggregate: no runs")
 	}
+	measured := make([]Result, 0, len(rs))
+	for _, r := range rs {
+		if !r.Unmeasurable {
+			measured = append(measured, r)
+		}
+	}
+	if len(measured) == 0 {
+		return Agg{}, fmt.Errorf("%w: all %d run(s); too many contract checks could not be "+
+			"performed for adherence to mean anything", ErrUnmeasurable, len(rs))
+	}
+	rs = measured
+
 	vals := make([]float64, len(rs))
 	sum := 0.0
 	for i, r := range rs {

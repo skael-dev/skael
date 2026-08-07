@@ -87,7 +87,7 @@ function RunEvalButton({ skillName }: { skillName: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <button
-        onClick={run}
+        onClick={() => run()}
         disabled={!canRun || isPending}
         title={!canRun ? RUN_EVAL_DISABLED_REASON : undefined}
         className="text-[11px] text-accent hover:underline shrink-0 disabled:opacity-50"

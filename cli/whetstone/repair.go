@@ -152,9 +152,18 @@ func RunRepair(ctx context.Context, skill string, maxIter int, yes bool) error {
 	}
 	drv.Sweep(ctx)
 
+	// repair always runs the shipped default panel (it names no agents or
+	// models), so it needs the same gateway-aware defaults the eval command
+	// resolves — otherwise a BYOK operator can evaluate but not repair.
+	panelStrong, panelFast, panelBase := panelModelsFromEnv()
+	if w := warnUnconfiguredPanelModels(panelStrong, panelFast, panelBase); w != "" {
+		ui.Warn("%s", w)
+	}
+
 	deps := EvalDeps{
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
+		PanelStrongModel: panelStrong, PanelFastModel: panelFast, PanelBaseURL: panelBase,
 	}
 
 	sp, specVersion, err := st.LoadSpec(skill)

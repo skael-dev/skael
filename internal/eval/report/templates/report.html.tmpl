@@ -111,6 +111,26 @@
   </div>
   {{end}}
 
+  {{if .BaselineWipeout}}
+  <div class="banner">
+    <strong>Baseline passed nothing.</strong> No baseline run passed any task, so Uplift carries no
+    information independent of Reliability &mdash; at a zero baseline the pass-rate fallback reduces
+    to <code>0.5 + Reliability/2</code>, which Effectiveness then weighs a second time. Treat Uplift
+    as uninformative here. The same shape appears when the baseline harness itself is broken, which
+    is worth ruling out before concluding the tasks are impossible without the skill.
+  </div>
+  {{end}}
+
+  {{if .DriftUnmeasurable}}
+  <div class="banner bad">
+    <strong>Contract adherence not measured.</strong> Too many contract checks could not be
+    performed for at least one panel member, so no adherence figure is reported for it. This is an
+    absent measurement, not a low score &mdash; a run whose checks cannot be performed reports zero
+    step coverage and, at the same time, zero detected violations, which would otherwise read as
+    flawless compliance. See the unevaluable checks below for what could not be checked.
+  </div>
+  {{end}}
+
   <h2>Score matrix</h2>
   <div class="table-scroll">
   <table>
@@ -123,10 +143,9 @@
         <th>Uplift (%)</th>
         <th>Efficiency (%)</th>
         <th>Effectiveness (0&ndash;100)</th>
-        <th>Drift mean (0&ndash;100)</th>
-        <th>Drift worst (0&ndash;100)</th>
-        <th>Drift σ (pp)</th>
-        <th>Grade</th>
+        <th>Adherence mean (0&ndash;100)</th>
+        <th>Adherence worst (0&ndash;100)</th>
+        <th>Adherence σ (pp)</th>
         <th>Health</th>
       </tr>
     </thead>
@@ -141,18 +160,21 @@
         <td>{{pct .Pillars.Uplift}}</td>
         <td>{{pct .Pillars.Efficiency}}</td>
         <td>{{round1 .Effectiveness}}</td>
+        {{if .DriftUnmeasurable}}
+        <td colspan="3" class="empty">not measured &mdash; too many contract checks could not be performed</td>
+        {{else}}
         <td>{{round1 .Drift.Mean}}</td>
         <td>{{round1 .Drift.Worst}}</td>
         <td>{{round1 .Drift.Sigma}}</td>
-        <td>{{.DriftGrade}}</td>
+        {{end}}
         <td>healthy</td>
         {{else}}
-        <td colspan="9">not measured &mdash; {{if .Detail}}{{.Detail}}{{else}}no reason recorded{{end}}</td>
+        <td colspan="8">not measured &mdash; {{if .Detail}}{{.Detail}}{{else}}no reason recorded{{end}}</td>
         <td>unhealthy</td>
         {{end}}
       </tr>
       {{else}}
-      <tr><td colspan="12" class="empty">no panel members reported a result</td></tr>
+      <tr><td colspan="11" class="empty">no panel members reported a result</td></tr>
       {{end}}
     </tbody>
   </table>
@@ -161,7 +183,7 @@
   <h2>Headline</h2>
   <div class="card">
     <div class="headline-value">{{round1 .Headline}}</div>
-    <div class="headline-ci">95% CI [{{round1 (index .HeadlineCI 0)}}, {{round1 (index .HeadlineCI 1)}}]</div>
+    <div class="headline-ci">lowest effectiveness across the panel, 0&ndash;100</div>
     <p>
       <span class="pill">Uplift source: {{.UpliftSource}}</span>
       {{if .JudgeKappa}}
@@ -174,9 +196,9 @@
       {{end}}
     </p>
     <p>
-      Robustness gap (strong vs. floor):
+      Robustness gap (strong vs. floor), in adherence points &mdash; not effectiveness:
       {{if .RobustnessGap}}
-        {{deref .RobustnessGap}} points
+        {{deref .RobustnessGap}}
       {{else}}
         <span class="empty">not computed &mdash; the strong/floor comparison was not well defined for this panel (zero or more than one member in a class, or one member has no drift runs)</span>
       {{end}}
@@ -215,10 +237,10 @@
     {{if .Conditions}}
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th><th>Why it failed</th></tr></thead>
       <tbody>
         {{range .Conditions}}
-        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td></tr>
+        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td><td>{{.Reason}}</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -229,20 +251,24 @@
     <h4>Drift per run</h4>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Model</th><th>Attempt</th><th>Step coverage (%)</th><th>Order (%)</th><th>Violation (%)</th><th>Checkpoint (%)</th><th>Semantic (%)</th><th>Focus (%)</th><th>Adherence (0&ndash;100)</th><th>Unevaluable</th></tr></thead>
+      <thead><tr><th>Model</th><th>Attempt</th><th title="Share of the contract's required steps that were observed">Step recall (%)</th><th title="Share of observed actions that were on-contract">On-contract precision (%)</th><th title="How closely the observed order followed the contract's">Order match (%)</th><th>No violations (%)</th><th>Checkpoints run (%)</th><th>Semantic (%)</th><th>Adherence (0&ndash;100)</th><th>Unevaluable</th></tr></thead>
       <tbody>
         {{range .Drift}}
         <tr>
           <td>{{.Model}}</td>
           <td>{{.Attempt}}</td>
           <td>{{pct .Components.StepCoverage}}</td>
+          <td>{{pct .Components.Focus}}</td>
           <td>{{pct .Components.Order}}</td>
           <td>{{pct .Components.Violation}}</td>
           <td>{{pct .Components.Checkpoint}}</td>
           <td>{{pct .Components.Semantic}}</td>
-          <td>{{pct .Components.Focus}}</td>
+          {{if .Unmeasurable}}
+          <td class="empty">not measured</td>
+          {{else}}
           <td>{{round1 .Adherence}}</td>
-          <td>{{if .Unevaluable}}{{.Unevaluable}}{{else}}0{{end}}</td>
+          {{end}}
+          <td>{{if .Unevaluable}}{{.Unevaluable}}{{if .Attempted}} of {{.Attempted}}{{end}}{{else}}0{{end}}</td>
         </tr>
         {{end}}
       </tbody>

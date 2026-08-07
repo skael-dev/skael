@@ -22,6 +22,36 @@ import (
 )
 
 // findTask returns the task with id from the plan's task list.
+// runTaskSetup runs the task's setup script in ws, under the same NetNone
+// policy and the same bound as the verifier — it is a suite-authored script
+// of the same kind, and it must not be able to fetch anything either. A task
+// with no setup script costs no run.
+func (r *Runner) runTaskSetup(ctx context.Context, image sandbox.ImageRef, ws string, task suite.TaskPkg) error {
+	if strings.TrimSpace(task.Setup) == "" {
+		return nil
+	}
+	if err := suite.StageSetup(ws, task); err != nil {
+		return err
+	}
+	res, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
+		Image:     image,
+		Workspace: ws,
+		Argv:      []string{"bash", suite.SetupScript},
+		Network:   sandbox.NetNone,
+		Timeout:   suite.VerifierTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("runner: running task setup for %s: %w", task.ID, err)
+	}
+	if res.TimedOut {
+		return fmt.Errorf("runner: task setup for %s exceeded %s", task.ID, suite.VerifierTimeout)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("runner: task setup for %s failed (exit %d)", task.ID, res.ExitCode)
+	}
+	return nil
+}
+
 func findTask(tasks []suite.TaskPkg, id string) (suite.TaskPkg, bool) {
 	for _, t := range tasks {
 		if t.ID == id {
@@ -60,11 +90,13 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 	// ws and raw are filled in as the session progresses; finish reads
 	// whatever they hold at call time, so artifacts are recorded even when
-	// the run ends before invoke completes.
+	// the run ends before invoke completes. verifierOut is declared here
+	// (rather than at the verifier call site) so finish can close over it.
 	var (
-		ws       string
-		raw      []byte
-		skipDirs []string
+		ws          string
+		raw         []byte
+		skipDirs    []string
+		verifierOut tailWriter
 	)
 
 	finish := func(status string, ferr error) Outcome {
@@ -76,9 +108,9 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		if artifactDir != "" && ws != "" {
 			g := Grading{
 				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
-				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(), Reason: out.Reason,
 			}
-			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs, verifierOut.Bytes()); wErr != nil {
 				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
 				// Events are the only artifact scoring and resume read back;
 				// losing them must not be recorded as a completed
@@ -127,7 +159,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	}
 
 	taskDir := filepath.Join(in.SuiteDir, "tasks", k.TaskID)
-	ws, err = stageRunWorkspace(taskDir)
+	ws, err = stageRunWorkspace(taskDir, r.o.WorkspaceRoot)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -136,6 +168,15 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 			r.o.Logger("runner: removing workspace %s: %v", ws, rmErr)
 		}
 	}()
+
+	// The task's input files are created inside the sandbox before the agent
+	// starts: a task prompt that names a file has nothing else in the run
+	// that creates it. Setup failing is the task's defect, not the skill's,
+	// so it ends the session as an error rather than as a failed measurement
+	// that would be scored against the skill.
+	if err := r.runTaskSetup(ctx, in.Image, ws, task); err != nil {
+		return finish(store.StatusError, err)
+	}
 
 	// The skill installs only for the skill condition. A baseline workspace
 	// carrying the skill would make Uplift measure nothing. skipDirs mirrors
@@ -172,7 +213,9 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(status, err)
 	}
-	out.Events, out.Meta = result.Events, result.Meta
+	// Relativised here rather than in each adapter, so the invariant holds for
+	// every adapter present and future. See trajectory.Relativize.
+	out.Events, out.Meta = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta
 
 	// The verifier runs under NetNone in the same workspace: it must not be
 	// able to reach the network, or a task could be satisfied by fetching the
@@ -187,10 +230,12 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	vres, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
-		Argv:      []string{"sh", "/verifier/test.sh"},
+		Argv:      []string{"bash", "/verifier/test.sh"},
 		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
 		Network:   sandbox.NetNone,
 		Timeout:   suite.VerifierTimeout,
+		Stdout:    &verifierOut,
+		Stderr:    &verifierOut,
 	})
 	if err != nil {
 		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))
@@ -205,6 +250,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	exitCode := vres.ExitCode
 	out.VerifierExit = &exitCode
 	if vres.ExitCode != 0 {
+		out.Reason = distilReason(verifierOut.Bytes())
 		return finish(store.StatusFailed, nil)
 	}
 	return finish(store.StatusOK, nil)
@@ -265,7 +311,8 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 			// SkillDir, so excluding it keeps every copy of the bundle out
 			// of outputs/ regardless of which distractors were installed.
 			skipDirs := []string{a.Caps().SkillDir}
-			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
+			// A trigger probe has no verifier, so there is no output to log.
+			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs, nil); wErr != nil {
 				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
 				// Same rule as executeRun: a probe's events are the only
 				// evidence resumeProbeOutcome can recover, so losing them
@@ -350,7 +397,10 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(err)
 	}
 
-	po.Events, po.Meta, po.Caps = result.Events, result.Meta, a.Caps()
+	// Relativised as above. Trigger measurement reads only the skill directory
+	// out of a path, so it survived absolute paths where drift did not — but
+	// the two must not disagree about what a recorded path means.
+	po.Events, po.Meta, po.Caps = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta, a.Caps()
 	return finish(nil)
 }
 
@@ -392,9 +442,16 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		Err:          err,
 	}
 
-	if meta, mErr := loadArtifactMeta(rec.Outcome.ArtifactDir); mErr == nil {
-		out.Meta = meta
-		return out
+	// filepath.Join("", gradingFileName) resolves to the bare relative name,
+	// read against the process's cwd rather than failing — guard against
+	// that rather than let an unset ArtifactDir accidentally pick up a
+	// stray grading.json in whatever directory whetstone eval was run from.
+	if rec.Outcome.ArtifactDir != "" {
+		if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
+			out.Meta = g.Meta
+			out.Reason = g.Reason
+			return out
+		}
 	}
 
 	out.Meta = agent.Meta{

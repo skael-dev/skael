@@ -103,7 +103,7 @@ func newEnqueueTestServer(t *testing.T, queue skill.QueueSubmitter, suites skill
 		Queue:  queue,
 		Suites: suites,
 	})
-	evalsuite.RegisterRoutes(api, r, suiteRegistry, store)
+	evalsuite.RegisterRoutes(api, r, suiteRegistry, store, evalsuite.RouteOptions{})
 
 	return &enqueueTestServer{handler: r, skills: store, suites: suiteRegistry, pool: pool}
 }

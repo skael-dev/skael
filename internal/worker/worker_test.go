@@ -106,24 +106,45 @@ func reportFixture(skill, suiteRef string, headline float64) *report.Report {
 }
 
 // fakeAPI is a test double for worker.API: an in-memory job queue plus
-// recording of what the worker posted back.
+// recording of what the worker reported back.
 type fakeAPI struct {
 	t *testing.T
 
 	mu           sync.Mutex
 	queue        []evalqueue.Job
-	posted       *report.Report
-	failedCause  string
+	reported     *report.Report
+	failCause    string
 	heartbeats   int
 	heartbeatErr error
 
-	bundle       []byte
-	suiteArchive []byte
-	checks       []evalsuite.Check
+	bundle []byte
+	// suiteArchive is what FetchSuite returns for any ref not named in
+	// suiteArchives. suiteArchives lets a test give a specific ref content
+	// that actually hashes to it — Materialize verifies the fetched archive
+	// against the ref it asked for, so a test that wants a job to run with the
+	// ref it declared must register content for it.
+	suiteArchive  []byte
+	suiteArchives map[string][]byte
+	checks        []evalsuite.Check
 	// spec is nil by default: SuiteMeta returns SuiteMeta{Spec: nil}, which
 	// exercises Materialize's frontmatter-reconstruction fallback, same as
 	// before this field existed.
 	spec *spec.SkillSpec
+	// origin is what SuiteMeta reports as the suite's origin. Zero value ("")
+	// is neither OriginDerived nor OriginAuthored, so AllowVoid is false by
+	// default — a test that cares must set it explicitly.
+	origin evalsuite.Origin
+
+	// job, when set, is claimed once by Claim before the queue is consulted —
+	// a shorthand for tests that only care about a single job, so they don't
+	// need enqueue's slice ceremony.
+	job *evalqueue.Job
+	// pushRef is what PushSuite returns.
+	pushRef     string
+	pushedSkill string
+	pushedJobID string
+	pushedToken string
+	pushErr     error
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -145,6 +166,11 @@ func (f *fakeAPI) enqueue(j evalqueue.Job) {
 func (f *fakeAPI) Claim(_ context.Context, _ string, _ time.Duration) (*evalqueue.Job, string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.job != nil {
+		j := f.job
+		f.job = nil
+		return j, "claim-token", true, nil
+	}
 	if len(f.queue) == 0 {
 		return nil, "", false, nil
 	}
@@ -163,18 +189,23 @@ func (f *fakeAPI) Heartbeat(_ context.Context, _ evalqueue.JobID, _ string) erro
 func (f *fakeAPI) PostReport(_ context.Context, _ evalqueue.JobID, _ string, r *report.Report) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.posted = r
+	f.reported = r
 	return nil
 }
 
 func (f *fakeAPI) FailJob(_ context.Context, _ evalqueue.JobID, _, cause string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failedCause = cause
+	f.failCause = cause
 	return nil
 }
 
-func (f *fakeAPI) FetchSuite(_ context.Context, _ string) ([]byte, error) {
+func (f *fakeAPI) FetchSuite(_ context.Context, ref string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a, ok := f.suiteArchives[ref]; ok {
+		return a, nil
+	}
 	return f.suiteArchive, nil
 }
 
@@ -183,7 +214,16 @@ func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error
 }
 
 func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, error) {
-	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec}, nil
+	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec, Origin: f.origin}, nil
+}
+
+func (f *fakeAPI) PushSuite(_ context.Context, in worker.PushSuiteInput) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushedSkill = in.Skill
+	f.pushedJobID = string(in.JobID)
+	f.pushedToken = in.ClaimToken
+	return f.pushRef, f.pushErr
 }
 
 // fakeRunner is a test double for worker.Runner: no Docker, just a canned
@@ -193,6 +233,12 @@ type fakeRunner struct {
 	report *report.Report
 	err    error
 	block  chan struct{}
+
+	// reportSuiteRef is a shorthand for tests that only care about the
+	// report's suite_ref: when report is nil and this is non-empty, Run
+	// builds a minimal report naming it. Leaving both zero preserves the
+	// original fakeRunner{} behaviour of returning (nil, nil).
+	reportSuiteRef string
 
 	mu       sync.Mutex
 	gotInput worker.RunInput
@@ -213,7 +259,13 @@ func (f *fakeRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.report, nil
+	if f.report != nil {
+		return f.report, nil
+	}
+	if f.reportSuiteRef != "" {
+		return reportFixture(in.Skill, f.reportSuiteRef, 60), nil
+	}
+	return nil, nil
 }
 
 func (f *fakeRunner) input() worker.RunInput {
@@ -222,13 +274,63 @@ func (f *fakeRunner) input() worker.RunInput {
 	return f.gotInput
 }
 
+// fakeDeriver is a test double for worker.Deriver: no LLM, no Docker, just a
+// canned suite (or error) and a call count.
+type fakeDeriver struct {
+	result *worker.DeriveResult
+	err    error
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeDeriver) Derive(_ context.Context, _ worker.DeriveInput) (*worker.DeriveResult, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.result != nil {
+		return f.result, nil
+	}
+	return &worker.DeriveResult{
+		Archive: []byte("fake-derived-archive"),
+		Checks:  []evalsuite.Check{{TaskID: "t1", OK: true}},
+		Spec:    &spec.SkillSpec{Name: "demo"},
+	}, nil
+}
+
+// newTestWorker builds a Worker over api with a short-lived WorkRoot, filling
+// in whatever fixture data api didn't set explicitly so a test can construct
+// a bare fakeAPI naming only the fields its scenario cares about. der may be
+// nil — that is the scenario TestRunOnce_FailsCleanlyWithNoDeriver exercises.
+func newTestWorker(t *testing.T, api *fakeAPI, r *fakeRunner, der worker.Deriver) *worker.Worker {
+	t.Helper()
+	if api.bundle == nil {
+		api.bundle = fixtureBundle(t)
+	}
+	if api.suiteArchive == nil {
+		api.suiteArchive = fixtureSuiteArchive(t)
+	}
+	if api.checks == nil {
+		api.checks = []evalsuite.Check{{TaskID: "t1", OK: true}}
+	}
+	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, r, der)
+	if err != nil {
+		t.Fatalf("worker.New: %v", err)
+	}
+	return w
+}
+
 func TestWorker_RunOnce_ClaimsRunsAndPostsAReport(t *testing.T) {
 	api := newFakeAPI(t)
 	ref := fixtureSuiteRef(t)
 	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: ref, Tier: "smoke"})
 	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 71)}
 
-	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,11 +338,11 @@ func TestWorker_RunOnce_ClaimsRunsAndPostsAReport(t *testing.T) {
 	if err != nil || !worked {
 		t.Fatalf("RunOnce = (%v, %v)", worked, err)
 	}
-	if api.posted == nil {
-		t.Fatal("no report was posted")
+	if api.reported == nil {
+		t.Fatal("no report was reported")
 	}
-	if api.posted.Headline != 71 {
-		t.Fatalf("posted headline = %v", api.posted.Headline)
+	if api.reported.Headline != 71 {
+		t.Fatalf("reported headline = %v", api.reported.Headline)
 	}
 	if runner.input().WorkspaceDir == "" {
 		t.Fatal("the runner was handed no workspace")
@@ -253,22 +355,22 @@ func TestWorker_RunOnce_ReportsAFailureInsteadOfSwallowingIt(t *testing.T) {
 	api := newFakeAPI(t)
 	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 2, SuiteRef: fixtureSuiteRef(t)})
 	runner := &fakeRunner{err: errors.New("sandbox unavailable")}
-	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner, nil)
 
 	if _, err := w.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce hid the run failure")
 	}
-	if api.failedCause == "" || !strings.Contains(api.failedCause, "sandbox unavailable") {
-		t.Fatalf("failure cause reported = %q", api.failedCause)
+	if api.failCause == "" || !strings.Contains(api.failCause, "sandbox unavailable") {
+		t.Fatalf("failure cause reported = %q", api.failCause)
 	}
-	if api.posted != nil {
-		t.Fatal("a report was posted for a failed run")
+	if api.reported != nil {
+		t.Fatal("a report was reported for a failed run")
 	}
 }
 
 func TestWorker_RunOnce_EmptyQueueIsNotAnError(t *testing.T) {
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()},
-		newFakeAPI(t), &fakeRunner{})
+		newFakeAPI(t), &fakeRunner{}, nil)
 	worked, err := w.RunOnce(context.Background())
 	if err != nil || worked {
 		t.Fatalf("RunOnce on an empty queue = (%v, %v), want (false, nil)", worked, err)
@@ -282,7 +384,7 @@ func TestWorker_HeartbeatsWhileTheRunIsInFlight(t *testing.T) {
 	release := make(chan struct{})
 	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 60), block: release}
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1",
-		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 50 * time.Millisecond}, api, runner)
+		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 50 * time.Millisecond}, api, runner, nil)
 
 	done := make(chan error, 1)
 	go func() { _, err := w.RunOnce(context.Background()); done <- err }()
@@ -309,7 +411,7 @@ func TestWorker_AbandonsTheRunWhenTheLeaseIsLost(t *testing.T) {
 	release := make(chan struct{})
 	runner := &fakeRunner{report: reportFixture("deploy-helper", ref, 60), block: release}
 	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1",
-		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 30 * time.Millisecond}, api, runner)
+		WorkRoot: t.TempDir(), Lease: 300 * time.Millisecond, Heartbeat: 30 * time.Millisecond}, api, runner, nil)
 
 	done := make(chan error, 1)
 	go func() { _, err := w.RunOnce(context.Background()); done <- err }()
@@ -321,10 +423,10 @@ func TestWorker_AbandonsTheRunWhenTheLeaseIsLost(t *testing.T) {
 	}
 	close(release)
 	api.mu.Lock()
-	posted := api.posted
+	reported := api.reported
 	api.mu.Unlock()
-	if posted != nil {
-		t.Fatal("a report was posted after the lease was lost")
+	if reported != nil {
+		t.Fatal("a report was reported after the lease was lost")
 	}
 }
 
@@ -337,16 +439,16 @@ func TestWorker_RunOnce_RefusesAReportWithMismatchedSuiteRef(t *testing.T) {
 	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: fixtureSuiteRef(t)})
 	// The report names a suite ref the job never asked for.
 	runner := &fakeRunner{report: reportFixture("deploy-helper", "sha256:different", 60)}
-	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner, nil)
 
 	if _, err := w.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce accepted a report whose suite_ref did not match the job")
 	}
 	api.mu.Lock()
-	posted := api.posted
+	reported := api.reported
 	api.mu.Unlock()
-	if posted != nil {
-		t.Fatal("a report was posted despite a suite_ref mismatch")
+	if reported != nil {
+		t.Fatal("a report was reported despite a suite_ref mismatch")
 	}
 }
 
@@ -356,7 +458,7 @@ func TestWorker_RunOnce_ANilReportWithNoErrorIsAFailureNotAPanic(t *testing.T) {
 	api := newFakeAPI(t)
 	api.enqueue(evalqueue.Job{ID: "job-1", SkillName: "deploy-helper", Version: 1, SuiteRef: fixtureSuiteRef(t)})
 	runner := &fakeRunner{} // report == nil, err == nil
-	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner)
+	w, _ := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, runner, nil)
 
 	worked, err := w.RunOnce(context.Background())
 	if err == nil {
@@ -377,8 +479,179 @@ func TestNew_FailsFastOnAnUnusableWorkRoot(t *testing.T) {
 	}
 	badRoot := filepath.Join(blocker, "workroot")
 
-	_, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: badRoot}, newFakeAPI(t), &fakeRunner{})
+	_, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: badRoot}, newFakeAPI(t), &fakeRunner{}, nil)
 	if err == nil {
 		t.Fatal("New accepted a WorkRoot that cannot be created")
+	}
+}
+
+func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
+	// pushRef must be a real suite.Ref of the fixture tree: fakeAPI.FetchSuite
+	// always returns the fixture archive regardless of which ref is asked
+	// for, and Materialize's WantSuiteRef check now runs against suiteRef
+	// (what PushSuite returned) on the derive path too, so a placeholder
+	// like "derived-ref" would fail materialization before this test ever
+	// reaches its own assertions.
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef: derivedRef, // what PushSuite returns
+	}
+	der := &fakeDeriver{}
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: derivedRef}, der)
+
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if der.calls != 1 {
+		t.Fatalf("Derive called %d times, want 1", der.calls)
+	}
+	if api.pushedSkill != "demo" {
+		t.Fatalf("pushed suite for %q, want demo", api.pushedSkill)
+	}
+	if api.reported == nil || api.reported.SuiteRef != derivedRef {
+		t.Fatalf("report suite_ref = %q, want the derived ref", api.reported.SuiteRef)
+	}
+}
+
+// A derived suite is gated by its own oracles with nobody to repair a task
+// that fails, which is why it asks for 18 rather than 10. That surplus only
+// helps if the run then excludes the void tasks instead of refusing outright.
+//
+// AllowVoid is sourced from the suite's recorded origin (SuiteMeta.Origin),
+// not from whether this particular run was the one that derived it — see
+// TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite for the
+// retry/follow-up case that distinction exists to fix.
+func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef: derivedRef,
+		origin:  evalsuite.OriginDerived,
+	}
+	r := &fakeRunner{reportSuiteRef: derivedRef}
+	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !r.input().AllowVoid {
+		t.Fatal("a derived suite's run was not allowed to exclude void tasks")
+	}
+
+	// An authored suite has an author who can go fix a void task, so the
+	// stricter contract stays regardless of which run is asking.
+	authoredRef := fixtureSuiteRef(t)
+	api2 := &fakeAPI{
+		job:           &evalqueue.Job{ID: "j2", SkillName: "demo", Version: 1, SuiteRef: authoredRef, Tier: "full"},
+		suiteArchives: map[string][]byte{authoredRef: fixtureSuiteArchive(t)},
+		origin:        evalsuite.OriginAuthored,
+	}
+	r2 := &fakeRunner{reportSuiteRef: authoredRef}
+	if _, err := newTestWorker(t, api2, r2, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if r2.input().AllowVoid {
+		t.Fatal("an authored suite's run was allowed to exclude void tasks")
+	}
+}
+
+// TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite proves the
+// retry/follow-up fix: RecordDerivedSuite now stamps eval_jobs.suite_ref at
+// push time, before the panel runs, so a retry after a mid-run failure (or
+// any later eval against a previously-derived suite) sees a non-empty
+// job.SuiteRef from the start — the old `derivedHere := suiteRef == ""`
+// computation would then set AllowVoid: false and refuse deterministically
+// on voids that were fine to accept the first time. AllowVoid must instead
+// come from the suite's own recorded origin, which SuiteMeta reports on
+// every run, not just the one that derived it.
+func TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		// SuiteRef is already populated, as it would be on a retry or a
+		// fresh follow-up eval — this is the case that was broken.
+		job:           &evalqueue.Job{ID: "j3", SkillName: "demo", Version: 1, SuiteRef: derivedRef, Tier: "full"},
+		suiteArchives: map[string][]byte{derivedRef: fixtureSuiteArchive(t)},
+		origin:        evalsuite.OriginDerived,
+	}
+	r := &fakeRunner{reportSuiteRef: derivedRef}
+	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !r.input().AllowVoid {
+		t.Fatal("a run against an already-derived suite (non-empty job.SuiteRef) was not allowed to exclude void tasks")
+	}
+}
+
+// The push carries the claim so the server can record the suite as derived
+// there and then; without it a run that never reports leaves a
+// machine-generated suite recorded as authored.
+func TestRunOnce_PushesTheDerivedSuiteWithTheJobClaim(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef: derivedRef,
+	}
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: derivedRef}, &fakeDeriver{})
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if api.pushedJobID != "j1" {
+		t.Fatalf("pushed with job id %q, want j1", api.pushedJobID)
+	}
+	if api.pushedToken != "claim-token" {
+		t.Fatalf("pushed with claim token %q, want the token Claim returned", api.pushedToken)
+	}
+}
+
+func TestRunOnce_DoesNotDeriveWhenTheJobNamesASuite(t *testing.T) {
+	// Deriving a second suite would make two scores for the same skill
+	// incomparable, and cost a full derivation to do it.
+	// The ref is the fixture archive's own content hash, spelled out here
+	// rather than substituted by newTestWorker behind the test's back:
+	// Materialize verifies the fetched archive against the ref it asked for,
+	// so a job can only name a ref whose content the fake actually serves.
+	existing := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job: &evalqueue.Job{
+			ID: "j1", SkillName: "demo", Version: 1, SuiteRef: existing, Tier: "full",
+		},
+		suiteArchives: map[string][]byte{existing: fixtureSuiteArchive(t)},
+	}
+	der := &fakeDeriver{}
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: existing}, der)
+
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if der.calls != 0 {
+		t.Fatalf("Derive called %d times for a job that already names a suite", der.calls)
+	}
+}
+
+func TestRunOnce_FailsCleanlyWithNoDeriver(t *testing.T) {
+	api := &fakeAPI{job: &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: ""}}
+	w := newTestWorker(t, api, &fakeRunner{}, nil)
+
+	if _, err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce accepted a derive job with no Deriver")
+	}
+	if api.failCause == "" || !strings.Contains(api.failCause, "derive") {
+		t.Fatalf("job failed with cause %q, which does not name the missing deriver", api.failCause)
+	}
+}
+
+func TestRunOnce_ReportMustMatchTheDerivedRef(t *testing.T) {
+	// The invariant still holds; it is just checked against the ref the worker
+	// derived rather than the empty one it claimed. pushRef must still be a
+	// real suite.Ref (see TestRunOnce_DerivesWhenTheJobHasNoSuiteRef) so this
+	// fails on the intended report/derived-ref mismatch, not on Materialize's
+	// unrelated WantSuiteRef check rejecting a placeholder first.
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: ""},
+		pushRef: fixtureSuiteRef(t),
+	}
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: "something-else"}, &fakeDeriver{})
+
+	if _, err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce accepted a report naming a different suite")
 	}
 }

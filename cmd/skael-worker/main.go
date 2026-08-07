@@ -30,6 +30,7 @@ import (
 	_ "github.com/skael-dev/skael/internal/eval/agent/cursor"
 	_ "github.com/skael-dev/skael/internal/eval/agent/opencode"
 
+	"github.com/skael-dev/skael/internal/eval/derive"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
 	"github.com/skael-dev/skael/internal/eval/report"
@@ -65,6 +66,14 @@ type workerConfig struct {
 	LLMAuthStyle   api.AuthStyle
 	LLMStrongModel string
 	LLMFastModel   string
+	// RunRoot is where per-session sandbox workspaces are created; empty means
+	// os.TempDir(). Only needs setting in a container — see
+	// requireHostSharedRoots.
+	RunRoot string
+	// PanelBaseURL is ANTHROPIC_BASE_URL: the gateway the *panel* dials from
+	// inside the sandbox, as opposed to LLMBaseURL, which is the judge's. The
+	// worker never dials it, but whether it is set decides the panel's models.
+	PanelBaseURL string
 }
 
 func main() {
@@ -151,6 +160,12 @@ func configFromEnv() (workerConfig, error) {
 		return workerConfig{}, err
 	}
 
+	runRoot := os.Getenv("WORKER_RUN_ROOT")
+	workRoot := os.Getenv("WORKER_WORK_ROOT")
+	if err := requireHostSharedRoots(runRoot, workRoot, inContainer()); err != nil {
+		return workerConfig{}, err
+	}
+
 	return workerConfig{
 		Config: worker.Config{
 			Endpoint:     endpoint,
@@ -158,7 +173,7 @@ func configFromEnv() (workerConfig, error) {
 			WorkerID:     workerID,
 			Lease:        lease,
 			PollInterval: poll,
-			WorkRoot:     os.Getenv("WORKER_WORK_ROOT"),
+			WorkRoot:     workRoot,
 		},
 		AnthropicAPIKey: anthropicKey,
 		Concurrency:     concurrency,
@@ -166,7 +181,68 @@ func configFromEnv() (workerConfig, error) {
 		LLMAuthStyle:    authStyle,
 		LLMStrongModel:  os.Getenv("LLM_STRONG_MODEL"),
 		LLMFastModel:    os.Getenv("LLM_FAST_MODEL"),
+		RunRoot:         runRoot,
+		PanelBaseURL:    os.Getenv("ANTHROPIC_BASE_URL"),
 	}, nil
+}
+
+// panelModels resolves the model ids the eval panel should use, empty when the
+// shipped default is correct. Gated on PanelBaseURL, not on the model
+// variables alone: an operator who set them to pick a cheaper judge must keep
+// the panel they had, since a changed panel splits the score trend.
+func panelModels(cfg workerConfig) (strong, fast string) {
+	if cfg.PanelBaseURL == "" {
+		return "", ""
+	}
+	return cfg.LLMStrongModel, cfg.LLMFastModel
+}
+
+// requireHostSharedRoots refuses to start a containerized worker that has not
+// been told where the directories it hands to the Docker daemon live.
+//
+// The daemon resolves every bind source in the host's filesystem, and a
+// container's /tmp names nothing there. Docker's response to a missing bind
+// source is to create an empty directory, not to fail — so an unset root
+// yields a sandbox with no task and no skill (WORKER_RUN_ROOT) or a verifier
+// script that isn't there (WORKER_WORK_ROOT), neither distinguishable
+// downstream from a genuinely bad skill.
+func requireHostSharedRoots(runRoot, workRoot string, containerized bool) error {
+	if !containerized {
+		return nil
+	}
+	var missing []string
+	if runRoot == "" {
+		missing = append(missing, "WORKER_RUN_ROOT")
+	}
+	if workRoot == "" {
+		missing = append(missing, "WORKER_WORK_ROOT")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"skael-worker: running inside a container without %s. Sandbox workspaces and the suite verifier "+
+			"are bind-mounted into containers started through the Docker socket, and the daemon resolves "+
+			"those paths on the host — a path under this container's own /tmp does not exist there, and "+
+			"Docker would silently mount an empty directory, scoring every skill as though it did nothing. "+
+			"Set each to a directory bind-mounted at the SAME path on both sides "+
+			"(e.g. `-v /var/lib/skael/run:/var/lib/skael/run` with WORKER_RUN_ROOT=/var/lib/skael/run)",
+		joinComma(missing))
+}
+
+// inContainer reports whether this process looks containerized. Docker writes
+// /.dockerenv into every container it creates; /run/.containerenv is Podman's
+// equivalent. Both are heuristics, which is why they only ever gate an error
+// that an explicit WORKER_RUN_ROOT already satisfies — a false positive is
+// cleared by setting the variable, and a false negative just restores the
+// previous behaviour.
+func inContainer() bool {
+	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // parseLLMAuthStyle resolves LLM_AUTH_STYLE. Empty defaults to
@@ -203,6 +279,18 @@ func joinComma(ss []string) string {
 	return out
 }
 
+// deriverOptions builds the deriver's configuration from the worker's own.
+// Split out from run() so the RunRoot -> StageRoot wiring is testable: nothing
+// else exercises it, and getting it wrong voids every task silently.
+func deriverOptions(cfg workerConfig, drv sandbox.Driver, gw llm.Gateway) derive.Options {
+	return derive.Options{
+		Gateway:   gw,
+		Driver:    drv,
+		StageRoot: cfg.RunRoot,
+		Logger:    func(format string, args ...any) { log.Info().Msgf(format, args...) },
+	}
+}
+
 // run wires the real dependencies (Docker sandbox, API gateway, adapter
 // registry) and runs the worker loop until a signal cancels it.
 func run(cfg workerConfig) error {
@@ -233,9 +321,30 @@ func run(cfg workerConfig) error {
 
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
 
-	r := &realRunner{driver: drv, gateway: gw, concurrency: cfg.Concurrency}
+	panelStrong, panelFast := panelModels(cfg)
+	if cfg.PanelBaseURL != "" && (panelStrong == "" || panelFast == "") {
+		// A warning rather than a refusal: a passthrough proxy in front of
+		// Anthropic accepts "opus" happily. The panel health probe is the
+		// authority, and it now fails the job with the models named.
+		log.Warn().
+			Str("anthropic_base_url", cfg.PanelBaseURL).
+			Msg("skael-worker: ANTHROPIC_BASE_URL is set but LLM_STRONG_MODEL/LLM_FAST_MODEL are not, " +
+				"so the eval panel will ask that gateway for the default Claude Code aliases opus and haiku. " +
+				"A gateway that namespaces its model identifiers (OpenRouter uses anthropic/claude-opus-4) " +
+				"rejects those and every panel member fails its health probe")
+	}
 
-	w, err := worker.New(cfg.Config, httpAPI, r)
+	r := &realRunner{
+		driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot,
+		panelStrong: panelStrong, panelFast: panelFast, panelBase: cfg.PanelBaseURL,
+	}
+
+	der, err := derive.New(deriverOptions(cfg, drv, gw))
+	if err != nil {
+		return fmt.Errorf("skael-worker: suite deriver: %w", err)
+	}
+
+	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{d: der})
 	if err != nil {
 		return fmt.Errorf("skael-worker: %w", err)
 	}
@@ -312,6 +421,10 @@ type realRunner struct {
 	driver      sandbox.Driver
 	gateway     llm.Gateway
 	concurrency int
+	runRoot     string
+	panelStrong string
+	panelFast   string
+	panelBase   string
 }
 
 func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
@@ -330,13 +443,17 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Msg("skael-worker: claimed job")
 
 	deps := whetstone.EvalDeps{
-		Store:         st,
-		Driver:        r.driver,
-		Gateway:       r.gateway,
-		Adapters:      agent.Get,
-		Now:           time.Now,
-		Sleep:         time.Sleep,
-		EngineVersion: version,
+		Store:            st,
+		Driver:           r.driver,
+		Gateway:          r.gateway,
+		Adapters:         agent.Get,
+		Now:              time.Now,
+		Sleep:            time.Sleep,
+		EngineVersion:    version,
+		WorkspaceRoot:    r.runRoot,
+		PanelStrongModel: r.panelStrong,
+		PanelFastModel:   r.panelFast,
+		PanelBaseURL:     r.panelBase,
 	}
 
 	req := evalRequestFrom(in, r.concurrency)
@@ -364,6 +481,25 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 	return rep, nil
 }
 
+// realDeriver adapts derive.Deriver to worker.Deriver. The two Input types are
+// separate because internal/worker must not import internal/eval/derive —
+// that is what keeps the run loop testable with no LLM and no Docker.
+type realDeriver struct{ d *derive.Deriver }
+
+func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worker.DeriveResult, error) {
+	panel, err := runner.ParsePanel(in.Panel.Agents, in.Panel.Models)
+	if err != nil {
+		return nil, fmt.Errorf("skael-worker: derive: %w", err)
+	}
+	res, err := r.d.Derive(ctx, derive.Input{
+		Skill: in.Skill, Bundle: in.Bundle, Tier: in.Tier, Panel: panel,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &worker.DeriveResult{Archive: res.Archive, Checks: res.Checks, Spec: res.Spec}, nil
+}
+
 // evalRequestFrom maps a worker.RunInput — what the queue handed the worker
 // — onto the whetstone.EvalRequest RunEvalWith actually consumes. This hop
 // is the exact seam a prior task's fix round found broken (Panel silently
@@ -377,6 +513,7 @@ func evalRequestFrom(in worker.RunInput, concurrency int) whetstone.EvalRequest 
 		Tier:        runner.Tier(in.Tier),
 		Agents:      in.Panel.Agents,
 		Models:      in.Panel.Models,
+		AllowVoid:   in.AllowVoid,
 		Concurrency: concurrency,
 	}
 }

@@ -7,7 +7,7 @@ import { AuthProvider } from "@/app/auth-provider";
 import { server } from "@/test/handlers";
 import { mockUser as defaultMockUser } from "@/test/fixtures";
 import { ReviewQueue } from "./review-queue";
-import type { HeldVersion } from "@/api/types.gen";
+import type { HeldVersion, RecordOutput } from "@/api/types.gen";
 
 function withQuery(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -74,6 +74,44 @@ function mockUser(overrides: Partial<{ role: string }>) {
   server.use(
     http.get("/api/auth/me", () => {
       return HttpResponse.json({ ...defaultMockUser, ...overrides });
+    }),
+  );
+}
+
+const DEFAULT_QUALITY_RECORD: RecordOutput = {
+  critical_forbid_violations: 0,
+  drift_breakdown: {},
+  engine_version: "1",
+  headline_ci_high: 0,
+  headline_ci_low: 0,
+  headline_score: 90,
+  model_panel: {},
+  panel_complete: true,
+  panel_matrix: [],
+  pillar_breakdown: {},
+  scored_at: "2026-08-01T00:00:00Z",
+  skill_id: "skill-1",
+  suite_derived: false,
+  suite_ref: "sha256:abcdef0123456789",
+  tier: "standard",
+  verified: true,
+  version: 4,
+};
+
+// mockQuality overrides the default "never scored" handler (in
+// test/handlers.ts) with a specific record — used to give a held version's
+// skill a score, e.g. one from a derived suite. It answers the per-version
+// route, and only for the record's own version: HeldVersion must annotate the
+// version it is showing, not whatever was scored most recently across the
+// skill.
+function mockQuality(overrides: Partial<RecordOutput>) {
+  const record: RecordOutput = { ...DEFAULT_QUALITY_RECORD, ...overrides };
+  server.use(
+    http.get("/api/skills/:name/quality/:version", ({ params }) => {
+      if (Number(params.version) !== record.version) {
+        return HttpResponse.json({ detail: "not scored" }, { status: 404 });
+      }
+      return HttpResponse.json(record);
     }),
   );
 }
@@ -270,6 +308,52 @@ describe("ReviewQueue", () => {
     render(withQuery(<ReviewQueue />));
     expect(await screen.findByText(/-line two/)).toBeInTheDocument();
     expect(screen.getByText(/\+line TWO/)).toBeInTheDocument();
+  });
+
+  // ── Derived-suite hold copy (Task 10) ────────────────────────────
+  //
+  // internal/skill/release.go refuses to let a score computed against a
+  // machine-derived suite clear the `scan` hold kind — a reviewer looking
+  // at a high number needs to know why it didn't release the version.
+
+  it("says a derived score cannot release the hold", async () => {
+    mockQuality({ suite_derived: true });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["scan"],
+      outstanding: ["scan"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    expect(await screen.findByText(/cannot release this hold/i)).toBeInTheDocument();
+    // The reviewer needs to know what will work, not only what will not.
+    expect(screen.getByText(/approve as an owner/i)).toBeInTheDocument();
+  });
+
+  // Reconsider decides one version at a time. A score on a different version
+  // says nothing about this one, and annotating the held version with it told
+  // the reviewer something false about the score in front of them.
+  it("ignores a derived score belonging to another version", async () => {
+    mockQuality({ suite_derived: true, version: 3 });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["scan"],
+      outstanding: ["scan"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    await screen.findByText("deploy-helper");
+    expect(screen.queryByText(/cannot release this hold/i)).not.toBeInTheDocument();
+  });
+
+  it("does not say that for an authored score", async () => {
+    mockQuality({ suite_derived: false });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["scan"],
+      outstanding: ["scan"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    await screen.findByText("deploy-helper");
+    expect(screen.queryByText(/cannot release this hold/i)).not.toBeInTheDocument();
   });
 
   it("flags a non-SKILL.md file addition prominently", async () => {

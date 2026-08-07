@@ -129,6 +129,7 @@ type EvalSuiteMeta struct {
 	Checks      []EvalSuiteCheck `json:"checks"`
 	SpecVersion int              `json:"spec_version"`
 	Spec        json.RawMessage  `json:"spec,omitempty"`
+	Origin      string           `json:"origin"`
 }
 
 // FetchEvalSuiteMeta calls GET /api/eval/suites/{ref}/meta and returns the

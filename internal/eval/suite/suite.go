@@ -17,12 +17,16 @@ import (
 // Kind is one of "happy", "variant", "edge", or "negative-trigger". Split is
 // "dev" or "holdout" once Split has been called; it is empty on a freshly
 // generated, unsplit task.
+// Setup is a shell script that creates the task's input files in the
+// workspace. It runs before the agent under test and before the oracle, in
+// the same sandbox those run in — most tasks are "do X to this file", and
+// without it the file does not exist for either of them.
 type TaskPkg struct {
 	ID       string
 	Kind     string
 	Split    string
 	PromptMD string
-	EnvFrag  string
+	Setup    string
 	Oracle   string
 	Verifier string
 }

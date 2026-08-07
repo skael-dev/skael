@@ -83,7 +83,7 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, i
 
 	bundle, err := generateBundle(ctx, st, g, sp)
 	if err != nil {
-		return err
+		return wrapGenerationError(err, "whetstone gen "+sp.Name)
 	}
 
 	res, code, err := lintBundle(bundle.Dir, false)
@@ -102,7 +102,24 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, i
 	if err := writeContract(st, sp); err != nil {
 		return err
 	}
-	return generateSuite(ctx, st, g, sp)
+	if err := generateSuite(ctx, st, g, sp); err != nil {
+		return wrapGenerationError(err, "whetstone suite gen "+sp.Name)
+	}
+	return nil
+}
+
+// wrapGenerationError appends a resume hint to a generation-pass failure.
+// Every completed pass is cached (internal/eval/store), so a failure partway
+// through a multi-call pipeline does not have to restart from the interview —
+// resumeCmd is the command that picks up where it left off. A timeout gets
+// the WHETSTONE_LLM_TIMEOUT hint too, since that is the direct remedy for it
+// rather than something the operator has to already know to look for.
+func wrapGenerationError(err error, resumeCmd string) error {
+	hint := fmt.Sprintf("completed passes are cached — resume with %s", ui.Code(resumeCmd))
+	if errors.Is(err, llm.ErrTimeout) {
+		hint += fmt.Sprintf("; or raise the timeout with %s", ui.Code(timeoutEnv+"=<duration>"))
+	}
+	return fmt.Errorf("%w; %s", err, hint)
 }
 
 // writeContract compiles the drift contract from the spec and writes it into

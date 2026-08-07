@@ -232,9 +232,13 @@ func copyTree(t *testing.T, src, dst string) {
 // values because the pipeline composes floating-point aggregates — but narrow
 // bands, because a range wide enough to accept any behaviour asserts nothing.
 type expectedScore struct {
-	HeadlineMin   float64  `json:"headline_min"`
-	HeadlineMax   float64  `json:"headline_max"`
-	DriftGrade    string   `json:"drift_grade"`
+	HeadlineMin float64 `json:"headline_min"`
+	HeadlineMax float64 `json:"headline_max"`
+	// AdherenceMin/Max bound each member's mean adherence. This replaced a
+	// committed letter grade: the letter bucketed a thirty-point range, so a
+	// real regression could move adherence a long way without changing it.
+	AdherenceMin  float64  `json:"adherence_min"`
+	AdherenceMax  float64  `json:"adherence_max"`
 	MinViolations int      `json:"min_violations"`
 	Violations    []string `json:"violation_ids"`
 	Unevaluable   int      `json:"unevaluable"`
@@ -262,9 +266,18 @@ func TestCorpus_ScoresWithinItsCommittedBand(t *testing.T) {
 			if rep.Headline < want.HeadlineMin || rep.Headline > want.HeadlineMax {
 				t.Errorf("headline %.1f outside the committed band [%.1f, %.1f]", rep.Headline, want.HeadlineMin, want.HeadlineMax)
 			}
+			// Adherence itself rather than the letter grade it used to be
+			// bucketed into: the letter was removed, and a number is a
+			// stronger assertion than a bucket that spans thirty points.
 			for _, m := range rep.Members {
-				if m.DriftGrade != want.DriftGrade {
-					t.Errorf("%s drift grade %q, want %q", m.Member.Model, m.DriftGrade, want.DriftGrade)
+				t.Logf("%s adherence mean=%.4f worst=%.4f", m.Member.Model, m.Drift.Mean, m.Drift.Worst)
+				if m.DriftUnmeasurable {
+					t.Errorf("%s adherence was unmeasurable in a committed corpus fixture", m.Member.Model)
+					continue
+				}
+				if m.Drift.Mean < want.AdherenceMin || m.Drift.Mean > want.AdherenceMax {
+					t.Errorf("%s adherence mean %.2f outside the committed band [%.2f, %.2f]",
+						m.Member.Model, m.Drift.Mean, want.AdherenceMin, want.AdherenceMax)
 				}
 			}
 			if got := violationIDs(rep); !equalSets(got, want.Violations) {

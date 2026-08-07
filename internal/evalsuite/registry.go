@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -53,8 +54,28 @@ type Record struct {
 	// recover it. Nil when the caller that pushed this suite predates this
 	// field, or genuinely has no spec to send.
 	Spec       json.RawMessage
+	Origin     Origin
 	UploadedBy string
 	CreatedAt  time.Time
+}
+
+// Origin records how a suite came to exist.
+type Origin string
+
+const (
+	// OriginAuthored is a suite a person wrote and gated through whetstone.
+	OriginAuthored Origin = "authored"
+	// OriginDerived is a suite generated from the skill's own SKILL.md. A
+	// score against one measures the skill against its own claims, which is
+	// why internal/skill's Releaser will not let it clear a scan hold.
+	OriginDerived Origin = "derived"
+)
+
+// Queryer is the subset of pgx both a pool and a transaction satisfy, so
+// MarkDerived can be composed into the report handler's transaction rather
+// than landing outside it and surviving a rolled-back score.
+type Queryer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // ErrInvalidArchive is wrapped into any Put error caused by the caller's
@@ -93,6 +114,21 @@ func archiveKey(ref string) string {
 // construction rather than by convention. specJSON is the pusher's spec.yaml
 // as JSON (may be nil/empty — see Record.Spec).
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, nil)
+}
+
+// PutDerived stores a suite the server has itself established is machine
+// derived, marking it so in the same transaction as the insert and running
+// after (when non-nil) inside it too — that is how the job row that caused
+// the derivation gets its suite_ref without a second, separately-failable
+// write. Origin is never taken from the pusher: a worker that could declare
+// its own suite authored would defeat internal/skill's refusal to let a
+// derived score clear a scan hold.
+func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, after)
+}
+
+func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
@@ -144,8 +180,31 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (ref) DO NOTHING
 	`
-	if _, err := r.db.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Put begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+	if _, err := tx.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
 		return nil, fmt.Errorf("evalsuite: Put insert: %w", err)
+	}
+	// MarkDerived rather than an origin column in the insert: it is an
+	// upgrade-only update, so re-pushing content already recorded as derived
+	// (the insert is ON CONFLICT DO NOTHING) still ends derived, and an
+	// authored push can never walk a derived suite back.
+	if origin == OriginDerived {
+		if err := r.MarkDerived(ctx, tx, ref); err != nil {
+			return nil, err
+		}
+	}
+	if after != nil {
+		if err := after(ctx, tx, ref); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("evalsuite: Put commit: %w", err)
 	}
 
 	return r.Get(ctx, ref)
@@ -154,7 +213,7 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -191,7 +250,7 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 // skillName.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
 		FROM eval_suites
 		WHERE skill_name = $1
 		ORDER BY created_at DESC
@@ -208,11 +267,24 @@ func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Recor
 	return rec, nil
 }
 
+// MarkDerived flags ref as machine-derived. It takes a Queryer so the caller
+// can write it inside the same transaction as the score that justifies it.
+func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error {
+	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1 WHERE ref = $2`, string(OriginDerived), ref)
+	if err != nil {
+		return fmt.Errorf("evalsuite: MarkDerived %s: %w", ref, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("evalsuite: MarkDerived: no suite recorded for ref %s: %w", ref, ErrNotFound)
+	}
+	return nil
+}
+
 func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
 	var specJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON); err != nil {
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {

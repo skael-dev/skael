@@ -40,11 +40,12 @@ const gradingFileName = "grading.json"
 
 // Artifacts locates the files WriteArtifacts produced for one run.
 type Artifacts struct {
-	Dir            string
-	TranscriptPath string
-	EventsPath     string
-	GradingPath    string
-	OutputsDir     string
+	Dir             string
+	TranscriptPath  string
+	EventsPath      string
+	GradingPath     string
+	VerifierLogPath string
+	OutputsDir      string
 }
 
 // Grading is the human- and machine-readable record of how one run was
@@ -61,14 +62,19 @@ type Grading struct {
 	Error        string
 	StartedAt    time.Time
 	FinishedAt   time.Time
+	// Reason mirrors Outcome.Reason. It lives in grading.json because that
+	// is what a resumed run reads back — see outcomeFromRecord.
+	Reason string `json:",omitempty"`
 }
 
 // WriteArtifacts records the evidence trail for one run into dir:
 // transcript.raw (the agent's native stream, byte for byte), events.jsonl
 // (the normalized trajectory, one compact JSON object per line, in order),
-// grading.json (the Grading record, indented for a human), and outputs/ (a
-// copy of the workspace's regular files a verifier inspected, skipping any
-// entry under a directory listed in skipDirs).
+// grading.json (the Grading record, indented for a human), verifier.log
+// (verifierOut, the verifier's captured stdout/stderr — empty for a run with
+// no verifier, such as a trigger probe), and outputs/ (a copy of the
+// workspace's regular files a verifier inspected, skipping any entry under a
+// directory listed in skipDirs).
 //
 // skipDirs exists so the installed skill bundle — and, for a trigger probe,
 // the distractor pack alongside it — is never copied into outputs/: it is
@@ -77,20 +83,21 @@ type Grading struct {
 // value. A baseline session installs no skill, so its caller passes no
 // skipDirs and its real outputs are copied in full.
 //
-// WriteArtifacts is best-effort across the four artifacts: it attempts every
+// WriteArtifacts is best-effort across the five artifacts: it attempts every
 // one rather than stopping at the first failure, so a caller that only cares
 // about (say) the events failure is not also denied the transcript that did
 // write successfully. Every failure is accumulated and returned via
 // errors.Join; a failure to write events.jsonl specifically is wrapped in
 // ErrEventsNotWritten so a caller can single it out with errors.Is without
 // parsing the message.
-func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
+func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading, workspace string, skipDirs []string, verifierOut []byte) (Artifacts, error) {
 	a := Artifacts{
-		Dir:            dir,
-		TranscriptPath: filepath.Join(dir, "transcript.raw"),
-		EventsPath:     filepath.Join(dir, "events.jsonl"),
-		GradingPath:    filepath.Join(dir, gradingFileName),
-		OutputsDir:     filepath.Join(dir, "outputs"),
+		Dir:             dir,
+		TranscriptPath:  filepath.Join(dir, "transcript.raw"),
+		EventsPath:      filepath.Join(dir, "events.jsonl"),
+		GradingPath:     filepath.Join(dir, gradingFileName),
+		VerifierLogPath: filepath.Join(dir, "verifier.log"),
+		OutputsDir:      filepath.Join(dir, "outputs"),
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -103,6 +110,15 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 	// verbatim: no normalization, no re-encoding, no truncation.
 	if err := os.WriteFile(a.TranscriptPath, raw, 0o644); err != nil {
 		errs = append(errs, fmt.Errorf("runner: writing transcript: %w", err))
+	}
+
+	// The full tail, not just the distilled line: when the one-liner is not
+	// enough, this is what a reader opens instead of re-running the verifier
+	// by hand.
+	if len(verifierOut) > 0 {
+		if err := os.WriteFile(a.VerifierLogPath, verifierOut, 0o644); err != nil {
+			errs = append(errs, fmt.Errorf("runner: writing verifier log: %w", err))
+		}
 	}
 
 	if err := writeEvents(a.EventsPath, events); err != nil {

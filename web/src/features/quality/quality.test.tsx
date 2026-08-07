@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
@@ -107,7 +107,8 @@ describe("EvalStatus", () => {
   it("offers to run an eval when there is no score and no job", async () => {
     mockEvals([]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
-    expect(await screen.findByRole("button", { name: /run eval/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /quick check/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /full evaluation/i })).toBeInTheDocument();
   });
 
   it("names both versions and offers a re-run when the score is stale", async () => {
@@ -120,13 +121,71 @@ describe("EvalStatus", () => {
       />,
     ));
     expect(await screen.findByText(/scored on v3 · current v7/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /re-run eval/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-run quick check/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-run full evaluation/i })).toBeInTheDocument();
   });
 
   it("surfaces a failed job's error", async () => {
     mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: "sandbox image missing", enqueued_at: "2026-08-01T00:00:00Z" }]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
     expect(await screen.findByText(/sandbox image missing/i)).toBeInTheDocument();
+  });
+
+  // last_error is one column carrying a plain-language lead and the raw Go
+  // error chain, separated by a blank line (evalqueue's fail handler). The
+  // raw chain must not render as running text next to the lead — it belongs
+  // behind the <details> toggle, collapsed by default.
+  it("leads with the plain-language sentence and keeps the raw chain out of the running text", async () => {
+    const lastError =
+      "This skill's evaluation suite had too few usable tasks to score. See the suite's checks for which tasks were void and why.\n\n" +
+      "worker: derive suite for x: derive: the derived suite is too thin to evaluate: runner: tier full needs 7 dev tasks, the suite has 3";
+    mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: lastError, enqueued_at: "2026-08-01T00:00:00Z" }]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    expect(await screen.findByText(/too few usable tasks to score/i)).toBeInTheDocument();
+    // The raw chain exists in the DOM (inside <details>) but is not visible
+    // collapsed — this is the run-on-line regression check.
+    const summary = screen.getByText(/too few usable tasks to score/i);
+    expect(summary.textContent).not.toMatch(/runner: tier full needs/);
+  });
+
+  it("renders an unrecognised failure as-is, with no toggle", async () => {
+    const lastError = "worker: something nobody has classified yet";
+    mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: lastError, enqueued_at: "2026-08-01T00:00:00Z" }]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    expect(await screen.findByText(/something nobody has classified yet/i)).toBeInTheDocument();
+    expect(document.querySelector("details")).not.toBeInTheDocument();
+  });
+
+  // EvalStatus has no production call site outside QualityReport today
+  // (which passes hideDerivedBadge to avoid a duplicate). This protects the
+  // prop's default (false/undefined) so a future standalone usage still
+  // shows the badge on its own.
+  it("shows its own derived-suite badge when not told to hide it", async () => {
+    mockEvals([]);
+    render(withQuery(
+      <EvalStatus
+        skillName="s"
+        quality={{ version: 3, headline_score: 90, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z", suite_derived: true }}
+        latestVersion={3}
+      />,
+    ));
+    expect(await screen.findByText(/derived suite/i)).toBeInTheDocument();
+  });
+
+  it("suppresses its own derived-suite badge when hideDerivedBadge is set", async () => {
+    mockEvals([]);
+    render(withQuery(
+      <EvalStatus
+        skillName="s"
+        quality={{ version: 3, headline_score: 90, verified: true, panel_complete: true, scored_at: "2026-08-01T00:00:00Z", suite_derived: true }}
+        latestVersion={3}
+        hideDerivedBadge
+      />,
+    ));
+    await screen.findByText(/scored on v3/i);
+    expect(screen.queryByText(/derived suite/i)).not.toBeInTheDocument();
   });
 
   it("surfaces an enqueue failure so a silent click isn't mistaken for a no-op", async () => {
@@ -139,10 +198,48 @@ describe("EvalStatus", () => {
     );
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
 
-    const button = await screen.findByRole("button", { name: /run eval/i });
+    const button = await screen.findByRole("button", { name: /full evaluation/i });
     await user.click(button);
 
     expect(await screen.findByText(/failed|queue is full/i)).toBeInTheDocument();
+  });
+
+  it("sends the chosen tier when running an eval", async () => {
+    let sent: Record<string, unknown> | undefined;
+    server.use(
+      http.post("/api/skills/:name/evals", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ job_id: "job-1" }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    mockEvals([]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    const button = await screen.findByRole("button", { name: /quick check/i });
+    await user.click(button);
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).toMatchObject({ tier: "smoke" });
+  });
+
+  it("omits the tier when none is chosen, so the server default applies", async () => {
+    let sent: Record<string, unknown> | undefined;
+    server.use(
+      http.post("/api/skills/:name/evals", async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ job_id: "job-1" }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    mockEvals([]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    const button = await screen.findByRole("button", { name: /full evaluation/i });
+    await user.click(button);
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).not.toHaveProperty("tier");
   });
 });
 
@@ -159,6 +256,7 @@ const DEFAULT_RECORD: RecordOutput = {
   pillar_breakdown: {},
   scored_at: "2026-08-01T00:00:00Z",
   skill_id: "skill-1",
+  suite_derived: false,
   suite_ref: "sha256:abcdef0123456789",
   tier: "standard",
   verified: true,
@@ -206,6 +304,12 @@ describe("QualityReport", () => {
     mockQuality({
       version: 3,
       headline_score: 74.2,
+      // Still sent by historical rows; the UI no longer renders either. The
+      // confidence interval bootstrapped the mean of member effectiveness
+      // while the headline is the minimum, and at the shipped two-member
+      // panel it could only ever reproduce [min, max]. The letter grade was
+      // the drift grade shown beside effectiveness — a second composite on a
+      // second scale. Both are asserted absent below.
       headline_ci_low: 70,
       headline_ci_high: 78,
       verified: true,
@@ -218,9 +322,11 @@ describe("QualityReport", () => {
     // Headline renders rounded, matching the badge (Math.round), not the
     // raw geometric-mean float.
     expect(await screen.findByText("74")).toBeInTheDocument();
-    expect(screen.getByText(/70.*78/)).toBeInTheDocument();
     expect(screen.getByText(/6\.5/)).toBeInTheDocument();
-    expect(screen.getByText("B")).toBeInTheDocument();
+    // Effectiveness is the single published score: no interval beside it and
+    // no letter grade, even when a historical record still carries both.
+    expect(screen.queryByText(/70.*78/)).not.toBeInTheDocument();
+    expect(screen.queryByText("B")).not.toBeInTheDocument();
   });
 
   it("says a null robustness gap was not measured, never zero", async () => {
@@ -425,6 +531,92 @@ describe("QualityReport", () => {
     render(withQuery(<QualityReport skillName="s" latestVersion={1} />));
     expect(await screen.findByText(/could not load the detailed report/i)).toBeInTheDocument();
     expect(screen.queryByText(/detailed report not available/i)).not.toBeInTheDocument();
+  });
+
+  // suite_derived (internal/skill/release.go) marks a score computed against
+  // a machine-generated suite rather than one the skill's author wrote.
+  // QualityReport renders the badge itself next to the headline and passes
+  // hideDerivedBadge to the nested EvalStatus, so it must appear exactly
+  // once on the composed page, not once per component that knows about
+  // suite_derived.
+  it("labels a score from a derived suite exactly once", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_derived: true });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    await screen.findByText("90");
+    expect(await screen.findByText(/derived suite/i)).toBeInTheDocument();
+  });
+
+  it("does not label a score from an authored suite", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_derived: false });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    await screen.findByText("90");
+    expect(screen.queryAllByText(/derived suite/i)).toHaveLength(0);
+  });
+
+  // Task 3 turned a derive-time drop into a void check on the suite rather
+  // than a silently smaller suite. Nothing under web/src read that `checks`
+  // array before this — these two guard the count and the reason text.
+  it("reports how many of a suite's tasks were usable", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: false, void: true, reason: "generation failed: api: response truncated at max_tokens (32768)" },
+            { task_id: "t3", ok: false, void: true, reason: "oracle did not pass its own verifier" },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    expect(await screen.findByText(/1 of 3 tasks usable/i)).toBeInTheDocument();
+  });
+
+  it("says why a task was unusable", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: false, void: true, reason: "generation failed: api: response truncated at max_tokens (32768)" },
+            { task_id: "t3", ok: false, void: true, reason: "oracle did not pass its own verifier" },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    expect(await screen.findByText(/truncated at max_tokens/i)).toBeInTheDocument();
+  });
+
+  it("renders nothing about suite coverage when the suite has no void tasks", async () => {
+    mockQuality({ version: 3, headline_score: 90, suite_ref: "sha256:abc" });
+    server.use(
+      http.get("/api/eval/suites/:ref/meta", () =>
+        HttpResponse.json({
+          ref: "sha256:abc",
+          skill_name: "demo",
+          checks: [
+            { task_id: "t1", ok: true, void: false },
+            { task_id: "t2", ok: true, void: false },
+          ],
+        }),
+      ),
+    );
+
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+
+    await screen.findByText("90");
+    expect(screen.queryByText(/tasks usable/i)).not.toBeInTheDocument();
   });
 });
 

@@ -57,6 +57,28 @@ func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
 	}
 }
 
+// The permission mode has to clear Bash, not just file edits. It was
+// acceptEdits, which auto-approves Edit and Write but still prompts for Bash —
+// and a headless session has nobody to prompt, so every shell command came
+// back denied. A skill whose whole job is running scripts/*.py then scored
+// zero on every task while looking like a skill that simply did not work.
+// bypassPermissions is the correct mode here because the isolation is the
+// sandbox's job: a container with no network beyond a proxy allowlist, thrown
+// away after the run.
+func TestArgv_PermissionModeClearsShellNotJustEdits(t *testing.T) {
+	a, err := claudecode.Argv(agent.InvokeSpec{Prompt: "convert it", Model: "opus"})
+	if err != nil {
+		t.Fatalf("Argv: %v", err)
+	}
+	joined := strings.Join(a, " ")
+	if strings.Contains(joined, "acceptEdits") {
+		t.Error("argv still asks for acceptEdits, which denies every Bash call in a headless session")
+	}
+	if !strings.Contains(joined, "--permission-mode bypassPermissions") {
+		t.Errorf("argv does not request bypassPermissions: %v", a)
+	}
+}
+
 func TestArgv_RequiresAPromptAndAModel(t *testing.T) {
 	if _, err := claudecode.Argv(agent.InvokeSpec{Model: "opus"}); err == nil {
 		t.Error("Argv accepted an empty prompt")

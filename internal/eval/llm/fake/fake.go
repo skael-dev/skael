@@ -15,6 +15,7 @@ import (
 type Gateway struct {
 	mu        sync.Mutex
 	responses []string
+	fn        func(llm.Req) (string, error)
 	calls     []llm.Req
 	err       error
 }
@@ -22,6 +23,13 @@ type Gateway struct {
 // New returns a fake that replies with responses in order.
 func New(responses ...string) *Gateway {
 	return &Gateway{responses: responses}
+}
+
+// NewFunc returns a fake that answers from fn. Order-based scripting cannot
+// serve a concurrent fan-out — the reply a goroutine gets depends on which
+// won the lock — so a test of concurrent calls routes on the request instead.
+func NewFunc(fn func(llm.Req) (string, error)) *Gateway {
+	return &Gateway{fn: fn}
 }
 
 // SetError makes every subsequent Complete return err.
@@ -46,6 +54,13 @@ func (g *Gateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	g.calls = append(g.calls, r)
 	if g.err != nil {
 		return llm.Res{}, g.err
+	}
+	if g.fn != nil {
+		text, err := g.fn(r)
+		if err != nil {
+			return llm.Res{}, err
+		}
+		return llm.Res{Text: text, Model: "fake"}, nil
 	}
 	if len(g.calls) > len(g.responses) {
 		return llm.Res{}, fmt.Errorf("fake: unexpected call %d (%s); only %d responses scripted",

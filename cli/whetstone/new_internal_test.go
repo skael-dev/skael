@@ -29,22 +29,36 @@ const cleanBody = `{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <in
 // brokenBody links to a file the bundle does not contain, which lint reports
 // as a broken-link error. It is the cheapest way to make generation produce a
 // bundle that fails lint without reaching into the generator.
+//
+// broken-link is body-owned, so gen's revision loop tries to fix it — scripting
+// the same broken body back as each revision response is what exercises the
+// case that matters here: revision exhausted, bundle still bad, gate holds.
 const brokenBody = `{"body":"# PDF Extract\n\nSee [the format notes](references/missing.md).\n\n1. Run ` +
 	"`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`
 
 const (
 	outlinePass     = `{"sections":["Overview","Steps","Failure handling"]}`
-	resourcesPass   = `{"files":[]}`
 	descriptionPass = `{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF, a report, or table extraction."}`
 )
 
-// newScript returns every scripted gateway response a full `new` run consumes,
-// in order: two interview passes, four generation passes, one suite draft.
+// suiteExpandTask is one expansion response, reused for both of suiteOutline's
+// stubs — fake.New serves responses strictly by call order, not by request
+// content, so an identical response for every expand slot is what keeps the
+// concurrent fan-out's non-deterministic ordering harmless here.
+const suiteExpandTask = `{"prompt_md": "extract the tables", "oracle": "#!/bin/sh\nexit 0\n", ` +
+	`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`
+
+// newScript returns every scripted gateway response a full `new` run
+// consumes, in order: two interview passes, three generation passes, one
+// suite outline call plus one expansion per outlined stub (suiteOutline
+// names two). specDraft plans no resource files, so the generator makes no
+// resources-pass call at all — there is no fourth generation response to
+// script.
 func newScript(body string) []string {
 	return []string{
 		specDraft, specDraft,
-		outlinePass, body, resourcesPass, descriptionPass,
-		suiteDraft,
+		outlinePass, body, descriptionPass,
+		suiteOutline, suiteExpandTask, suiteExpandTask,
 	}
 }
 
@@ -70,7 +84,13 @@ func exists(t *testing.T, path string) bool {
 // measures nothing. Neither artifact may be written.
 func TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint(t *testing.T) {
 	st := newTestStore(t)
-	g := fake.New(newScript(brokenBody)...)
+	// No suite draft is scripted: reaching it is itself the failure this test
+	// is looking for, and the fake reports an unscripted call by name.
+	g := fake.New(
+		specDraft, specDraft,
+		outlinePass, brokenBody, descriptionPass,
+		brokenBody, brokenBody,
+	)
 
 	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
 	if err == nil {
@@ -99,8 +119,9 @@ func TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint(t *testing.T) {
 	// The suite draft must not have been requested either: it is the most
 	// expensive call in the pipeline, and stopping "after the contract" would
 	// still have spent it.
-	if n := len(g.Calls()); n != 6 {
-		t.Errorf("gateway calls = %d, want 6 (2 interview + 4 generation, no suite draft)", n)
+	if n := len(g.Calls()); n != 7 {
+		t.Errorf("gateway calls = %d, want 7 (2 interview + 3 generation — specDraft plans no resources — "+
+			"+ 2 exhausted body revisions, no suite draft)", n)
 	}
 }
 
@@ -194,6 +215,42 @@ func TestRunNew_ApprovalGateAccepts(t *testing.T) {
 				t.Errorf("answer %q did not approve the spec", answer)
 			}
 		})
+	}
+}
+
+// TestRunNew_GenerationFailureSuggestsResume pins the resume hint from
+// wrapGenerationError: completed passes are cached, so a generation failure
+// should name the exact command to pick up from there rather than leaving the
+// operator to already know that.
+func TestRunNew_GenerationFailureSuggestsResume(t *testing.T) {
+	st := newTestStore(t)
+	// Only the interview is scripted, so the outline call — the first
+	// generation pass — fails with no response left to serve it.
+	g := fake.New(specDraft, specDraft)
+
+	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
+	if err == nil {
+		t.Fatal("runNew succeeded with no generation responses scripted")
+	}
+	if !strings.Contains(err.Error(), "resume with") || !strings.Contains(err.Error(), "whetstone gen pdf-extract") {
+		t.Errorf("error does not suggest the resume command: %v", err)
+	}
+}
+
+// TestRunNew_SuiteFailureSuggestsResume covers the other call site sharing
+// wrapGenerationError: a suite-drafting failure is resumed with `suite gen`,
+// not `gen` — the bundle already generated successfully.
+func TestRunNew_SuiteFailureSuggestsResume(t *testing.T) {
+	st := newTestStore(t)
+	// The bundle passes are all scripted; the suite draft is not.
+	g := fake.New(specDraft, specDraft, outlinePass, cleanBody, descriptionPass)
+
+	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
+	if err == nil {
+		t.Fatal("runNew succeeded with no suite-draft response scripted")
+	}
+	if !strings.Contains(err.Error(), "resume with") || !strings.Contains(err.Error(), "whetstone suite gen pdf-extract") {
+		t.Errorf("error does not suggest the suite resume command: %v", err)
 	}
 }
 

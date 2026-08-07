@@ -2,7 +2,9 @@ package suite_test
 
 import (
 	"context"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,8 +39,11 @@ func (d *scriptDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.RunRe
 // phases in order (oracle, post-oracle verifier, bare verifier), so counting
 // verifier calls modulo two distinguishes the two verifier runs.
 type recordingDriver struct {
-	onRun    func(rs sandbox.RunSpec)
-	verifier int
+	onRun func(rs sandbox.RunSpec)
+
+	mu         sync.Mutex
+	verifier   int
+	workspaces []string
 }
 
 func (d *recordingDriver) Name() string           { return "recording" }
@@ -53,11 +58,20 @@ func (d *recordingDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.Ru
 	if d.onRun != nil {
 		d.onRun(rs)
 	}
+
+	d.mu.Lock()
+	d.workspaces = append(d.workspaces, rs.Workspace)
+	d.mu.Unlock()
+
 	if isOracle(rs.Argv) {
 		return sandbox.RunResult{ExitCode: 0}, nil
 	}
+
+	d.mu.Lock()
 	d.verifier++
-	if d.verifier%2 == 1 {
+	v := d.verifier
+	d.mu.Unlock()
+	if v%2 == 1 {
 		return sandbox.RunResult{ExitCode: 0}, nil // post-oracle: accepts
 	}
 	return sandbox.RunResult{ExitCode: 1}, nil // bare: rejects
@@ -88,11 +102,72 @@ func checkWith(t *testing.T, exit func(argv []string) int) ([]suite.CheckResult,
 	return rs, d
 }
 
+func oneTaskSuite(t *testing.T) *suite.Suite {
+	t.Helper()
+	return &suite.Suite{Tasks: []suite.TaskPkg{
+		{ID: "t1", Kind: "happy", PromptMD: "do it", Oracle: "#!/bin/sh\ntrue\n", Verifier: "#!/bin/sh\ntrue\n"},
+	}}
+}
+
+// writtenSuiteDir writes a fresh oneTaskSuite to a temp dir and returns it —
+// checkOne reads task packages from SuiteDir/tasks/<id>, not from the Suite
+// value passed to Check, so a caller needs both.
+func writtenSuiteDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := oneTaskSuite(t).Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func isOracle(argv []string) bool {
 	return strings.Contains(strings.Join(argv, " "), "oracle/solve.sh")
 }
 func isVerifier(argv []string) bool {
 	return strings.Contains(strings.Join(argv, " "), "verifier/test.sh")
+}
+
+func TestCheck_StagesUnderStageRoot(t *testing.T) {
+	// These directories are bind-mounted into sibling containers. On a
+	// containerized worker os.TempDir() names nothing the host daemon can
+	// resolve, and Docker creates a missing bind source as an empty directory
+	// rather than failing — so every task would score against an empty
+	// workspace with no error anywhere.
+	root := t.TempDir()
+	d := &recordingDriver{}
+
+	_, err := suite.Check(context.Background(), oneTaskSuite(t), suite.CheckOptions{
+		Driver: d, SuiteDir: writtenSuiteDir(t), StageRoot: root,
+		Timeout: time.Minute, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(d.workspaces) == 0 {
+		t.Fatal("driver was never run")
+	}
+	for _, ws := range d.workspaces {
+		if !strings.HasPrefix(ws, root) {
+			t.Fatalf("workspace %q is not under StageRoot %q", ws, root)
+		}
+	}
+}
+
+func TestCheck_EmptyStageRootUsesTempDir(t *testing.T) {
+	// whetstone passes no StageRoot and must keep working unchanged.
+	d := &recordingDriver{}
+	_, err := suite.Check(context.Background(), oneTaskSuite(t), suite.CheckOptions{
+		Driver: d, SuiteDir: writtenSuiteDir(t), Timeout: time.Minute, Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, ws := range d.workspaces {
+		if !strings.HasPrefix(ws, os.TempDir()) {
+			t.Fatalf("workspace %q is not under os.TempDir()", ws)
+		}
+	}
 }
 
 func TestCheck_PassesWhenTheOracleSolvesAndTheVerifierDiscriminates(t *testing.T) {

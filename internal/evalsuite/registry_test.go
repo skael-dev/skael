@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
@@ -86,6 +89,65 @@ func archiveWithSymlink(t *testing.T) []byte {
 		t.Fatalf("archiveWithSymlink close gzip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// newTestRegistry returns a Registry over a fresh test database and local
+// storage, plus the pool so a test can write in the same transaction shape a
+// production caller (e.g. the report handler) would use.
+func newTestRegistry(t *testing.T) (*evalsuite.Registry, *pgxpool.Pool) {
+	t.Helper()
+	pool := testutil.SetupTestDB(t)
+	return evalsuite.NewRegistry(pool, newTempStorage(t)), pool
+}
+
+// putFixtureSuite pushes a minimal fixture suite for skillName and returns
+// the stored record.
+func putFixtureSuite(t *testing.T, reg *evalsuite.Registry, skillName string) *evalsuite.Record {
+	t.Helper()
+	archive := fixtureSuiteArchive(t)
+	checks := []evalsuite.Check{{TaskID: "t1", OK: true}}
+	rec, err := reg.Put(ctx, skillName, archive, checks, 1, "nate@example.com", nil)
+	if err != nil {
+		t.Fatalf("putFixtureSuite: %v", err)
+	}
+	return rec
+}
+
+func TestRegistry_PutRecordsAuthoredOrigin(t *testing.T) {
+	// A suite pushed through the normal path is authored until something
+	// says otherwise.
+	reg, _ := newTestRegistry(t)
+	rec := putFixtureSuite(t, reg, "demo")
+	if rec.Origin != evalsuite.OriginAuthored {
+		t.Fatalf("Put recorded origin %q, want %q", rec.Origin, evalsuite.OriginAuthored)
+	}
+}
+
+func TestRegistry_MarkDerived(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	rec := putFixtureSuite(t, reg, "demo")
+
+	if err := reg.MarkDerived(context.Background(), pool, rec.Ref); err != nil {
+		t.Fatalf("MarkDerived: %v", err)
+	}
+
+	got, err := reg.Get(context.Background(), rec.Ref)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Origin != evalsuite.OriginDerived {
+		t.Fatalf("origin %q after MarkDerived, want %q", got.Origin, evalsuite.OriginDerived)
+	}
+}
+
+func TestRegistry_MarkDerivedUnknownRefIsNotFound(t *testing.T) {
+	// A silent no-op here would leave a derived suite classified as authored,
+	// which is the one direction that matters.
+	reg, pool := newTestRegistry(t)
+	err := reg.MarkDerived(context.Background(), pool, "no-such-ref")
+	if !errors.Is(err, evalsuite.ErrNotFound) {
+		t.Fatalf("MarkDerived on unknown ref returned %v, want ErrNotFound", err)
+	}
 }
 
 func TestRegistry_PutIsIdempotentOnRef(t *testing.T) {

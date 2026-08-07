@@ -1,0 +1,28 @@
+# The eval worker. Separate from the server's Dockerfile because it needs the
+# docker CLI (it starts sandbox containers) and a shell-bearing base to carry
+# it; the server stays on distroless/static with no socket and no LLM key.
+
+# CGO_ENABLED=0 is safe: the eval store's SQLite driver is modernc.org/sqlite.
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /skael-worker ./cmd/skael-worker
+
+# docker-cli is the client only — it talks to whatever daemon the mounted
+# socket belongs to. ca-certificates reaches the Skael API and the LLM gateway.
+FROM alpine:3.21
+RUN apk add --no-cache docker-cli ca-certificates
+
+COPY --from=build /skael-worker /usr/local/bin/skael-worker
+
+# Both roots must resolve to the same path inside the container and on the
+# host, since the daemon resolves bind sources on the host. Bind each as
+# `-v /var/lib/skael/run:/var/lib/skael/run`; a named volume does not work. See
+# docker-compose.yml.
+ENV WORKER_RUN_ROOT=/var/lib/skael/run
+ENV WORKER_WORK_ROOT=/var/lib/skael/work
+RUN mkdir -p /var/lib/skael/run /var/lib/skael/work
+
+ENTRYPOINT ["/usr/local/bin/skael-worker"]

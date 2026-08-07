@@ -17,7 +17,7 @@ import (
 func TestWriteArtifacts_KeepsTheNativeStreamByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	raw := []byte("{\"type\":\"system\"}\n{\"type\":\"assistant\"}\n\x00binary\xff")
-	a, err := runner.WriteArtifacts(dir, raw, nil, runner.Grading{Status: "ok"}, t.TempDir(), nil)
+	a, err := runner.WriteArtifacts(dir, raw, nil, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestWriteArtifacts_EventsAreOnePerLineInOrder(t *testing.T) {
 		{Seq: 1, Type: trajectory.TypeShell, Name: "python3 scripts/parse.py"},
 		{Seq: 2, Type: trajectory.TypeFileWrite, Paths: []string{"out/tables.md"}},
 	}
-	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
+	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestLoadEvents_RoundTripsALineLargerThanTheDefaultScannerBuffer(t *testing.
 	events := []trajectory.Event{
 		{Seq: 1, Type: trajectory.TypeFileWrite, Paths: []string{bigPath}},
 	}
-	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
+	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestWriteArtifacts_ExcludesTheInstalledSkillFromOutputs(t *testing.T) {
 	mustWrite(t, filepath.Join(ws, "out", "tables.md"), "| a |")
 	mustWrite(t, filepath.Join(ws, ".claude", "skills", "demo", "SKILL.md"), "---\nname: demo\n---\n")
 
-	a, err := runner.WriteArtifacts(t.TempDir(), nil, nil, runner.Grading{Status: "ok"}, ws, []string{".claude"})
+	a, err := runner.WriteArtifacts(t.TempDir(), nil, nil, runner.Grading{Status: "ok"}, ws, []string{".claude"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestGrading_RoundTripsWithItsKeyAndMeta(t *testing.T) {
 		StartedAt:    time.Unix(1700000000, 0).UTC(),
 		FinishedAt:   time.Unix(1700000100, 0).UTC(),
 	}
-	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil)
+	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestGrading_NilVerifierExitRoundTripsAsNil(t *testing.T) {
 		Key:    store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "trigger", Attempt: 1},
 		Status: "error",
 	}
-	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil)
+	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

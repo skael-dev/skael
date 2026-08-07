@@ -56,7 +56,7 @@ func safeJoin(tasksDir, id string) (string, error) {
 //	└── tasks/<id>/
 //	    ├── task.md
 //	    ├── meta.yaml
-//	    ├── environment/Dockerfile.frag   (only when EnvFrag is non-empty)
+//	    ├── environment/setup.sh          (mode 0755, only when Setup is set)
 //	    ├── oracle/solve.sh               (mode 0755)
 //	    └── verifier/test.sh              (mode 0755)
 func (s *Suite) Write(dir string) error {
@@ -88,13 +88,13 @@ func writeTask(taskDir string, task TaskPkg) error {
 		return fmt.Errorf("suite: writing task.md for %q: %w", task.ID, err)
 	}
 
-	if task.EnvFrag != "" {
+	if task.Setup != "" {
 		envDir := filepath.Join(taskDir, "environment")
 		if err := os.MkdirAll(envDir, dirMode); err != nil {
 			return fmt.Errorf("suite: creating environment directory for %q: %w", task.ID, err)
 		}
-		if err := os.WriteFile(filepath.Join(envDir, "Dockerfile.frag"), []byte(task.EnvFrag), fileMode); err != nil {
-			return fmt.Errorf("suite: writing environment fragment for %q: %w", task.ID, err)
+		if err := os.WriteFile(filepath.Join(envDir, "setup.sh"), []byte(task.Setup), scriptMode); err != nil {
+			return fmt.Errorf("suite: writing setup script for %q: %w", task.ID, err)
 		}
 	}
 
@@ -184,11 +184,9 @@ func loadTask(tasksDir, id string) (TaskPkg, error) {
 		return TaskPkg{}, fmt.Errorf("suite: reading verifier for %q: %w", id, err)
 	}
 
-	var envFrag string
-	if b, err := os.ReadFile(filepath.Join(taskDir, "environment", "Dockerfile.frag")); err == nil {
-		envFrag = string(b)
-	} else if !os.IsNotExist(err) {
-		return TaskPkg{}, fmt.Errorf("suite: reading environment fragment for %q: %w", id, err)
+	setup, err := loadSetup(taskDir, id)
+	if err != nil {
+		return TaskPkg{}, err
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(taskDir, "meta.yaml"))
@@ -205,10 +203,29 @@ func loadTask(tasksDir, id string) (TaskPkg, error) {
 		Kind:     meta.Kind,
 		Split:    meta.Split,
 		PromptMD: string(promptMD),
-		EnvFrag:  envFrag,
+		Setup:    setup,
 		Oracle:   string(oracle),
 		Verifier: string(verifier),
 	}, nil
+}
+
+// loadSetup reads a task's setup script, falling back to the name it was
+// written under before setup.sh existed. Suites generated then carry the same
+// shell — the field was offered to the model as a Dockerfile fragment but
+// never applied as one, so what landed in those files is workspace setup —
+// and reading it here is what keeps an already-generated suite runnable
+// instead of demanding it be regenerated.
+func loadSetup(taskDir, id string) (string, error) {
+	for _, name := range []string{"setup.sh", "Dockerfile.frag"} {
+		b, err := os.ReadFile(filepath.Join(taskDir, "environment", name))
+		switch {
+		case err == nil:
+			return string(b), nil
+		case !os.IsNotExist(err):
+			return "", fmt.Errorf("suite: reading setup script for %q: %w", id, err)
+		}
+	}
+	return "", nil
 }
 
 // loadTriggers reads the suite-level trigger set.

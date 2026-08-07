@@ -52,6 +52,31 @@ func (f *flakyStorage) Read(ctx context.Context, name string) (io.ReadCloser, er
 type testServer struct {
 	handler http.Handler
 	skills  *skill.Store
+	reg     *evalsuite.Registry
+	claims  *fakeClaims
+}
+
+// fakeClaims stands in for internal/evalqueue's PoolExecutor: it answers
+// whether a push's job claim verifies, and records the ref the route asked it
+// to write onto the job — the same write the real implementation makes inside
+// the registry's transaction.
+type fakeClaims struct {
+	ok        bool
+	verifyErr error
+	recordErr error
+
+	gotJobID, gotToken, gotSkill string
+	recordedJobID, recordedRef   string
+}
+
+func (f *fakeClaims) VerifyDerivePush(_ context.Context, jobID, token, skillName string) (bool, error) {
+	f.gotJobID, f.gotToken, f.gotSkill = jobID, token, skillName
+	return f.ok, f.verifyErr
+}
+
+func (f *fakeClaims) RecordDerivedSuite(_ context.Context, _ evalsuite.Queryer, jobID, ref string) error {
+	f.recordedJobID, f.recordedRef = jobID, ref
+	return f.recordErr
 }
 
 // newTestServer spins up a fresh migrated Postgres testcontainer, local
@@ -91,9 +116,10 @@ func newTestServerWithStorage(t *testing.T, storage platform.Storage) *testServe
 		})
 	})
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	evalsuite.RegisterRoutes(api, r, reg, skillStore)
+	claims := &fakeClaims{}
+	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{Claims: claims})
 
-	return &testServer{handler: r, skills: skillStore}
+	return &testServer{handler: r, skills: skillStore, reg: reg, claims: claims}
 }
 
 // newUnauthTestServer wires the eval suite routes behind the real
@@ -115,9 +141,9 @@ func newUnauthTestServer(t *testing.T) *testServer {
 	r := chi.NewMux()
 	r.Use(auth.Middleware(nil, nil, nil))
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	evalsuite.RegisterRoutes(api, r, reg, skillStore)
+	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{})
 
-	return &testServer{handler: r, skills: skillStore}
+	return &testServer{handler: r, skills: skillStore, reg: reg}
 }
 
 // createSkill registers a bare skill row so the upload handler's skill lookup
@@ -179,6 +205,106 @@ func TestPostSuite_StoresAndReturnsRef(t *testing.T) {
 	}
 	if ct := dl.Header().Get("Content-Type"); ct != "application/gzip" {
 		t.Fatalf("content type = %q", ct)
+	}
+}
+
+// A push that presents a verified job claim is the eval worker deriving a
+// suite for a skill that has none. Recording that at push time is what stops a
+// run that never reports from leaving a machine-generated suite recorded as
+// authored — which a later re-run's score could then use to clear a scan hold.
+func TestPostSuite_AVerifiedJobClaimRecordsTheSuiteAsDerived(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.claims.ok = true
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+		"job_id":         "job-7",
+		"claim_token":    "tok",
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		Ref string `json:"ref"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &out)
+
+	rec, err := srv.reg.Get(t.Context(), out.Ref)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", out.Ref, err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Fatalf("origin = %q immediately after the push, want %q — a suite that only becomes derived when a report lands is authored for as long as the run takes, and forever if it never reports",
+			rec.Origin, evalsuite.OriginDerived)
+	}
+	if srv.claims.gotJobID != "job-7" || srv.claims.gotToken != "tok" || srv.claims.gotSkill != "deploy-helper" {
+		t.Fatalf("claim verified with (%q, %q, %q)", srv.claims.gotJobID, srv.claims.gotToken, srv.claims.gotSkill)
+	}
+	if srv.claims.recordedJobID != "job-7" || srv.claims.recordedRef != out.Ref {
+		t.Fatalf("job suite_ref recorded as (%q, %q), want (job-7, %q)", srv.claims.recordedJobID, srv.claims.recordedRef, out.Ref)
+	}
+}
+
+// The claim is verified, never believed: a push cannot talk the server into
+// attributing a suite to a job it does not hold — and equally cannot get its
+// suite recorded authored by presenting a bad claim.
+func TestPostSuite_AnUnverifiedJobClaimIsRejected(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.claims.ok = false
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+		"job_id":         "job-7",
+		"claim_token":    "forged",
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", resp.Code, resp.Body)
+	}
+	if srv.claims.recordedRef != "" {
+		t.Fatalf("a rejected push still recorded a suite ref on the job: %q", srv.claims.recordedRef)
+	}
+}
+
+// A push naming no job is the ordinary authored path (whetstone suite push),
+// which must keep working exactly as before.
+func TestPostSuite_APushWithNoJobStaysAuthored(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.claims.ok = true // would say yes if it were ever asked
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		Ref string `json:"ref"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &out)
+	rec, err := srv.reg.Get(t.Context(), out.Ref)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", out.Ref, err)
+	}
+	if rec.Origin != evalsuite.OriginAuthored {
+		t.Fatalf("origin = %q, want %q", rec.Origin, evalsuite.OriginAuthored)
+	}
+	if srv.claims.gotJobID != "" {
+		t.Fatalf("an authored push consulted the claim verifier with job %q", srv.claims.gotJobID)
 	}
 }
 

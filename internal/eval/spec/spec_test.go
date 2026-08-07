@@ -3,6 +3,7 @@ package spec_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,10 +184,17 @@ func TestSkillSpec_Validate(t *testing.T) {
 		{"step without postcondition", func(s *spec.SkillSpec) { s.Steps[0].Postcondition = "" }, "postcondition"},
 		{"description too long", func(s *spec.SkillSpec) { s.Description = strings.Repeat("x", 1025) }, "1024"},
 		{"no positive trigger", func(s *spec.SkillSpec) { s.Triggers = []spec.TriggerPhrase{{Text: "no", Negative: true}} }, "positive trigger"},
-		{"too many modules", func(s *spec.SkillSpec) {
-			s.Resources.Scripts = []spec.ResourceItem{{Path: "a"}, {Path: "b"}}
-			s.Resources.References = []spec.ResourceItem{{Path: "c"}, {Path: "d"}}
-		}, "at most 3"},
+		{"too many capacity modules", func(s *spec.SkillSpec) {
+			// scripts+assets over MaxModules; references untouched by this cap.
+			s.Resources.Scripts = []spec.ResourceItem{{Path: "a"}, {Path: "b"}, {Path: "c"}}
+		}, "scripts/assets"},
+		{"too many references", func(s *spec.SkillSpec) {
+			// One past the cap, derived so raising MaxReferences keeps this
+			// case exercising the cap instead of silently passing.
+			for i := 0; i <= spec.MaxReferences; i++ {
+				s.Resources.References = append(s.Resources.References, spec.ResourceItem{Path: fmt.Sprintf("r%d", i)})
+			}
+		}, "references"},
 	}
 
 	for _, tt := range tests {
