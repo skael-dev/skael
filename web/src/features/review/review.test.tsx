@@ -100,10 +100,20 @@ const DEFAULT_QUALITY_RECORD: RecordOutput = {
 
 // mockQuality overrides the default "never scored" handler (in
 // test/handlers.ts) with a specific record — used to give a held version's
-// skill a score, e.g. one from a derived suite.
+// skill a score, e.g. one from a derived suite. It answers the per-version
+// route, and only for the record's own version: HeldVersion must annotate the
+// version it is showing, not whatever was scored most recently across the
+// skill.
 function mockQuality(overrides: Partial<RecordOutput>) {
   const record: RecordOutput = { ...DEFAULT_QUALITY_RECORD, ...overrides };
-  server.use(http.get("/api/skills/:name/quality", () => HttpResponse.json(record)));
+  server.use(
+    http.get("/api/skills/:name/quality/:version", ({ params }) => {
+      if (Number(params.version) !== record.version) {
+        return HttpResponse.json({ detail: "not scored" }, { status: 404 });
+      }
+      return HttpResponse.json(record);
+    }),
+  );
 }
 
 describe("ReviewQueue", () => {
@@ -317,6 +327,21 @@ describe("ReviewQueue", () => {
     expect(await screen.findByText(/cannot release this hold/i)).toBeInTheDocument();
     // The reviewer needs to know what will work, not only what will not.
     expect(screen.getByText(/approve as an owner/i)).toBeInTheDocument();
+  });
+
+  // Reconsider decides one version at a time. A score on a different version
+  // says nothing about this one, and annotating the held version with it told
+  // the reviewer something false about the score in front of them.
+  it("ignores a derived score belonging to another version", async () => {
+    mockQuality({ suite_derived: true, version: 3 });
+    mockReviewQueue([oneHeld({
+      clears: "an owner or admin approval",
+      hold_reasons: ["scan"],
+      outstanding: ["scan"],
+    })]);
+    render(withQuery(<ReviewQueue />));
+    await screen.findByText("deploy-helper");
+    expect(screen.queryByText(/cannot release this hold/i)).not.toBeInTheDocument();
   });
 
   it("does not say that for an authored score", async () => {

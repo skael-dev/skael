@@ -66,6 +66,12 @@ type RunInput struct {
 	Tier     string
 	Panel    evalqueue.Panel
 
+	// AllowVoid excludes void tasks instead of refusing the run. Set only on
+	// the derive path: a derived suite asks for 18 tasks precisely so the ones
+	// its own oracle gate voids are absorbed, and there is no author to go
+	// repair them. An authored suite keeps the stricter contract.
+	AllowVoid bool
+
 	// WorkspaceDir already contains an initialised whetstone workspace with
 	// the skill bundle, the suite, and the suite's recorded checks.
 	WorkspaceDir string
@@ -94,7 +100,20 @@ type API interface {
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
 	SuiteMeta(ctx context.Context, ref string) (SuiteMeta, error)
-	PushSuite(ctx context.Context, skill string, archive []byte, checks []evalsuite.Check, sp *spec.SkillSpec) (string, error)
+	PushSuite(ctx context.Context, in PushSuiteInput) (string, error)
+}
+
+// PushSuiteInput is one derived-suite upload. JobID and ClaimToken are the
+// worker's proof that it holds the claim on a job with no suite of its own,
+// which is what lets the server record the suite as derived at push time
+// rather than trusting a worker-declared origin.
+type PushSuiteInput struct {
+	Skill      string
+	Archive    []byte
+	Checks     []evalsuite.Check
+	Spec       *spec.SkillSpec
+	JobID      evalqueue.JobID
+	ClaimToken string
 }
 
 // DeriveInput is what a Deriver needs to build a suite for one job. Tier and
@@ -227,6 +246,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	}
 
 	suiteRef := job.SuiteRef
+	derivedHere := suiteRef == ""
 	if suiteRef == "" {
 		// No suite was registered when this job was submitted. Derive one,
 		// push it, and continue down the ordinary path: re-downloading what
@@ -241,7 +261,16 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		if err != nil {
 			return fmt.Errorf("worker: derive suite for %s: %w", job.SkillName, err)
 		}
-		ref, err := w.api.PushSuite(runCtx, job.SkillName, res.Archive, res.Checks, res.Spec)
+		// job.ID and token travel with the push so the server can attribute it
+		// to the claim in flight and stamp the suite derived there and then. A
+		// suite that only becomes derived when the report lands is authored
+		// for as long as the run takes, and stays authored forever if the run
+		// never reports — a machine-generated suite that a later re-run could
+		// then use to clear a scan hold.
+		ref, err := w.api.PushSuite(runCtx, PushSuiteInput{
+			Skill: job.SkillName, Archive: res.Archive, Checks: res.Checks,
+			Spec: res.Spec, JobID: job.ID, ClaimToken: token,
+		})
 		if err != nil {
 			return fmt.Errorf("worker: push derived suite for %s: %w", job.SkillName, err)
 		}
@@ -285,6 +314,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
+		AllowVoid: derivedHere,
 	})
 
 	cancel()

@@ -114,6 +114,21 @@ func archiveKey(ref string) string {
 // construction rather than by convention. specJSON is the pusher's spec.yaml
 // as JSON (may be nil/empty — see Record.Spec).
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, nil)
+}
+
+// PutDerived stores a suite the server has itself established is machine
+// derived, marking it so in the same transaction as the insert and running
+// after (when non-nil) inside it too — that is how the job row that caused
+// the derivation gets its suite_ref without a second, separately-failable
+// write. Origin is never taken from the pusher: a worker that could declare
+// its own suite authored would defeat internal/skill's refusal to let a
+// derived score clear a scan hold.
+func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, after)
+}
+
+func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
@@ -165,8 +180,31 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (ref) DO NOTHING
 	`
-	if _, err := r.db.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Put begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+	if _, err := tx.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
 		return nil, fmt.Errorf("evalsuite: Put insert: %w", err)
+	}
+	// MarkDerived rather than an origin column in the insert: it is an
+	// upgrade-only update, so re-pushing content already recorded as derived
+	// (the insert is ON CONFLICT DO NOTHING) still ends derived, and an
+	// authored push can never walk a derived suite back.
+	if origin == OriginDerived {
+		if err := r.MarkDerived(ctx, tx, ref); err != nil {
+			return nil, err
+		}
+	}
+	if after != nil {
+		if err := after(ctx, tx, ref); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("evalsuite: Put commit: %w", err)
 	}
 
 	return r.Get(ctx, ref)

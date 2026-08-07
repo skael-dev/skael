@@ -513,6 +513,7 @@ func evalRequestFrom(in worker.RunInput, concurrency int) whetstone.EvalRequest 
 		Tier:        runner.Tier(in.Tier),
 		Agents:      in.Panel.Agents,
 		Models:      in.Panel.Models,
+		AllowVoid:   in.AllowVoid,
 		Concurrency: concurrency,
 	}
 }

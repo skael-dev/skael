@@ -178,7 +178,7 @@ func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 	})
 
 	skill.RegisterReviewQueueRoutes(api, skillStore, nil)
-	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore)
+	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore, evalsuite.RouteOptions{Claims: evalPool})
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: floor,
@@ -311,7 +311,7 @@ func latestQuality(t *testing.T, srv *evalEnv, skillName string, version int) qu
 func (e *evalEnv) pushSuite(t *testing.T, skillName string, archive []byte) string {
 	t.Helper()
 	checks := []client.EvalSuiteCheck{{TaskID: "t1", OK: true}}
-	up, err := e.c.UploadEvalSuite(skillName, 1, checks, nil, archive)
+	up, err := e.c.UploadEvalSuite(client.EvalSuiteUploadRequest{Skill: skillName, SpecVersion: 1, Checks: checks, Archive: archive})
 	require.NoError(t, err)
 	return up.Ref
 }

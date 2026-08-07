@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ShieldQuestion } from "lucide-react";
-import { getSkillQuality, reviewSkillVersion } from "@/api/sdk.gen";
+import { getSkillQualityVersion, reviewSkillVersion } from "@/api/sdk.gen";
 import type { HeldVersion as HeldVersionType, Reason } from "@/api/types.gen";
 import { useAuth } from "@/app/auth-provider";
 import { ScanFindings, type ScanReport } from "@/features/security/scan-findings";
@@ -254,10 +254,14 @@ export function HeldVersion({
   // clears it, appealable only via an owner/admin approval. A reviewer
   // staring at a high number needs to know that before they skip straight
   // past it.
+  // Scored per version, not per skill: Reconsider decides one version, so a
+  // held v4 must not be annotated with v3's score.
   const qualityQuery = useQuery({
-    queryKey: ["skill-quality", held.skill_name],
+    queryKey: ["skill-quality-version", held.skill_name, held.version],
     queryFn: async () => {
-      const res = await getSkillQuality({ path: { name: held.skill_name } });
+      const res = await getSkillQualityVersion({
+        path: { name: held.skill_name, version: held.version },
+      });
       if (res.response?.status === 404) return null;
       return res.data ?? null;
     },

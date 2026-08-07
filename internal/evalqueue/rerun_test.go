@@ -1,6 +1,7 @@
 package evalqueue_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -106,7 +108,7 @@ func newRerunTestServerWithRole(t *testing.T, role string) *rerunTestServer {
 		Queue:  rerunQueueAdapter{q: q},
 		Suites: rerunSuiteAdapter{r: suiteRegistry},
 	})
-	evalsuite.RegisterRoutes(api, r, suiteRegistry, skillStore)
+	evalsuite.RegisterRoutes(api, r, suiteRegistry, skillStore, evalsuite.RouteOptions{Claims: q})
 	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser: skill.NewReleaser(skillStore),
 	})
@@ -137,6 +139,13 @@ func (s *rerunTestServer) createSkill(t *testing.T, name string) string {
 // call, so the re-run endpoint's suite lookup finds it exactly as it would
 // in production. Returns the suite's ref.
 func (s *rerunTestServer) registerSuite(t *testing.T, name string) string {
+	t.Helper()
+	return s.registerSuiteForJob(t, name, "", "")
+}
+
+// registerSuiteForJob is registerSuite with an optional job claim attached —
+// the derive path's push, which the server attributes to the job in flight.
+func (s *rerunTestServer) registerSuiteForJob(t *testing.T, name, jobID, token string) string {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -176,6 +185,8 @@ func (s *rerunTestServer) registerSuite(t *testing.T, name string) string {
 			OK     bool   `json:"ok"`
 		} `json:"checks"`
 		ArchiveBase64 string `json:"archive_base64"`
+		JobID         string `json:"job_id,omitempty"`
+		ClaimToken    string `json:"claim_token,omitempty"`
 	}{
 		Skill:       name,
 		SpecVersion: 1,
@@ -184,6 +195,8 @@ func (s *rerunTestServer) registerSuite(t *testing.T, name string) string {
 			OK     bool   `json:"ok"`
 		}{{TaskID: "t1", OK: true}},
 		ArchiveBase64: base64.StdEncoding.EncodeToString(archive),
+		JobID:         jobID,
+		ClaimToken:    token,
 	})
 	if err != nil {
 		t.Fatalf("marshal suite body: %v", err)
@@ -497,5 +510,82 @@ func TestRerun_404WhenSkillHasNoPublishedVersion(t *testing.T) {
 	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{})
 	if resp.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
+	}
+}
+
+// The orphan case the push-time provenance exists for: a worker claims a job
+// with no suite, derives one, pushes it — and then never reports, because its
+// lease lapsed or it died. Before provenance was established at push time the
+// suite stayed recorded as authored forever, and the *next* run against it
+// would score as authored and could clear a scan hold on a real security
+// finding.
+func TestDerivePush_AnOrphanedPushIsStillRecordedDerived(t *testing.T) {
+	env := newRerunEnv(t)
+	env.publishSkill(t, "imported-skill")
+
+	if res := env.post(t, "/api/skills/imported-skill/evals", `{}`); res.Code != http.StatusAccepted {
+		t.Fatalf("rerun status = %d, want 202: %s", res.Code, res.Body)
+	}
+	job := env.latestJob(t, "imported-skill")
+	if job.SuiteRef != "" {
+		t.Fatalf("job suite_ref = %q, want empty for a skill with no suite", job.SuiteRef)
+	}
+
+	claimed, token, ok, err := env.queue.Claim(context.Background(), "w1", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("Claim = (%v, %v)", ok, err)
+	}
+	ref := env.registerSuiteForJob(t, "imported-skill", string(claimed.ID), token)
+
+	// No report ever arrives. The suite must already know what it is.
+	rec, err := env.suites.Get(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Get suite: %v", err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Fatalf("origin = %q for a suite pushed by a derive job's worker, want derived", rec.Origin)
+	}
+	after, err := env.queue.Get(context.Background(), claimed.ID)
+	if err != nil || after == nil {
+		t.Fatalf("Get job: %v", err)
+	}
+	if after.SuiteRef != ref {
+		t.Fatalf("job suite_ref = %q after the push, want %q", after.SuiteRef, ref)
+	}
+
+	// And the run that comes after it — which finds this suite through
+	// LatestForSkill and therefore names it — is still scored as derived, so
+	// it can never clear a scan hold.
+	if res := env.post(t, "/api/skills/imported-skill/evals", `{}`); res.Code != http.StatusAccepted {
+		t.Fatalf("second rerun status = %d, want 202: %s", res.Code, res.Body)
+	}
+	next := env.latestJob(t, "imported-skill")
+	if next.SuiteRef != ref {
+		t.Fatalf("the follow-up job named suite %q, want the orphaned %q", next.SuiteRef, ref)
+	}
+	nextClaimed, nextToken, ok, err := env.queue.Claim(context.Background(), "w2", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("Claim = (%v, %v)", ok, err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/eval/jobs/"+string(nextClaimed.ID)+"/report",
+		bytes.NewReader(reportFixture("imported-skill", ref, 80)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Claim-Token", nextToken)
+	rr := httptest.NewRecorder()
+	env.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("report status = %d, want 200: %s", rr.Code, rr.Body)
+	}
+
+	sk, err := env.skills.GetByName(context.Background(), "imported-skill")
+	if err != nil || sk == nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	qrec, err := quality.NewStore(env.pool).Latest(context.Background(), sk.ID, nextClaimed.Version)
+	if err != nil || qrec == nil {
+		t.Fatalf("Latest quality: %v", err)
+	}
+	if !qrec.SuiteDerived {
+		t.Fatal("a score against an orphaned derived suite was recorded as authored — it could clear a scan hold")
 	}
 }

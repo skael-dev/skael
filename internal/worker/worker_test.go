@@ -117,9 +117,15 @@ type fakeAPI struct {
 	heartbeats   int
 	heartbeatErr error
 
-	bundle       []byte
-	suiteArchive []byte
-	checks       []evalsuite.Check
+	bundle []byte
+	// suiteArchive is what FetchSuite returns for any ref not named in
+	// suiteArchives. suiteArchives lets a test give a specific ref content
+	// that actually hashes to it — Materialize verifies the fetched archive
+	// against the ref it asked for, so a test that wants a job to run with the
+	// ref it declared must register content for it.
+	suiteArchive  []byte
+	suiteArchives map[string][]byte
+	checks        []evalsuite.Check
 	// spec is nil by default: SuiteMeta returns SuiteMeta{Spec: nil}, which
 	// exercises Materialize's frontmatter-reconstruction fallback, same as
 	// before this field existed.
@@ -132,6 +138,8 @@ type fakeAPI struct {
 	// pushRef is what PushSuite returns.
 	pushRef     string
 	pushedSkill string
+	pushedJobID string
+	pushedToken string
 	pushErr     error
 }
 
@@ -188,7 +196,12 @@ func (f *fakeAPI) FailJob(_ context.Context, _ evalqueue.JobID, _, cause string)
 	return nil
 }
 
-func (f *fakeAPI) FetchSuite(_ context.Context, _ string) ([]byte, error) {
+func (f *fakeAPI) FetchSuite(_ context.Context, ref string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a, ok := f.suiteArchives[ref]; ok {
+		return a, nil
+	}
 	return f.suiteArchive, nil
 }
 
@@ -200,10 +213,12 @@ func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, erro
 	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec}, nil
 }
 
-func (f *fakeAPI) PushSuite(_ context.Context, skill string, _ []byte, _ []evalsuite.Check, _ *spec.SkillSpec) (string, error) {
+func (f *fakeAPI) PushSuite(_ context.Context, in worker.PushSuiteInput) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pushedSkill = skill
+	f.pushedSkill = in.Skill
+	f.pushedJobID = string(in.JobID)
+	f.pushedToken = in.ClaimToken
 	return f.pushRef, f.pushErr
 }
 
@@ -297,20 +312,6 @@ func newTestWorker(t *testing.T, api *fakeAPI, r *fakeRunner, der worker.Deriver
 	}
 	if api.checks == nil {
 		api.checks = []evalsuite.Check{{TaskID: "t1", OK: true}}
-	}
-	// A job that already names a suite must name one whose content the
-	// fixture archive above actually matches, so Materialize's own ref check
-	// (run against any non-empty job.SuiteRef) has something real to verify.
-	// Swap the placeholder for the fixture's real ref, and carry the same
-	// substitution into the runner's canned report if it was set to echo
-	// the same placeholder back — the two literals stood for "the same
-	// ref", so they stay equal after the swap.
-	if api.job != nil && api.job.SuiteRef != "" {
-		real := fixtureSuiteRef(t)
-		if r.reportSuiteRef == api.job.SuiteRef {
-			r.reportSuiteRef = real
-		}
-		api.job.SuiteRef = real
 	}
 	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, r, der)
 	if err != nil {
@@ -509,14 +510,76 @@ func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
 	}
 }
 
+// A derived suite is gated by its own oracles with nobody to repair a task
+// that fails, which is why it asks for 18 rather than 10. That surplus only
+// helps if the run then excludes the void tasks instead of refusing outright.
+func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef: derivedRef,
+	}
+	r := &fakeRunner{reportSuiteRef: derivedRef}
+	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !r.input().AllowVoid {
+		t.Fatal("a derived suite's run was not allowed to exclude void tasks")
+	}
+
+	// An authored suite has an author who can go fix a void task, so the
+	// stricter contract stays.
+	authoredRef := fixtureSuiteRef(t)
+	api2 := &fakeAPI{
+		job:           &evalqueue.Job{ID: "j2", SkillName: "demo", Version: 1, SuiteRef: authoredRef, Tier: "full"},
+		suiteArchives: map[string][]byte{authoredRef: fixtureSuiteArchive(t)},
+	}
+	r2 := &fakeRunner{reportSuiteRef: authoredRef}
+	if _, err := newTestWorker(t, api2, r2, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if r2.input().AllowVoid {
+		t.Fatal("an authored suite's run was allowed to exclude void tasks")
+	}
+}
+
+// The push carries the claim so the server can record the suite as derived
+// there and then; without it a run that never reports leaves a
+// machine-generated suite recorded as authored.
+func TestRunOnce_PushesTheDerivedSuiteWithTheJobClaim(t *testing.T) {
+	derivedRef := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef: derivedRef,
+	}
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: derivedRef}, &fakeDeriver{})
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if api.pushedJobID != "j1" {
+		t.Fatalf("pushed with job id %q, want j1", api.pushedJobID)
+	}
+	if api.pushedToken != "claim-token" {
+		t.Fatalf("pushed with claim token %q, want the token Claim returned", api.pushedToken)
+	}
+}
+
 func TestRunOnce_DoesNotDeriveWhenTheJobNamesASuite(t *testing.T) {
 	// Deriving a second suite would make two scores for the same skill
 	// incomparable, and cost a full derivation to do it.
-	api := &fakeAPI{job: &evalqueue.Job{
-		ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "existing", Tier: "full",
-	}}
+	// The ref is the fixture archive's own content hash, spelled out here
+	// rather than substituted by newTestWorker behind the test's back:
+	// Materialize verifies the fetched archive against the ref it asked for,
+	// so a job can only name a ref whose content the fake actually serves.
+	existing := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job: &evalqueue.Job{
+			ID: "j1", SkillName: "demo", Version: 1, SuiteRef: existing, Tier: "full",
+		},
+		suiteArchives: map[string][]byte{existing: fixtureSuiteArchive(t)},
+	}
 	der := &fakeDeriver{}
-	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: "existing"}, der)
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: existing}, der)
 
 	if _, err := w.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)

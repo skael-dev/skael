@@ -11,7 +11,6 @@ import (
 
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/internal/eval/report"
-	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 )
@@ -125,17 +124,22 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 
 // PushSuite uploads a derived suite through POST /api/eval/suites and returns
 // its content-addressed ref. spec_version is 0: a derived spec was never
-// saved to a workspace store, so it has no version to name.
-func (h *HTTPAPI) PushSuite(_ context.Context, skill string, archive []byte, checks []evalsuite.Check, sp *spec.SkillSpec) (string, error) {
-	wire := make([]client.EvalSuiteCheck, len(checks))
-	for i, c := range checks {
+// saved to a workspace store, so it has no version to name. The job id and
+// claim token are sent so the server can record the suite as derived at push
+// time — see PushSuiteInput.
+func (h *HTTPAPI) PushSuite(_ context.Context, in PushSuiteInput) (string, error) {
+	wire := make([]client.EvalSuiteCheck, len(in.Checks))
+	for i, c := range in.Checks {
 		wire[i] = client.EvalSuiteCheck{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
 	}
-	specJSON, err := json.Marshal(sp)
+	specJSON, err := json.Marshal(in.Spec)
 	if err != nil {
 		return "", fmt.Errorf("worker: marshal derived spec: %w", err)
 	}
-	out, err := h.c.UploadEvalSuite(skill, 0, wire, specJSON, archive)
+	out, err := h.c.UploadEvalSuite(client.EvalSuiteUploadRequest{
+		Skill: in.Skill, SpecVersion: 0, Checks: wire, Spec: specJSON, Archive: in.Archive,
+		JobID: string(in.JobID), ClaimToken: in.ClaimToken,
+	})
 	if err != nil {
 		return "", err
 	}

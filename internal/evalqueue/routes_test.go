@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -899,6 +900,26 @@ func TestReport_StillRejectsAMismatchOnANamedJob(t *testing.T) {
 	res := env.report(t, job, reportJSON(t, "demo", "something-else"))
 	if res.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status %d, want 422", res.Code)
+	}
+}
+
+// A job whose named suite is no longer registered is bad input, not a server
+// fault: the report names a ref this server cannot resolve, which is the same
+// condition the empty-ref branch already answers with 422.
+func TestReport_UnregisteredRefOnANamedJobIs422(t *testing.T) {
+	env := newReportEnv(t)
+	ref := env.pushSuite(t, "demo")
+	job := env.enqueueJob(t, "demo", withSuiteRef(ref))
+	if _, err := env.pool.Exec(context.Background(), `DELETE FROM eval_suites WHERE ref = $1`, ref); err != nil {
+		t.Fatalf("delete suite row: %v", err)
+	}
+
+	res := env.report(t, job, reportJSON(t, "demo", ref))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422 naming the missing ref: %s", res.Code, res.Body)
+	}
+	if !strings.Contains(res.Body.String(), ref) {
+		t.Fatalf("the 422 does not name the missing ref: %s", res.Body)
 	}
 }
 

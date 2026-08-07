@@ -17,6 +17,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
+	"github.com/skael-dev/skael/internal/evalsuite"
 	skillpkg "github.com/skael-dev/skael/internal/skill"
 )
 
@@ -395,6 +396,36 @@ func TestDerive_VoidsTasksCarryingAnEnvFrag(t *testing.T) {
 		if c.TaskID == "t03" && !c.Void {
 			t.Fatal("task with an env_frag was not voided")
 		}
+	}
+
+	// Voiding the task in Checks is only half of it: the fragment must not be
+	// in the archive either. cli/whetstone's RunEvalWith refuses an entire
+	// suite that carries a single environment/Dockerfile.frag, so a packed
+	// fragment makes the whole derived suite unevaluatable — the outcome
+	// voiding was meant to avoid.
+	dir := t.TempDir()
+	if err := evalsuite.Unpack(res.Archive, dir); err != nil {
+		t.Fatalf("unpack derived archive: %v", err)
+	}
+	loaded, err := suite.Load(dir)
+	if err != nil {
+		t.Fatalf("load derived suite: %v", err)
+	}
+	for _, task := range loaded.Tasks {
+		if task.EnvFrag != "" {
+			t.Fatalf("task %s still carries an environment fragment in the packed archive", task.ID)
+		}
+	}
+	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Name() == "Dockerfile.frag" {
+			t.Fatalf("the packed archive contains %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk derived archive: %v", err)
 	}
 }
 

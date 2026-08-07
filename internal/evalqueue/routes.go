@@ -443,6 +443,10 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			// skill against its own claims. Checking only the empty-ref
 			// case would call every run after the first one authored.
 			sr, err := suites.Get(ctx, rep.SuiteRef)
+			if errors.Is(err, evalsuite.ErrNotFound) {
+				return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
+					"report eval job: report suite_ref %q is not a registered suite", rep.SuiteRef))
+			}
 			if err != nil {
 				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: suite lookup failed")
 				return nil, huma.Error500InternalServerError("report eval job: internal error")
