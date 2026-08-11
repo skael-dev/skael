@@ -26,6 +26,11 @@ export function TriggerReview({
       if (res.error) throw res.error;
       return res.data;
     },
+    // This turns off the refetch React Query issues on window focus. The
+    // effect below resyncs `items` from every fetched result. An
+    // unrequested refetch while a reviewer holds an unsaved edit open
+    // silently discards that edit.
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {

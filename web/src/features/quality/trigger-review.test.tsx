@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { server } from "@/test/handlers";
 import { TriggerReview } from "./trigger-review";
 
 function renderReview(
@@ -35,12 +37,26 @@ describe("TriggerReview", () => {
   });
 
   it("offers a new evaluation when the review changed the set", async () => {
+    // The default handler keys its response on the path ref alone, so it
+    // cannot show whether the click changed anything sent to the server.
+    // This override reads the posted body instead. The assertion below
+    // fails if "Add query" adds nothing to the request.
+    let posted: unknown;
+    server.use(
+      http.post("/api/eval/suites/:ref/review", async ({ request }) => {
+        posted = await request.json();
+        return HttpResponse.json({ ref: "new-ref", changed: true });
+      }),
+    );
     renderReview({ ref: "edited" });
 
     await userEvent.click(await screen.findByRole("button", { name: /add query/i }));
     await userEvent.click(screen.getByRole("button", { name: /save review/i }));
 
     expect(await screen.findByText(/re-run the evaluation/i)).toBeInTheDocument();
+    expect(posted).toMatchObject({
+      triggers: expect.arrayContaining([{ query: "", should_trigger: true }]),
+    });
   });
 
   it("toggles a query between should and should not trigger", async () => {
