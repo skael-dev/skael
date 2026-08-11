@@ -2,6 +2,7 @@ package tune
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -122,7 +123,11 @@ func Score(ctx context.Context, g llm.Gateway, skillName, description string,
 	}
 	wg.Wait()
 	if len(errs) > 0 {
-		return ScoreResult{}, fmt.Errorf("tune: scoring the trigger set: %w", errs[0])
+		// errors.Join replaces errs[0]. A mutex-ordered first error is
+		// whichever goroutine won the lock, not the first query. That
+		// single error hides every other failure. The hidden set can
+		// also differ between two runs of the same broken gateway.
+		return ScoreResult{}, fmt.Errorf("tune: scoring the trigger set: %w", errors.Join(errs...))
 	}
 
 	out := ScoreResult{Total: len(set)}
