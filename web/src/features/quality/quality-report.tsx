@@ -400,6 +400,8 @@ export function QualityReport({
     (summaryQuery.error as Error & { status?: number })?.status === 404;
 
   if (notScored) {
+    // No score exists yet, so there is no suite to review. The prop is
+    // omitted rather than passed as undefined.
     return (
       <div className="text-sm text-text-secondary">
         <EvalStatus skillName={skillName} quality={null} latestVersion={latestVersion} />
@@ -449,6 +451,7 @@ export function QualityReport({
             quality={summary}
             latestVersion={latestVersion}
             hideDerivedBadge
+            suiteRef={summary.suite_ref}
           />
         </div>
       </div>
