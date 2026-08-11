@@ -80,53 +80,43 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.WorkerID == "" {
 		t.Fatal("worker id defaulted to empty; two anonymous workers cannot be told apart in the lease column")
 	}
-	if cfg.LLMBaseURL != "" || cfg.LLMAuthStyle != api.AuthStyleAnthropic || cfg.LLMStrongModel != "" || cfg.LLMFastModel != "" {
-		t.Fatalf("LLM gateway overrides = %+v, want all empty/default when unset", cfg)
+	if cfg.Provider.BaseURL != "" || cfg.Provider.AuthStyle != api.AuthStyleAnthropic || len(cfg.Provider.Models) != 0 {
+		t.Fatalf("gateway overrides = %+v, want all empty/default when unset", cfg.Provider)
 	}
 }
 
-// TestConfigFromEnv_LLMGatewayOverrides pins that LLM_BASE_URL,
-// LLM_AUTH_STYLE, LLM_STRONG_MODEL, and LLM_FAST_MODEL resolve onto
-// workerConfig, so an operator can point the judge at an Anthropic-compatible
-// gateway such as OpenRouter and pick models.
-func TestConfigFromEnv_LLMGatewayOverrides(t *testing.T) {
+// TestConfigFromEnv_GatewayOverrides pins that ANTHROPIC_BASE_URL,
+// ANTHROPIC_AUTH_TOKEN and LLM_MODEL resolve onto the worker's provider, so an
+// operator can point the judge at an Anthropic-compatible gateway such as
+// OpenRouter and name the models it serves.
+//
+// The bearer header is inferred from the token rather than configured. The
+// worker used to read no token at all, so the documented OpenRouter setup
+// authenticated with the wrong header — that asymmetry is what this covers.
+func TestConfigFromEnv_GatewayOverrides(t *testing.T) {
 	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
 	t.Setenv("SKAEL_API_KEY", "k")
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
-	t.Setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
-	t.Setenv("LLM_AUTH_STYLE", "bearer")
-	t.Setenv("LLM_STRONG_MODEL", "anthropic/claude-opus-5")
-	t.Setenv("LLM_FAST_MODEL", "anthropic/claude-haiku-4-5")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-or-test")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api/v1")
+	t.Setenv("LLM_MODEL", "anthropic/claude-opus-4,anthropic/claude-3.5-haiku")
 
 	cfg, err := configFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.LLMBaseURL != "https://openrouter.ai/api/v1" {
-		t.Errorf("LLMBaseURL = %q", cfg.LLMBaseURL)
+	if cfg.Provider.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("BaseURL = %q", cfg.Provider.BaseURL)
 	}
-	if cfg.LLMAuthStyle != api.AuthStyleBearer {
-		t.Errorf("LLMAuthStyle = %q, want bearer", cfg.LLMAuthStyle)
+	if cfg.Provider.AuthStyle != api.AuthStyleBearer {
+		t.Errorf("AuthStyle = %q, want bearer for a token", cfg.Provider.AuthStyle)
 	}
-	if cfg.LLMStrongModel != "anthropic/claude-opus-5" {
-		t.Errorf("LLMStrongModel = %q", cfg.LLMStrongModel)
+	if cfg.Provider.Key != "sk-or-test" {
+		t.Errorf("Key = %q, want the token", cfg.Provider.Key)
 	}
-	if cfg.LLMFastModel != "anthropic/claude-haiku-4-5" {
-		t.Errorf("LLMFastModel = %q", cfg.LLMFastModel)
-	}
-}
-
-// TestConfigFromEnv_RejectsUnknownAuthStyle guards against a typo'd
-// LLM_AUTH_STYLE silently falling back to the default rather than failing
-// loudly at startup.
-func TestConfigFromEnv_RejectsUnknownAuthStyle(t *testing.T) {
-	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
-	t.Setenv("SKAEL_API_KEY", "k")
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
-	t.Setenv("LLM_AUTH_STYLE", "not-a-real-style")
-
-	if _, err := configFromEnv(); err == nil {
-		t.Fatal("configFromEnv accepted an unrecognised LLM_AUTH_STYLE")
+	want := []string{"anthropic/claude-opus-4", "anthropic/claude-3.5-haiku"}
+	if !reflect.DeepEqual(cfg.Provider.Models, want) {
+		t.Errorf("Models = %v, want %v", cfg.Provider.Models, want)
 	}
 }
 

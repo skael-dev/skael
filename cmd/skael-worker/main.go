@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,7 +21,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/derive"
 	"github.com/skael-dev/skael/internal/eval/llm"
-	"github.com/skael-dev/skael/internal/eval/llm/api"
+	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
@@ -38,27 +37,25 @@ var (
 	date    = "unknown"
 )
 
+// judgeTimeout bounds a single judge call. Unlike whetstone's, it is not
+// configurable: nothing the worker asks for is an interactive one-shot worth
+// waiting ten minutes for.
+const judgeTimeout = 3 * time.Minute
+
 // workerConfig is the resolved, validated configuration for one run of
 // skael-worker.
 type workerConfig struct {
 	worker.Config
-	AnthropicAPIKey string
-	Concurrency     int
-	// LLM gateway overrides for pointing the judge at an Anthropic-compatible
-	// gateway (e.g. OpenRouter) instead of the direct Anthropic API. All
-	// optional; empty/unset reproduces today's behaviour exactly.
-	LLMBaseURL     string
-	LLMAuthStyle   api.AuthStyle
-	LLMStrongModel string
-	LLMFastModel   string
+	Concurrency int
+	// Provider is the resolved LLM backend: the endpoint, the credential, the
+	// auth header, and the model ids. It serves the judge in this process and
+	// decides the panel's models inside the sandbox — one gateway, resolved
+	// once, by the same package `whetstone doctor` reports.
+	Provider provider.Config
 	// RunRoot is where per-session sandbox workspaces are created; empty means
 	// os.TempDir(). Only needs setting in a container — see
 	// requireHostSharedRoots.
 	RunRoot string
-	// PanelBaseURL is ANTHROPIC_BASE_URL: the gateway the *panel* dials from
-	// inside the sandbox, as opposed to LLMBaseURL, which is the judge's. The
-	// worker never dials it, but whether it is set decides the panel's models.
-	PanelBaseURL string
 }
 
 func main() {
@@ -83,18 +80,17 @@ func main() {
 }
 
 // configFromEnv resolves and validates the worker's configuration from the
-// environment. ANTHROPIC_API_KEY wires the direct API gateway used for the
-// LLM judge, which is always the metered backend. It does not make panel
-// execution metered too: the claude-code agent adapter declares AuthDirs
-// (~/.claude, ~/.config/claude — see internal/eval/agent) which
-// internal/eval/runner/session.go mounts into the sandbox, so a panel member
-// run through that adapter authenticates with whatever host credentials it
-// finds there — subscription-backed wherever those directories exist on the
-// host running this worker.
+// environment. The LLM judge is always the metered API backend — hence
+// provider.APIFromEnv, which does not consider a subscription CLI on PATH at
+// all. That does not make panel execution metered too: the claude-code agent
+// adapter declares AuthDirs (~/.claude, ~/.config/claude — see
+// internal/eval/agent) which internal/eval/runner/session.go mounts into the
+// sandbox, so a panel member run through that adapter authenticates with
+// whatever host credentials it finds there — subscription-backed wherever
+// those directories exist on the host running this worker.
 func configFromEnv() (workerConfig, error) {
 	endpoint := os.Getenv("SKAEL_ENDPOINT")
 	apiKey := os.Getenv("SKAEL_API_KEY")
-	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
 
 	var missing []string
 	if endpoint == "" {
@@ -103,14 +99,16 @@ func configFromEnv() (workerConfig, error) {
 	if apiKey == "" {
 		missing = append(missing, "SKAEL_API_KEY")
 	}
-	if anthropicKey == "" {
-		missing = append(missing, "ANTHROPIC_API_KEY")
-	}
 	if len(missing) > 0 {
 		return workerConfig{}, fmt.Errorf(
-			"skael-worker: missing required environment variable(s): %s "+
-				"(ANTHROPIC_API_KEY is the direct API gateway; a subscription CLI on PATH is never used here)",
-			joinComma(missing))
+			"skael-worker: missing required environment variable(s): %s", joinComma(missing))
+	}
+
+	prov := provider.APIFromEnv()
+	if err := prov.Validate(); err != nil {
+		return workerConfig{}, fmt.Errorf(
+			"skael-worker: no LLM gateway for the judge: %w. A subscription CLI on PATH is never used here, "+
+				"because a published score must come from a metered, reproducible backend", err)
 	}
 
 	workerID := os.Getenv("WORKER_ID")
@@ -140,11 +138,6 @@ func configFromEnv() (workerConfig, error) {
 		concurrency = n
 	}
 
-	authStyle, err := parseLLMAuthStyle(os.Getenv("LLM_AUTH_STYLE"))
-	if err != nil {
-		return workerConfig{}, err
-	}
-
 	runRoot := os.Getenv("WORKER_RUN_ROOT")
 	workRoot := os.Getenv("WORKER_WORK_ROOT")
 	if err := requireHostSharedRoots(runRoot, workRoot, inContainer()); err != nil {
@@ -160,26 +153,10 @@ func configFromEnv() (workerConfig, error) {
 			PollInterval: poll,
 			WorkRoot:     workRoot,
 		},
-		AnthropicAPIKey: anthropicKey,
-		Concurrency:     concurrency,
-		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
-		LLMAuthStyle:    authStyle,
-		LLMStrongModel:  os.Getenv("LLM_STRONG_MODEL"),
-		LLMFastModel:    os.Getenv("LLM_FAST_MODEL"),
-		RunRoot:         runRoot,
-		PanelBaseURL:    os.Getenv("ANTHROPIC_BASE_URL"),
+		Concurrency: concurrency,
+		Provider:    prov,
+		RunRoot:     runRoot,
 	}, nil
-}
-
-// panelModels resolves the model ids the eval panel should use, empty when the
-// shipped default is correct. Gated on PanelBaseURL, not on the model
-// variables alone: an operator who set them to pick a cheaper judge must keep
-// the panel they had, since a changed panel splits the score trend.
-func panelModels(cfg workerConfig) (strong, fast string) {
-	if cfg.PanelBaseURL == "" {
-		return "", ""
-	}
-	return cfg.LLMStrongModel, cfg.LLMFastModel
 }
 
 // requireHostSharedRoots refuses to start a containerized worker that has not
@@ -230,20 +207,6 @@ func inContainer() bool {
 	return false
 }
 
-// parseLLMAuthStyle resolves LLM_AUTH_STYLE. Empty defaults to
-// api.AuthStyleAnthropic (today's x-api-key behaviour); any other value must
-// be one of the two the gateway understands.
-func parseLLMAuthStyle(v string) (api.AuthStyle, error) {
-	switch v {
-	case "", string(api.AuthStyleAnthropic):
-		return api.AuthStyleAnthropic, nil
-	case string(api.AuthStyleBearer):
-		return api.AuthStyleBearer, nil
-	default:
-		return "", fmt.Errorf("skael-worker: LLM_AUTH_STYLE %q is not one of %q, %q", v, api.AuthStyleAnthropic, api.AuthStyleBearer)
-	}
-}
-
 func parseDurationEnv(name string, def time.Duration) (time.Duration, error) {
 	v := os.Getenv(name)
 	if v == "" {
@@ -283,36 +246,21 @@ func run(cfg workerConfig) error {
 		return fmt.Errorf("skael-worker: docker driver: %w; is Docker installed and running?", err)
 	}
 
-	gw, err := api.New(api.Options{
-		APIKey:      cfg.AnthropicAPIKey,
-		BaseURL:     cfg.LLMBaseURL,
-		AuthStyle:   cfg.LLMAuthStyle,
-		StrongModel: cfg.LLMStrongModel,
-		FastModel:   cfg.LLMFastModel,
-		HTTPClient:  &http.Client{Timeout: 3 * time.Minute},
-	})
+	gw, err := cfg.Provider.Gateway(provider.Options{Timeout: judgeTimeout})
 	if err != nil {
 		return fmt.Errorf("skael-worker: LLM gateway: %w", err)
 	}
 
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
 
-	panelStrong, panelFast := panelModels(cfg)
-	if cfg.PanelBaseURL != "" && (panelStrong == "" || panelFast == "") {
-		// A warning rather than a refusal: a passthrough proxy in front of
-		// Anthropic accepts "opus" happily. The panel health probe is the
-		// authority, and it now fails the job with the models named.
-		log.Warn().
-			Str("anthropic_base_url", cfg.PanelBaseURL).
-			Msg("skael-worker: ANTHROPIC_BASE_URL is set but LLM_STRONG_MODEL/LLM_FAST_MODEL are not, " +
-				"so the eval panel will ask that gateway for the default Claude Code aliases opus and haiku. " +
-				"A gateway that namespaces its model identifiers (OpenRouter uses anthropic/claude-opus-4) " +
-				"rejects those and every panel member fails its health probe")
+	// The same warnings `whetstone doctor` prints, from the same place.
+	for _, w := range cfg.Provider.Warnings() {
+		log.Warn().Msgf("skael-worker: %s", w)
 	}
 
 	r := &realRunner{
 		driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot,
-		panelStrong: panelStrong, panelFast: panelFast, panelBase: cfg.PanelBaseURL,
+		panelModels: cfg.Provider.PanelModels(), panelBase: cfg.Provider.BaseURL,
 	}
 
 	der, err := derive.New(deriverOptions(gw))
@@ -379,8 +327,7 @@ type realRunner struct {
 	gateway     llm.Gateway
 	concurrency int
 	runRoot     string
-	panelStrong string
-	panelFast   string
+	panelModels []string
 	panelBase   string
 }
 
@@ -400,17 +347,16 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Msg("skael-worker: claimed job")
 
 	deps := whetstone.EvalDeps{
-		Store:            st,
-		Driver:           r.driver,
-		Gateway:          r.gateway,
-		Adapters:         agent.Get,
-		Now:              time.Now,
-		Sleep:            time.Sleep,
-		EngineVersion:    version,
-		WorkspaceRoot:    r.runRoot,
-		PanelStrongModel: r.panelStrong,
-		PanelFastModel:   r.panelFast,
-		PanelBaseURL:     r.panelBase,
+		Store:         st,
+		Driver:        r.driver,
+		Gateway:       r.gateway,
+		Adapters:      agent.Get,
+		Now:           time.Now,
+		Sleep:         time.Sleep,
+		EngineVersion: version,
+		WorkspaceRoot: r.runRoot,
+		PanelModels:   r.panelModels,
+		PanelBaseURL:  r.panelBase,
 	}
 
 	req := evalRequestFrom(in, r.concurrency)

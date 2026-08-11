@@ -3,7 +3,6 @@ package whetstone
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,41 +13,18 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
-	"github.com/skael-dev/skael/internal/eval/llm/api"
+	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
-// Gateway kinds reported by doctor and selected by every model-calling
-// command.
-const (
-	gatewaySubscription = "subscription"
-	gatewayAPI          = "api"
-	gatewayNone         = "none"
-)
-
-// Neither llm gateway package reads the environment — both take their
-// credentials as options — so mapping the environment onto them is the CLI's
-// job. These are the Anthropic SDK's own variable names rather than
-// whetstone-specific ones, so a machine already set up for the API needs no
-// further configuration.
-const (
-	apiKeyEnv     = "ANTHROPIC_API_KEY"
-	apiBaseURLEnv = "ANTHROPIC_BASE_URL"
-	// apiAuthTokenEnv is the Claude Code CLI's own name for a bearer token,
-	// used together with apiBaseURLEnv to point at an Anthropic-compatible
-	// gateway such as OpenRouter. Preferred over apiKeyEnv when both are set,
-	// since a bearer token implies a non-Anthropic gateway is intended.
-	apiAuthTokenEnv = "ANTHROPIC_AUTH_TOKEN"
-	// Model overrides, named to match the worker's so one environment
-	// configures both. Without these, pointing apiBaseURLEnv at a non-Anthropic
-	// gateway still asks it for Anthropic's own model names — OpenRouter
-	// namespaces its identifiers (anthropic/claude-opus-4), so the request
-	// 404s and authoring fails with a confusing "no endpoints found".
-	strongModelEnv = "LLM_STRONG_MODEL"
-	fastModelEnv   = "LLM_FAST_MODEL"
-	// timeoutEnv overrides authoringTimeout without a rebuild.
-	timeoutEnv = "WHETSTONE_LLM_TIMEOUT"
-)
+// Which backend serves model calls, and with which credentials, is resolved
+// by internal/eval/provider — the same package cmd/skael-worker resolves with,
+// so one environment configures both and a misconfiguration is described in
+// the same words wherever it is met.
+//
+// timeoutEnv is whetstone's alone: it overrides authoringTimeout without a
+// rebuild, and the worker has no interactive call long enough to need it.
+const timeoutEnv = "WHETSTONE_LLM_TIMEOUT"
 
 // maxGatewayRetries bounds retries of transient upstream failures. Generation
 // is a several-call sequence, and losing all of it to one 529 is not
@@ -107,11 +83,17 @@ type DoctorReport struct {
 	Gateway string `json:"gateway"`
 	// GatewayDetail explains that choice, including why it is "none".
 	GatewayDetail string `json:"gateway_detail"`
+	// Models names the model ids LLM_MODEL configured, empty for the shipped
+	// defaults.
+	Models []string `json:"models,omitempty"`
+	// Warnings carries provider.Config.Warnings — configurations that work
+	// often enough not to refuse and fail confusingly when they do not.
+	Warnings []string `json:"warnings,omitempty"`
 	// LLMTimeout is the resolved per-call gateway timeout — authoringTimeout
 	// unless WHETSTONE_LLM_TIMEOUT overrides it.
 	LLMTimeout string `json:"llm_timeout"`
 	// Docker reports whether a docker binary is on PATH. Required by the
-	// commands that run a sandbox: eval, repair, and suite check.
+	// commands that run a sandbox: eval and suite check.
 	Docker bool `json:"docker"`
 	// DockerPath is the resolved docker binary, empty when absent.
 	DockerPath string `json:"docker_path,omitempty"`
@@ -120,58 +102,7 @@ type DoctorReport struct {
 	Adapters []string `json:"adapters"`
 }
 
-// gatewayChoice is the decision doctor reports and newGateway acts on.
-type gatewayChoice struct {
-	Kind   string
-	Detail string
-	Binary string
-}
-
-// chooseGateway prefers the subscription gateway: calls made through an agent
-// CLI are billed to a subscription the author already has, where the direct
-// API needs a key and bills separately.
-func chooseGateway() gatewayChoice {
-	// Explicit gateway configuration beats autodetection. Setting a base URL
-	// or a bearer token is an unambiguous statement that a particular gateway
-	// is intended; silently preferring a subscription CLI that happens to be
-	// on PATH would bill the wrong account and quietly evaluate against a
-	// different model than the one configured.
-	//
-	// ANTHROPIC_API_KEY alone stays *below* the CLI: it is present on plenty
-	// of developer machines that also have the CLI installed, and treating it
-	// as an override would change today's behaviour for them.
-	if os.Getenv(apiBaseURLEnv) != "" || os.Getenv(apiAuthTokenEnv) != "" {
-		return gatewayChoice{
-			Kind:   gatewayAPI,
-			Detail: fmt.Sprintf("direct API, configured explicitly via %s/%s", apiBaseURLEnv, apiAuthTokenEnv),
-		}
-	}
-	if bin, err := agentcli.Detect(); err == nil {
-		return gatewayChoice{
-			Kind:   gatewaySubscription,
-			Binary: bin,
-			Detail: fmt.Sprintf("agent CLI %s, billed to your subscription", bin),
-		}
-	}
-	if os.Getenv(apiAuthTokenEnv) != "" {
-		return gatewayChoice{
-			Kind:   gatewayAPI,
-			Detail: fmt.Sprintf("direct API, authenticated with %s", apiAuthTokenEnv),
-		}
-	}
-	if os.Getenv(apiKeyEnv) != "" {
-		return gatewayChoice{
-			Kind:   gatewayAPI,
-			Detail: fmt.Sprintf("direct API, authenticated with %s", apiKeyEnv),
-		}
-	}
-	return gatewayChoice{
-		Kind:   gatewayNone,
-		Detail: fmt.Sprintf("no supported agent CLI on PATH and neither %s nor %s is set", apiKeyEnv, apiAuthTokenEnv),
-	}
-}
-
-// newGateway builds the gateway chooseGateway selected, sharing the store's
+// newGateway builds the backend provider.FromEnv resolved, sharing the store's
 // completion cache so a re-run of a generation step costs nothing. The
 // return value is wrapped in a progressGateway, so every command that calls
 // newGateway prints a line per model call without any change of its own.
@@ -181,37 +112,13 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 		return nil, err
 	}
 
-	var gw llm.Gateway
-	switch c := chooseGateway(); c.Kind {
-	case gatewaySubscription:
-		gw, err = agentcli.New(agentcli.Options{
-			Binary:     c.Binary,
-			Cache:      cache,
-			Timeout:    timeout,
-			MaxRetries: maxGatewayRetries,
-		})
-	case gatewayAPI:
-		authStyle := api.AuthStyleAnthropic
-		key := os.Getenv(apiKeyEnv)
-		if token := os.Getenv(apiAuthTokenEnv); token != "" {
-			authStyle = api.AuthStyleBearer
-			key = token
-		}
-		gw, err = api.New(api.Options{
-			BaseURL:     os.Getenv(apiBaseURLEnv),
-			APIKey:      key,
-			AuthStyle:   authStyle,
-			StrongModel: os.Getenv(strongModelEnv),
-			FastModel:   os.Getenv(fastModelEnv),
-			Cache:       cache,
-			HTTPClient:  &http.Client{Timeout: timeout},
-			MaxRetries:  maxGatewayRetries,
-		})
-	default:
-		return nil, fmt.Errorf("no LLM gateway available: %s (run `whetstone doctor`)", c.Detail)
-	}
+	gw, err := provider.FromEnv().Gateway(provider.Options{
+		Cache:      cache,
+		Timeout:    timeout,
+		MaxRetries: maxGatewayRetries,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (run `whetstone doctor`)", err)
 	}
 	return &progressGateway{inner: gw}, nil
 }
@@ -256,9 +163,16 @@ func RunDoctor(ctx context.Context) (*DoctorReport, error) {
 		rep.AgentCLIError = err.Error()
 	}
 
-	c := chooseGateway()
-	rep.Gateway = c.Kind
-	rep.GatewayDetail = c.Detail
+	p := provider.FromEnv()
+	rep.Gateway = string(p.Kind)
+	rep.GatewayDetail = p.Detail
+	rep.Models = p.Models
+	rep.Warnings = p.Warnings()
+	if verr := p.Validate(); verr != nil && p.Kind != provider.KindNone {
+		// A named gateway with no credential is not "none" — it is a gateway
+		// that cannot authenticate, which is a different fix.
+		rep.Warnings = append(rep.Warnings, verr.Error())
+	}
 
 	if path, err := exec.LookPath("docker"); err == nil {
 		rep.Docker = true
@@ -298,17 +212,23 @@ func (r *DoctorReport) render() {
 		ui.Warn("agent CLI: not found (%s)", r.AgentCLIError)
 	}
 
-	if r.Gateway == gatewayNone {
+	if r.Gateway == string(provider.KindNone) {
 		ui.Warn("gateway: none — %s", r.GatewayDetail)
 	} else {
 		ui.Success("gateway: %s — %s", r.Gateway, r.GatewayDetail)
+	}
+	if len(r.Models) > 0 {
+		ui.Info("models: %s (%s)", strings.Join(r.Models, ", "), provider.ModelEnv)
+	}
+	for _, w := range r.Warnings {
+		ui.Warn("%s", w)
 	}
 	ui.Info("llm timeout: %s (override with %s)", r.LLMTimeout, timeoutEnv)
 
 	if r.Docker {
 		ui.Success("docker: %s", r.DockerPath)
 	} else {
-		ui.Info("docker: not found (required by eval, repair, and suite check)")
+		ui.Info("docker: not found (required by eval and suite check)")
 	}
 
 	ui.Info("agent adapters: %s", strings.Join(r.Adapters, ", "))

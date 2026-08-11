@@ -22,6 +22,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
+	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
@@ -56,11 +57,10 @@ type EvalDeps struct {
 	// for the interactive CLI, which always shares a filesystem with the
 	// daemon it starts sandboxes on.
 	WorkspaceRoot string
-	// PanelStrongModel and PanelFastModel override the shipped panel's model
-	// ids. Already-resolved values rather than env lookups, so RunEvalWith
-	// carries no policy — see panelModelsFromEnv.
-	PanelStrongModel string
-	PanelFastModel   string
+	// PanelModels overrides the shipped panel's model ids, most capable
+	// first. Already-resolved values rather than env lookups, so RunEvalWith
+	// carries no policy — see provider.Config.PanelModels.
+	PanelModels []string
 	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
 	// can name the endpoint that rejected its models.
 	PanelBaseURL string
@@ -175,11 +175,15 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// boundary resolved model ids for a custom gateway, build the default out
 	// of those instead.
 	agents, models := req.Agents, req.Models
-	if len(agents) == 0 && len(models) == 0 && d.PanelStrongModel != "" {
-		agents = []string{runner.PanelFor(req.Tier)[0].Agent}
-		models = []string{d.PanelStrongModel}
-		if req.Tier == runner.TierDeep && d.PanelFastModel != "" {
-			models = append(models, d.PanelFastModel)
+	if len(agents) == 0 && len(models) == 0 && len(d.PanelModels) > 0 {
+		shipped := runner.PanelFor(req.Tier)
+		agents = []string{shipped[0].Agent}
+		// One configured model per shipped member, in order: the extra models
+		// only mean anything at the deep tier, which is the only tier with a
+		// floor member to give them to.
+		models = d.PanelModels
+		if len(models) > len(shipped) {
+			models = models[:len(shipped)]
 		}
 	}
 	panel := runner.PanelFor(req.Tier)
@@ -775,15 +779,15 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		gw = g
 	}
 
-	panelStrong, panelFast, panelBase := panelModelsFromEnv()
-	if w := warnUnconfiguredPanelModels(panelStrong, panelFast, panelBase); w != "" {
+	p := provider.FromEnv()
+	for _, w := range p.Warnings() {
 		ui.Warn("%s", w)
 	}
 
 	d := EvalDeps{
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
-		PanelStrongModel: panelStrong, PanelFastModel: panelFast, PanelBaseURL: panelBase,
+		PanelModels: p.PanelModels(), PanelBaseURL: p.BaseURL,
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

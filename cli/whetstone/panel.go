@@ -2,49 +2,11 @@ package whetstone
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/runner"
 )
-
-// panelModelsFromEnv resolves the eval panel's model overrides, returning
-// empty strings when the shipped opus/haiku default is right.
-//
-// Gated on ANTHROPIC_BASE_URL — the *panel's* gateway, forwarded into the
-// sandbox — not LLM_BASE_URL, which is the judge's. Only the panel's endpoint
-// decides which model ids the panel may ask for, and gating this way means
-// retuning the judge alone does not silently change the panel, which would
-// split the score trend.
-func panelModelsFromEnv() (strong, fast, baseURL string) {
-	baseURL = os.Getenv(apiBaseURLEnv)
-	if baseURL == "" {
-		return "", "", ""
-	}
-	return os.Getenv(strongModelEnv), os.Getenv(fastModelEnv), baseURL
-}
-
-// warnUnconfiguredPanelModels reports a custom panel gateway configured
-// without model ids. A warning rather than a refusal: a passthrough proxy
-// resolves "opus" fine, so the health probe is the authority.
-//
-// Substitution is all-or-nothing — one slot substituted leaves a panel with
-// one working member and one that 404s, which is not an error but a complete
-// run that scores, reports PanelComplete=false, and can never release the
-// version it was meant to clear.
-func warnUnconfiguredPanelModels(strong, fast, baseURL string) string {
-	if baseURL == "" || strong != "" {
-		return ""
-	}
-	_ = fast // the floor member only exists at the deep tier
-	return fmt.Sprintf(
-		"%s points the eval panel at %s, but %s is not set, so the panel will ask that gateway for "+
-			"Anthropic's own alias %q. A gateway that namespaces its model identifiers (OpenRouter uses "+
-			"anthropic/claude-sonnet-5) rejects that and every panel member fails its health probe. "+
-			"Set %s as well if you run the deep tier, which adds a floor member.",
-		apiBaseURLEnv, baseURL, strongModelEnv,
-		runner.DefaultPanel()[0].Model, fastModelEnv)
-}
 
 // checkPanelHealth fails an eval whose panel has no healthy member at all. A
 // *partially* unhealthy panel is deliberately allowed through — it degrades to
@@ -68,13 +30,13 @@ func checkPanelHealth(health []runner.Health, baseURL string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "whetstone eval: every panel member failed its health probe, so this run can measure nothing")
 	if baseURL != "" {
-		fmt.Fprintf(&b, " (panel gateway %s=%s)", apiBaseURLEnv, baseURL)
+		fmt.Fprintf(&b, " (gateway %s=%s)", provider.BaseURLEnv, baseURL)
 	}
 	b.WriteString(":")
 	for _, h := range health {
 		fmt.Fprintf(&b, "\n  %s/%s: %s", h.Member.Agent, h.Member.Model, h.Detail)
 	}
-	fmt.Fprintf(&b, "\nIf that gateway namespaces its model identifiers, set %s and %s to names it serves.",
-		strongModelEnv, fastModelEnv)
+	fmt.Fprintf(&b, "\nIf that gateway namespaces its model identifiers, set %s to names it serves.",
+		provider.ModelEnv)
 	return fmt.Errorf("%s", b.String())
 }
