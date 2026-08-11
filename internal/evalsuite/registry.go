@@ -228,6 +228,22 @@ func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	return rec, nil
 }
 
+// ReadArchive returns a stored suite's archive bytes. A route uses it to
+// look inside a suite. The route does not reach through the registry into
+// storage itself.
+func (r *Registry) ReadArchive(ctx context.Context, ref string) ([]byte, error) {
+	rec, err := r.Get(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := r.st.Read(ctx, rec.ArchivePath)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: ReadArchive %s: %w", ref, err)
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
+}
+
 // Fetch returns the raw archive bytes for ref.
 func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 	rec, err := r.Get(ctx, ref)

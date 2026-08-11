@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
@@ -452,5 +453,158 @@ func TestPostSuite_UnauthenticatedIsRejected(t *testing.T) {
 	resp := srv.postJSON(t, "/api/eval/suites", body)
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401: %s", resp.Code, resp.Body)
+	}
+}
+
+// setupReviewFixture pushes the two-query fixture suite as derived. It
+// returns the server, its ref, and the queries the archive holds. Every
+// review test starts from this fixture.
+func setupReviewFixture(t *testing.T) (*testServer, string, []suite.TriggerQuery) {
+	t.Helper()
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+		"unreviewed":     true,
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("setup upload status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("setup unmarshal: %v", err)
+	}
+
+	// The two queries writeFixtureSuite stores in evals/triggers.json.
+	originalQueries := []suite.TriggerQuery{
+		{Query: "do the thing", ShouldTrigger: true},
+		{Query: "do something unrelated"},
+	}
+	return srv, out.Ref, originalQueries
+}
+
+// reviewResult is the review-eval-suite response body.
+type reviewResult struct {
+	Ref     string `json:"ref"`
+	Changed bool   `json:"changed"`
+}
+
+// postReview posts a review of ref's trigger queries. It returns the
+// decoded response.
+func postReview(t *testing.T, srv *testServer, ref string, queries []suite.TriggerQuery) reviewResult {
+	t.Helper()
+	resp := srv.postJSON(t, "/api/eval/suites/"+ref+"/review", map[string]any{"triggers": queries})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	var out reviewResult
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}
+
+// TestGetTriggers_ServesTheStoredQuerySet is what pre-populates the review
+// view. Without it the browser must unpack a tarball to read one small JSON
+// file.
+func TestGetTriggers_ServesTheStoredQuerySet(t *testing.T) {
+	srv, ref, _ := setupReviewFixture(t)
+
+	resp := srv.get(t, "/api/eval/suites/"+ref+"/triggers")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	var body struct {
+		Triggers []struct {
+			Query         string `json:"query"`
+			ShouldTrigger bool   `json:"should_trigger"`
+		} `json:"triggers"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.Triggers) != 2 {
+		t.Fatalf("served %d queries, want 2", len(body.Triggers))
+	}
+}
+
+// TestReview_NoEditMarksTheSameRefAuthored is the case that clears a badge on
+// an existing score. A person read the eval set. The person vouched for it.
+// The score already measured against exactly these queries.
+func TestReview_NoEditMarksTheSameRefAuthored(t *testing.T) {
+	srv, ref, originalQueries := setupReviewFixture(t)
+
+	out := postReview(t, srv, ref, originalQueries)
+
+	if out.Ref != ref {
+		t.Errorf("ref = %q, want the unchanged %q", out.Ref, ref)
+	}
+	if out.Changed {
+		t.Error("changed = true for a review that edited nothing")
+	}
+	rec, err := srv.reg.Get(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Origin != evalsuite.OriginAuthored {
+		t.Errorf("origin = %q, want authored", rec.Origin)
+	}
+}
+
+// TestReview_AnEditStoresANewAuthoredRefAndLeavesTheOldOne is the honest
+// half. The existing score measured a different eval set, so its badge must
+// stay.
+func TestReview_AnEditStoresANewAuthoredRefAndLeavesTheOldOne(t *testing.T) {
+	srv, ref, originalQueries := setupReviewFixture(t)
+	edited := append(append([]suite.TriggerQuery(nil), originalQueries...),
+		suite.TriggerQuery{Query: "one more query", ShouldTrigger: true})
+
+	out := postReview(t, srv, ref, edited)
+
+	if out.Ref == ref {
+		t.Fatal("an edited review reused the old ref")
+	}
+	if !out.Changed {
+		t.Error("changed = false for a review that added a query")
+	}
+
+	old, err := srv.reg.Get(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Origin != evalsuite.OriginDerived {
+		t.Errorf("the old ref is %q, want it left derived", old.Origin)
+	}
+	fresh, err := srv.reg.Get(ctx, out.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Origin != evalsuite.OriginAuthored {
+		t.Errorf("the new ref is %q, want authored", fresh.Origin)
+	}
+}
+
+// TestReview_UnknownRefIs404 is a review of a ref that does not exist. It
+// must not create one.
+func TestReview_UnknownRefIs404(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := srv.postJSON(t, "/api/eval/suites/does-not-exist/review", map[string]any{
+		"triggers": []suite.TriggerQuery{{Query: "q", ShouldTrigger: true}},
+	})
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", resp.Code, resp.Body)
+	}
+
+	_, err := srv.reg.Get(ctx, "does-not-exist")
+	if !errors.Is(err, evalsuite.ErrNotFound) {
+		t.Fatalf("Get(does-not-exist) err = %v, want ErrNotFound", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -209,9 +210,145 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}}, nil
 	})
 
+	huma.Register(api, huma.Operation{
+		OperationID: "get-eval-suite-triggers",
+		Method:      http.MethodGet,
+		Path:        "/api/eval/suites/{ref}/triggers",
+		Summary:     "Get the trigger queries stored in a suite",
+	}, func(ctx context.Context, input *getSuiteMetaInput) (*triggersOutput, error) {
+		qs, dir, err := loadTriggers(ctx, reg, input.Ref)
+		if err != nil {
+			return nil, err
+		}
+		_ = os.RemoveAll(dir)
+		return &triggersOutput{Body: triggersBody{Triggers: qs}}, nil
+	})
+
+	// review-eval-suite is the only caller of Registry.MarkAuthored. An
+	// unchanged review vouches for the suite a score already measured
+	// against, so it raises that very ref. A changed review is a different
+	// eval set. It becomes a new suite. The old score keeps its badge,
+	// because it measured the old queries, not these.
+	huma.Register(api, huma.Operation{
+		OperationID: "review-eval-suite",
+		Method:      http.MethodPost,
+		Path:        "/api/eval/suites/{ref}/review",
+		Summary:     "Record a person's review of a suite's trigger queries",
+	}, func(ctx context.Context, input *suiteReviewInput) (*suiteReviewOutput, error) {
+		current, dir, err := loadTriggers(ctx, reg, input.Ref)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+
+		rec, err := reg.Get(ctx, input.Ref)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, huma.Error404NotFound(fmt.Sprintf("suite %q not found", input.Ref))
+			}
+			log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: lookup suite failed")
+			return nil, huma.Error500InternalServerError("review eval suite: internal error")
+		}
+
+		if sameQueries(current, input.Body.Triggers) {
+			if err := reg.MarkAuthored(ctx, reg.db, input.Ref); err != nil {
+				log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: mark authored failed")
+				return nil, huma.Error500InternalServerError("review eval suite: internal error")
+			}
+			return &suiteReviewOutput{Body: suiteReviewBody{Ref: input.Ref, Changed: false}}, nil
+		}
+
+		if err := suite.WriteTriggerQueries(dir, input.Body.Triggers); err != nil {
+			return nil, huma.Error500InternalServerError("review eval suite: internal error")
+		}
+		archive, err := PackDir(dir)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("review eval suite: internal error")
+		}
+		uploadedBy := "system"
+		if u := auth.UserFromContext(ctx); u != nil {
+			uploadedBy = u.Email
+		}
+		fresh, err := reg.Put(ctx, rec.SkillName, archive, rec.Checks, rec.SpecVersion, uploadedBy, rec.Spec)
+		if err != nil {
+			log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: store reviewed suite failed")
+			return nil, huma.Error500InternalServerError("review eval suite: internal error")
+		}
+		return &suiteReviewOutput{Body: suiteReviewBody{Ref: fresh.Ref, Changed: true}}, nil
+	})
+
 	if router != nil {
 		router.Get("/api/eval/suites/{ref}", makeDownloadHandler(reg))
 	}
+}
+
+type triggersBody struct {
+	Triggers []suite.TriggerQuery `json:"triggers"`
+}
+
+type triggersOutput struct {
+	Body triggersBody
+}
+
+type suiteReviewInput struct {
+	Ref  string `path:"ref"`
+	Body struct {
+		Triggers []suite.TriggerQuery `json:"triggers"`
+	}
+}
+
+type suiteReviewBody struct {
+	Ref string `json:"ref"`
+	// Changed reports whether the review edited anything. False means the
+	// review raised the stored suite to authored in place, so a score
+	// already measured against it becomes releasable.
+	Changed bool `json:"changed"`
+}
+
+type suiteReviewOutput struct {
+	Body suiteReviewBody
+}
+
+// loadTriggers unpacks a suite into a temp directory. It reads the trigger
+// queries from that directory. The caller removes dir.
+func loadTriggers(ctx context.Context, reg *Registry, ref string) ([]suite.TriggerQuery, string, error) {
+	archive, err := reg.ReadArchive(ctx, ref)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", huma.Error404NotFound(fmt.Sprintf("suite %q not found", ref))
+		}
+		log.Error().Err(err).Str("ref", ref).Msg("evalsuite: read suite archive failed")
+		return nil, "", huma.Error500InternalServerError("read eval suite: internal error")
+	}
+	dir, err := os.MkdirTemp("", "skael-suite-review-")
+	if err != nil {
+		return nil, "", huma.Error500InternalServerError("read eval suite: internal error")
+	}
+	if err := Unpack(archive, dir); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, "", huma.Error500InternalServerError("read eval suite: internal error")
+	}
+	qs, err := suite.LoadTriggerQueries(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, "", huma.Error500InternalServerError("read eval suite: internal error")
+	}
+	return qs, dir, nil
+}
+
+// sameQueries reports whether two query lists are identical in order and
+// content. A review that changed nothing raises the ref a score already
+// measured against. Anything else is a different eval set.
+func sameQueries(a, b []suite.TriggerQuery) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type getSuiteMetaInput struct {
