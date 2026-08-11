@@ -54,6 +54,17 @@ func TestSplit_KeepsAtLeastOneOfEachInTest(t *testing.T) {
 	if len(test) != 2 {
 		t.Errorf("test split holds %d queries, want 2", len(test))
 	}
+	var pos, neg int
+	for _, q := range test {
+		if q.ShouldTrigger {
+			pos++
+		} else {
+			neg++
+		}
+	}
+	if pos != 1 || neg != 1 {
+		t.Errorf("test split = %d positive, %d negative; want 1 and 1", pos, neg)
+	}
 }
 
 func TestSplit_IsStableForOneSeed(t *testing.T) {
@@ -67,10 +78,15 @@ func TestSplit_IsStableForOneSeed(t *testing.T) {
 			t.Fatalf("train[%d] = %q then %q; the split is not stable", i, a[i].Query, c[i].Query)
 		}
 	}
+	for i := range b {
+		if b[i].Query != d[i].Query {
+			t.Fatalf("test[%d] = %q then %q; the split is not stable", i, b[i].Query, d[i].Query)
+		}
+	}
 }
 
-// TestSplit_ZeroHoldoutTestsNothing keeps the escape hatch the Python has:
-// holdout 0 trains on everything and selects on the train score.
+// TestSplit_ZeroHoldoutTestsNothing keeps the escape hatch the Python has.
+// A holdout of 0 trains on everything. It then selects on the train score.
 func TestSplit_ZeroHoldoutTestsNothing(t *testing.T) {
 	train, test := tune.Split(set(8, 8), 0, 42)
 	if len(train) != 16 || len(test) != 0 {

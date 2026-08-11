@@ -16,7 +16,7 @@ import (
 //
 // The winner is selected on the test score, so a split that puts every
 // negative on one side chooses a description on half the question. A
-// holdout of 0 disables the split and trains on everything.
+// holdout of 0 disables the split. The loop then trains on everything.
 func Split(set []suite.TriggerQuery, holdout float64, seed int64) (train, test []suite.TriggerQuery) {
 	if holdout <= 0 {
 		return append([]suite.TriggerQuery(nil), set...), nil
@@ -46,8 +46,8 @@ func Split(set []suite.TriggerQuery, holdout float64, seed int64) (train, test [
 }
 
 // holdoutCount is max(1, int(n*holdout)) when there is anything to hold back.
-// One query held back measures little, but zero measures nothing at all and
-// makes the test score identical to the train score.
+// One query held back measures little. Zero measures nothing at all. Zero
+// also makes the test score identical to the train score.
 func holdoutCount(n int, holdout float64) int {
 	if n == 0 {
 		return 0
