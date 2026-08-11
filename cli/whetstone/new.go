@@ -44,8 +44,8 @@ func RunNew(ctx context.Context, intent string) error {
 
 // runNew is the pipeline itself, with the store and the gateway passed in.
 // It never asks a question. A person who wants to change the drafted spec
-// edits it afterwards, which is why the spec is printed and the next commands
-// are named at the end.
+// edits it afterwards. That is why the run prints the spec and names the
+// next commands at the end.
 func runNew(ctx context.Context, st *store.Store, g llm.Gateway, intent string) error {
 	ui.Info("drafting a specification…")
 	sp, err := spec.Interview(ctx, g, intent)

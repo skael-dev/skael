@@ -219,8 +219,8 @@ func TestRunNew_WritesAllThreeArtifactsWithNoPrompt(t *testing.T) {
 }
 
 // TestRunNew_ApprovesTheSpecItDrafts guards the downstream consequence.
-// RunEvalWith refuses an unapproved spec, so a creation run that stored one
-// without approval would end with a skill that cannot be scored.
+// RunEvalWith refuses an unapproved spec. A creation run that stores one
+// without approval ends with a skill nobody can score.
 func TestRunNew_ApprovesTheSpecItDrafts(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)
