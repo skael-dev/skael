@@ -99,6 +99,53 @@ func writeSkillMD(dir string, s *spec.SkillSpec, body, description string) (stri
 	return "SKILL.md", nil
 }
 
+// RewriteDescription replaces the description in a bundle's SKILL.md
+// frontmatter and leaves the body untouched.
+//
+// The tuner changes one field. A full regeneration spends several model
+// calls and rewrites prose nobody asked to change. The frontmatter is
+// re-marshalled instead. The body is copied through verbatim.
+func RewriteDescription(bundleDir, description string) error {
+	path := filepath.Join(bundleDir, "SKILL.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("gen: reading %s: %w", path, err)
+	}
+
+	const sep = "---\n"
+	body := string(raw)
+	if !strings.HasPrefix(body, sep) {
+		return fmt.Errorf("gen: %s has no frontmatter", path)
+	}
+	rest := body[len(sep):]
+	end := strings.Index(rest, "\n"+sep)
+	if end < 0 {
+		return fmt.Errorf("gen: %s has an unterminated frontmatter block", path)
+	}
+
+	var fm frontmatter
+	if err := yaml.Unmarshal([]byte(rest[:end+1]), &fm); err != nil {
+		return fmt.Errorf("gen: parsing the frontmatter of %s: %w", path, err)
+	}
+	fm.Description = description
+
+	out, err := yaml.Marshal(fm)
+	if err != nil {
+		return fmt.Errorf("gen: marshalling frontmatter: %w", err)
+	}
+
+	var content strings.Builder
+	content.WriteString(sep)
+	content.Write(out)
+	content.WriteString(sep)
+	content.WriteString(rest[end+1+len(sep):])
+
+	if err := os.WriteFile(path, []byte(content.String()), fileMode); err != nil {
+		return fmt.Errorf("gen: writing %s: %w", path, err)
+	}
+	return nil
+}
+
 // writeResource writes one model-authored resource file through safeJoin and
 // returns its path relative to dir. Files under scripts/ are written
 // executable; everything else is not.
