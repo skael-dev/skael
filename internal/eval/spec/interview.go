@@ -48,9 +48,11 @@ Produce a skill specification. Requirements:
 - Every step states a verifiable postcondition — something a script could check.
   "Parse the file" is not a postcondition; "out/parsed.json exists and is valid JSON" is.
 - Mark steps that are validations with "validation": true.
-- Triggers must include concrete positive example prompts AND hard negatives:
-  adjacent-domain near-misses that must NOT fire this skill. An obviously
-  irrelevant negative tests nothing.
+- Write 8 positive trigger phrases and 8 hard negative ones. A positive is a
+  concrete prompt a real user would type. A negative is an adjacent-domain
+  near-miss that must NOT fire this skill. An obviously irrelevant negative
+  tests nothing. The counts are not advisory: the evaluation tiers and the
+  description tuner all read this set, and a short set cannot be scored.
 - The description states what the skill does AND when to use it, naming concrete
   trigger nouns. Be assertive about when to use it — skills under-fire far more
   often than they over-fire.
