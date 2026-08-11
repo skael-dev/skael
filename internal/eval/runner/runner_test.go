@@ -673,7 +673,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 		}
 		return nil, false
 	}
-	panel := append(runner.DefaultPanel(), runner.Member{Agent: "cursor", Model: "auto"})
+	panel := append(runner.DefaultPanel(), runner.Member{Agent: "unregistered-agent", Model: "auto"})
 
 	r, err := runner.New(h.options())
 	if err != nil {
@@ -713,7 +713,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 		t.Error("PanelComplete = true with an unhealthy member")
 	}
 	for _, o := range res.Outcomes {
-		if o.Key.Agent == "cursor" {
+		if o.Key.Agent == "unregistered-agent" {
 			t.Errorf("ran a session on an unhealthy member: %+v", o.Key)
 		}
 	}

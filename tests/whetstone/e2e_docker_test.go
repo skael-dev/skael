@@ -481,9 +481,9 @@ func seedSuiteTasks() []suite.TaskPkg {
 
 // stubClaudeFixture is the recorded stream-json session the stub `claude`
 // replays: a real transcript the claudecode adapter already parses in
-// internal/eval/agent/claudecode/parse_test.go, so the stub exercises the
+// internal/eval/agent/parse_test.go, so the stub exercises the
 // real parser rather than a hand-rolled shape that only looks like one.
-const stubClaudeFixture = "../../internal/eval/agent/claudecode/testdata/basic-tools.jsonl"
+const stubClaudeFixture = "../../internal/eval/agent/testdata/basic-tools.jsonl"
 
 // stubClaudeTag is the tag the derived image is built under. Content-fixed
 // rather than digested: the fixture and the wrapper script are both
@@ -529,7 +529,7 @@ func stubClaudeBaseTag(t *testing.T) string {
 		// The fixture is used verbatim, including its rate_limit_info line
 		// (status "allowed" — routine telemetry, not an actual throttle).
 		// Debugging this test against the pre-fix parser is what surfaced
-		// internal/eval/agent/claudecode/parse.go treating any
+		// internal/eval/agent/parse.go treating any
 		// rate_limit_event as a hit regardless of status: replaying this
 		// exact line made every session look throttled, so the runner burned
 		// its three retries and failed every task deterministically. That is

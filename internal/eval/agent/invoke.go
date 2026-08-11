@@ -1,4 +1,4 @@
-package claudecode
+package agent
 
 import (
 	"bytes"
@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/skael-dev/skael/internal/eval/agent"
 )
 
 // Argv is the command line one evaluation session runs. Exported so the flags
@@ -26,7 +24,7 @@ import (
 // clears Edit and Write but still prompts for Bash, so a headless session had
 // every shell command denied, and any skill that runs a script scored zero on
 // every task with nothing in the report naming the cause.
-func Argv(s agent.InvokeSpec) ([]string, error) {
+func Argv(s InvokeSpec) ([]string, error) {
 	if strings.TrimSpace(s.Prompt) == "" {
 		return nil, errors.New("claudecode: invoke has no prompt")
 	}
@@ -46,9 +44,9 @@ func Argv(s agent.InvokeSpec) ([]string, error) {
 // Invoke runs one headless session through the caller's executor and returns
 // the native stream verbatim. Parsing is a separate step so a transcript is
 // recorded even when parsing fails.
-func (a *Adapter) Invoke(ctx context.Context, s agent.InvokeSpec) (agent.RawStream, error) {
+func (a *ClaudeCode) Invoke(ctx context.Context, s InvokeSpec) (RawStream, error) {
 	if s.Exec == nil {
-		return nil, agent.ErrNoExecutor
+		return nil, ErrNoExecutor
 	}
 	argv, err := Argv(s)
 	if err != nil {

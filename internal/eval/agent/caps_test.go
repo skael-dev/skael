@@ -1,9 +1,9 @@
-package claudecode_test
+package agent_test
 
 import (
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
+	"github.com/skael-dev/skael/internal/eval/agent"
 )
 
 // TestCaps_AuthEnvIncludesGatewayOverrides pins that AuthEnv still forwards
@@ -12,7 +12,7 @@ import (
 // panel agent at an Anthropic-compatible gateway such as OpenRouter.
 func TestCaps_AuthEnvIncludesGatewayOverrides(t *testing.T) {
 	want := []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"}
-	got := claudecode.New().Caps().AuthEnv
+	got := agent.New().Caps().AuthEnv
 
 	for _, name := range want {
 		found := false

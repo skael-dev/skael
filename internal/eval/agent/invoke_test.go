@@ -1,4 +1,4 @@
-package claudecode_test
+package agent_test
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
-	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
 )
 
 type fakeExec struct {
@@ -25,7 +24,7 @@ func (f *fakeExec) Exec(_ context.Context, argv []string, stdout, _ io.Writer) (
 }
 
 func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
-	a, err := claudecode.Argv(agent.InvokeSpec{
+	a, err := agent.Argv(agent.InvokeSpec{
 		Prompt: "Convert data.csv to out/tables.md", Model: "opus",
 	})
 	if err != nil {
@@ -44,7 +43,7 @@ func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
 	// hardcoded "--model" in Argv would pass a literal-string check just as
 	// well as the real thing, and is exactly the drift Caps().ModelFlag
 	// exists to prevent.
-	if wantFlag := claudecode.New().Caps().ModelFlag + " opus"; !strings.Contains(joined, wantFlag) {
+	if wantFlag := agent.New().Caps().ModelFlag + " opus"; !strings.Contains(joined, wantFlag) {
 		t.Errorf("argv missing %q (from Caps().ModelFlag): %v", wantFlag, a)
 	}
 	if a[0] != "claude" {
@@ -66,7 +65,7 @@ func TestArgv_PinsTheFlagsAnEvaluationRunNeeds(t *testing.T) {
 // sandbox's job: a container with no network beyond a proxy allowlist, thrown
 // away after the run.
 func TestArgv_PermissionModeClearsShellNotJustEdits(t *testing.T) {
-	a, err := claudecode.Argv(agent.InvokeSpec{Prompt: "convert it", Model: "opus"})
+	a, err := agent.Argv(agent.InvokeSpec{Prompt: "convert it", Model: "opus"})
 	if err != nil {
 		t.Fatalf("Argv: %v", err)
 	}
@@ -80,19 +79,19 @@ func TestArgv_PermissionModeClearsShellNotJustEdits(t *testing.T) {
 }
 
 func TestArgv_RequiresAPromptAndAModel(t *testing.T) {
-	if _, err := claudecode.Argv(agent.InvokeSpec{Model: "opus"}); err == nil {
+	if _, err := agent.Argv(agent.InvokeSpec{Model: "opus"}); err == nil {
 		t.Error("Argv accepted an empty prompt")
 	}
 	// A run with no model is a run whose score cannot be attributed to a panel
 	// member, which makes the whole matrix meaningless.
-	if _, err := claudecode.Argv(agent.InvokeSpec{Prompt: "x"}); err == nil {
+	if _, err := agent.Argv(agent.InvokeSpec{Prompt: "x"}); err == nil {
 		t.Error("Argv accepted an empty model")
 	}
 }
 
 func TestInvoke_RunsThroughTheExecutorAndReturnsItsStream(t *testing.T) {
 	fx := &fakeExec{stdout: `{"type":"system","subtype":"init"}` + "\n"}
-	r, err := claudecode.New().Invoke(context.Background(), agent.InvokeSpec{
+	r, err := agent.New().Invoke(context.Background(), agent.InvokeSpec{
 		Prompt: "p", Model: "opus", Exec: fx,
 	})
 	if err != nil {
@@ -108,7 +107,7 @@ func TestInvoke_RunsThroughTheExecutorAndReturnsItsStream(t *testing.T) {
 }
 
 func TestInvoke_RefusesToRunOutsideASandbox(t *testing.T) {
-	_, err := claudecode.New().Invoke(context.Background(), agent.InvokeSpec{Prompt: "p", Model: "m"})
+	_, err := agent.New().Invoke(context.Background(), agent.InvokeSpec{Prompt: "p", Model: "m"})
 	// An adapter that falls back to exec.Command runs an untrusted skill on the
 	// host. Failing closed is the only correct behaviour, and it is worth a
 	// sentinel so a caller cannot mistake it for a CLI problem.
@@ -119,7 +118,7 @@ func TestInvoke_RefusesToRunOutsideASandbox(t *testing.T) {
 
 func TestInvoke_SurfacesANonZeroExitWithItsOutput(t *testing.T) {
 	fx := &fakeExec{exit: 1, stdout: "API Error: 529"}
-	_, err := claudecode.New().Invoke(context.Background(), agent.InvokeSpec{
+	_, err := agent.New().Invoke(context.Background(), agent.InvokeSpec{
 		Prompt: "p", Model: "m", Exec: fx,
 	})
 	if err == nil || !strings.Contains(err.Error(), "529") {

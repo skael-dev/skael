@@ -1,11 +1,11 @@
-package claudecode_test
+package agent_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
+	"github.com/skael-dev/skael/internal/eval/agent"
 )
 
 // InstallSkill must install shipped content only. The directory it is handed
@@ -36,7 +36,7 @@ func TestInstallSkill_DoesNotInstallTheEvalSidecar(t *testing.T) {
 	write("eval/suite/tasks/happy/verifier/test.sh", "#!/bin/sh\nexit 0\n")
 
 	ws := t.TempDir()
-	a := claudecode.New()
+	a := agent.New()
 	if err := a.InstallSkill(ws, src); err != nil {
 		t.Fatal(err)
 	}

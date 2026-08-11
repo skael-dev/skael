@@ -14,17 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skael-dev/skael/internal/ui"
-
-	// The agent adapters register themselves from init(), so they are only
-	// reachable through agent.Get once their package is linked in. Without
-	// these blank imports agent.Get returns (nil, false) for that name — no
-	// compile error and no panic, just an adapter silently missing from every
-	// model panel. They live here rather than in cmd/whetstone so that the
-	// package's own tests link them too.
-	_ "github.com/skael-dev/skael/internal/eval/agent/claudecode"
-	_ "github.com/skael-dev/skael/internal/eval/agent/codex"
-	_ "github.com/skael-dev/skael/internal/eval/agent/cursor"
-	_ "github.com/skael-dev/skael/internal/eval/agent/opencode"
 )
 
 var (

@@ -59,13 +59,13 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 }
 
 // TestRunDoctor_ListsEveryRegisteredAdapter is the guard for the blank-import
-// hazard: the adapters register only from init(), so a missing import in the
-// CLI's own package silently drops an agent from every panel with no compile
-// error and no panic.
+// hazard: the adapter registers only from init(), so a missing import in the
+// CLI's own package silently empties every panel with no compile error and no
+// panic.
 func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 	t.Setenv("PATH", "")
 
-	want := []string{"claude-code", "codex", "cursor", "opencode"}
+	want := []string{"claude-code"}
 
 	if got := len(agent.All()); got != len(want) {
 		t.Errorf("registered adapters = %d, want %d: %v", got, len(want), adapterNames())

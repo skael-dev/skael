@@ -9,11 +9,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
-
-	// Registers "claude-code" and "codex" in the adapter registry so
-	// ParsePanel's agent-name cross-check has something real to find.
-	_ "github.com/skael-dev/skael/internal/eval/agent/claudecode"
-	_ "github.com/skael-dev/skael/internal/eval/agent/codex"
 )
 
 // tasks builds a split suite: n tasks, holdoutN of them holdout, spread
@@ -255,11 +250,10 @@ func TestParsePanel_RejectsAnUnknownAgent(t *testing.T) {
 	}
 }
 
-func TestParsePanel_RejectsATwoAgentPanelWithOnlyOneModel(t *testing.T) {
-	// Two agents, one model: class assignment is keyed to the model's index
-	// within each agent's inner loop, so every member here would otherwise
-	// land in TierStrong with no floor member at all.
-	_, err := runner.ParsePanel([]string{"claude-code", "codex"}, []string{"opus"})
+func TestParsePanel_RejectsAPanelWithOnlyOneModel(t *testing.T) {
+	// Class assignment is keyed to the model's index within the agent's inner
+	// loop, so a single model lands in TierStrong with no floor member at all.
+	_, err := runner.ParsePanel([]string{"claude-code"}, []string{"opus"})
 	if err == nil {
 		t.Fatal("ParsePanel accepted a panel with no floor member")
 	}

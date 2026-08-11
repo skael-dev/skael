@@ -1,4 +1,4 @@
-package claudecode_test
+package agent_test
 
 import (
 	"os"
@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
-	"github.com/skael-dev/skael/internal/eval/agent/claudecode"
 	"github.com/skael-dev/skael/internal/eval/score"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
@@ -21,7 +20,7 @@ func parseFixture(t *testing.T, name string) *agent.Result {
 	}
 	defer f.Close()
 
-	res, err := claudecode.New().Parse(f)
+	res, err := agent.New().Parse(f)
 	if err != nil {
 		t.Fatalf("Parse(%s): %v", name, err)
 	}
@@ -108,7 +107,7 @@ func TestParse_NoTimestampAnywhereStaysZeroNotFabricated(t *testing.T) {
 			`{"type":"rate_limit_event"}` + "\n" +
 			`{"type":"some_future_event","session_id":"x"}` + "\n")
 
-	res, err := claudecode.New().Parse(r)
+	res, err := agent.New().Parse(r)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestParse_NoTimestampAnywhereStaysZeroNotFabricated(t *testing.T) {
 // parser set Meta.RateLimited on the event's mere presence. That made an
 // ordinary session indistinguishable from one actually being throttled, so
 // the runner burned its retries and failed sessions that were never rate
-// limited — see internal/eval/agent/claudecode/parse.go's rateLimitInfo
+// limited — see internal/eval/agent/parse.go's rateLimitInfo
 // comment, and tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag, which
 // hit this same defect against a real recorded transcript and had to strip
 // the line to work around it before this fix landed.
@@ -156,7 +155,7 @@ func TestParse_RateLimitEventOnlyFlagsAnActualLimit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := claudecode.New().Parse(stringReader(tc.line + "\n"))
+			res, err := agent.New().Parse(stringReader(tc.line + "\n"))
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
@@ -273,7 +272,7 @@ func TestParse_MalformedLinesAreSkippedNotFatal(t *testing.T) {
 	r := stringReader("{not json\n" +
 		`{"type":"assistant","timestamp":"2026-07-29T19:55:21.430Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}` + "\n")
 
-	res, err := claudecode.New().Parse(r)
+	res, err := agent.New().Parse(r)
 	if err != nil {
 		t.Fatalf("Parse should tolerate a malformed line, got %v", err)
 	}
@@ -289,7 +288,7 @@ func TestParse_UnrecognisedTopLevelTypeBecomesOpaque(t *testing.T) {
 	// count in ways nothing downstream could detect.
 	r := stringReader(`{"type":"some_future_event","session_id":"x","timestamp":"2026-07-29T19:55:21.430Z"}` + "\n")
 
-	res, err := claudecode.New().Parse(r)
+	res, err := agent.New().Parse(r)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -306,7 +305,7 @@ func TestParse_UnrecognisedTopLevelTypeBecomesOpaque(t *testing.T) {
 }
 
 func TestCaps(t *testing.T) {
-	c := claudecode.New().Caps()
+	c := agent.New().Caps()
 	if c.SkillDir != ".claude/skills" {
 		t.Errorf("SkillDir = %q, want .claude/skills", c.SkillDir)
 	}

@@ -1,4 +1,4 @@
-package claudecode
+package agent
 
 import (
 	"bufio"
@@ -7,7 +7,6 @@ import (
 	"path"
 	"time"
 
-	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
@@ -107,11 +106,11 @@ type toolInput struct {
 // stream, which this project's reproducibility depends on not happening;
 // the zero value is honest and callers can detect it with TS.IsZero() to
 // mean "no time information", distinct from any real recorded moment.
-func (a *Adapter) Parse(r agent.RawStream) (*agent.Result, error) {
+func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 
-	res := &agent.Result{}
+	res := &Result{}
 	var last time.Time
 	var seq int
 

@@ -11,16 +11,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
-// ErrInvokeNotImplemented is returned by adapters whose Invoke path is not
-// built yet. Invoking an agent requires a sandbox, so it lands with the
-// sandbox rather than with the parsers.
-var ErrInvokeNotImplemented = errors.New("agent: Invoke not implemented")
-
-// ErrInstallNotImplemented is returned by adapters whose skill installation
-// path is not built yet. Installing a skill requires knowledge of the agent's
-// filesystem layout, which is why it is distinct from ErrInvokeNotImplemented.
-var ErrInstallNotImplemented = errors.New("agent: InstallSkill not implemented")
-
 // ErrNoExecutor is returned when Invoke is called with no Exec. Failing closed
 // is deliberate: an adapter that fell back to exec.Command would run an
 // untrusted skill on the host.

@@ -20,16 +20,6 @@ import (
 
 	"github.com/skael-dev/skael/cli/whetstone"
 	"github.com/skael-dev/skael/internal/eval/agent"
-
-	// Adapters register themselves via init() with agent.Register. A
-	// forgotten import here makes agent.Get(name) return (nil, false) with
-	// no compile error — the adapter is just silently absent from the panel.
-	// checkAdapters below asserts against this at startup.
-	_ "github.com/skael-dev/skael/internal/eval/agent/claudecode"
-	_ "github.com/skael-dev/skael/internal/eval/agent/codex"
-	_ "github.com/skael-dev/skael/internal/eval/agent/cursor"
-	_ "github.com/skael-dev/skael/internal/eval/agent/opencode"
-
 	"github.com/skael-dev/skael/internal/eval/derive"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
@@ -41,11 +31,6 @@ import (
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/worker"
 )
-
-// wantAdapters is the set of adapters this binary expects to have linked in.
-// checkAdapters checks the registry against it so a forgotten blank import
-// is logged loudly at startup instead of silently thinning the panel.
-var wantAdapters = []string{"claude-code", "codex", "cursor", "opencode"}
 
 var (
 	version = "dev"
@@ -101,7 +86,7 @@ func main() {
 // environment. ANTHROPIC_API_KEY wires the direct API gateway used for the
 // LLM judge, which is always the metered backend. It does not make panel
 // execution metered too: the claude-code agent adapter declares AuthDirs
-// (~/.claude, ~/.config/claude — see internal/eval/agent/claudecode) which
+// (~/.claude, ~/.config/claude — see internal/eval/agent) which
 // internal/eval/runner/session.go mounts into the sandbox, so a panel member
 // run through that adapter authenticates with whatever host credentials it
 // finds there — subscription-backed wherever those directories exist on the
@@ -294,11 +279,6 @@ func deriverOptions(cfg workerConfig, drv sandbox.Driver, gw llm.Gateway) derive
 // run wires the real dependencies (Docker sandbox, API gateway, adapter
 // registry) and runs the worker loop until a signal cancels it.
 func run(cfg workerConfig) error {
-	adapterNames := checkAdapters()
-	log.Info().Int("adapters", len(adapterNames)).Strs("names", adapterNames).Msg("skael-worker: agent adapters registered")
-	if len(adapterNames) == 0 {
-		return errors.New("skael-worker: no agent adapters registered; every blank import is missing")
-	}
 
 	drv, err := docker.New(docker.Options{Logger: func(format string, args ...any) {
 		log.Info().Msgf(format, args...)
@@ -390,25 +370,6 @@ func pollLoop(ctx context.Context, w *worker.Worker, pollInterval time.Duration)
 		case <-time.After(pollInterval):
 		}
 	}
-}
-
-// checkAdapters confirms every adapter this binary expects (wantAdapters) is
-// actually reachable through agent.Get — the guard against a blank import
-// that compiles clean but leaves an adapter silently missing from the panel.
-func checkAdapters() []string {
-	var present []string
-	var missing []string
-	for _, name := range wantAdapters {
-		if _, ok := agent.Get(name); ok {
-			present = append(present, name)
-		} else {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		log.Error().Strs("missing", missing).Msg("skael-worker: expected agent adapter(s) not registered — check blank imports")
-	}
-	return present
 }
 
 // realRunner implements worker.Runner over whetstone.RunEvalWith, opening

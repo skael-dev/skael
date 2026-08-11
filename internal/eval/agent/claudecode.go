@@ -1,7 +1,4 @@
-// Package claudecode adapts the Claude Code CLI. Flags and stream shapes are
-// isolated here: CLI churn is a known risk, so every version-sensitive detail
-// lives in this package and is pinned by recorded fixtures in testdata/.
-package claudecode
+package agent
 
 import (
 	"fmt"
@@ -9,26 +6,25 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/lint"
 )
 
-// Adapter implements agent.Adapter for Claude Code.
-type Adapter struct{}
+// ClaudeCode adapts the Claude Code CLI. Flags and stream shapes are isolated
+// in claudecode.go, invoke.go and parse.go: CLI churn is a known risk, so every
+// version-sensitive detail is pinned by recorded fixtures in testdata/.
+type ClaudeCode struct{}
 
 // New returns a Claude Code adapter.
-func New() *Adapter { return &Adapter{} }
-
-func init() { agent.Register(New()) }
+func New() *ClaudeCode { return &ClaudeCode{} }
 
 // Name identifies the adapter in reports and panel matrices.
-func (a *Adapter) Name() string { return "claude-code" }
+func (a *ClaudeCode) Name() string { return "claude-code" }
 
 // Caps reports Claude Code's capabilities. Verified against CLI 2.1.220: the
 // stream reports individual tool calls and results (tier A) and exposes skill
 // invocation as an explicit Skill tool call.
-func (a *Adapter) Caps() agent.Caps {
-	return agent.Caps{
+func (a *ClaudeCode) Caps() Caps {
+	return Caps{
 		EventTier: "A",
 		ModelFlag: "--model",
 		SkillDir:  ".claude/skills",
@@ -50,7 +46,7 @@ func (a *Adapter) Caps() agent.Caps {
 // InstallSkill copies a skill bundle into the workspace's project-local skill
 // directory. Project-local rather than user-level install keeps each run's
 // visible skill set exactly what the run intends.
-func (a *Adapter) InstallSkill(workspace, bundlePath string) error {
+func (a *ClaudeCode) InstallSkill(workspace, bundlePath string) error {
 	dst := filepath.Join(workspace, a.Caps().SkillDir, filepath.Base(bundlePath))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("claudecode.InstallSkill mkdir: %w", err)
