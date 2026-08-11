@@ -2,6 +2,7 @@ package tune_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,9 +21,9 @@ func failing() tune.ScoreResult {
 	}
 }
 
-// TestImprove_NamesBothFailureKinds pins that the model is shown what missed
-// and what fired wrongly. A prompt that showed only one tunes precision or
-// recall alone.
+// TestImprove_NamesBothFailureKinds pins that the prompt shows the model what
+// missed and what fired wrongly. A prompt that shows only one half tunes
+// precision or recall alone.
 func TestImprove_NamesBothFailureKinds(t *testing.T) {
 	g := fake.NewFunc(func(llm.Req) (string, error) {
 		return `{"description":"A better description."}`, nil
@@ -37,6 +38,9 @@ func TestImprove_NamesBothFailureKinds(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt does not carry the failing query %q", want)
 		}
+	}
+	if len(g.Calls()) != 1 {
+		t.Errorf("made %d calls, want 1: an under-limit description needs no shorten retry", len(g.Calls()))
 	}
 }
 
@@ -59,17 +63,19 @@ func TestImprove_TheHistoryCarriesNoTestScore(t *testing.T) {
 	}
 
 	prompt := g.Calls()[0].Prompt
-	if strings.Contains(prompt, "5/6") || strings.Contains(strings.ToLower(prompt), "test") {
-		t.Errorf("the improvement prompt leaks the held-out score:\n%s", prompt)
+	heldOut := fmt.Sprintf("%d/%d", history[0].Test.Passed, history[0].Test.Total)
+	if strings.Contains(prompt, heldOut) {
+		t.Errorf("the improvement prompt leaks the held-out score %q:\n%s", heldOut, prompt)
 	}
-	if !strings.Contains(prompt, "7/10") {
-		t.Error("the improvement prompt does not carry the train score")
+	trainScore := fmt.Sprintf("%d/%d", history[0].Train.Passed, history[0].Train.Total)
+	if !strings.Contains(prompt, trainScore) {
+		t.Errorf("the improvement prompt does not carry the train score %q", trainScore)
 	}
 }
 
 // TestImprove_ShortensADescriptionOverTheLimit covers the second call the
-// Python makes. 1024 characters is the Agent Skills limit. A longer one is
-// truncated where nobody sees it happen.
+// Python makes. 1024 characters is the Agent Skills limit. Nothing warns a
+// person when a longer description loses its tail.
 func TestImprove_ShortensADescriptionOverTheLimit(t *testing.T) {
 	long := strings.Repeat("x", 1100)
 	var calls int
