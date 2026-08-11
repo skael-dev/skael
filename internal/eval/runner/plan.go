@@ -100,13 +100,21 @@ func PanelFor(t Tier) Panel {
 	return DefaultPanel()
 }
 
-// ParsePanel builds a panel from CLI arguments, cross-checking each agent
+// ParsePanel builds a panel from caller arguments, cross-checking each agent
 // against the adapter lookup so a typo is a refusal rather than a panel member
 // that silently never runs. The first model is the strong member and any
 // others are floor members.
+//
+// Models alone are enough. The UI and the re-run endpoint offer a model
+// without an agent — there is one adapter to choose from — and requiring both
+// meant a chosen model fell back to the shipped panel with no error anywhere,
+// producing a score against a model nobody asked for.
 func ParsePanel(agents, models []string) (Panel, error) {
-	if len(agents) == 0 || len(models) == 0 {
+	if len(models) == 0 {
 		return DefaultPanel(), nil
+	}
+	if len(agents) == 0 {
+		agents = []string{DefaultPanel()[0].Agent}
 	}
 	var p Panel
 	for _, a := range agents {

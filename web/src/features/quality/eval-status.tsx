@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { listSkillEvals } from "@/api/sdk.gen";
@@ -12,6 +13,15 @@ const ACTIVE = new Set(["queued", "running"]);
 // member sees why the button is disabled rather than a 403 after clicking.
 const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
 const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
+
+// The models the panel may be pinned to. These are the Claude Code CLI's own
+// aliases, which is what the panel runs — the same vocabulary
+// runner.DefaultPanel() uses, not API model ids. A worker pointed at a gateway
+// that namespaces its identifiers serves none of them, and says so: every
+// panel member fails its health probe and the job fails with the model named.
+// Empty value means "whatever the worker's default panel is", which is the
+// only choice that stays comparable with a skill's existing score history.
+const PANEL_MODELS = ["opus", "sonnet", "haiku"];
 
 // A held-for-review score that came from a machine-derived suite (no
 // authored SKILL.md suite existed) cannot clear a scan hold — see
@@ -84,6 +94,8 @@ export function EvalStatus({
   const { user } = useAuth();
   const canRun = user != null && RUN_EVAL_ROLES.has(user.role);
   const { run, isPending, isError, error } = useRunEval(skillName);
+  const [model, setModel] = useState("");
+  const models = model ? [model] : undefined;
   const evalsQuery = useQuery({
     queryKey: ["skill-evals", skillName],
     queryFn: async () => (await listSkillEvals({ path: { name: skillName } })).data,
@@ -134,8 +146,23 @@ export function EvalStatus({
       {quality?.suite_derived && !hideDerivedBadge && <DerivedSuiteBadge />}
       {lastFailed?.last_error && <LastFailedError lastError={lastFailed.last_error} />}
       <span className="inline-flex items-center gap-1.5">
+        <select
+          aria-label="Panel model"
+          title="Which model attempts the tasks. A score against a different model is charted as its own series, not appended to the existing trend."
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={!canRun || isPending}
+          className="bg-transparent border border-border rounded px-1 py-0.5 text-[11px] disabled:opacity-50"
+        >
+          <option value="">Default model</option>
+          {PANEL_MODELS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
         <button
-          onClick={() => run("smoke")}
+          onClick={() => run({ tier: "smoke", models })}
           disabled={!canRun || isPending}
           title={!canRun ? RUN_EVAL_DISABLED_REASON : "5 tasks on one model"}
           className="text-accent hover:underline disabled:opacity-50"
@@ -144,7 +171,7 @@ export function EvalStatus({
         </button>
         <span className="text-text-tertiary">·</span>
         <button
-          onClick={() => run()}
+          onClick={() => run({ models })}
           disabled={!canRun || isPending}
           title={!canRun ? RUN_EVAL_DISABLED_REASON : "the releasable score"}
           className="text-accent hover:underline disabled:opacity-50"
