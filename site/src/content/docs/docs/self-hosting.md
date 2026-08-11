@@ -123,14 +123,11 @@ Optional, with defaults:
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
 | `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
-| `LLM_BASE_URL` | `https://api.anthropic.com` | Judge gateway base URL. Posts to `{base}/v1/messages` |
-| `LLM_AUTH_STYLE` | `x-api-key` | Judge auth header: `x-api-key` or `bearer` (OpenRouter expects `bearer`) |
-| `LLM_STRONG_MODEL` | `claude-opus-5` | Model for the judge (strong class) |
-| `LLM_FAST_MODEL` | `claude-haiku-4-5-20251001` | Model for the fast class |
-| `ANTHROPIC_BASE_URL` | — | Forwarded into the sandbox for the claude-code panel agent; points it at a different gateway |
-| `ANTHROPIC_AUTH_TOKEN` | — | Forwarded into the sandbox for the claude-code panel agent; the token for `ANTHROPIC_BASE_URL` |
+| `ANTHROPIC_AUTH_TOKEN` | — | Credential sent as `Authorization: Bearer` — what OpenRouter issues. An alternative to `ANTHROPIC_API_KEY`, and it wins when both are set |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | An Anthropic-compatible gateway for the judge *and* the panel. Posts to `{base}/v1/messages` |
+| `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members at the deep tier. Required behind a gateway that namespaces its identifiers |
 
-The judge model (`ANTHROPIC_API_KEY`) is checked at startup. The panel agent is not checked at startup: if neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set, and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today — `codex`, `cursor`, and `opencode` are registered but can't yet run. See [Quality scoring](/docs/quality) for the OpenRouter example and what changing the judge model means for score comparability.
+The judge's credential is checked at startup — the worker exits naming the variables to set. The panel agent is not checked at startup: if no credential reaches the sandbox and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today. See [Quality scoring](/docs/quality) for the OpenRouter example and what changing the model means for score comparability.
 
 ## Storage
 
