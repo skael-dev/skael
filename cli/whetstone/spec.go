@@ -65,7 +65,7 @@ func RunSpecShow(skill string) error {
 	return sp.Save(os.Stdout)
 }
 
-// RunSpecEdit opens the spec YAML in $EDITOR and stores the edited result as
+// RunSpecEdit opens the spec YAML in $EDITOR. It stores the edited result as
 // a new, approved version. Approval is per version, so a prior version's
 // approval never carries forward to one nobody has reviewed.
 func RunSpecEdit(skill string) error {
