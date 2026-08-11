@@ -40,6 +40,15 @@ type suiteBody struct {
 	// ordinary authored push.
 	JobID      string `json:"job_id,omitempty"`
 	ClaimToken string `json:"claim_token,omitempty"`
+	// Unreviewed is the pusher's declaration that this suite is exactly what
+	// the generator wrote and that nobody has read it. The server acts on it:
+	// it records the suite as machine-derived.
+	//
+	// A client can declare only the weaker status. There is no field that
+	// claims authored, because a pusher that claims it clears its own scan
+	// hold. omitempty is load-bearing: a required body field returns 422 to
+	// every already-deployed client.
+	Unreviewed bool `json:"unreviewed,omitempty"`
 }
 
 // DeriveClaims is the eval-queue surface this route needs to attribute a push
@@ -143,6 +152,19 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 					return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
 				}
 				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store derived suite failed")
+				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
+			}
+			return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil
+		}
+
+		if input.Body.Unreviewed {
+			rec, err = reg.PutDerived(ctx, input.Body.Skill, archive, checks,
+				input.Body.SpecVersion, uploadedBy, input.Body.Spec, nil)
+			if err != nil {
+				if errors.Is(err, ErrInvalidArchive) {
+					return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
+				}
+				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store unreviewed suite failed")
 				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
 			}
 			return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil

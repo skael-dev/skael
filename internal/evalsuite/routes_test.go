@@ -308,6 +308,42 @@ func TestPostSuite_APushWithNoJobStaysAuthored(t *testing.T) {
 	}
 }
 
+// TestPostSuite_AnUnreviewedPushIsRecordedDerived pins the meaning origin now
+// carries. A suite the generator wrote and nobody read must not clear a scan
+// hold. Origin is the one flag that says so.
+//
+// The claim path proves a worker derived the suite. This proves nobody read
+// it. Both end at PutDerived, and no path lets a client claim the stronger
+// status.
+func TestPostSuite_AnUnreviewedPushIsRecordedDerived(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+
+	body := map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"checks":         []map[string]any{{"task_id": "t1", "ok": true}},
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+		"unreviewed":     true,
+	}
+	resp := srv.postJSON(t, "/api/eval/suites", body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		Ref string `json:"ref"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &out)
+
+	rec, err := srv.reg.Get(t.Context(), out.Ref)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", out.Ref, err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Fatalf("origin = %q, want %q", rec.Origin, evalsuite.OriginDerived)
+	}
+}
+
 func TestPostSuite_UnknownSkillIs404(t *testing.T) {
 	srv := newTestServer(t)
 
