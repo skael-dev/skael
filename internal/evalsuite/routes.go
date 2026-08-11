@@ -85,6 +85,22 @@ type suiteOutput struct {
 	Body   suiteOutputBody
 }
 
+// suiteUploadResult turns a Registry Put/PutDerived outcome into the response
+// or error the upload-eval-suite handler returns. All three call sites share
+// this classification: a malformed archive is a 422, anything else logged
+// under skill and msg is a 500, and success is a 201 with the record's ref
+// and task count.
+func suiteUploadResult(rec *Record, err error, skillName, msg string) (*suiteOutput, error) {
+	if err != nil {
+		if errors.Is(err, ErrInvalidArchive) {
+			return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
+		}
+		log.Error().Err(err).Str("skill", skillName).Msg(msg)
+		return nil, huma.Error500InternalServerError("upload eval suite: internal error")
+	}
+	return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil
+}
+
 // RegisterRoutes wires up the eval suite registry HTTP endpoints onto the
 // provided Huma API and Chi router. The router is needed for the raw-response
 // download route, which streams bytes rather than returning JSON.
@@ -147,45 +163,17 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 				func(ctx context.Context, q Queryer, ref string) error {
 					return opts.Claims.RecordDerivedSuite(ctx, q, jobID, ref)
 				})
-			if err != nil {
-				if errors.Is(err, ErrInvalidArchive) {
-					return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
-				}
-				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store derived suite failed")
-				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
-			}
-			return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil
+			return suiteUploadResult(rec, err, input.Body.Skill, "evalsuite: store derived suite failed")
 		}
 
 		if input.Body.Unreviewed {
 			rec, err = reg.PutDerived(ctx, input.Body.Skill, archive, checks,
 				input.Body.SpecVersion, uploadedBy, input.Body.Spec, nil)
-			if err != nil {
-				if errors.Is(err, ErrInvalidArchive) {
-					return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
-				}
-				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store unreviewed suite failed")
-				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
-			}
-			return &suiteOutput{Status: http.StatusCreated, Body: suiteOutputBody{Ref: rec.Ref, TaskCount: rec.TaskCount}}, nil
+			return suiteUploadResult(rec, err, input.Body.Skill, "evalsuite: store unreviewed suite failed")
 		}
 
 		rec, err = reg.Put(ctx, input.Body.Skill, archive, checks, input.Body.SpecVersion, uploadedBy, input.Body.Spec)
-		if err != nil {
-			if errors.Is(err, ErrInvalidArchive) {
-				return nil, huma.Error422UnprocessableEntity("upload eval suite: " + err.Error())
-			}
-			log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: store suite failed")
-			return nil, huma.Error500InternalServerError("upload eval suite: internal error")
-		}
-
-		return &suiteOutput{
-			Status: http.StatusCreated,
-			Body: suiteOutputBody{
-				Ref:       rec.Ref,
-				TaskCount: rec.TaskCount,
-			},
-		}, nil
+		return suiteUploadResult(rec, err, input.Body.Skill, "evalsuite: store suite failed")
 	})
 
 	// get-eval-suite-meta serves everything a worker needs to materialize a

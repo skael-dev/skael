@@ -425,7 +425,8 @@ type EvalSuiteUpload struct {
 }
 
 // EvalSuiteUploadRequest is one suite upload. Spec may be nil; JobID and
-// ClaimToken are set only by the eval worker's derive path.
+// ClaimToken are set only by the eval worker's derive path; Unreviewed
+// declares that nobody has read this suite. See UploadEvalSuite.
 type EvalSuiteUploadRequest struct {
 	Skill       string
 	SpecVersion int
@@ -434,11 +435,7 @@ type EvalSuiteUploadRequest struct {
 	Archive     []byte
 	JobID       string
 	ClaimToken  string
-	// Unreviewed declares that this suite is exactly what the generator wrote
-	// and that nobody has read it. The server records such a suite as
-	// machine-derived, so a skill cannot clear a scan hold on its own eval
-	// set.
-	Unreviewed bool
+	Unreviewed  bool
 }
 
 // UploadEvalSuite uploads an evaluation suite archive, together with the
