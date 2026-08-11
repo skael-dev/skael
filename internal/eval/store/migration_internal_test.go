@@ -187,9 +187,15 @@ func TestMigration9_PreservesAnExistingWorkspace(t *testing.T) {
 func TestLatestMigration_ClearsVerifierEraRowsAndAddsRunGrades(t *testing.T) {
 	root := t.TempDir()
 
-	// One short of every migration this build knows, so the migration under
-	// test runs against a database populated at the version before it.
-	s := openAtVersion(t, root, len(migrations)-1)
+	// Version 4: every migration through the ALTER TABLE that drops
+	// robustness_gap and adds scores.healthy, but not the run_grades
+	// migration under test. Hardcoded rather than len(migrations)-1, for the
+	// same reason TestMigration9_PreservesAnExistingWorkspace hardcodes its
+	// version above: len(migrations)-1 means "one before the newest", so a
+	// later append silently retargets this test onto the appended migration
+	// instead of the one named in its title.
+	const preRunGradesVersion = 4
+	s := openAtVersion(t, root, preRunGradesVersion)
 
 	id, err := s.CreateEval(EvalRecord{Skill: "demo", Tier: "full", Status: "running", StartedAt: time.Now()})
 	if err != nil {

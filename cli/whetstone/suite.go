@@ -70,6 +70,16 @@ func generateSuite(ctx context.Context, st *store.Store, g llm.Gateway, sp *spec
 		return err
 	}
 
+	// Record what was generated, so `suite push` can tell an untouched eval
+	// set from one a person edited. A failure here must not fail generation:
+	// the artifacts exist. The worst consequence is a push recorded as
+	// authored, which is the status quo.
+	if ref, rerr := suite.Ref(dir); rerr == nil {
+		if err := st.RecordGeneratedRef(sp.Name, ref); err != nil {
+			ui.Warn("could not record the generated eval set ref: %v", err)
+		}
+	}
+
 	if ui.JSONMode {
 		return ui.PrintJSON(map[string]any{
 			"skill":    sp.Name,

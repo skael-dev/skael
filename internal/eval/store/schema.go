@@ -176,6 +176,16 @@ var migrations = []string{
 		created_at TEXT    NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (eval_id, task_id, agent, model, condition, attempt)
 	);`,
+
+	// Migration 5: whetstone records the ref of the suite it generated, so
+	// `suite push` can tell an untouched eval set from an edited one. The
+	// server stamps an untouched one as machine-derived. This is why a skill
+	// cannot write its own exam.
+	`CREATE TABLE suite_generated (
+		skill_name TEXT NOT NULL PRIMARY KEY,
+		suite_ref  TEXT NOT NULL,
+		written_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
 }
 
 func migrate(db *sql.DB) error {
