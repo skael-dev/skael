@@ -1,0 +1,13 @@
+Skael
+Copyright (c) Skael contributors
+
+This product includes software and formats developed by Anthropic.
+
+- github.com/anthropics/skills, the skill-creator skill
+  Licensed under the Apache License, Version 2.0.
+  https://www.apache.org/licenses/LICENSE-2.0
+
+  Skael adopts skill-creator's evals/evals.json schema unchanged, and its
+  grading.json expectation shape. The grader instruction in
+  internal/eval/score/grade.go is adapted from that skill's agents/grader.md.
+  No source file is vendored.
