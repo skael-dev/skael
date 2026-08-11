@@ -189,11 +189,11 @@ func TestLatestMigration_ClearsVerifierEraRowsAndAddsRunGrades(t *testing.T) {
 
 	// Version 4: every migration through the ALTER TABLE that drops
 	// robustness_gap and adds scores.healthy, but not the run_grades
-	// migration under test. Hardcoded rather than len(migrations)-1, for the
-	// same reason TestMigration9_PreservesAnExistingWorkspace hardcodes its
-	// version above: len(migrations)-1 means "one before the newest", so a
-	// later append silently retargets this test onto the appended migration
-	// instead of the one named in its title.
+	// migration under test. Hardcoded for the same reason
+	// TestMigration9_PreservesAnExistingWorkspace hardcodes its version
+	// above. The expression len(migrations)-1 names "one before the
+	// newest". A later append silently retargets this test onto the
+	// appended migration, not the one named in its title.
 	const preRunGradesVersion = 4
 	s := openAtVersion(t, root, preRunGradesVersion)
 
