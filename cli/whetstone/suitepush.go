@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -134,10 +135,42 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 			req.Skill, len(archive), base64EncodedLen(len(archive)), maxArchiveBytes, maxRequestBodyBytes)
 	}
 
+	// When an eval set's content still matches what the generator wrote,
+	// nobody has read it. The server records such a suite as machine-derived,
+	// so its score cannot clear a scan hold. A read failure here declares
+	// nothing, which keeps the old behaviour rather than a guess.
+	generated, err := req.Store.GeneratedRef(req.Skill)
+	if err != nil {
+		return fmt.Errorf("suite push: %w", err)
+	}
+	unreviewed := generated != "" && generated == suiteRef
+
 	c := client.New(req.Endpoint, req.APIKey)
 	resp, err := c.UploadEvalSuite(client.EvalSuiteUploadRequest{
-		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON, Archive: archive,
+		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON,
+		Archive: archive, Unreviewed: unreviewed,
 	})
+	// A server that predates the unreviewed field rejects the whole request,
+	// because Huma refuses an unknown body property. A retry without the
+	// field is the only way an author on an older server can push at all.
+	// The cost is that the suite is then recorded as authored. The retry
+	// below discloses that cost. It does not hide it.
+	if unreviewed {
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			resp, err = c.UploadEvalSuite(client.EvalSuiteUploadRequest{
+				Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON,
+				Archive: archive, Unreviewed: false,
+			})
+			if err == nil {
+				// The retry actually recorded the suite as authored, so the
+				// rest of this function must report that, not the original
+				// intent.
+				unreviewed = false
+				ui.Warn("this server does not record an unreviewed eval set")
+				ui.Warn("%s was pushed as authored, so its score can release a held version", req.Skill)
+			}
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}
@@ -147,7 +180,11 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 			"skill":      req.Skill,
 			"ref":        resp.Ref,
 			"task_count": resp.TaskCount,
+			"unreviewed": unreviewed,
 		})
+	}
+	if unreviewed {
+		ui.Warn("recorded as machine-derived: nobody has read this eval set, so its score cannot release a held version")
 	}
 	ui.Success("pushed %s: %s (%d tasks)", req.Skill, resp.Ref, resp.TaskCount)
 	return nil
