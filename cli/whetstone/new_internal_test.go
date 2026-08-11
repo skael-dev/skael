@@ -3,6 +3,7 @@ package whetstone
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -91,7 +92,7 @@ func TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint(t *testing.T) {
 		brokenBody, brokenBody,
 	)
 
-	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
+	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
 		t.Fatal("runNew succeeded on a bundle that fails lint")
 	}
@@ -122,7 +123,7 @@ func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 	st := newTestStore(t)
 	g := fake.New(newScript(cleanBody)...)
 
-	if err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true); err != nil {
+	if err := runNew(context.Background(), st, g, "extract tables from PDFs"); err != nil {
 		t.Fatalf("runNew: %v", err)
 	}
 
@@ -139,67 +140,6 @@ func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 	}
 }
 
-// TestRunNew_ApprovalGateDeclines covers every answer that is not consent,
-// including the empty one: the prompt is "[y/N]", so a bare Enter must stop
-// the run rather than approve a spec nobody read.
-func TestRunNew_ApprovalGateDeclines(t *testing.T) {
-	cases := []struct {
-		name   string
-		answer string
-	}{
-		{"n", "n\n"},
-		{"bare enter", "\n"},
-		{"no", "no\n"},
-		{"closed stdin", ""},
-		{"maybe", "maybe\n"},
-		{"not quite yes", "Y es\n"},
-	}
-	for _, tc := range cases {
-		answer := tc.answer
-		t.Run(tc.name, func(t *testing.T) {
-			st := newTestStore(t)
-			// Only the interview is scripted: if the gate leaks, generation
-			// runs out of responses and the failure names the wrong step.
-			g := fake.New(specDraft, specDraft)
-
-			err := runNew(context.Background(), st, g, strings.NewReader(answer), "extract tables from PDFs", false)
-			if err == nil {
-				t.Fatalf("runNew proceeded on answer %q", answer)
-			}
-			if !strings.Contains(err.Error(), "was not approved") {
-				t.Errorf("answer %q stopped for the wrong reason: %v", answer, err)
-			}
-
-			// The spec is still stored — the draft is not thrown away — but
-			// the version must not be approved, or `gen` would accept it.
-			if isApproved(st, "pdf-extract", 1) {
-				t.Errorf("answer %q approved the spec", answer)
-			}
-			if n := len(g.Calls()); n != 2 {
-				t.Errorf("gateway calls = %d, want 2: generation ran despite a declined gate", n)
-			}
-		})
-	}
-}
-
-// TestRunNew_ApprovalGateAccepts pins the other half: "y" and "yes" consent,
-// case-insensitively and ignoring surrounding whitespace.
-func TestRunNew_ApprovalGateAccepts(t *testing.T) {
-	for _, answer := range []string{"y\n", "yes\n", "Y\n", "  yes  \n"} {
-		t.Run(strings.TrimSpace(answer), func(t *testing.T) {
-			st := newTestStore(t)
-			g := fake.New(newScript(cleanBody)...)
-
-			if err := runNew(context.Background(), st, g, strings.NewReader(answer), "extract tables from PDFs", false); err != nil {
-				t.Fatalf("answer %q was rejected: %v", answer, err)
-			}
-			if !isApproved(st, "pdf-extract", 1) {
-				t.Errorf("answer %q did not approve the spec", answer)
-			}
-		})
-	}
-}
-
 // TestRunNew_GenerationFailureSuggestsResume pins the resume hint from
 // wrapGenerationError: completed passes are cached, so a generation failure
 // should name the exact command to pick up from there rather than leaving the
@@ -210,7 +150,7 @@ func TestRunNew_GenerationFailureSuggestsResume(t *testing.T) {
 	// generation pass — fails with no response left to serve it.
 	g := fake.New(specDraft, specDraft)
 
-	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
+	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
 		t.Fatal("runNew succeeded with no generation responses scripted")
 	}
@@ -227,7 +167,7 @@ func TestRunNew_SuiteFailureSuggestsResume(t *testing.T) {
 	// The bundle passes are all scripted; the suite draft is not.
 	g := fake.New(specDraft, specDraft, outlinePass, cleanBody, descriptionPass)
 
-	err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true)
+	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
 		t.Fatal("runNew succeeded with no suite-draft response scripted")
 	}
@@ -236,20 +176,68 @@ func TestRunNew_SuiteFailureSuggestsResume(t *testing.T) {
 	}
 }
 
-// TestRunNew_YesSkipsThePromptEntirely gives --yes an input that would decline
-// if it were read. The flag must bypass the gate, not answer it.
-func TestRunNew_YesSkipsThePromptEntirely(t *testing.T) {
-	st := newTestStore(t)
+// TestRunNew_WritesAllThreeArtifactsWithNoPrompt pins the creation contract:
+// one run, three artifacts, no question asked. The gate this replaces left a
+// stored spec and no bundle when a person answered N, which is a half-created
+// skill.
+func TestRunNew_WritesAllThreeArtifactsWithNoPrompt(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
 	g := fake.New(newScript(cleanBody)...)
 
-	declining := strings.NewReader("n\n")
-	if err := runNew(context.Background(), st, g, declining, "extract tables from PDFs", true); err != nil {
-		t.Fatalf("runNew --yes: %v", err)
+	if err := runNew(context.Background(), st, g, "extract tables from pdfs"); err != nil {
+		t.Fatalf("runNew: %v", err)
 	}
-	if !isApproved(st, "pdf-extract", 1) {
-		t.Error("--yes did not approve the spec")
+
+	skillDir, err := st.SkillDir("pdf-extract")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if declining.Len() == 0 {
-		t.Error("--yes consumed the approval input; it must not read stdin at all")
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Errorf("SKILL.md: %v", err)
+	}
+
+	suiteDir, err := st.SuiteDir("pdf-extract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := suite.LoadEvalSet(suiteDir); err != nil {
+		t.Errorf("evals.json: %v", err)
+	}
+	qs, err := suite.LoadTriggerQueries(suiteDir)
+	if err != nil {
+		t.Errorf("triggers.json: %v", err)
+	}
+	if len(qs) == 0 {
+		t.Error("triggers.json is empty; the spec's trigger phrases did not reach it")
+	}
+}
+
+// TestRunNew_ApprovesTheSpecItDrafts guards the downstream consequence.
+// RunEvalWith refuses an unapproved spec, so a creation run that stored one
+// without approval would end with a skill that cannot be scored.
+func TestRunNew_ApprovesTheSpecItDrafts(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := runNew(context.Background(), st, fake.New(newScript(cleanBody)...), "extract tables from pdfs"); err != nil {
+		t.Fatalf("runNew: %v", err)
+	}
+
+	_, version, err := st.LoadSpec("pdf-extract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isApproved(st, "pdf-extract", version) {
+		t.Errorf("spec version %d is not approved", version)
 	}
 }
