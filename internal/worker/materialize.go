@@ -9,7 +9,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -103,15 +102,6 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 		return nil, fmt.Errorf("worker: materialize approve spec: %w", err)
 	}
 
-	// The contract is compiled, not shipped: `whetstone new` writes it into the
-	// eval sidecar, which lint.Excluded keeps out of every published bundle. A
-	// worker therefore has to compile its own, and contract.Compile is a pure
-	// function of the spec saved above. Omitting it fails only at the scoring
-	// step, after the panel has already run.
-	if err := writeContract(st, in.Skill, sp); err != nil {
-		return nil, err
-	}
-
 	suiteDir, err := st.SuiteDir(in.Skill)
 	if err != nil {
 		return nil, fmt.Errorf("worker: materialize suite dir: %w", err)
@@ -150,37 +140,6 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	}
 
 	return st, nil
-}
-
-// writeContract mirrors `whetstone new`'s writeContract, which is the
-// authoring path that produces the file a materialized workspace lacks.
-func writeContract(st *store.Store, skillName string, sp *spec.SkillSpec) error {
-	c, err := contract.Compile(sp)
-	if err != nil {
-		return fmt.Errorf("worker: materialize compile contract: %w", err)
-	}
-
-	path, err := st.ContractPath(skillName)
-	if err != nil {
-		return fmt.Errorf("worker: materialize contract path: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("worker: materialize mkdir contract dir: %w", err)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("worker: materialize create contract: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	if err := c.Save(f); err != nil {
-		return fmt.Errorf("worker: materialize save contract: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("worker: materialize writing %s: %w", path, err)
-	}
-	return nil
 }
 
 // specFromBundle reconstructs just enough of a spec.SkillSpec from the

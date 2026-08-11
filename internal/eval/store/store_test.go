@@ -60,21 +60,17 @@ func TestOpen_CreatesLayoutAndIsIdempotent(t *testing.T) {
 func TestPaths_EvalSidecarIsOneDirectory(t *testing.T) {
 	s := openStore(t)
 
-	// pack strips the sidecar with a single RemoveAll, so contract and suite
-	// must both live under the eval directory.
+	// pack strips the sidecar with a single RemoveAll, so the eval set must
+	// live under the eval directory.
 	eval, err := s.EvalDir("pdf-extract")
 	if err != nil {
 		t.Fatalf("EvalDir: %v", err)
-	}
-	contract, err := s.ContractPath("pdf-extract")
-	if err != nil {
-		t.Fatalf("ContractPath: %v", err)
 	}
 	suite, err := s.SuiteDir("pdf-extract")
 	if err != nil {
 		t.Fatalf("SuiteDir: %v", err)
 	}
-	for _, p := range []string{contract, suite} {
+	for _, p := range []string{suite} {
 		if !strings.HasPrefix(p, eval+string(filepath.Separator)) {
 			t.Errorf("%q is not inside the eval sidecar %q", p, eval)
 		}
@@ -134,9 +130,6 @@ func TestPaths_RejectUnsafeNames(t *testing.T) {
 		}
 		if _, err := s.EvalDir(name); err == nil {
 			t.Errorf("EvalDir(%q) succeeded, want a rejection", name)
-		}
-		if _, err := s.ContractPath(name); err == nil {
-			t.Errorf("ContractPath(%q) succeeded, want a rejection", name)
 		}
 		if _, err := s.SuiteDir(name); err == nil {
 			t.Errorf("SuiteDir(%q) succeeded, want a rejection", name)

@@ -18,7 +18,7 @@ func TestRunDoctor_ReportsAGatewayWithNothingInstalled(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor returned an error for a missing CLI: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 		}
 	}
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRunDoctor_ReportsTheDefaultLLMTimeout(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunDoctor_HonoursTheTimeoutOverride(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "45s")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunDoctor_RejectsAMalformedTimeout(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "not-a-duration")
 
-	_, err := whetstone.RunDoctor(context.Background(), false)
+	_, err := whetstone.RunDoctor(context.Background())
 	if err == nil {
 		t.Fatal("RunDoctor accepted a malformed WHETSTONE_LLM_TIMEOUT")
 	}

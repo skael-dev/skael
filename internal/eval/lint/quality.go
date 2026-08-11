@@ -63,7 +63,7 @@ var declarativeHeadingWords = []string{
 
 // IsDeclarativeSection reports whether a heading names a declarative section
 // — reference material rather than a procedure. Exported so gen's deterministic
-// offload pass (internal/eval/gen) can pick the same candidate sections this
+// offload pass (cli/whetstone/gen) can pick the same candidate sections this
 // linter treats as non-steps, rather than a second copy of the heuristic.
 func IsDeclarativeSection(heading string) bool {
 	lower := strings.ToLower(heading)

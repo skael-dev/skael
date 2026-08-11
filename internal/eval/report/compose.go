@@ -62,6 +62,9 @@ type ComposeInput struct {
 	BaselineMeasured bool
 	BaselineWipeout  bool
 
+	TokensMedian         int64
+	TokensMedianBaseline int64
+
 	TriggerF1       float64
 	TriggerInferred bool
 	TriggerSource   PanelMember
@@ -126,26 +129,28 @@ func Compose(in ComposeInput) (*Report, error) {
 	}
 
 	rep := &Report{
-		SchemaVersion:   SchemaVersion,
-		Skill:           in.Skill,
-		SpecVersion:     in.SpecVersion,
-		Tier:            in.Tier,
-		SuiteRef:        in.SuiteRef,
-		EngineVersion:   in.EngineVersion,
-		ModelPanel:      in.ModelPanel,
-		PanelComplete:   in.PanelComplete,
-		Headline:        headline,
-		BaselineWipeout: in.BaselineWipeout,
-		TriggerF1:       in.TriggerF1,
-		Members:         members,
-		Tasks:           tasks,
-		VoidTasks:       in.Void,
-		TriggerInferred: in.TriggerInferred,
-		TriggerSource:   in.TriggerSource,
-		TriggerUnknown:  in.TriggerUnknown,
-		GraderModel:     in.GraderModel,
-		StartedAt:       in.StartedAt,
-		FinishedAt:      in.FinishedAt,
+		SchemaVersion:        SchemaVersion,
+		Skill:                in.Skill,
+		SpecVersion:          in.SpecVersion,
+		Tier:                 in.Tier,
+		SuiteRef:             in.SuiteRef,
+		EngineVersion:        in.EngineVersion,
+		ModelPanel:           in.ModelPanel,
+		PanelComplete:        in.PanelComplete,
+		Headline:             headline,
+		BaselineWipeout:      in.BaselineWipeout,
+		TokensMedian:         in.TokensMedian,
+		TokensMedianBaseline: in.TokensMedianBaseline,
+		TriggerF1:            in.TriggerF1,
+		Members:              members,
+		Tasks:                tasks,
+		VoidTasks:            in.Void,
+		TriggerInferred:      in.TriggerInferred,
+		TriggerSource:        in.TriggerSource,
+		TriggerUnknown:       in.TriggerUnknown,
+		GraderModel:          in.GraderModel,
+		StartedAt:            in.StartedAt,
+		FinishedAt:           in.FinishedAt,
 	}
 	if in.BaselineMeasured {
 		rep.Baseline = in.Baseline

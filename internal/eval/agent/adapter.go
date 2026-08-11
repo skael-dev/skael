@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"io"
-
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // ErrNoExecutor is returned when Invoke is called with no Exec. Failing closed
@@ -73,8 +71,8 @@ type InvokeSpec struct {
 }
 
 // Meta is everything a parsed stream reports about the session itself, as
-// opposed to the trajectory. Token counts feed Efficiency, VisibleSkills feeds
-// trigger precision, and AgentVersion is recorded per run so a score can be
+// opposed to the trajectory. Token counts are the cost figure reported beside
+// the score, and AgentVersion is recorded per run so a score can be
 // attributed to a specific CLI build.
 type Meta struct {
 	AgentVersion      string
@@ -91,7 +89,7 @@ type Meta struct {
 
 // Result is a parsed session.
 type Result struct {
-	Events []trajectory.Event
+	Events []Event
 	Meta   Meta
 }
 

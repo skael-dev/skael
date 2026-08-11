@@ -103,9 +103,9 @@ type ScoreRow struct {
 	Agent         string
 	Model         string
 	Effectiveness float64
-	// Healthy is false when this member's adapter failed its probe, mirroring
-	// score.PanelEntry.Healthy. Every other field on such a row is a zero
-	// value that must not be read as a real measurement.
+	// Healthy is false when this member's adapter failed its probe. Every
+	// other field on such a row is a zero value that must not be read as a
+	// real measurement.
 	Healthy bool
 }
 

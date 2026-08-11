@@ -9,7 +9,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/score"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 func parseFixture(t *testing.T, name string) *agent.Result {
@@ -27,15 +26,15 @@ func parseFixture(t *testing.T, name string) *agent.Result {
 	return res
 }
 
-func typesOf(events []trajectory.Event) []trajectory.EventType {
-	out := make([]trajectory.EventType, len(events))
+func typesOf(events []agent.Event) []agent.EventType {
+	out := make([]agent.EventType, len(events))
 	for i, e := range events {
 		out[i] = e.Type
 	}
 	return out
 }
 
-func countType(events []trajectory.Event, want trajectory.EventType) int {
+func countType(events []agent.Event, want agent.EventType) int {
 	var n int
 	for _, e := range events {
 		if e.Type == want {
@@ -48,13 +47,13 @@ func countType(events []trajectory.Event, want trajectory.EventType) int {
 func TestParse_MapsToolsToNormalizedTypes(t *testing.T) {
 	res := parseFixture(t, "basic-tools.jsonl")
 
-	if countType(res.Events, trajectory.TypeFileWrite) < 1 {
+	if countType(res.Events, agent.TypeFileWrite) < 1 {
 		t.Errorf("no file_write event parsed from a fixture that writes a file: %v", typesOf(res.Events))
 	}
-	if countType(res.Events, trajectory.TypeFileRead) < 1 {
+	if countType(res.Events, agent.TypeFileRead) < 1 {
 		t.Errorf("no file_read event parsed from a fixture that reads a file: %v", typesOf(res.Events))
 	}
-	if countType(res.Events, trajectory.TypeMessage) < 1 {
+	if countType(res.Events, agent.TypeMessage) < 1 {
 		t.Errorf("no message event parsed: %v", typesOf(res.Events))
 	}
 
@@ -62,7 +61,7 @@ func TestParse_MapsToolsToNormalizedTypes(t *testing.T) {
 	// so a file_write with no path is unscoreable.
 	var found bool
 	for _, e := range res.Events {
-		if e.Type == trajectory.TypeFileWrite && len(e.Paths) > 0 {
+		if e.Type == agent.TypeFileWrite && len(e.Paths) > 0 {
 			found = true
 		}
 	}
@@ -169,9 +168,9 @@ func TestParse_RateLimitEventOnlyFlagsAnActualLimit(t *testing.T) {
 func TestParse_SkillInvocationBecomesAnExplicitToolCall(t *testing.T) {
 	res := parseFixture(t, "skill-invocation.jsonl")
 
-	var got []trajectory.Event
+	var got []agent.Event
 	for _, e := range res.Events {
-		if e.Type == trajectory.TypeToolCall && e.Name == "Skill" {
+		if e.Type == agent.TypeToolCall && e.Name == "Skill" {
 			got = append(got, e)
 		}
 	}
@@ -192,7 +191,7 @@ func TestParse_SkillInvocationBecomesAnExplicitToolCall(t *testing.T) {
 	// score.DetectFiring's inferred branch becomes reachable from a real
 	// invocation and Probe.Inferred stops meaning what it claims.
 	for _, e := range res.Events {
-		if e.Type == trajectory.TypeSkillRead {
+		if e.Type == agent.TypeSkillRead {
 			t.Errorf("skill invocation reported as skill_read: %+v", e)
 		}
 	}
@@ -222,11 +221,11 @@ func TestParse_UnknownEventsBecomeOpaque(t *testing.T) {
 	// stream bookkeeping, not agent behaviour. They must be recorded as opaque
 	// so they are excluded from contract denominators rather than scored.
 	res := parseFixture(t, "basic-tools.jsonl")
-	if countType(res.Events, trajectory.TypeOpaque) == 0 {
+	if countType(res.Events, agent.TypeOpaque) == 0 {
 		t.Error("expected the hook/init/result events to be recorded as opaque")
 	}
 	for _, e := range res.Events {
-		if e.Type == trajectory.TypeOpaque && e.Name == "" {
+		if e.Type == agent.TypeOpaque && e.Name == "" {
 			t.Errorf("opaque event %d has no Name; an unmapped event must record what it was", e.Seq)
 		}
 	}
@@ -263,7 +262,7 @@ func TestParse_PolymorphicToolResultDoesNotFail(t *testing.T) {
 	if len(res.Events) == 0 {
 		t.Fatal("no events parsed")
 	}
-	if countType(res.Events, trajectory.TypeToolResult) == 0 {
+	if countType(res.Events, agent.TypeToolResult) == 0 {
 		t.Errorf("no tool_result events: %v", typesOf(res.Events))
 	}
 }
@@ -276,7 +275,7 @@ func TestParse_MalformedLinesAreSkippedNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse should tolerate a malformed line, got %v", err)
 	}
-	if countType(res.Events, trajectory.TypeMessage) != 1 {
+	if countType(res.Events, agent.TypeMessage) != 1 {
 		t.Errorf("valid line after a malformed one was not parsed: %v", typesOf(res.Events))
 	}
 }
@@ -296,8 +295,8 @@ func TestParse_UnrecognisedTopLevelTypeBecomesOpaque(t *testing.T) {
 		t.Fatalf("want 1 event, got %d: %v", len(res.Events), typesOf(res.Events))
 	}
 	e := res.Events[0]
-	if e.Type != trajectory.TypeOpaque {
-		t.Errorf("Type = %q, want %q", e.Type, trajectory.TypeOpaque)
+	if e.Type != agent.TypeOpaque {
+		t.Errorf("Type = %q, want %q", e.Type, agent.TypeOpaque)
 	}
 	if e.Name != "some_future_event" {
 		t.Errorf("Name = %q, want the unrecognised type recorded", e.Name)

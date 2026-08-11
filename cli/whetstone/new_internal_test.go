@@ -78,11 +78,10 @@ func exists(t *testing.T, path string) bool {
 	return err == nil
 }
 
-// TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint is the brief's
-// load-bearing rule: a contract compiled from a spec whose bundle does not
-// lint describes a skill that does not exist, and a suite drafted against it
-// measures nothing. Neither artifact may be written.
-func TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint(t *testing.T) {
+// TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint is the brief's
+// load-bearing rule: an eval set drafted against a bundle that does not lint
+// measures a skill that does not exist, so it must not be written.
+func TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint(t *testing.T) {
 	st := newTestStore(t)
 	// No suite draft is scripted: reaching it is itself the failure this test
 	// is looking for, and the fake reports an unscripted call by name.
@@ -100,25 +99,16 @@ func TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint(t *testing.T) {
 		t.Errorf("error does not name the lint failure: %v", err)
 	}
 
-	contractPath, perr := st.ContractPath("pdf-extract")
-	if perr != nil {
-		t.Fatal(perr)
-	}
-	if exists(t, contractPath) {
-		t.Error("a contract was written for a bundle that fails lint")
-	}
-
 	suiteDir, perr := st.SuiteDir("pdf-extract")
 	if perr != nil {
 		t.Fatal(perr)
 	}
 	if exists(t, suiteDir) {
-		t.Error("a suite was written for a bundle that fails lint")
+		t.Error("an eval set was written for a bundle that fails lint")
 	}
 
-	// The suite draft must not have been requested either: it is the most
-	// expensive call in the pipeline, and stopping "after the contract" would
-	// still have spent it.
+	// The eval set draft must not have been requested either: it is the most
+	// expensive call left in the pipeline.
 	if n := len(g.Calls()); n != 7 {
 		t.Errorf("gateway calls = %d, want 7 (2 interview + 3 generation — specDraft plans no resources — "+
 			"+ 2 exhausted body revisions, no suite draft)", n)
@@ -126,22 +116,14 @@ func TestRunNew_StopsBeforeTheContractWhenTheBundleFailsLint(t *testing.T) {
 }
 
 // TestRunNew_WritesTheSidecarWhenTheBundleLintsClean is the positive control
-// for the test above: with the only difference being a bundle that lints, both
-// artifacts must appear.
+// for the test above: with the only difference being a bundle that lints, the
+// eval set must appear.
 func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 	st := newTestStore(t)
 	g := fake.New(newScript(cleanBody)...)
 
 	if err := runNew(context.Background(), st, g, strings.NewReader(""), "extract tables from PDFs", true); err != nil {
 		t.Fatalf("runNew: %v", err)
-	}
-
-	contractPath, err := st.ContractPath("pdf-extract")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !exists(t, contractPath) {
-		t.Error("no contract was written for a bundle that lints clean")
 	}
 
 	suiteDir, err := st.SuiteDir("pdf-extract")

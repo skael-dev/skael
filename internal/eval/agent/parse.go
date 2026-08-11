@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"path"
 	"time"
-
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // maxLineBytes bounds one stream line. Tool results embed file contents, so
@@ -119,12 +117,12 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 	// that precede the first assistant turn and carry no timestamp of their
 	// own). They are backfilled with the first real timestamp the moment it
 	// arrives and flushed then; from that point on nothing is buffered.
-	var pending []trajectory.Event
+	var pending []Event
 
 	// add is the single place an event's timestamp is assigned. While no
 	// timestamp has been seen yet (last is zero), the event is queued in
 	// pending rather than committed with a zero TS.
-	add := func(e trajectory.Event) {
+	add := func(e Event) {
 		seq++
 		e.Seq = seq
 		if last.IsZero() {
@@ -171,13 +169,13 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 				res.Meta.Model = sl.Model
 				res.Meta.VisibleSkills = sl.Skills
 			}
-			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "system/" + sl.Subtype})
+			add(Event{Type: TypeOpaque, Name: "system/" + sl.Subtype})
 
 		case "rate_limit_event":
 			if sl.RateLimitInfo == nil || (sl.RateLimitInfo.Status != "" && sl.RateLimitInfo.Status != "allowed") {
 				res.Meta.RateLimited = true
 			}
-			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "rate_limit_event"})
+			add(Event{Type: TypeOpaque, Name: "rate_limit_event"})
 
 		case "result":
 			res.Meta.DurationMS = sl.DurationMS
@@ -190,7 +188,7 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 			for _, d := range sl.PermissionDenied {
 				res.Meta.PermissionDenials = append(res.Meta.PermissionDenials, d.ToolName)
 			}
-			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "result/" + sl.Subtype})
+			add(Event{Type: TypeOpaque, Name: "result/" + sl.Subtype})
 
 		case "assistant":
 			if sl.Message == nil {
@@ -199,11 +197,11 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 			for _, b := range sl.Message.Content {
 				switch b.Type {
 				case "text":
-					add(trajectory.Event{Type: trajectory.TypeMessage, TextDigest: trajectory.Digest(b.Text)})
+					add(Event{Type: TypeMessage})
 				case "tool_use":
 					add(mapToolUse(b))
 				default:
-					add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "block/" + b.Type})
+					add(Event{Type: TypeOpaque, Name: "block/" + b.Type})
 				}
 			}
 
@@ -213,19 +211,18 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 			}
 			for _, b := range sl.Message.Content {
 				if b.Type != "tool_result" {
-					add(trajectory.Event{Type: trajectory.TypeOpaque, Name: "block/" + b.Type})
+					add(Event{Type: TypeOpaque, Name: "block/" + b.Type})
 					continue
 				}
-				e := trajectory.Event{Type: trajectory.TypeToolResult}
+				e := Event{Type: TypeToolResult}
 				if code, ok := exitCodeOf(sl.ToolResult); ok {
 					e.ExitCode = &code
 				}
-				e.TextDigest = trajectory.Digest(string(sl.ToolResult))
 				add(e)
 			}
 
 		default:
-			add(trajectory.Event{Type: trajectory.TypeOpaque, Name: sl.Type})
+			add(Event{Type: TypeOpaque, Name: sl.Type})
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -245,22 +242,21 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 // names are Claude Code's own; anything unrecognised becomes a generic
 // tool_call rather than opaque, because it is still real agent behaviour and
 // belongs in the focus denominator.
-func mapToolUse(b block) trajectory.Event {
+func mapToolUse(b block) Event {
 	var in toolInput
 	_ = json.Unmarshal(b.Input, &in)
 
-	e := trajectory.Event{Name: b.Name, ArgsDigest: trajectory.Digest(string(b.Input))}
+	e := Event{Name: b.Name}
 
 	switch b.Name {
 	case "Read":
-		e.Type = trajectory.TypeFileRead
+		e.Type = TypeFileRead
 		e.Paths = pathsOf(in.FilePath)
 	case "Write", "Edit", "NotebookEdit":
-		e.Type = trajectory.TypeFileWrite
+		e.Type = TypeFileWrite
 		e.Paths = pathsOf(in.FilePath)
 	case "Bash":
-		e.Type = trajectory.TypeShell
-		e.ArgsDigest = trajectory.Digest(in.Command)
+		e.Type = TypeShell
 	case "Skill":
 		// The native skill-invocation event: an explicit "used this skill" signal,
 		// not a mere read of its SKILL.md. Keep it a tool_call named "Skill" so
@@ -268,12 +264,12 @@ func mapToolUse(b block) trajectory.Event {
 		// invoked skill as a synthetic path so eventNamesSkill's path heuristic
 		// (parent-directory match) can find it without depending on Name, the
 		// same way a Read of SKILL.md would be matched.
-		e.Type = trajectory.TypeToolCall
+		e.Type = TypeToolCall
 		e.Paths = []string{path.Join(in.Skill, "SKILL.md")}
 	case "AskUserQuestion":
-		e.Type = trajectory.TypeAskUser
+		e.Type = TypeAskUser
 	default:
-		e.Type = trajectory.TypeToolCall
+		e.Type = TypeToolCall
 	}
 	return e
 }

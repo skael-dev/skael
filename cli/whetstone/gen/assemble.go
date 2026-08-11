@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/skael-dev/skael/internal/eval/bundlepath"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +35,7 @@ type frontmatter struct {
 // package's proposal paths, so there is exactly one implementation of the
 // rule; this wrapper only adds gen's error context.
 func safeJoin(dir, rel string) (string, error) {
-	target, err := bundlepath.SafeJoin(dir, rel)
+	target, err := SafeJoin(dir, rel)
 	if err != nil {
 		return "", fmt.Errorf("gen: resource %w", err)
 	}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/score"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 func TestTriggerF1_PerfectDiscrimination(t *testing.T) {
@@ -112,8 +111,8 @@ func TestTriggerF1_FlagsAnInferredMeasurement(t *testing.T) {
 
 func TestDetectFiring_PrefersAnExplicitInvocation(t *testing.T) {
 	caps := agent.Caps{SupportsSkillInvocation: true}
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeToolCall, Name: "Skill", ArgsDigest: "x", Paths: []string{".claude/skills/demo/SKILL.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
 	fired, inferred := score.DetectFiring("demo", caps, events)
 	if !fired || inferred {
@@ -123,8 +122,8 @@ func TestDetectFiring_PrefersAnExplicitInvocation(t *testing.T) {
 
 func TestDetectFiring_FallsBackToASkillRead(t *testing.T) {
 	caps := agent.Caps{SupportsSkillInvocation: false}
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
 	fired, inferred := score.DetectFiring("demo", caps, events)
 	if !fired || !inferred {
@@ -139,8 +138,8 @@ func TestDetectFiring_ASkillReadIsAlwaysInferredEvenWhenTheAdapterSupportsInvoca
 	// truly saw only a read here (no TypeToolCall), that's exactly the case
 	// Inferred exists to flag.
 	caps := agent.Caps{SupportsSkillInvocation: true}
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
 	fired, inferred := score.DetectFiring("demo", caps, events)
 	if !fired || !inferred {
@@ -150,8 +149,8 @@ func TestDetectFiring_ASkillReadIsAlwaysInferredEvenWhenTheAdapterSupportsInvoca
 
 func TestDetectFiring_IgnoresADistractorsSkillRead(t *testing.T) {
 	caps := agent.Caps{SupportsSkillInvocation: false}
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "other", Paths: []string{".claude/skills/other/SKILL.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeSkillRead, Name: "other", Paths: []string{".claude/skills/other/SKILL.md"}},
 	}
 	// Reading a distractor is the correct behaviour on a hard negative. Counting
 	// it as the skill under test firing would make precision measure nothing.
@@ -162,8 +161,8 @@ func TestDetectFiring_IgnoresADistractorsSkillRead(t *testing.T) {
 
 func TestDetectFiring_IgnoresTheSkillNameAsANonTerminalPathSegment(t *testing.T) {
 	caps := agent.Caps{SupportsSkillInvocation: false}
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeSkillRead, Name: "other-skill", Paths: []string{".claude/skills/other-skill/demo/subdir/notes.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeSkillRead, Name: "other-skill", Paths: []string{".claude/skills/other-skill/demo/subdir/notes.md"}},
 	}
 	// A distractor whose own directory happens to contain a subfolder named
 	// after the skill under test is a plausible fixture-naming collision, not

@@ -129,15 +129,6 @@ func (s *Store) EvalDir(skill string) (string, error) {
 	return filepath.Join(dir, lint.SidecarDir), nil
 }
 
-// ContractPath is the compiled drift contract.
-func (s *Store) ContractPath(skill string) (string, error) {
-	dir, err := s.EvalDir(skill)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "contract.yaml"), nil
-}
-
 // SuiteDir holds generated task packages and the trigger set.
 func (s *Store) SuiteDir(skill string) (string, error) {
 	dir, err := s.EvalDir(skill)

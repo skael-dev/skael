@@ -18,7 +18,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 func TestRunEvalWith_ProducesAReportCarryingItsProvenance(t *testing.T) {
@@ -358,9 +357,9 @@ func (fakeAdapter) Invoke(context.Context, agent.InvokeSpec) (agent.RawStream, e
 }
 func (fakeAdapter) Parse(agent.RawStream) (*agent.Result, error) {
 	return &agent.Result{
-		Events: []trajectory.Event{
-			{Seq: 1, Type: trajectory.TypeToolCall, Name: "Skill", Paths: []string{"demo/SKILL.md"}},
-			{Seq: 2, Type: trajectory.TypeShell, Name: "bash scripts/do.py"},
+		Events: []agent.Event{
+			{Seq: 1, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{"demo/SKILL.md"}},
+			{Seq: 2, Type: agent.TypeShell, Name: "bash scripts/do.py"},
 		},
 		Meta: agent.Meta{InputTokens: 100, OutputTokens: 50},
 	}, nil

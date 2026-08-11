@@ -370,6 +370,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		}
 	}
 
+	tokensSkill := medianTokens(execRes.Outcomes, runner.CondSkill)
+	tokensBaseline := medianTokens(execRes.Outcomes, runner.CondBaseline)
+
 	triggerF1, triggerInferred, triggerUnknown, triggerSource, err := scoreTriggers(req.Skill, execRes.Probes)
 	if err != nil {
 		return nil, err
@@ -380,6 +383,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		EngineVersion: d.EngineVersion, ModelPanel: modelPanelOut, PanelComplete: execRes.PanelComplete,
 		Members: members, Tasks: tasks.slice(), Void: voidTasks,
 		Baseline: baseline, BaselineMeasured: baselineMeasured, BaselineWipeout: baselineWipeout,
+		TokensMedian: tokensSkill, TokensMedianBaseline: tokensBaseline,
 		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
 		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		GraderModel: d.Gateway.ModelFor(llm.ClassStrong),
@@ -588,6 +592,23 @@ func scoreTriggers(skill string, probes []runner.ProbeOutcome) (f1 float64, infe
 		return 0, false, 0, source, err
 	}
 	return res.F1, res.AnyInferred, res.Unknown, source, nil
+}
+
+// medianTokens is the median total token spend across the sessions run under
+// one condition. Zero when nothing was measured, which the report omits.
+func medianTokens(outs []runner.Outcome, cond store.Condition) int64 {
+	var totals []int64
+	for _, o := range outs {
+		if o.Key.Condition != cond || o.Status != store.StatusOK {
+			continue
+		}
+		totals = append(totals, o.Meta.InputTokens+o.Meta.OutputTokens)
+	}
+	m, err := score.MedianTokens(totals)
+	if err != nil {
+		return 0
+	}
+	return m
 }
 
 // taskAgg accumulates each eval's per-condition tallies and graded runs across

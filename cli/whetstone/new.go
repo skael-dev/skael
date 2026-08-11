@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
@@ -25,7 +23,7 @@ var newCmd = &cobra.Command{
 	Use:   "new <intent>",
 	Short: "Interview, generate, lint, and evaluate a new skill",
 	Long: "Draft a specification from a plain-language intent, store it, ask you to\n" +
-		"approve it, then generate the bundle, lint it, compile its drift contract,\n" +
+		"approve it, then generate the bundle, lint it,\n" +
 		"and draft its evaluation suite.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -92,16 +90,12 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, i
 	}
 	renderFindings(res)
 	if code != 0 {
-		// Stopping here is deliberate. A contract compiled from a spec whose
-		// bundle does not lint describes a skill that does not exist, and a
-		// suite drafted against it measures nothing.
+		// Stopping here is deliberate. An eval set drafted against a bundle
+		// that does not lint measures a skill that does not exist.
 		return fmt.Errorf("the generated bundle at %s does not lint clean (%s); fix it and re-run `whetstone gen %s`",
 			bundle.Dir, plural(res.Errors(), "error"), sp.Name)
 	}
 
-	if err := writeContract(st, sp); err != nil {
-		return err
-	}
 	if err := generateSuite(ctx, st, g, sp); err != nil {
 		return wrapGenerationError(err, "whetstone suite gen "+sp.Name)
 	}
@@ -122,40 +116,8 @@ func wrapGenerationError(err error, resumeCmd string) error {
 	return fmt.Errorf("%w; %s", err, hint)
 }
 
-// writeContract compiles the drift contract from the spec and writes it into
-// the skill's eval sidecar.
-func writeContract(st *store.Store, sp *spec.SkillSpec) error {
-	c, err := contract.Compile(sp)
-	if err != nil {
-		return err
-	}
-
-	path, err := st.ContractPath(sp.Name)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("whetstone new: %w", err)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("whetstone new: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	if err := c.Save(f); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("whetstone new: writing %s: %w", path, err)
-	}
-	ui.Success("compiled contract to %s", path)
-	return nil
-}
-
 // confirmSpec prints the drafted spec and asks for approval. It is the human
-// gate: everything downstream — the bundle, the contract, the suite — is
+// gate: everything downstream — the bundle and the eval set — is
 // derived from this document, so it is the only place review is cheap.
 func confirmSpec(sp *spec.SkillSpec, in io.Reader) (bool, error) {
 	if err := sp.Save(os.Stdout); err != nil {

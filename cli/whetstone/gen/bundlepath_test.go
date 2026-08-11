@@ -1,10 +1,10 @@
-package bundlepath_test
+package gen_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/bundlepath"
+	"github.com/skael-dev/skael/cli/whetstone/gen"
 )
 
 // TestSafeJoin_RefusesNestedTraversal exercises SafeJoin against traversal
@@ -16,8 +16,8 @@ func TestSafeJoin_RefusesNestedTraversal(t *testing.T) {
 		"./../escape.sh",
 		"a/b/../../../escape.sh",
 	} {
-		if _, err := bundlepath.SafeJoin(dir, rel); err == nil {
-			t.Errorf("SafeJoin(%q) = nil error, want an escape error", rel)
+		if _, err := gen.SafeJoin(dir, rel); err == nil {
+			t.Errorf("gen.SafeJoin(%q) = nil error, want an escape error", rel)
 		}
 	}
 }
@@ -43,18 +43,18 @@ func TestNaivePrefixCheck_WouldMissNestedTraversal(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if _, err := bundlepath.SafeJoin(dir, evil); err == nil {
-		t.Errorf("SafeJoin(%q) = nil error, want an escape error — the naive prefix check "+
+	if _, err := gen.SafeJoin(dir, evil); err == nil {
+		t.Errorf("gen.SafeJoin(%q) = nil error, want an escape error — the naive prefix check "+
 			"above wrongly allows this path, which is exactly what SafeJoin must catch instead", evil)
 	}
 }
 
 func TestSafeJoin_RefusesAbsoluteAndEmpty(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := bundlepath.SafeJoin(dir, "/etc/passwd"); err == nil {
+	if _, err := gen.SafeJoin(dir, "/etc/passwd"); err == nil {
 		t.Error("SafeJoin accepted an absolute path")
 	}
-	if _, err := bundlepath.SafeJoin(dir, ""); err == nil {
+	if _, err := gen.SafeJoin(dir, ""); err == nil {
 		t.Error("SafeJoin accepted an empty path")
 	}
 }

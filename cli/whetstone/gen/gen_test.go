@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/gen"
+	"github.com/skael-dev/skael/cli/whetstone/gen"
 	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"

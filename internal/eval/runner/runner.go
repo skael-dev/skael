@@ -11,7 +11,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // Options configures a Runner.
@@ -52,7 +51,7 @@ type Options struct {
 // Outcome is what one planned session (skill or baseline) reported.
 type Outcome struct {
 	Key         store.RunKey
-	Events      []trajectory.Event
+	Events      []agent.Event
 	Meta        agent.Meta
 	ArtifactDir string
 	Status      string
@@ -76,7 +75,7 @@ type Outcome struct {
 // fields.
 type ProbeOutcome struct {
 	Probe  Probe
-	Events []trajectory.Event
+	Events []agent.Event
 	Meta   agent.Meta
 	Caps   agent.Caps
 	// Unknown is true when the probe could not be observed at all — the

@@ -11,7 +11,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 func TestWriteArtifacts_KeepsTheNativeStreamByteIdentical(t *testing.T) {
@@ -35,9 +34,9 @@ func TestWriteArtifacts_KeepsTheNativeStreamByteIdentical(t *testing.T) {
 
 func TestWriteArtifacts_EventsAreOnePerLineInOrder(t *testing.T) {
 	dir := t.TempDir()
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeShell, Name: "python3 scripts/parse.py"},
-		{Seq: 2, Type: trajectory.TypeFileWrite, Paths: []string{"out/tables.md"}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeShell, Name: "python3 scripts/parse.py"},
+		{Seq: 2, Type: agent.TypeFileWrite, Paths: []string{"out/tables.md"}},
 	}
 	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
 	if err != nil {
@@ -53,7 +52,7 @@ func TestWriteArtifacts_EventsAreOnePerLineInOrder(t *testing.T) {
 		t.Fatalf("%d lines, want 2", len(lines))
 	}
 	for i, line := range lines {
-		var e trajectory.Event
+		var e agent.Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			t.Fatalf("line %d is not one JSON event: %v", i, err)
 		}
@@ -73,10 +72,10 @@ func TestLoadEvents_RoundTripsALineLargerThanTheDefaultScannerBuffer(t *testing.
 	// bufio.Scanner's default MaxScanTokenSize is 64KiB. A Paths entry from a
 	// wide glob can exceed that on its own; a scanner that has not raised its
 	// buffer stops silently at this line rather than erroring, dropping the
-	// rest of the trajectory.
+	// rest of the agent.
 	bigPath := strings.Repeat("a", 100*1024)
-	events := []trajectory.Event{
-		{Seq: 1, Type: trajectory.TypeFileWrite, Paths: []string{bigPath}},
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeFileWrite, Paths: []string{bigPath}},
 	}
 	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
 	if err != nil {

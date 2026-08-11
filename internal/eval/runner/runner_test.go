@@ -18,7 +18,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // wsSnapshot is what fakeAdapter observed about a session's workspace at the
@@ -138,7 +137,7 @@ func (f *fakeAdapter) Parse(agent.RawStream) (*agent.Result, error) {
 		m.RateLimited = true
 	}
 	return &agent.Result{
-		Events: []trajectory.Event{{Seq: 1, Type: trajectory.TypeSkillRead, Name: "demo", Paths: []string{"SKILL.md"}}},
+		Events: []agent.Event{{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{"SKILL.md"}}},
 		Meta:   m,
 	}, nil
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // executeRun runs one skill or baseline session, claiming it first so a
@@ -425,7 +424,7 @@ func resumeProbeOutcome(adapters func(string) (agent.Adapter, bool), p Probe, re
 
 // loadProbeEvents reads a newline-delimited JSON trajectory from
 // <artifactDir>/events.jsonl.
-func loadProbeEvents(artifactDir string) ([]trajectory.Event, error) {
+func loadProbeEvents(artifactDir string) ([]agent.Event, error) {
 	if artifactDir == "" {
 		return nil, errors.New("no artifact directory recorded")
 	}
@@ -435,10 +434,10 @@ func loadProbeEvents(artifactDir string) ([]trajectory.Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var events []trajectory.Event
+	var events []agent.Event
 	dec := json.NewDecoder(f)
 	for dec.More() {
-		var e trajectory.Event
+		var e agent.Event
 		if err := dec.Decode(&e); err != nil {
 			return nil, fmt.Errorf("decoding event: %w", err)
 		}

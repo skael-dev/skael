@@ -1,10 +1,4 @@
-// Package bundlepath holds the one bundle-containment check every package
-// that writes model-authored paths into a skill bundle shares. A resource
-// path (gen), or a repair proposal's file path (repair), is untrusted input
-// exactly the same way in both places, and a duplicated check that drifts is
-// a security defect waiting to happen — so there is exactly one
-// implementation of the rule.
-package bundlepath
+package gen
 
 import (
 	"fmt"
@@ -12,7 +6,10 @@ import (
 	"strings"
 )
 
-// SafeJoin resolves rel inside dir, refusing anything that escapes: an
+// SafeJoin is the bundle-containment check for model-authored paths: a
+// resource path a model names is untrusted input.
+//
+// It resolves rel inside dir, refusing anything that escapes: an
 // absolute path, or a traversal that resolves outside dir even when buried
 // after the first path segment (e.g. "scripts/../../escape.sh", which does
 // not start with ".." and so would slip past a naive prefix check).

@@ -22,3 +22,22 @@ func Median(xs []float64) (float64, error) {
 	}
 	return (sorted[n/2-1] + sorted[n/2]) / 2, nil
 }
+
+// MedianTokens is the median total token spend across a set of sessions.
+// Reported beside the score rather than inside it: a verbose skill that works
+// still works, and nobody notices a skill tripling its own token bill unless
+// the figure is on the report.
+func MedianTokens(totals []int64) (int64, error) {
+	if len(totals) == 0 {
+		return 0, errors.New("score.MedianTokens: no samples")
+	}
+	xs := make([]float64, len(totals))
+	for i, t := range totals {
+		xs[i] = float64(t)
+	}
+	m, err := Median(xs)
+	if err != nil {
+		return 0, err
+	}
+	return int64(m), nil
+}

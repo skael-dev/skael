@@ -113,6 +113,13 @@ type Report struct {
 	// which is also what a broken baseline harness looks like.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 
+	// TokensMedian is the median total token spend of a scored session with the
+	// skill, and TokensMedianBaseline the same without it. Reported beside the
+	// score rather than inside it: a verbose skill that works still works, and
+	// nobody notices one tripling its own token bill unless the figure is here.
+	TokensMedian         int64 `json:"tokens_median,omitempty"`
+	TokensMedianBaseline int64 `json:"tokens_median_baseline,omitempty"`
+
 	// TriggerF1 is the trigger smoke check: does the skill fire when it should
 	// and stay silent when it should not. It is reported beside the headline
 	// rather than folded into it, and it gates a release rather than scoring

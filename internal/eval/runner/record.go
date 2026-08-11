@@ -14,7 +14,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // ErrEventsNotWritten wraps a failure to write events.jsonl specifically, so
@@ -80,7 +79,7 @@ type Grading struct {
 // errors.Join; a failure to write events.jsonl specifically is wrapped in
 // ErrEventsNotWritten so a caller can single it out with errors.Is without
 // parsing the message.
-func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
+func WriteArtifacts(dir string, raw []byte, events []agent.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
 	a := Artifacts{
 		Dir:            dir,
 		TranscriptPath: filepath.Join(dir, "transcript.raw"),
@@ -118,7 +117,7 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 
 // writeEvents writes one compact JSON object per line, in slice order — the
 // format loadProbeEvents and LoadEvents both expect.
-func writeEvents(path string, events []trajectory.Event) error {
+func writeEvents(path string, events []agent.Event) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("runner: creating events file: %w", err)
@@ -206,7 +205,7 @@ func skipsEntry(rel string, skipDirs []string) bool {
 
 // LoadEvents reads a newline-delimited JSON trajectory written by
 // WriteArtifacts.
-func LoadEvents(path string) ([]trajectory.Event, error) {
+func LoadEvents(path string) ([]agent.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -216,13 +215,13 @@ func LoadEvents(path string) ([]trajectory.Event, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), eventScanBuffer)
 
-	var events []trajectory.Event
+	var events []agent.Event
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
 			continue
 		}
-		var e trajectory.Event
+		var e agent.Event
 		if err := json.Unmarshal(line, &e); err != nil {
 			return nil, fmt.Errorf("runner: decoding event: %w", err)
 		}

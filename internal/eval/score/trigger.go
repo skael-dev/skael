@@ -5,7 +5,6 @@ import (
 	"path"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // Probe is one trigger measurement: did the skill fire on this prompt, and
@@ -96,16 +95,16 @@ func TriggerF1(ps []Probe) (F1Result, error) {
 // via a path whose directory component is the skill name — so reading a
 // distractor's SKILL.md, which is correct behavior on a hard negative,
 // never counts as skill firing.
-func DetectFiring(skill string, caps agent.Caps, events []trajectory.Event) (fired, inferred bool) {
+func DetectFiring(skill string, caps agent.Caps, events []agent.Event) (fired, inferred bool) {
 	explicit := false
 	read := false
 	for _, e := range events {
 		switch e.Type {
-		case trajectory.TypeToolCall:
+		case agent.TypeToolCall:
 			if e.Name == "Skill" && eventNamesSkill(e, skill) {
 				explicit = true
 			}
-		case trajectory.TypeSkillRead:
+		case agent.TypeSkillRead:
 			if eventNamesSkill(e, skill) {
 				read = true
 			}
@@ -123,7 +122,7 @@ func DetectFiring(skill string, caps agent.Caps, events []trajectory.Event) (fir
 // eventNamesSkill reports whether e refers to skill, either by its Name
 // field or by a path whose parent directory is the skill's name (e.g.
 // ".claude/skills/<skill>/SKILL.md").
-func eventNamesSkill(e trajectory.Event, skill string) bool {
+func eventNamesSkill(e agent.Event, skill string) bool {
 	if e.Name == skill {
 		return true
 	}

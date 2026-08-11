@@ -2,10 +2,8 @@ package whetstone
 
 import (
 	"context"
-	"os"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
@@ -26,12 +24,11 @@ func suiteExpandGateway() *fake.Gateway {
 	})
 }
 
-// TestNewPipelineWritesTheEvalSidecar covers the two steps of `new` that no
-// other test and no manual run reaches without a live gateway: compiling the
-// drift contract into the sidecar, and drafting, splitting, and writing the
-// suite beside it. Both write through the store's own path helpers, so a
-// helper returning an error for a name — or a caller composing a path itself —
-// shows up here.
+// TestNewPipelineWritesTheEvalSidecar covers the step of `new` that no other
+// test and no manual run reaches without a live gateway: drafting the eval set
+// and writing it into the sidecar. It writes through the store's own path
+// helpers, so a helper returning an error for a name — or a caller composing a
+// path itself — shows up here.
 func TestNewPipelineWritesTheEvalSidecar(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -48,23 +45,6 @@ func TestNewPipelineWritesTheEvalSidecar(t *testing.T) {
 			{ID: "s1", Action: "Run scripts/extract.py", Postcondition: "out/tables.csv exists"},
 		},
 		TargetTier: spec.TierMid,
-	}
-
-	if err := writeContract(st, sp); err != nil {
-		t.Fatalf("writeContract: %v", err)
-	}
-
-	contractPath, err := st.ContractPath(sp.Name)
-	if err != nil {
-		t.Fatalf("ContractPath: %v", err)
-	}
-	f, err := os.Open(contractPath)
-	if err != nil {
-		t.Fatalf("contract was not written where the store says it lives: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := contract.Load(f); err != nil {
-		t.Errorf("the written contract does not load back: %v", err)
 	}
 
 	if err := generateSuite(context.Background(), st, suiteExpandGateway(), sp); err != nil {
