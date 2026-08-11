@@ -333,9 +333,9 @@ func TestStore_SuiteDerivedFollowsTheSuiteRecord(t *testing.T) {
 	}
 }
 
-// insertDerivedSuite registers a fixture suite for skillName, marks it
-// derived, and returns the registry (so the caller can later flip it) and
-// its ref.
+// insertDerivedSuite registers a fixture suite for skillName. It then marks
+// the suite derived. It returns the registry and the suite's ref. The caller
+// needs the registry to flip that origin later.
 func insertDerivedSuite(t *testing.T, pool *pgxpool.Pool, skillName string) (*evalsuite.Registry, string) {
 	t.Helper()
 	ctx := context.Background()

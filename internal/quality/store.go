@@ -44,12 +44,17 @@ func (s *Store) WithExecutor(e Executor) *Store {
 // review that raises a suite to authored afterwards cannot clear the badge
 // it exists to clear. The stored column stays as the audit trail of what
 // the release gate saw at that moment. Nothing serves it.
+//
+// The check tests NOT EXISTS for an authored suite, not EXISTS for a
+// derived one. The two forms agree for every row that exists, since origin
+// only ever holds one of two values. A missing row then reads as derived.
+// This keeps the flag fail closed rather than permissive.
 const recordColumns = `skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 	pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
 	critical_forbid_violations, judge_model,
-	EXISTS (SELECT 1 FROM eval_suites s
-	        WHERE s.ref = skill_quality.suite_ref AND s.origin = 'derived')`
+	NOT EXISTS (SELECT 1 FROM eval_suites s
+	            WHERE s.ref = skill_quality.suite_ref AND s.origin = 'authored')`
 
 // getVersionColumns is recordColumns plus the report payload. It is the only
 // column list that selects report_json: the summary and history reads stay
