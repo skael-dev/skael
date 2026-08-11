@@ -280,6 +280,25 @@ func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error
 	return nil
 }
 
+// MarkAuthored flags ref as reviewed by a person. It takes a Queryer so the
+// caller can write it inside the same transaction as the review that
+// justifies it.
+//
+// This is the one path that can raise a suite's origin. Its only caller
+// runs behind an authenticated user who acts in the review view. No client
+// declaration reaches it: a pusher that claims authored clears its own scan
+// hold.
+func (r *Registry) MarkAuthored(ctx context.Context, q Queryer, ref string) error {
+	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1 WHERE ref = $2`, string(OriginAuthored), ref)
+	if err != nil {
+		return fmt.Errorf("evalsuite: MarkAuthored %s: %w", ref, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("evalsuite: MarkAuthored: no suite recorded for ref %s: %w", ref, ErrNotFound)
+	}
+	return nil
+}
+
 func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte

@@ -146,6 +146,35 @@ func TestRegistry_MarkDerivedUnknownRefIsNotFound(t *testing.T) {
 	}
 }
 
+// TestRegistry_MarkAuthoredFlipsADerivedSuite is the review path's whole
+// server-side effect. A person read the eval set and vouched for it. Origin
+// is where that fact lives.
+func TestRegistry_MarkAuthoredFlipsADerivedSuite(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	rec := putFixtureSuite(t, reg, "demo")
+	if err := reg.MarkDerived(ctx, pool, rec.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.MarkAuthored(ctx, pool, rec.Ref); err != nil {
+		t.Fatalf("MarkAuthored: %v", err)
+	}
+
+	got, err := reg.Get(ctx, rec.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != evalsuite.OriginAuthored {
+		t.Errorf("origin = %q after MarkAuthored, want %q", got.Origin, evalsuite.OriginAuthored)
+	}
+}
+
+func TestRegistry_MarkAuthoredOnAnUnknownRefIsNotFound(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	if err := reg.MarkAuthored(ctx, pool, "no-such-ref"); !errors.Is(err, evalsuite.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestRegistry_PutIsIdempotentOnRef(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	st := newTempStorage(t)

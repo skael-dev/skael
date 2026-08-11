@@ -38,10 +38,18 @@ func (s *Store) WithExecutor(e Executor) *Store {
 
 // recordColumns is the single definition of the column list scanRecord
 // expects, in order.
+//
+// suite_derived is computed from the suite record rather than read from the
+// column of the same name. The column is stamped once at report time. A
+// review that raises a suite to authored afterwards cannot clear the badge
+// it exists to clear. The stored column stays as the audit trail of what
+// the release gate saw at that moment. Nothing serves it.
 const recordColumns = `skill_id, version, headline_score, headline_ci_low, headline_ci_high,
 	pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
-	critical_forbid_violations, judge_model, suite_derived`
+	critical_forbid_violations, judge_model,
+	EXISTS (SELECT 1 FROM eval_suites s
+	        WHERE s.ref = skill_quality.suite_ref AND s.origin = 'derived')`
 
 // getVersionColumns is recordColumns plus the report payload. It is the only
 // column list that selects report_json: the summary and history reads stay
