@@ -11,3 +11,10 @@ This product includes software and formats developed by Anthropic.
   grading.json expectation shape. The grader instruction in
   internal/eval/score/grade.go is adapted from that skill's agents/grader.md.
   No source file is vendored.
+
+  internal/eval/tune ports the description optimization loop from that skill's
+  scripts/run_loop.py and scripts/improve_description.py. The port keeps the
+  train and test split. It also keeps the improvement prompt. Skael adapts
+  the prompt that drafts trigger queries from the same skill's SKILL.md.
+  web/src/features/quality/trigger-review.tsx is a port of that skill's
+  assets/eval_review.html. No source file is vendored.
