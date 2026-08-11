@@ -1,2 +1,0 @@
-{"seq":1,"ts":"2026-07-01T12:00:01Z","type":"message","name":"reformat the document by hand","args_digest":"digest-1"}
-{"seq":2,"ts":"2026-07-01T12:00:02Z","type":"file_write","name":"write","args_digest":"digest-2","paths":["report.md"]}
