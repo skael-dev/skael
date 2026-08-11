@@ -41,24 +41,24 @@ const (
 	descriptionPass = `{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF, a report, or table extraction."}`
 )
 
-// suiteExpandTask is one expansion response, reused for both of suiteOutline's
-// stubs — fake.New serves responses strictly by call order, not by request
-// content, so an identical response for every expand slot is what keeps the
-// concurrent fan-out's non-deterministic ordering harmless here.
-const suiteExpandTask = `{"prompt_md": "extract the tables", "oracle": "#!/bin/sh\nexit 0\n", ` +
-	`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`
+// evalSetDraft is the eval set suite.Generate drafts in one call.
+const evalSetDraft = `{"evals": [
+  {"prompt": "extract the tables", "expected_output": "a csv",
+   "expectations": ["out/tables.csv exists"]},
+  {"prompt": "pull the tables out", "expected_output": "a csv",
+   "expectations": ["out/tables.csv exists"]}
+]}`
 
 // newScript returns every scripted gateway response a full `new` run
-// consumes, in order: two interview passes, three generation passes, one
-// suite outline call plus one expansion per outlined stub (suiteOutline
-// names two). specDraft plans no resource files, so the generator makes no
-// resources-pass call at all — there is no fourth generation response to
+// consumes, in order: two interview passes, three generation passes, and one
+// eval set draft. specDraft plans no resource files, so the generator makes
+// no resources-pass call at all — there is no fourth generation response to
 // script.
 func newScript(body string) []string {
 	return []string{
 		specDraft, specDraft,
 		outlinePass, body, descriptionPass,
-		suiteOutline, suiteExpandTask, suiteExpandTask,
+		evalSetDraft,
 	}
 }
 
@@ -148,12 +148,12 @@ func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := suite.Load(suiteDir)
+	loaded, err := suite.LoadEvalSet(suiteDir)
 	if err != nil {
-		t.Fatalf("no suite was written: %v", err)
+		t.Fatalf("no eval set was written: %v", err)
 	}
-	if len(loaded.Tasks) != 2 {
-		t.Errorf("suite has %d tasks, want 2", len(loaded.Tasks))
+	if len(loaded.Evals) == 0 {
+		t.Error("the written eval set has no evals")
 	}
 }
 

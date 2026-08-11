@@ -29,28 +29,24 @@ func newTempStorage(t *testing.T) *platform.LocalStorage {
 	return st
 }
 
-// writeFixtureSuite writes a minimal suite tree to dir that suite.Load
-// accepts: one task with a prompt, oracle, and verifier.
+// writeFixtureSuite writes a minimal eval set to dir that suite.LoadEvalSet
+// accepts: one eval with a prompt and an expectation.
 func writeFixtureSuite(t *testing.T, dir string) {
 	t.Helper()
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t1",
-				Kind:     "happy",
-				Split:    "holdout",
-				PromptMD: "# Task\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	set := &suite.EvalSet{
+		SkillName: "demo",
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
-	if err := s.Write(dir); err != nil {
+	if err := suite.WriteEvalSet(dir, set); err != nil {
 		t.Fatalf("writeFixtureSuite: %v", err)
+	}
+	if err := suite.WriteTriggerQueries(dir, []suite.TriggerQuery{
+		{Query: "do the thing", ShouldTrigger: true},
+		{Query: "do something unrelated"},
+	}); err != nil {
+		t.Fatalf("writeFixtureSuite triggers: %v", err)
 	}
 }
 
@@ -264,7 +260,7 @@ func TestRegistry_RoundTripsThroughFetchAndUnpack(t *testing.T) {
 	if back != rec.Ref {
 		t.Fatalf("ref after round trip = %s, want %s", back, rec.Ref)
 	}
-	if _, err := suite.Load(out); err != nil {
+	if _, err := suite.LoadEvalSet(out); err != nil {
 		t.Fatalf("unpacked tree does not load as a suite: %v", err)
 	}
 }

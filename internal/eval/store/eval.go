@@ -72,13 +72,6 @@ type RunKey struct {
 
 // RunOutcome is what a finished (or failed-to-run) session reported.
 type RunOutcome struct {
-	// VerifierExit is nil when the verifier never ran — a trigger probe (which
-	// has no verifier at all) or a run that failed before reaching it — and
-	// the verifier's exit code otherwise, including 0. A caller that reads
-	// *VerifierExit == 0 without checking it is non-nil first is the one bug
-	// this distinction exists to prevent: "not measured" and "measured and
-	// passed" must never collapse into the same value.
-	VerifierExit *int
 	InputTokens  int64
 	OutputTokens int64
 	DurationMS   int64
@@ -96,31 +89,20 @@ type RunRecord struct {
 	Outcome RunOutcome
 }
 
-// Judgment is one LLM-judge (or rule-based) verdict recorded against an eval.
-type Judgment struct {
-	TaskID   string
-	Model    string
-	Kind     string
-	RuleID   string
-	Winner   string
-	Margin   float64
-	Evidence string
-	Votes    int
-	Swapped  bool
+// RunGrade is one session's graded expectations, as stored. Doc is the
+// per-expectation detail, opaque here so this package never imports score.
+type RunGrade struct {
+	Key    RunKey
+	Passed int
+	Total  int
+	Doc    []byte
 }
 
-// ScoreRow is one agent/model pair's computed scores for an eval.
+// ScoreRow is one agent/model pair's computed score for an eval.
 type ScoreRow struct {
 	Agent         string
 	Model         string
-	TriggerF1     float64
-	Reliability   float64
-	Uplift        float64
-	Efficiency    float64
 	Effectiveness float64
-	Adherence     float64
-	Drift         float64
-	Grade         string
 	// Healthy is false when this member's adapter failed its probe, mirroring
 	// score.PanelEntry.Healthy. Every other field on such a row is a zero
 	// value that must not be read as a real measurement.
@@ -305,9 +287,9 @@ func (s *Store) ClaimRun(evalID int64, k RunKey) (int64, bool, error) {
 // later ClaimRun of the same key report done, the latter two make it retry.
 func (s *Store) FinishRun(id int64, o RunOutcome) error {
 	res, err := s.db.Exec(
-		`UPDATE runs SET status = ?, verifier_exit = ?, input_tokens = ?, output_tokens = ?, duration_ms = ?,
+		`UPDATE runs SET status = ?, input_tokens = ?, output_tokens = ?, duration_ms = ?,
 		 agent_version = ?, rate_limited = ?, error = ?, artifact_dir = ? WHERE id = ?`,
-		o.Status, o.VerifierExit, o.InputTokens, o.OutputTokens, o.DurationMS,
+		o.Status, o.InputTokens, o.OutputTokens, o.DurationMS,
 		o.AgentVersion, boolToInt(o.RateLimited), o.Error, o.ArtifactDir, id)
 	if err != nil {
 		return fmt.Errorf("store.FinishRun: %w", err)
@@ -325,7 +307,7 @@ func (s *Store) FinishRun(id int64, o RunOutcome) error {
 // Runs lists every run recorded for an eval, in claim order.
 func (s *Store) Runs(evalID int64) ([]RunRecord, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, agent, model, condition, attempt, artifact_dir, verifier_exit,
+		`SELECT id, task_id, agent, model, condition, attempt, artifact_dir,
 		 input_tokens, output_tokens, duration_ms, agent_version, rate_limited, status, error
 		 FROM runs WHERE eval_id = ? ORDER BY id`, evalID)
 	if err != nil {
@@ -336,18 +318,13 @@ func (s *Store) Runs(evalID int64) ([]RunRecord, error) {
 	var out []RunRecord
 	for rows.Next() {
 		var (
-			r            RunRecord
-			verifierExit sql.NullInt64
-			rateLimited  int64
+			r           RunRecord
+			rateLimited int64
 		)
 		if err := rows.Scan(&r.ID, &r.Key.TaskID, &r.Key.Agent, &r.Key.Model, &r.Key.Condition, &r.Key.Attempt,
-			&r.Outcome.ArtifactDir, &verifierExit, &r.Outcome.InputTokens, &r.Outcome.OutputTokens,
+			&r.Outcome.ArtifactDir, &r.Outcome.InputTokens, &r.Outcome.OutputTokens,
 			&r.Outcome.DurationMS, &r.Outcome.AgentVersion, &rateLimited, &r.Outcome.Status, &r.Outcome.Error); err != nil {
 			return nil, fmt.Errorf("store.Runs scan: %w", err)
-		}
-		if verifierExit.Valid {
-			v := int(verifierExit.Int64)
-			r.Outcome.VerifierExit = &v
 		}
 		r.Outcome.RateLimited = rateLimited != 0
 		out = append(out, r)
@@ -355,16 +332,51 @@ func (s *Store) Runs(evalID int64) ([]RunRecord, error) {
 	return out, rows.Err()
 }
 
-// SaveJudgment records one judge verdict against an eval.
-func (s *Store) SaveJudgment(evalID int64, j Judgment) error {
+// SaveGrade upserts one session's grade. Upsert rather than insert: a
+// re-graded run recomputes the same key, and a unique-constraint failure there
+// would abort the eval.
+func (s *Store) SaveGrade(evalID int64, g RunGrade) error {
+	doc := g.Doc
+	if len(doc) == 0 {
+		doc = []byte("[]")
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO judgments (eval_id, task_id, model, kind, rule_id, winner, margin, evidence, votes, swapped)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		evalID, j.TaskID, j.Model, j.Kind, j.RuleID, j.Winner, j.Margin, j.Evidence, j.Votes, boolToInt(j.Swapped))
+		`INSERT INTO run_grades (eval_id, task_id, agent, model, condition, attempt, passed, total, doc)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(eval_id, task_id, agent, model, condition, attempt) DO UPDATE SET
+		   passed = excluded.passed, total = excluded.total, doc = excluded.doc`,
+		evalID, g.Key.TaskID, g.Key.Agent, g.Key.Model, string(g.Key.Condition), g.Key.Attempt,
+		g.Passed, g.Total, string(doc))
 	if err != nil {
-		return fmt.Errorf("store.SaveJudgment: %w", err)
+		return fmt.Errorf("store.SaveGrade: %w", err)
 	}
 	return nil
+}
+
+// Grades lists every stored grade for an eval, the read side of SaveGrade.
+func (s *Store) Grades(evalID int64) ([]RunGrade, error) {
+	rows, err := s.db.Query(
+		`SELECT task_id, agent, model, condition, attempt, passed, total, doc
+		 FROM run_grades WHERE eval_id = ? ORDER BY task_id, agent, model, condition, attempt`, evalID)
+	if err != nil {
+		return nil, fmt.Errorf("store.Grades: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RunGrade
+	for rows.Next() {
+		var (
+			g   RunGrade
+			doc string
+		)
+		if err := rows.Scan(&g.Key.TaskID, &g.Key.Agent, &g.Key.Model, &g.Key.Condition,
+			&g.Key.Attempt, &g.Passed, &g.Total, &doc); err != nil {
+			return nil, fmt.Errorf("store.Grades scan: %w", err)
+		}
+		g.Doc = []byte(doc)
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }
 
 // SaveScore upserts one agent/model pair's scores for an eval. Upsert rather
@@ -372,14 +384,11 @@ func (s *Store) SaveJudgment(evalID int64, j Judgment) error {
 // key, and a unique-constraint failure there would abort the run.
 func (s *Store) SaveScore(evalID int64, sc ScoreRow) error {
 	_, err := s.db.Exec(
-		`INSERT INTO scores (eval_id, agent, model, trigger_f1, reliability, uplift, efficiency, effectiveness, adherence, drift, grade, healthy)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO scores (eval_id, agent, model, effectiveness, healthy)
+		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(eval_id, agent, model) DO UPDATE SET
-		   trigger_f1 = excluded.trigger_f1, reliability = excluded.reliability, uplift = excluded.uplift,
-		   efficiency = excluded.efficiency, effectiveness = excluded.effectiveness, adherence = excluded.adherence,
-		   drift = excluded.drift, grade = excluded.grade, healthy = excluded.healthy`,
-		evalID, sc.Agent, sc.Model, sc.TriggerF1, sc.Reliability, sc.Uplift, sc.Efficiency, sc.Effectiveness,
-		sc.Adherence, sc.Drift, sc.Grade, boolToInt(sc.Healthy))
+		   effectiveness = excluded.effectiveness, healthy = excluded.healthy`,
+		evalID, sc.Agent, sc.Model, sc.Effectiveness, boolToInt(sc.Healthy))
 	if err != nil {
 		return fmt.Errorf("store.SaveScore: %w", err)
 	}
@@ -435,7 +444,7 @@ func (s *Store) ReportMeta(evalID int64) (ReportMeta, error) {
 // side of SaveScore.
 func (s *Store) Scores(evalID int64) ([]ScoreRow, error) {
 	rows, err := s.db.Query(
-		`SELECT agent, model, trigger_f1, reliability, uplift, efficiency, effectiveness, adherence, drift, grade, healthy
+		`SELECT agent, model, effectiveness, healthy
 		 FROM scores WHERE eval_id = ? ORDER BY agent, model`, evalID)
 	if err != nil {
 		return nil, fmt.Errorf("store.Scores: %w", err)
@@ -448,8 +457,7 @@ func (s *Store) Scores(evalID int64) ([]ScoreRow, error) {
 			r       ScoreRow
 			healthy int64
 		)
-		if err := rows.Scan(&r.Agent, &r.Model, &r.TriggerF1, &r.Reliability, &r.Uplift, &r.Efficiency,
-			&r.Effectiveness, &r.Adherence, &r.Drift, &r.Grade, &healthy); err != nil {
+		if err := rows.Scan(&r.Agent, &r.Model, &r.Effectiveness, &healthy); err != nil {
 			return nil, fmt.Errorf("store.Scores scan: %w", err)
 		}
 		r.Healthy = healthy != 0

@@ -17,49 +17,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
-
-// findTask returns the task with id from the plan's task list.
-// runTaskSetup runs the task's setup script in ws, under the same NetNone
-// policy and the same bound as the verifier — it is a suite-authored script
-// of the same kind, and it must not be able to fetch anything either. A task
-// with no setup script costs no run.
-func (r *Runner) runTaskSetup(ctx context.Context, image sandbox.ImageRef, ws string, task suite.TaskPkg) error {
-	if strings.TrimSpace(task.Setup) == "" {
-		return nil
-	}
-	if err := suite.StageSetup(ws, task); err != nil {
-		return err
-	}
-	res, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
-		Image:     image,
-		Workspace: ws,
-		Argv:      []string{"bash", suite.SetupScript},
-		Network:   sandbox.NetNone,
-		Timeout:   suite.VerifierTimeout,
-	})
-	if err != nil {
-		return fmt.Errorf("runner: running task setup for %s: %w", task.ID, err)
-	}
-	if res.TimedOut {
-		return fmt.Errorf("runner: task setup for %s exceeded %s", task.ID, suite.VerifierTimeout)
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("runner: task setup for %s failed (exit %d)", task.ID, res.ExitCode)
-	}
-	return nil
-}
-
-func findTask(tasks []suite.TaskPkg, id string) (suite.TaskPkg, bool) {
-	for _, t := range tasks {
-		if t.ID == id {
-			return t, true
-		}
-	}
-	return suite.TaskPkg{}, false
-}
 
 // executeRun runs one skill or baseline session, claiming it first so a
 // resumed Execute skips it entirely once it has finished. Plan.Runs never
@@ -90,13 +49,11 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 	// ws and raw are filled in as the session progresses; finish reads
 	// whatever they hold at call time, so artifacts are recorded even when
-	// the run ends before invoke completes. verifierOut is declared here
-	// (rather than at the verifier call site) so finish can close over it.
+	// the run ends before invoke completes.
 	var (
-		ws          string
-		raw         []byte
-		skipDirs    []string
-		verifierOut tailWriter
+		ws       string
+		raw      []byte
+		skipDirs []string
 	)
 
 	finish := func(status string, ferr error) Outcome {
@@ -107,10 +64,10 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 		if artifactDir != "" && ws != "" {
 			g := Grading{
-				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
-				StartedAt: startedAt, FinishedAt: time.Now().UTC(), Reason: out.Reason,
+				Key: k, Meta: out.Meta, Status: status, Error: errStr,
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
 			}
-			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs, verifierOut.Bytes()); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
 				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
 				// Events are the only artifact scoring and resume read back;
 				// losing them must not be recorded as a completed
@@ -129,7 +86,6 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 		out.Status, out.Err, out.ArtifactDir = status, ferr, artifactDir
 		fo := store.RunOutcome{
-			VerifierExit: out.VerifierExit,
 			InputTokens:  out.Meta.InputTokens,
 			OutputTokens: out.Meta.OutputTokens,
 			DurationMS:   out.Meta.DurationMS,
@@ -149,17 +105,20 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		return finish(store.StatusError, fmt.Errorf("runner: preparing artifact dir: %w", adErr))
 	}
 
-	task, ok := findTask(in.Plan.Tasks, k.TaskID)
+	ev, ok := in.Plan.EvalByID(k.TaskID)
 	if !ok {
-		return finish(store.StatusError, fmt.Errorf("runner: no task %q in the plan", k.TaskID))
+		return finish(store.StatusError, fmt.Errorf("runner: no eval %q in the plan", k.TaskID))
 	}
 	a, ok := r.o.Adapters(k.Agent)
 	if !ok {
 		return finish(store.StatusError, fmt.Errorf("runner: no adapter registered for %q", k.Agent))
 	}
 
-	taskDir := filepath.Join(in.SuiteDir, "tasks", k.TaskID)
-	ws, err = stageRunWorkspace(taskDir, r.o.WorkspaceRoot)
+	// An eval's input files are copied on the host rather than created by a
+	// script inside the sandbox. A missing file is the eval's defect, not the
+	// skill's, so it ends the session as an error rather than as a failed
+	// measurement that would be scored against the skill.
+	ws, err = stageEvalWorkspace(in.SuiteDir, ev, r.o.WorkspaceRoot)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -169,19 +128,10 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		}
 	}()
 
-	// The task's input files are created inside the sandbox before the agent
-	// starts: a task prompt that names a file has nothing else in the run
-	// that creates it. Setup failing is the task's defect, not the skill's,
-	// so it ends the session as an error rather than as a failed measurement
-	// that would be scored against the skill.
-	if err := r.runTaskSetup(ctx, in.Image, ws, task); err != nil {
-		return finish(store.StatusError, err)
-	}
-
 	// The skill installs only for the skill condition. A baseline workspace
-	// carrying the skill would make Uplift measure nothing. skipDirs mirrors
-	// that: a baseline has no installed skill to exclude from outputs/, so
-	// its real outputs are copied in full.
+	// carrying the skill would make the delta measure nothing. skipDirs
+	// mirrors that: a baseline has no installed skill to exclude from
+	// outputs/, so its real outputs are copied in full.
 	if k.Condition == CondSkill {
 		if err := a.InstallSkill(ws, in.BundleDir); err != nil {
 			return finish(store.StatusError, fmt.Errorf("runner: installing skill: %w", err))
@@ -205,7 +155,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	})
 
 	result, invokeRaw, status, err := r.invoke(ctx, a, agent.InvokeSpec{
-		Prompt: task.PromptMD,
+		Prompt: ev.Prompt,
 		Model:  k.Model,
 		Exec:   exec,
 	}, k)
@@ -213,46 +163,11 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(status, err)
 	}
-	// Relativised here rather than in each adapter, so the invariant holds for
-	// every adapter present and future. See trajectory.Relativize.
-	out.Events, out.Meta = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta
+	out.Events, out.Meta = result.Events, result.Meta
 
-	// The verifier runs under NetNone in the same workspace: it must not be
-	// able to reach the network, or a task could be satisfied by fetching the
-	// answer instead of solving it.
-	//
-	// Timeout is suite.VerifierTimeout, not r.o.SessionTimeout: this is the
-	// same verifier/test.sh suite.Check bounds at that value, and the two
-	// disagreeing by 4x (the runner's SessionTimeout defaults to 20 minutes)
-	// meant a hung verifier script was tolerated four times longer here than
-	// in the oracle gate that is supposed to have already proven it doesn't
-	// hang.
-	vres, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
-		Image:     in.Image,
-		Workspace: ws,
-		Argv:      []string{"bash", "/verifier/test.sh"},
-		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
-		Network:   sandbox.NetNone,
-		Timeout:   suite.VerifierTimeout,
-		Stdout:    &verifierOut,
-		Stderr:    &verifierOut,
-	})
-	if err != nil {
-		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))
-	}
-	if vres.TimedOut {
-		// The verifier did not produce a real exit code; out.VerifierExit
-		// stays nil (not measured) rather than recording the zero value a
-		// timed-out RunResult happens to carry, which would misread as "the
-		// verifier passed."
-		return finish(store.StatusTimeout, fmt.Errorf("runner: verifier timed out: %w", context.DeadlineExceeded))
-	}
-	exitCode := vres.ExitCode
-	out.VerifierExit = &exitCode
-	if vres.ExitCode != 0 {
-		out.Reason = distilReason(verifierOut.Bytes())
-		return finish(store.StatusFailed, nil)
-	}
+	// Whether the session did the task is decided later, by the grader reading
+	// the transcript and the outputs this call just wrote. The runner records;
+	// it does not judge.
 	return finish(store.StatusOK, nil)
 }
 
@@ -311,8 +226,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 			// SkillDir, so excluding it keeps every copy of the bundle out
 			// of outputs/ regardless of which distractors were installed.
 			skipDirs := []string{a.Caps().SkillDir}
-			// A trigger probe has no verifier, so there is no output to log.
-			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs, nil); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
 				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
 				// Same rule as executeRun: a probe's events are the only
 				// evidence resumeProbeOutcome can recover, so losing them
@@ -400,7 +314,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	// Relativised as above. Trigger measurement reads only the skill directory
 	// out of a path, so it survived absolute paths where drift did not — but
 	// the two must not disagree about what a recorded path means.
-	po.Events, po.Meta, po.Caps = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta, a.Caps()
+	po.Events, po.Meta, po.Caps = result.Events, result.Meta, a.Caps()
 	return finish(nil)
 }
 
@@ -435,11 +349,10 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		err = errors.New(rec.Outcome.Error)
 	}
 	out := Outcome{
-		Key:          rec.Key,
-		VerifierExit: rec.Outcome.VerifierExit,
-		ArtifactDir:  rec.Outcome.ArtifactDir,
-		Status:       rec.Outcome.Status,
-		Err:          err,
+		Key:         rec.Key,
+		ArtifactDir: rec.Outcome.ArtifactDir,
+		Status:      rec.Outcome.Status,
+		Err:         err,
 	}
 
 	// filepath.Join("", gradingFileName) resolves to the bare relative name,
@@ -449,7 +362,6 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 	if rec.Outcome.ArtifactDir != "" {
 		if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
 			out.Meta = g.Meta
-			out.Reason = g.Reason
 			return out
 		}
 	}

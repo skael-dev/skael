@@ -17,7 +17,7 @@ import (
 func TestWriteArtifacts_KeepsTheNativeStreamByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	raw := []byte("{\"type\":\"system\"}\n{\"type\":\"assistant\"}\n\x00binary\xff")
-	a, err := runner.WriteArtifacts(dir, raw, nil, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
+	a, err := runner.WriteArtifacts(dir, raw, nil, runner.Grading{Status: "ok"}, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestWriteArtifacts_EventsAreOnePerLineInOrder(t *testing.T) {
 		{Seq: 1, Type: trajectory.TypeShell, Name: "python3 scripts/parse.py"},
 		{Seq: 2, Type: trajectory.TypeFileWrite, Paths: []string{"out/tables.md"}},
 	}
-	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
+	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestLoadEvents_RoundTripsALineLargerThanTheDefaultScannerBuffer(t *testing.
 	events := []trajectory.Event{
 		{Seq: 1, Type: trajectory.TypeFileWrite, Paths: []string{bigPath}},
 	}
-	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil, nil)
+	a, err := runner.WriteArtifacts(dir, nil, events, runner.Grading{Status: "ok"}, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestWriteArtifacts_ExcludesTheInstalledSkillFromOutputs(t *testing.T) {
 	mustWrite(t, filepath.Join(ws, "out", "tables.md"), "| a |")
 	mustWrite(t, filepath.Join(ws, ".claude", "skills", "demo", "SKILL.md"), "---\nname: demo\n---\n")
 
-	a, err := runner.WriteArtifacts(t.TempDir(), nil, nil, runner.Grading{Status: "ok"}, ws, []string{".claude"}, nil)
+	a, err := runner.WriteArtifacts(t.TempDir(), nil, nil, runner.Grading{Status: "ok"}, ws, []string{".claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,16 +116,14 @@ func TestWriteArtifacts_ExcludesTheInstalledSkillFromOutputs(t *testing.T) {
 
 func TestGrading_RoundTripsWithItsKeyAndMeta(t *testing.T) {
 	dir := t.TempDir()
-	verifierExit := 1
 	g := runner.Grading{
-		Key:          store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "skill", Attempt: 2},
-		VerifierExit: &verifierExit,
-		Meta:         agent.Meta{AgentVersion: "2.1.220", InputTokens: 1200, OutputTokens: 800, NumTurns: 7},
-		Status:       "ok",
-		StartedAt:    time.Unix(1700000000, 0).UTC(),
-		FinishedAt:   time.Unix(1700000100, 0).UTC(),
+		Key:        store.RunKey{TaskID: "1", Agent: "claude-code", Model: "sonnet", Condition: "skill", Attempt: 2},
+		Meta:       agent.Meta{AgentVersion: "2.1.220", InputTokens: 1200, OutputTokens: 800, NumTurns: 7},
+		Status:     "ok",
+		StartedAt:  time.Unix(1700000000, 0).UTC(),
+		FinishedAt: time.Unix(1700000100, 0).UTC(),
 	}
-	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil, nil)
+	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,36 +131,14 @@ func TestGrading_RoundTripsWithItsKeyAndMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Token counts feed Efficiency and the agent version is what attributes a
-	// score to a CLI build. Losing either makes a score unexplainable later.
-	if got.Meta.InputTokens != 1200 || got.Meta.AgentVersion != "2.1.220" || got.VerifierExit == nil || *got.VerifierExit != 1 {
+	// Token counts are the cost figure reported beside the score, and the
+	// agent version is what attributes a score to a CLI build. Losing either
+	// makes a score unexplainable later.
+	if got.Meta.InputTokens != 1200 || got.Meta.AgentVersion != "2.1.220" {
 		t.Errorf("grading round-trip lost data: %+v", got)
 	}
 	if got.Key != g.Key {
 		t.Errorf("key = %+v, want %+v", got.Key, g.Key)
-	}
-}
-
-// TestGrading_NilVerifierExitRoundTripsAsNil pins the distinction a nullable
-// VerifierExit exists for: "the verifier never ran" (nil) must not collapse
-// into "the verifier ran and exited 0" (a pointer to zero) anywhere along the
-// path grading.json takes to LoadGrading.
-func TestGrading_NilVerifierExitRoundTripsAsNil(t *testing.T) {
-	dir := t.TempDir()
-	g := runner.Grading{
-		Key:    store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "trigger", Attempt: 1},
-		Status: "error",
-	}
-	a, err := runner.WriteArtifacts(dir, nil, nil, g, t.TempDir(), nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := runner.LoadGrading(a.GradingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.VerifierExit != nil {
-		t.Errorf("VerifierExit = %v, want nil (the verifier never ran)", *got.VerifierExit)
 	}
 }
 

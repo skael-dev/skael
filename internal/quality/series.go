@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/report"
-	"github.com/skael-dev/skael/internal/eval/score"
 )
 
 // unknownJudge is the JudgeModel value asReport substitutes for a record with
@@ -74,14 +73,13 @@ func asReport(skillName string, r Record) *report.Report {
 		Tier:          r.Tier,
 		ModelPanel:    panel,
 		PanelComplete: r.PanelComplete,
-		UpliftSource:  score.UpliftSource(r.UpliftSource),
-		JudgeModel:    judgeModelFor(r),
+		GraderModel:   graderModelFor(r),
 	}
 }
 
-// judgeModelFor resolves the JudgeModel dimension Comparable groups on: the
+// graderModelFor resolves the grader dimension Comparable groups on: the
 // recorded value as-is, or unknownJudge when none was recorded.
-func judgeModelFor(r Record) string {
+func graderModelFor(r Record) string {
 	if r.JudgeModel != nil {
 		return *r.JudgeModel
 	}

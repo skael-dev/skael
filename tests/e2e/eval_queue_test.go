@@ -474,23 +474,17 @@ func fixtureBundle(t *testing.T) []byte {
 
 func writeFixtureSuite(t *testing.T, dir string) {
 	t.Helper()
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t1",
-				Kind:     "happy",
-				Split:    "holdout",
-				PromptMD: "# Task\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	set := &suite.EvalSet{
+		SkillName: "demo",
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
-	require.NoError(t, s.Write(dir))
+	require.NoError(t, suite.WriteEvalSet(dir, set))
+	require.NoError(t, suite.WriteTriggerQueries(dir, []suite.TriggerQuery{
+		{Query: "do the thing", ShouldTrigger: true},
+		{Query: "do something unrelated"},
+	}))
 }
 
 func fixtureSuiteArchive(t *testing.T) []byte {

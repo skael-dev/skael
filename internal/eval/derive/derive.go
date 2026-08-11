@@ -15,40 +15,27 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/runner"
-	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillpkg "github.com/skael-dev/skael/internal/skill"
 )
 
-// taskCount is how many task packages a derived suite asks for. More than the
-// authored path's 10: there is no author to repair a task the oracle gate
-// voids, so the surplus is what lets runner.BuildPlan still plan afterwards. A
-// 0.3 split of 18 leaves roughly 5 holdout and 13 dev, and tier "full" needs 3
-// and 7.
-const taskCount = 18
+// evalCount is how many evals a derived set asks for. More than the full
+// tier's budget of 10: there is no author to fix an eval that validation
+// voids, so the surplus is what lets runner.BuildPlan still plan afterwards.
+const evalCount = 14
 
-// splitSeed matches cli/whetstone's constant. The holdout is what a reported
-// score means, so the split must not vary between the two paths.
-const splitSeed int64 = 1
-
-// Options are the deriver's injected dependencies.
+// Options are the deriver's injected dependencies. There is no sandbox here
+// any more: the oracle gate was the only part that needed one.
 type Options struct {
 	Gateway llm.Gateway
-	Driver  sandbox.Driver
-	// BaseTag selects the sandbox base image; empty means the default.
-	BaseTag string
-	// StageRoot is where the oracle gate stages task workspaces. It must be a
-	// path bind-mounted identically for this process and for the Docker
-	// daemon — see suite.CheckOptions.StageRoot.
-	StageRoot string
-	Logger    func(format string, args ...any)
+	Logger  func(format string, args ...any)
 }
 
 // Input is one derivation request.
@@ -76,17 +63,18 @@ func New(o Options) (*Deriver, error) {
 	if o.Gateway == nil {
 		return nil, errors.New("derive: New requires a non-nil Gateway")
 	}
-	if o.Driver == nil {
-		return nil, errors.New("derive: New requires a non-nil Driver")
-	}
 	if o.Logger == nil {
 		o.Logger = func(string, ...any) {}
 	}
 	return &Deriver{o: o}, nil
 }
 
-// Derive recovers a spec from the bundle, drafts a suite, gates it against its
-// own oracles, and packs it.
+// Derive recovers a spec from the bundle, drafts an eval set from it, and
+// validates that set statically.
+//
+// There is no oracle gate any more: with no verifier script to prove correct,
+// what remains to check is that each eval can be run and scored, which needs
+// neither Docker nor a staged workspace.
 func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	bundleDir, err := os.MkdirTemp("", "derive-bundle-*")
 	if err != nil {
@@ -102,132 +90,47 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 		return nil, fmt.Errorf("derive: recover spec: %w", err)
 	}
 
-	s, dropped, err := suite.GenerateN(ctx, d.o.Gateway, sp, taskCount)
+	set, triggers, err := suite.Generate(ctx, d.o.Gateway, sp, evalCount)
 	if err != nil {
-		return nil, fmt.Errorf("derive: generate suite: %w", err)
+		return nil, fmt.Errorf("derive: generate eval set: %w", err)
 	}
-	s.Split(splitSeed)
 
 	suiteDir, err := os.MkdirTemp("", "derive-suite-*")
 	if err != nil {
 		return nil, fmt.Errorf("derive: temp dir: %w", err)
 	}
 	defer os.RemoveAll(suiteDir)
-	if err := s.Write(suiteDir); err != nil {
-		return nil, fmt.Errorf("derive: write suite: %w", err)
+	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
+		return nil, fmt.Errorf("derive: write eval set: %w", err)
+	}
+	if err := suite.WriteTriggerQueries(suiteDir, triggers); err != nil {
+		return nil, fmt.Errorf("derive: write trigger queries: %w", err)
 	}
 
-	checks, err := d.gate(ctx, s, sp, suiteDir)
-	if err != nil {
-		return nil, err
-	}
-
-	// A stub that never became a task has no archive entry to gate, so it
-	// reaches the record here rather than from the gate. Void already means
-	// "planned but does not count", which is exactly its state — so a thin
-	// suite's gate voids and generation drops read as one list.
-	for _, dr := range dropped {
-		checks = append(checks, evalsuite.Check{
-			TaskID: dr.TaskID,
-			OK:     false,
-			Void:   true,
-			Reason: "generation failed: " + dr.Reason,
-		})
-	}
-
-	void := make(map[string]bool, len(checks))
-	for _, c := range checks {
+	checks := make([]evalsuite.Check, 0, len(set.Evals))
+	void := map[int]bool{}
+	var voidSummaries []string
+	for _, c := range suite.Validate(suiteDir, set) {
+		id := strconv.Itoa(c.ID)
+		checks = append(checks, evalsuite.Check{TaskID: id, OK: c.OK, Void: c.Void, Reason: c.Reason})
 		if c.Void {
-			void[c.TaskID] = true
+			void[c.ID] = true
+			voidSummaries = append(voidSummaries, id+": "+c.Reason)
 		}
 	}
+
 	// A dry run of the real planner, not a reimplementation of its arithmetic:
-	// a flat "N non-void tasks" floor would pass suites BuildPlan then rejects,
-	// after the suite is already pushed. Its message names the failing split.
-	if _, err := runner.BuildPlan(runner.Tier(in.Tier), in.Panel, s, void); err != nil {
-		// A too-thin suite is never packed or pushed, so this error message is
-		// the only record of which tasks were void and why — evalqueue.Explain
-		// points a reader at "the suite's checks" for exactly this failure,
-		// and there is no suite to have checks. Names every void reason here
-		// instead, and logs it too, since a worker operator has no other trace
-		// of the derive that never produced a job-visible suite.
-		var voidSummaries []string
-		for _, c := range checks {
-			if c.Void {
-				voidSummaries = append(voidSummaries, c.TaskID+": "+c.Reason)
-			}
-		}
-		d.o.Logger("derive: too thin, %d of %d tasks void: %s", len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "))
-		return nil, fmt.Errorf("derive: the derived suite is too thin to evaluate (%d of %d tasks void: %s): %w",
+	// a flat "N non-void evals" floor would pass sets BuildPlan then rejects,
+	// after the set is already pushed and an eval row created.
+	if _, err := runner.BuildPlan(runner.Tier(in.Tier), in.Panel, set, void, triggers); err != nil {
+		d.o.Logger("derive: too thin, %d of %d evals void: %s", len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "))
+		return nil, fmt.Errorf("derive: the derived eval set is too thin to evaluate (%d of %d evals void: %s): %w",
 			len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "), err)
 	}
 
 	archive, err := evalsuite.PackDir(suiteDir)
 	if err != nil {
-		return nil, fmt.Errorf("derive: pack suite: %w", err)
+		return nil, fmt.Errorf("derive: pack eval set: %w", err)
 	}
 	return &Result{Archive: archive, Checks: checks, Spec: sp}, nil
-}
-
-// gate runs the oracle gate and converts its results to registry checks.
-func (d *Deriver) gate(ctx context.Context, s *suite.Suite, sp *spec.SkillSpec, suiteDir string) ([]evalsuite.Check, error) {
-	// untrusted:false matches runner.New's default and every other
-	// docker-driver caller. The oracle and verifier scripts here are
-	// model-generated from a third party's SKILL.md, which is the same trust
-	// level the panel already runs that skill's own instructions at; passing
-	// true would refuse outright, because Docker shares the host kernel.
-	gd, err := sandbox.Gated(d.o.Driver, false)
-	if err != nil {
-		return nil, fmt.Errorf("derive: %w", err)
-	}
-
-	image, err := d.prepare(ctx, sp)
-	if err != nil {
-		return nil, err
-	}
-
-	results, err := suite.Check(ctx, s, suite.CheckOptions{
-		Driver: gd, Image: image, SuiteDir: suiteDir,
-		Timeout: suite.VerifierTimeout, StageRoot: d.o.StageRoot,
-		Concurrency: 4, Logger: d.o.Logger,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("derive: oracle gate: %w", err)
-	}
-
-	checks := make([]evalsuite.Check, 0, len(s.Tasks))
-	for _, r := range results {
-		checks = append(checks, evalsuite.Check{
-			TaskID: r.TaskID, OK: !r.Void, Void: r.Void, Reason: r.Reason,
-		})
-	}
-	return checks, nil
-}
-
-// imagePreparer is the part of the Docker driver the oracle gate needs beyond
-// Run. A driver that does not implement it — a test fake — gets a zero
-// ImageRef and no base image, which is all a fake needs.
-type imagePreparer interface {
-	Sweep(ctx context.Context)
-	EnsureBase(ctx context.Context, slim bool) error
-	Prepare(ctx context.Context, e sandbox.EnvSpec) (sandbox.ImageRef, error)
-}
-
-func (d *Deriver) prepare(ctx context.Context, sp *spec.SkillSpec) (sandbox.ImageRef, error) {
-	p, ok := d.o.Driver.(imagePreparer)
-	if !ok {
-		return sandbox.ImageRef{}, nil
-	}
-	// A prior run killed by something stronger than its own context can leave
-	// containers and networks behind; sweeping first keeps those from
-	// exhausting the docker address pool on a long-lived worker.
-	p.Sweep(ctx)
-	if err := p.EnsureBase(ctx, d.o.BaseTag == imagespec.SlimBaseTag); err != nil {
-		return sandbox.ImageRef{}, fmt.Errorf("derive: preparing base image: %w", err)
-	}
-	img, err := p.Prepare(ctx, sandbox.EnvSpec{Skill: sp.Name, Deps: sp.Deps, BaseTag: d.o.BaseTag})
-	if err != nil {
-		return sandbox.ImageRef{}, fmt.Errorf("derive: preparing image: %w", err)
-	}
-	return img, nil
 }

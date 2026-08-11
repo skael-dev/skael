@@ -167,13 +167,9 @@ func TestMigration9_PreservesAnExistingWorkspace(t *testing.T) {
 		t.Errorf("RobustnessGap = %v after migration 9, want nil: DROP COLUMN should not preserve the pre-migration value", *meta.RobustnessGap)
 	}
 
-	rows, err := s2.Scores(id)
-	if err != nil {
-		t.Fatalf("Scores: %v", err)
-	}
-	if len(rows) != 1 || !rows[0].Healthy {
-		t.Errorf("Scores = %+v, want one row with healthy=true (the ADD COLUMN ... DEFAULT 1 applied to the pre-existing row)", rows)
-	}
+	// The seeded score row is deliberately not checked here: migration 10
+	// clears scores, because a pillar-era score and an expectation pass rate
+	// are not the same measurement. See the migration test below.
 
 	// The new nullable/healthy columns must also work going forward.
 	gap := 12.5
@@ -182,5 +178,70 @@ func TestMigration9_PreservesAnExistingWorkspace(t *testing.T) {
 	}
 	if err := s2.SaveScore(id, ScoreRow{Agent: "claude-code", Model: "opus", Effectiveness: 82, Healthy: false}); err != nil {
 		t.Errorf("SaveScore with the new healthy column failed post-migration: %v", err)
+	}
+}
+
+// The move to an expectation pass rate clears rows written under the
+// verifier-era schema rather than reinterpreting them, and adds the
+// run_grades table the new score is stored in.
+func TestLatestMigration_ClearsVerifierEraRowsAndAddsRunGrades(t *testing.T) {
+	root := t.TempDir()
+
+	// One short of every migration this build knows, so the migration under
+	// test runs against a database populated at the version before it.
+	s := openAtVersion(t, root, len(migrations)-1)
+
+	id, err := s.CreateEval(EvalRecord{Skill: "demo", Tier: "full", Status: "running", StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Raw inserts, as above: FinishRun and SaveScore bind against the current
+	// schema, which no longer has verifier_exit or the pillar columns.
+	if _, err := s.db.Exec(
+		`INSERT INTO runs (eval_id, task_id, agent, model, condition, attempt, verifier_exit, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, "t1", "claude-code", "opus", "skill", 1, 0, "ok"); err != nil {
+		t.Fatalf("seed pre-migration run: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO scores (eval_id, agent, model, trigger_f1, effectiveness) VALUES (?, ?, ?, ?, ?)`,
+		id, "claude-code", "opus", 0.9, 82.0); err != nil {
+		t.Fatalf("seed pre-migration score: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = s2.Close() }()
+
+	runs, err := s2.Runs(id)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("%d runs survived migration 10, want 0: a verifier exit code is not an expectation pass rate", len(runs))
+	}
+	rows, err := s2.Scores(id)
+	if err != nil {
+		t.Fatalf("Scores: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("%d scores survived migration 10, want 0", len(rows))
+	}
+
+	k := RunKey{TaskID: "1", Agent: "claude-code", Model: "sonnet", Condition: "skill", Attempt: 1}
+	if err := s2.SaveGrade(id, RunGrade{Key: k, Passed: 2, Total: 3}); err != nil {
+		t.Fatalf("SaveGrade post-migration: %v", err)
+	}
+	gs, err := s2.Grades(id)
+	if err != nil {
+		t.Fatalf("Grades: %v", err)
+	}
+	if len(gs) != 1 || gs[0].Passed != 2 {
+		t.Errorf("Grades = %+v, want the one grade just written", gs)
 	}
 }

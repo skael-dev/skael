@@ -35,9 +35,10 @@ already written, so that it can be evaluated. Requirements:
   observable result of what it does instruct.
 - Constraints must be MUST or MUST-NOT statements the skill's own text makes.
   If it states none, return no constraints rather than inventing plausible ones.
-- Triggers: positive prompts drawn from what the skill says it is for, and hard
-  negatives that are adjacent-domain near-misses. An obviously irrelevant
-  negative tests nothing.
+- Triggers: at least eight positive prompts drawn from what the skill says it
+  is for, and at least eight hard negatives that are adjacent-domain
+  near-misses. An obviously irrelevant negative tests nothing, and too few of
+  either leaves the trigger measurement with nothing to measure.
 - Deps must be limited to tools the skill actually invokes.
 
 The skill:

@@ -16,17 +16,17 @@ const (
 	wsFileMode = os.FileMode(0o644)
 )
 
-// stageRunWorkspace creates a fresh session workspace for one task run,
-// copying only task.md and environment/ from taskDir. oracle/ and verifier/
-// are deliberately never copied here: the oracle is the reference solution,
-// and a workspace that carries it is not measuring the skill, it is handing
-// the agent the answer. The verifier is mounted separately, after the
-// session ends, so the agent cannot read it either.
+// stageEvalWorkspace creates a fresh session workspace for one eval run and
+// copies that eval's input files into it, flattened to their base names.
+//
+// Only the files the eval lists are copied. evals.json itself is never staged:
+// it holds the expectations, which are the answer key, and a workspace
+// carrying it is not measuring the skill.
 //
 // root is Options.WorkspaceRoot: empty means os.TempDir(), and a non-empty
 // value is a directory the caller has arranged to be visible at the same path
 // to whatever daemon starts the sandbox containers.
-func stageRunWorkspace(taskDir, root string) (_ string, err error) {
+func stageEvalWorkspace(suiteDir string, ev suite.Eval, root string) (_ string, err error) {
 	// ws is deliberately a plain local, not the named return: an error return
 	// below sets the named result to "", and a defer reading that instead of
 	// this variable would call os.RemoveAll("") — a no-op — rather than
@@ -46,29 +46,19 @@ func stageRunWorkspace(taskDir, root string) (_ string, err error) {
 		}
 	}()
 
-	promptPath := filepath.Join(taskDir, "task.md")
-	b, rErr := os.ReadFile(promptPath)
-	switch {
-	case rErr == nil:
-		if err := os.WriteFile(filepath.Join(ws, "task.md"), b, wsFileMode); err != nil {
-			return "", fmt.Errorf("runner: staging task.md: %w", err)
+	for _, rel := range ev.Files {
+		src := filepath.Join(suiteDir, filepath.FromSlash(rel))
+		// suite.Validate has already refused a path that escapes the suite
+		// directory, so a file that fails to open here is one the eval names
+		// and the archive does not carry.
+		b, rErr := os.ReadFile(src)
+		if rErr != nil {
+			return "", fmt.Errorf("runner: staging input file %q for eval %d: %w", rel, ev.ID, rErr)
 		}
-	case os.IsNotExist(rErr):
-		// No task.md is a caller error surfaced elsewhere (a missing task),
-		// not a reason to fail staging itself.
-	default:
-		return "", fmt.Errorf("runner: reading task.md: %w", rErr)
-	}
-
-	envDir := filepath.Join(taskDir, "environment")
-	if info, sErr := os.Stat(envDir); sErr == nil && info.IsDir() {
-		if err := copyTree(envDir, filepath.Join(ws, "environment")); err != nil {
-			return "", fmt.Errorf("runner: staging environment: %w", err)
+		if err := os.WriteFile(filepath.Join(ws, filepath.Base(rel)), b, wsFileMode); err != nil {
+			return "", fmt.Errorf("runner: staging input file %q for eval %d: %w", rel, ev.ID, err)
 		}
-	} else if sErr != nil && !os.IsNotExist(sErr) {
-		return "", fmt.Errorf("runner: staging environment: %w", sErr)
 	}
-
 	return ws, nil
 }
 

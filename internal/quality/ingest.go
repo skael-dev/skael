@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/report"
-	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
 // Record is one scored measurement of a skill version, as stored in
@@ -106,33 +105,6 @@ func FromReport(r *report.Report) (Record, error) {
 		return Record{}, fmt.Errorf("quality.FromReport: marshal members: %w", err)
 	}
 
-	// Pillars is the per-member breakdown, keyed the same way as
-	// panel_matrix: only healthy members contribute, since an unhealthy
-	// member's pillars are not a measurement.
-	pillars := make(map[string]interface{}, len(r.Members))
-	for _, m := range r.Members {
-		if !m.Healthy {
-			continue
-		}
-		pillars[memberKey(m.Member)] = m.Pillars
-	}
-	pillarsJSON, err := json.Marshal(pillars)
-	if err != nil {
-		return Record{}, fmt.Errorf("quality.FromReport: marshal pillars: %w", err)
-	}
-
-	driftBreakdown := make(map[string]interface{}, len(r.Members))
-	for _, m := range r.Members {
-		if !m.Healthy {
-			continue
-		}
-		driftBreakdown[memberKey(m.Member)] = m.Drift
-	}
-	driftJSON, err := json.Marshal(driftBreakdown)
-	if err != nil {
-		return Record{}, fmt.Errorf("quality.FromReport: marshal drift breakdown: %w", err)
-	}
-
 	modelPanel := r.ModelPanel
 	if modelPanel == nil {
 		modelPanel = []report.PanelMember{}
@@ -142,52 +114,32 @@ func FromReport(r *report.Report) (Record, error) {
 		return Record{}, fmt.Errorf("quality.FromReport: marshal model panel: %w", err)
 	}
 
-	// DriftGrade comes from the first healthy member, and "" when there is
-	// none — an absent grade, not a guess.
-	driftGrade := ""
-	for _, m := range r.Members {
-		if m.Healthy {
-			driftGrade = m.DriftGrade
-			break
-		}
+	var graderModel *string
+	if r.GraderModel != "" {
+		graderModel = &r.GraderModel
 	}
 
-	var judgeModel *string
-	if r.JudgeModel != "" {
-		judgeModel = &r.JudgeModel
-	}
-
-	criticalViolations := 0
-	for _, task := range r.Tasks {
-		for _, rd := range task.Drift {
-			for _, v := range rd.Violations {
-				if v.Severity == spec.SeverityCritical {
-					// Count violation records, not Hits: three hits of one
-					// forbid rule in one run is one violated rule, and
-					// summing hits would make a chatty rule look like a
-					// worse breach than a quiet one.
-					criticalViolations++
-				}
-			}
-		}
-	}
+	// Baseline, Delta and TriggerF1 are deliberately not columns yet. They
+	// live in ReportJSON, which the detail page already reads. Adding columns
+	// is a schema change, and this pass does not make one.
+	//
+	// Pillars and DriftBreakdown are the reverse: columns whose contents no
+	// longer exist. They are written as empty objects rather than dropped, so
+	// no migration is needed and no historical row changes meaning.
+	empty := json.RawMessage("{}")
 
 	return Record{
-		Headline:                 r.Headline,
-		Pillars:                  pillarsJSON,
-		PanelMatrix:              panelMatrix,
-		RobustnessGap:            r.RobustnessGap,
-		DriftGrade:               driftGrade,
-		DriftBreakdown:           driftJSON,
-		PanelComplete:            r.PanelComplete,
-		SuiteRef:                 r.SuiteRef,
-		EngineVersion:            r.EngineVersion,
-		ModelPanel:               modelPanelJSON,
-		Tier:                     r.Tier,
-		UpliftSource:             string(r.UpliftSource),
-		JudgeModel:               judgeModel,
-		ScoredAt:                 r.FinishedAt,
-		CriticalForbidViolations: criticalViolations,
+		Headline:       r.Headline,
+		Pillars:        empty,
+		DriftBreakdown: empty,
+		PanelMatrix:    panelMatrix,
+		PanelComplete:  r.PanelComplete,
+		SuiteRef:       r.SuiteRef,
+		EngineVersion:  r.EngineVersion,
+		ModelPanel:     modelPanelJSON,
+		Tier:           r.Tier,
+		JudgeModel:     graderModel,
+		ScoredAt:       r.FinishedAt,
 	}, nil
 }
 

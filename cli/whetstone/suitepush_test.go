@@ -84,29 +84,24 @@ func newWorkspaceWithCheckedSuiteNoSpec(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t00",
-				Kind:     "happy",
-				PromptMD: "Do the thing.",
-				Oracle:   "#!/bin/sh\ntrue\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
+	set := &suite.EvalSet{
+		SkillName: "deploy-helper",
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
 	suiteDir, err := st.SuiteDir("deploy-helper")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Write(suiteDir); err != nil {
-		t.Fatalf("writing suite fixture: %v", err)
+	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
+		t.Fatalf("writing eval set fixture: %v", err)
 	}
 	ref, err := suite.Ref(suiteDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "t00"}}); err != nil {
+	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "1"}}); err != nil {
 		t.Fatalf("SaveSuiteCheck: %v", err)
 	}
 	return st
@@ -128,7 +123,7 @@ func newWorkspaceWithCheckedSuite(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := []store.SuiteCheckRow{{TaskID: "t00"}}
+	rows := []store.SuiteCheckRow{{TaskID: "1"}}
 	if err := st.SaveSuiteCheck("deploy-helper", ref, rows); err != nil {
 		t.Fatalf("SaveSuiteCheck: %v", err)
 	}
@@ -168,23 +163,18 @@ func newWorkspaceWithUncheckedSuite(t *testing.T) *store.Store {
 		t.Fatalf("ApproveSpec: %v", err)
 	}
 
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t00",
-				Kind:     "happy",
-				PromptMD: "Do the thing.",
-				Oracle:   "#!/bin/sh\ntrue\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
+	set := &suite.EvalSet{
+		SkillName: sp.Name,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
 	suiteDir, err := st.SuiteDir(sp.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Write(suiteDir); err != nil {
-		t.Fatalf("writing suite fixture: %v", err)
+	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
+		t.Fatalf("writing eval set fixture: %v", err)
 	}
 
 	return st

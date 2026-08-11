@@ -1,5 +1,5 @@
 // Package report defines the machine-readable result of an eval run: the
-// schema a CI job reads, a later phase posts, and a future UI charts.
+// schema a CI job reads, the worker posts, and the UI charts.
 package report
 
 import (
@@ -9,7 +9,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/score"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -19,7 +18,10 @@ import (
 // spec version of the skill it measures. Load refuses a report from a newer
 // schema rather than misreading it: a field that changed meaning is worse
 // than a field that is missing.
-const SchemaVersion = 1
+//
+// Version 2 is the expectation pass rate. Version 1 was a weighted geometric
+// mean of four pillars, on the same 0–100 scale and measuring something else.
+const SchemaVersion = 2
 
 // PanelMember identifies one model-panel entry on the report.
 type PanelMember struct {
@@ -31,97 +33,55 @@ type PanelMember struct {
 
 // MemberReport is one panel member's measured result.
 type MemberReport struct {
-	Member        PanelMember   `json:"member"`
-	Pillars       score.Pillars `json:"pillars"`
-	Effectiveness float64       `json:"effectiveness"`
-	Drift         drift.Agg     `json:"drift"`
-	// DriftUnmeasurable is true when too many checks could not be performed for
-	// adherence to mean anything, in which case Drift is absent rather than
-	// zero — a zero would read as "followed the contract not at all".
-	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
-	// DriftGrade is no longer set: it was a second composite on a second scale
-	// beside Effectiveness. Retained as an always-empty omitempty field, which
-	// it already was for unhealthy members, so decoders keep working.
-	DriftGrade string `json:"drift_grade,omitempty"`
+	Member PanelMember `json:"member"`
+	// Effectiveness is this member's 0–100 score: the mean of its evals' pass
+	// rates. The field keeps the name it had when it was a geometric mean of
+	// four pillars, because it still answers the same question and renaming it
+	// would break every stored decoder for no gain.
+	Effectiveness float64 `json:"effectiveness"`
 	// Healthy is false when the member's adapter failed its probe. Such a
 	// member contributes nothing to the headline rather than a zero.
 	Healthy bool   `json:"healthy"`
 	Detail  string `json:"detail,omitempty"`
 	// MetaPartial is true when this member's session metadata was rebuilt from
 	// the store's own columns rather than recovered in full (a resumed run
-	// whose recorded artifact could not be re-read) — runner.Outcome carries
-	// the same flag under the same name. A reader must be able to tell that a
-	// figure derived from this member rests on partial metadata.
+	// whose recorded artifact could not be re-read).
 	MetaPartial       bool   `json:"meta_partial,omitempty"`
 	MetaPartialReason string `json:"meta_partial_reason,omitempty"`
 }
 
-// ConditionReport is the pass rate for one task's condition (skill or
-// baseline), across models.
+// ConditionReport is one eval's expectation tally for one condition (skill or
+// baseline), for one model. Passes and Runs are expectations passed and
+// expectations graded, summed over that condition's runs.
 type ConditionReport struct {
 	Condition store.Condition `json:"condition"`
 	Model     string          `json:"model"`
 	Passes    int             `json:"passes"`
 	Runs      int             `json:"runs"`
-	// Reason is the verifier's own account of why this condition failed,
-	// empty when it passed. Without it a report can state that a task failed
-	// but never why, which is the difference between a score and a finding.
-	Reason string `json:"reason,omitempty"`
 }
 
-// RunDrift is one run's drift measurement. It embeds drift.Result rather
-// than duplicating Components/Adherence/Unevaluable as separate fields, so
-// the per-task view rendered here and the per-member view drift.Aggregate
-// consumes are always the same numbers, not two hand-built copies that can
-// silently disagree.
-//
-// Agent, alongside Model, is what disambiguates which panel member this run
-// belongs to: a cross-vendor panel (e.g. --agents claude-code,cursor
-// --models opus) can put two members on the same model string, and Model
-// alone cannot tell them apart.
-type RunDrift struct {
-	Agent   string `json:"agent"`
-	Model   string `json:"model"`
-	Attempt int    `json:"attempt"`
-	drift.Result
-	Violations []drift.Violation `json:"violations,omitempty"`
+// GradeNote is one graded session, kept so a surprising score can be read back
+// to the expectation and the evidence that produced it.
+type GradeNote struct {
+	Model        string              `json:"model"`
+	Condition    store.Condition     `json:"condition"`
+	Attempt      int                 `json:"attempt"`
+	Expectations []score.Expectation `json:"expectations,omitempty"`
 }
 
-// JudgeNote is one judge verdict summarised for the report.
-type JudgeNote struct {
-	Model    string   `json:"model"`
-	Winner   string   `json:"winner"`
-	Margin   float64  `json:"margin"`
-	Evidence []string `json:"evidence,omitempty"`
-	Votes    int      `json:"votes"`
-}
-
-// TaskReport is one non-void task's results.
+// TaskReport is one non-void eval's results.
 type TaskReport struct {
 	TaskID     string            `json:"task_id"`
-	Kind       string            `json:"kind"`
-	Split      string            `json:"split"`
 	Conditions []ConditionReport `json:"conditions,omitempty"`
-	Drift      []RunDrift        `json:"drift,omitempty"`
-	Judge      []JudgeNote       `json:"judge,omitempty"`
+	Grades     []GradeNote       `json:"grades,omitempty"`
 }
 
-// VoidTask is a task excluded from scoring by the oracle gate, listed rather
-// than merely dropped: a suite quietly losing tasks changes what the score
-// means, and the reader has to be able to see it.
+// VoidTask is an eval excluded from scoring, listed rather than merely
+// dropped: a suite quietly losing evals changes what the score means, and the
+// reader has to be able to see it.
 type VoidTask struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason"`
-}
-
-// Iteration is one repair loop's outcome, when the eval ran with repair
-// enabled.
-type Iteration struct {
-	N                int      `json:"n"`
-	DevEffectiveness float64  `json:"dev_effectiveness"`
-	Applied          int      `json:"applied"`
-	Pruned           []string `json:"pruned,omitempty"`
-	Notes            []string `json:"notes,omitempty"`
 }
 
 // Report is the machine-readable result of one eval run against one skill.
@@ -136,74 +96,51 @@ type Report struct {
 	ModelPanel    []PanelMember `json:"model_panel"`
 	PanelComplete bool          `json:"panel_complete"`
 
-	// Headline is the single published 0–100 score: the minimum Effectiveness
+	// Headline is the single published 0–100 score: the lowest member score
 	// across healthy panel members.
 	Headline float64 `json:"headline"`
-	// DriftUnmeasurable is true when at least one member's adherence could not
-	// be measured, so a reader knows a missing drift figure is an absent
-	// measurement rather than a zero.
-	DriftUnmeasurable bool `json:"drift_unmeasurable,omitempty"`
-	// BaselineWipeout is true when some member's baseline passed no task at
-	// all, which makes Uplift a rescaling of Reliability rather than
-	// independent evidence — and is also what a broken baseline harness looks
-	// like.
+	// Baseline is the same measurement with no skill installed, and Delta is
+	// Headline minus it. Together they answer "does this skill help", which no
+	// pass rate answers on its own.
+	//
+	// DeltaMeasured is false when no baseline session ran. A zero delta and an
+	// absent delta are different facts: the first says the skill changed
+	// nothing, the second says nobody looked.
+	Baseline      float64 `json:"baseline"`
+	Delta         float64 `json:"delta"`
+	DeltaMeasured bool    `json:"delta_measured"`
+	// BaselineWipeout is true when the baseline passed no expectation at all,
+	// which is also what a broken baseline harness looks like.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 
-	UpliftSource score.UpliftSource `json:"uplift_source"`
-	// JudgeKappa is nil when no judge was calibrated for this run, as opposed
-	// to a judge calibrated at κ=0 — the two are different facts and a bare
-	// float64 cannot distinguish them.
-	JudgeKappa     *float64 `json:"judge_kappa,omitempty"`
-	JudgeLabeledBy string   `json:"judge_labeled_by,omitempty"`
-	// JudgeModel identifies which model judged this run — the judge is a
-	// distinct axis of comparability from the model panel being scored: an
-	// operator-configurable judge means the same panel, scored on the same
-	// suite, can produce a different Headline purely because a different
-	// model did the judging. Empty when no judge ran for this report (the
-	// pass-rate fallback in UpliftSource), or when the caller building the
-	// report could not determine which model served the request.
-	//
-	// A gateway base URL would sharpen this further — a different base URL
-	// can serve a different model behind the same name — but the llm.Gateway
-	// interface this package's caller holds is opaque (Complete(ctx, Req)
-	// (Res, error), no accessor for the endpoint or model it was constructed
-	// with), so that fact is not obtainable at report-build time today. Only
-	// the model name is recorded here; see cli/whetstone/eval.go for where a
-	// future accessor would need to surface it.
-	JudgeModel string `json:"judge_model,omitempty"`
+	// TriggerF1 is the trigger smoke check: does the skill fire when it should
+	// and stay silent when it should not. It is reported beside the headline
+	// rather than folded into it, and it gates a release rather than scoring
+	// one.
+	TriggerF1 float64 `json:"trigger_f1"`
 
 	Members []MemberReport `json:"members"`
-	// RobustnessGap is nil when it could not be computed — score.Matrix.ByClass
-	// returns ok == false when a class has zero or more than one member, so a
-	// strong/floor comparison is not always defined. A pointer rather than a
-	// value-plus-flag pair: a zero value would otherwise read as "the floor
-	// model kept up", the opposite of "we could not tell", and a two-field
-	// representation makes that wrong state constructible by forgetting to set
-	// the flag alongside the value.
-	RobustnessGap *float64 `json:"robustness_gap,omitempty"`
 
 	Tasks     []TaskReport `json:"tasks"`
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`
 
 	TriggerInferred bool `json:"trigger_inferred"`
-	// TriggerSource is the single panel member the trigger probes actually ran
-	// on. Trigger firing is measured once per eval, on this member, and the
-	// resulting F1 is then copied into every scored member's Pillars — it is
-	// not a per-member measurement, whatever the member's own row in Members
-	// might suggest. A zero value means no probes were planned for this tier.
+	// TriggerSource is the single panel member the trigger probes ran on.
+	// Trigger firing is measured once per eval, on this member.
 	TriggerSource PanelMember `json:"trigger_source,omitempty"`
 	// TriggerUnknown is the count of trigger probes excluded from the trigger
-	// confusion matrix because their session could not be measured — see
-	// score.Probe.Unknown. Excluded rather than counted as a miss, so an
-	// infrastructure failure does not masquerade as a recall failure.
-	TriggerUnknown    int      `json:"trigger_unknown,omitempty"`
-	Unevaluable       int      `json:"unevaluable"`
-	UnevaluableDetail []string `json:"unevaluable_detail,omitempty"`
+	// confusion matrix because their session could not be measured — excluded
+	// rather than counted as a miss, so an infrastructure failure does not
+	// masquerade as a recall failure.
+	TriggerUnknown int `json:"trigger_unknown,omitempty"`
+
+	// GraderModel identifies which model graded this run. An operator-
+	// configurable grader means the same panel, on the same suite, can produce
+	// a different Headline purely because a different model did the grading.
+	GraderModel string `json:"grader_model,omitempty"`
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
-
-	Iterations []Iteration `json:"iterations,omitempty"`
 }
 
 // Save writes r as indented JSON: a human opens this file when a score
@@ -215,9 +152,7 @@ func (r *Report) Save(w io.Writer) error {
 }
 
 // Load reads a Report and rejects one written by a newer schema: a field
-// that changed meaning is worse than a field that is missing, so a newer
-// report read by an older binary must fail loudly rather than be
-// misinterpreted.
+// that changed meaning is worse than a field that is missing.
 func Load(r io.Reader) (*Report, error) {
 	var probe struct {
 		SchemaVersion int `json:"schema_version"`
@@ -243,11 +178,11 @@ func Load(r io.Reader) (*Report, error) {
 // when they do not.
 //
 // This is the difference between a trend and a misleading chart. A score is a
-// measurement against a specific suite, evaluated by a specific model panel, at
-// a specific tier — change any of those and "the score dropped" is not a fact
-// about the skill. What deliberately does *not* affect comparability is the spec
-// version and the score itself: comparing v3 against v4 is the only question
-// this method exists to answer.
+// measurement against a specific eval set, run by a specific model panel, at a
+// specific tier, graded by a specific model — change any of those and "the
+// score dropped" is not a fact about the skill. What deliberately does *not*
+// affect comparability is the spec version and the score itself: comparing v3
+// against v4 is the only question this method exists to answer.
 func (r *Report) Comparable(o *Report) (bool, string) {
 	switch {
 	case r == nil || o == nil:
@@ -257,7 +192,7 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 	case r.Skill != o.Skill:
 		return false, fmt.Sprintf("different skills (%s and %s)", r.Skill, o.Skill)
 	case r.SuiteRef != o.SuiteRef:
-		return false, fmt.Sprintf("different suites (%s and %s): the tasks are not the same", suite.ShortRef(r.SuiteRef), suite.ShortRef(o.SuiteRef))
+		return false, fmt.Sprintf("different eval sets (%s and %s): the evals are not the same", suite.ShortRef(r.SuiteRef), suite.ShortRef(o.SuiteRef))
 	case r.EngineVersion != o.EngineVersion:
 		return false, fmt.Sprintf("different engine versions (%s and %s): a scoring-logic change can move the number without the skill changing", r.EngineVersion, o.EngineVersion)
 	case r.Tier != o.Tier:
@@ -268,10 +203,8 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 		return false, "different agent CLI versions on the panel: a score change could be the CLI rather than the skill"
 	case r.PanelComplete != o.PanelComplete:
 		return false, "one panel was incomplete, so its minimum was taken over fewer members"
-	case r.UpliftSource != o.UpliftSource:
-		return false, fmt.Sprintf("Uplift came from different sources (%s and %s)", r.UpliftSource, o.UpliftSource)
-	case r.JudgeModel != o.JudgeModel:
-		return false, fmt.Sprintf("different judge models (%q and %q): a different judge can move the number without the skill changing", r.JudgeModel, o.JudgeModel)
+	case r.GraderModel != o.GraderModel:
+		return false, fmt.Sprintf("different grader models (%q and %q): a different grader can move the number without the skill changing", r.GraderModel, o.GraderModel)
 	}
 	return true, ""
 }
@@ -302,11 +235,10 @@ func sortedKeys(ms []PanelMember) []string {
 }
 
 // sameCLIVersions compares the CLIVersion recorded against each panel member,
-// as a sorted multiset alongside samePanel's identity check — order is a
-// planner implementation detail, not a fact about the panel. Called only
-// after samePanel has already confirmed the two panels have the same
-// members, so a mismatch here means the same members were measured with
-// different agent CLI builds.
+// as a sorted multiset alongside samePanel's identity check. Called only after
+// samePanel has already confirmed the two panels have the same members, so a
+// mismatch here means the same members were measured with different agent CLI
+// builds.
 func sameCLIVersions(a, b []PanelMember) bool {
 	if len(a) != len(b) {
 		return false

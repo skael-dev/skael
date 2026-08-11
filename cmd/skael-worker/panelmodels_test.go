@@ -58,21 +58,6 @@ func TestPanelModels(t *testing.T) {
 	}
 }
 
-// The oracle gate bind-mounts its task workspaces into sibling containers,
-// so they must sit under the same host-visible path session workspaces do.
-// A container-local path names nothing on the host, Docker creates the
-// missing bind source as an empty directory, and every task voids with no
-// error anywhere.
-func TestDeriverOptions_StageRootIsTheRunRoot(t *testing.T) {
-	cfg := workerConfig{}
-	cfg.RunRoot = "/var/lib/skael/run"
-
-	o := deriverOptions(cfg, nil, nil)
-	if o.StageRoot != "/var/lib/skael/run" {
-		t.Fatalf("StageRoot = %q, want the configured run root", o.StageRoot)
-	}
-}
-
 // ANTHROPIC_BASE_URL must land in its own field rather than being confused
 // with the judge's LLM_BASE_URL, which is read from a different variable.
 func TestConfigFromEnv_ReadsThePanelGatewaySeparatelyFromTheJudges(t *testing.T) {

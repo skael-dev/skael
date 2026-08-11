@@ -33,23 +33,17 @@ func panelModelsFromEnv() (strong, fast, baseURL string) {
 // run that scores, reports PanelComplete=false, and can never release the
 // version it was meant to clear.
 func warnUnconfiguredPanelModels(strong, fast, baseURL string) string {
-	if baseURL == "" || (strong != "" && fast != "") {
+	if baseURL == "" || strong != "" {
 		return ""
 	}
-	missing := fmt.Sprintf("neither %s nor %s is", strongModelEnv, fastModelEnv)
-	switch {
-	case strong != "":
-		missing = fmt.Sprintf("%s is set but %s is not", strongModelEnv, fastModelEnv)
-	case fast != "":
-		missing = fmt.Sprintf("%s is set but %s is not", fastModelEnv, strongModelEnv)
-	}
+	_ = fast // the floor member only exists at the deep tier
 	return fmt.Sprintf(
-		"%s points the eval panel at %s, but %s, so the panel will ask that gateway for "+
-			"Anthropic's own aliases %q and %q — both of them, since the two are set together "+
-			"or not at all. A gateway that namespaces its model identifiers (OpenRouter uses "+
-			"anthropic/claude-opus-4) rejects those and every panel member fails its health probe.",
-		apiBaseURLEnv, baseURL, missing,
-		runner.DefaultPanel()[0].Model, runner.DefaultPanel()[1].Model)
+		"%s points the eval panel at %s, but %s is not set, so the panel will ask that gateway for "+
+			"Anthropic's own alias %q. A gateway that namespaces its model identifiers (OpenRouter uses "+
+			"anthropic/claude-sonnet-5) rejects that and every panel member fails its health probe. "+
+			"Set %s as well if you run the deep tier, which adds a floor member.",
+		apiBaseURLEnv, baseURL, strongModelEnv,
+		runner.DefaultPanel()[0].Model, fastModelEnv)
 }
 
 // checkPanelHealth fails an eval whose panel has no healthy member at all. A

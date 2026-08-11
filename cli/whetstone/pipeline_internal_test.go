@@ -3,7 +3,6 @@ package whetstone
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/contract"
@@ -14,31 +13,16 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// suiteOutline is the outline-phase response for suite.Generate's two-phase
-// draft: two stubs, expanded below by suiteExpandGateway.
-const suiteOutline = `{
-  "tasks": [
-    {"id": "happy", "kind": "happy", "intent": "extract the tables"},
-    {"id": "variant", "kind": "variant", "intent": "pull the tables out"}
-  ],
-  "triggers": {"positive": ["extract this PDF"], "negative": ["extract this zip"]}
-}`
-
-// suiteExpandGateway routes suite.outline to suiteOutline and every
-// suite.expand call to the package matching the stub id named in its prompt.
-// The fake gateway is how this runs with no subscription, no API key, and no
-// network.
+// suiteExpandGateway answers suite.Generate with a two-eval set. The fake
+// gateway is how this runs with no subscription, no API key, and no network.
 func suiteExpandGateway() *fake.Gateway {
-	return fake.NewFunc(func(r llm.Req) (string, error) {
-		if r.Role == "suite.outline" {
-			return suiteOutline, nil
-		}
-		if strings.Contains(r.Prompt, "id: happy") {
-			return `{"prompt_md": "extract the tables", "oracle": "#!/bin/sh\nexit 0\n", ` +
-				`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`, nil
-		}
-		return `{"prompt_md": "pull the tables out", "oracle": "#!/bin/sh\nexit 0\n", ` +
-			`"verifier": "#!/bin/sh\ntest -f out/tables.csv\n"}`, nil
+	return fake.NewFunc(func(llm.Req) (string, error) {
+		return `{"evals": [
+		  {"prompt": "extract the tables", "expected_output": "a csv",
+		   "expectations": ["out/tables.csv exists"]},
+		  {"prompt": "pull the tables out", "expected_output": "a csv",
+		   "expectations": ["out/tables.csv exists", "the csv has a header row"]}
+		]}`, nil
 	})
 }
 
@@ -91,26 +75,26 @@ func TestNewPipelineWritesTheEvalSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SuiteDir: %v", err)
 	}
-	loaded, err := suite.Load(suiteDir)
+	loaded, err := suite.LoadEvalSet(suiteDir)
 	if err != nil {
-		t.Fatalf("the written suite does not load back: %v", err)
+		t.Fatalf("the written eval set does not load back: %v", err)
 	}
-	if len(loaded.Tasks) != 2 {
-		t.Errorf("loaded %d tasks, want 2", len(loaded.Tasks))
+	if len(loaded.Evals) != 2 {
+		t.Errorf("loaded %d evals, want 2", len(loaded.Evals))
+	}
+	for _, ev := range loaded.Evals {
+		if len(ev.Expectations) == 0 {
+			t.Errorf("eval %d was written with nothing to grade", ev.ID)
+		}
 	}
 
-	// Split must have run before Write: the reported score is the holdout
-	// score, and an unsplit suite has no holdout at all.
-	var holdout int
-	for _, task := range loaded.Tasks {
-		if task.Split == "" {
-			t.Errorf("task %q was written with no split assigned", task.ID)
-		}
-		if task.Split == "holdout" {
-			holdout++
-		}
+	// The trigger queries are written beside the evals, derived from the
+	// spec's own trigger phrases.
+	qs, err := suite.LoadTriggerQueries(suiteDir)
+	if err != nil {
+		t.Fatalf("the written trigger queries do not load back: %v", err)
 	}
-	if holdout == 0 {
-		t.Error("the written suite has no holdout tasks")
+	if len(qs) != len(sp.Triggers) {
+		t.Errorf("loaded %d trigger queries, want the spec's %d", len(qs), len(sp.Triggers))
 	}
 }

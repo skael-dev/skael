@@ -265,14 +265,10 @@ func joinComma(ss []string) string {
 }
 
 // deriverOptions builds the deriver's configuration from the worker's own.
-// Split out from run() so the RunRoot -> StageRoot wiring is testable: nothing
-// else exercises it, and getting it wrong voids every task silently.
-func deriverOptions(cfg workerConfig, drv sandbox.Driver, gw llm.Gateway) derive.Options {
+func deriverOptions(gw llm.Gateway) derive.Options {
 	return derive.Options{
-		Gateway:   gw,
-		Driver:    drv,
-		StageRoot: cfg.RunRoot,
-		Logger:    func(format string, args ...any) { log.Info().Msgf(format, args...) },
+		Gateway: gw,
+		Logger:  func(format string, args ...any) { log.Info().Msgf(format, args...) },
 	}
 }
 
@@ -319,7 +315,7 @@ func run(cfg workerConfig) error {
 		panelStrong: panelStrong, panelFast: panelFast, panelBase: cfg.PanelBaseURL,
 	}
 
-	der, err := derive.New(deriverOptions(cfg, drv, gw))
+	der, err := derive.New(deriverOptions(gw))
 	if err != nil {
 		return fmt.Errorf("skael-worker: suite deriver: %w", err)
 	}

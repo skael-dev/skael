@@ -44,23 +44,13 @@ func (f *fakeQueue) Cancel(ctx context.Context, id evalqueue.JobID) error {
 // keyed to whichever skill Put first.
 func writeFixtureSuite(t *testing.T, dir, skillName string) {
 	t.Helper()
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t1",
-				Kind:     "happy",
-				Split:    "holdout",
-				PromptMD: "# Task for " + skillName + "\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	s := &suite.EvalSet{
+		SkillName: skillName,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing for " + skillName + ".", Expectations: []string{"it did the thing"}},
 		},
 	}
-	require.NoError(t, s.Write(dir))
+	require.NoError(t, suite.WriteEvalSet(dir, s))
 }
 
 // registerFixtureSuite registers a suite for skillName against reg, so

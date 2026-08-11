@@ -2,7 +2,6 @@ package runner_test
 
 import (
 	"fmt"
-	"math/rand"
 	"strings"
 	"testing"
 
@@ -11,39 +10,39 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// tasks builds a split suite: n tasks, holdoutN of them holdout, spread
-// evenly across the ID range rather than clustered at the end. Interleaving
-// matters: a fixture where holdout is always the highest-numbered IDs makes a
-// plain ID-order prefix look split-aware when it is not, and makes a missing
-// split filter invisible to a test that only checks the first few IDs taken.
-func tasks(n, holdoutN int) *suite.Suite {
-	s := &suite.Suite{Triggers: suite.TriggerSet{}}
-	holdout := map[int]bool{}
-	for i := 0; i < holdoutN; i++ {
-		holdout[i*n/holdoutN] = true
+// evals builds a set of n scoreable evals.
+func evals(n int) *suite.EvalSet {
+	set := &suite.EvalSet{SkillName: "demo"}
+	for i := 1; i <= n; i++ {
+		set.Evals = append(set.Evals, suite.Eval{
+			ID:           i,
+			Prompt:       fmt.Sprintf("please do thing %d", i),
+			Expectations: []string{"it did the thing"},
+		})
+	}
+	return set
+}
+
+// triggers builds n should-trigger and n should-not-trigger queries.
+func triggers(n int) []suite.TriggerQuery {
+	var out []suite.TriggerQuery
+	for i := 0; i < n; i++ {
+		out = append(out, suite.TriggerQuery{Query: fmt.Sprintf("do thing %d", i), ShouldTrigger: true})
 	}
 	for i := 0; i < n; i++ {
-		split := "dev"
-		if holdout[i] {
-			split = "holdout"
-		}
-		s.Tasks = append(s.Tasks, suite.TaskPkg{ID: fmt.Sprintf("t%02d", i), Kind: "happy", Split: split})
+		out = append(out, suite.TriggerQuery{Query: fmt.Sprintf("do an adjacent thing %d", i)})
 	}
-	for i := 0; i < 8; i++ {
-		s.Triggers.Positive = append(s.Triggers.Positive, fmt.Sprintf("please do thing %d", i))
-		s.Triggers.Negative = append(s.Triggers.Negative, fmt.Sprintf("do an adjacent thing %d", i))
-	}
-	return s
+	return out
 }
 
+// The budget is what makes a tier's cost predictable, so it is asserted rather
+// than assumed.
 func TestBuildPlan_FullTierMatchesTheDocumentedBudget(t *testing.T) {
-	p, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), tasks(10, 3), nil)
+	p, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), evals(10), nil, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
-	// 10 tasks × 2 runs × 2 models = 40 skill sessions, plus 10 baselines × 1
-	// × 2 models = 20, plus 16 short trigger probes. The budget is what makes a
-	// tier's cost predictable, so it is asserted rather than assumed.
+
 	skill, baseline := 0, 0
 	for _, k := range p.Runs {
 		switch k.Condition {
@@ -53,84 +52,38 @@ func TestBuildPlan_FullTierMatchesTheDocumentedBudget(t *testing.T) {
 			baseline++
 		}
 	}
-	if skill != 40 || baseline != 20 {
-		t.Errorf("skill=%d baseline=%d, want 40 and 20", skill, baseline)
+	// 10 evals × 2 attempts on one member, plus one baseline each.
+	if skill != 20 || baseline != 10 {
+		t.Errorf("skill=%d baseline=%d, want 20 and 10", skill, baseline)
 	}
-	if len(p.Probes) != 16 {
-		t.Errorf("%d probes, want 16", len(p.Probes))
+	if len(p.Probes) != 6 {
+		t.Errorf("%d probes, want the 6-query trigger smoke check", len(p.Probes))
 	}
-	if p.N != 2 || p.K != 2 {
-		t.Errorf("N=%d K=%d, want 2 and 2 for a Full tier", p.N, p.K)
-	}
-	// BaselineK must fit BaselineRuns (1 for Full), not K: K=2 exceeds the
-	// single baseline attempt a Full tier plans, and score.PassAtK refuses
-	// k > n.
-	if p.BaselineK != 1 {
-		t.Errorf("BaselineK=%d, want 1 for a Full tier (BaselineRuns=1)", p.BaselineK)
-	}
-	// Probes are measured on the primary member only: they answer "does it
-	// fire", which is a property of the skill's description, not of the model
-	// panel.
-	for _, pr := range p.Probes {
-		if pr.Member != runner.DefaultPanel()[0] {
-			t.Errorf("probe on %+v, want the primary member", pr.Member)
-		}
+	if len(p.Evals) != 10 {
+		t.Errorf("%d evals planned, want 10", len(p.Evals))
 	}
 }
 
-func TestBuildPlan_FullTierReservesHoldoutFromALargerSuite(t *testing.T) {
-	// 30 tasks, 9 of them holdout: comfortably more than the Full tier's
-	// budget of 10 tasks (7 dev + 3 holdout), so this exercises the
-	// stratified selection rather than "every eligible task happens to be
-	// used".
-	p, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), tasks(30, 9), nil)
+// The baseline answers one published question, so it runs on the primary
+// member only however wide the panel is.
+func TestBuildPlan_BaselineRunsOnThePrimaryMemberOnly(t *testing.T) {
+	p, err := runner.BuildPlan(runner.TierDeep, runner.DeepPanel(), evals(16), nil, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
-	skill, baseline := 0, 0
+	primary := runner.DeepPanel()[0]
 	for _, k := range p.Runs {
-		switch k.Condition {
-		case runner.CondSkill:
-			skill++
-		case runner.CondBaseline:
-			baseline++
+		if k.Condition != runner.CondBaseline {
+			continue
+		}
+		if k.Agent != primary.Agent || k.Model != primary.Model {
+			t.Fatalf("baseline planned on %s/%s, want the primary member", k.Agent, k.Model)
 		}
 	}
-	if skill != 40 || baseline != 20 {
-		t.Errorf("skill=%d baseline=%d, want 40 and 20 regardless of suite size", skill, baseline)
-	}
-	// The reported score of an eval is the holdout score. A Full tier that
-	// matches the documented session count while silently drawing zero
-	// holdout tasks would report a number computed from nothing.
-	holdoutRuns := p.HoldoutRuns()
-	if len(holdoutRuns) == 0 {
-		t.Fatal("HoldoutRuns() is empty for a Full tier run against a larger suite")
-	}
-	distinct := map[string]bool{}
-	for _, k := range holdoutRuns {
-		distinct[k.TaskID] = true
-	}
-	if len(distinct) != 3 {
-		t.Errorf("%d distinct holdout tasks, want 3 (round(30%% of the Full budget of 10))", len(distinct))
-	}
 }
 
-func TestBuildPlan_RefusesATierWithTooFewHoldoutTasks(t *testing.T) {
-	// 20 tasks is plenty for the Full tier's overall budget of 10, but only
-	// one of them is holdout — short of the 3 the Full tier reserves. Filling
-	// the shortfall from the dev pool would be exactly the silent-starvation
-	// bug being fixed here, so this must be a refusal, not a smaller holdout.
-	_, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), tasks(20, 1), nil)
-	if err == nil {
-		t.Fatal("BuildPlan silently filled a Full tier's holdout share from the dev pool")
-	}
-	if !strings.Contains(err.Error(), "holdout") {
-		t.Errorf("err = %v, want it to name the holdout shortfall", err)
-	}
-}
-
-func TestBuildPlan_SmokeIsFiveDevSessionsAndNoBaselines(t *testing.T) {
-	p, err := runner.BuildPlan(runner.TierSmoke, runner.DefaultPanel(), tasks(10, 3), nil)
+func TestBuildPlan_SmokeIsFiveSessionsAndNoBaselineOrProbes(t *testing.T) {
+	p, err := runner.BuildPlan(runner.TierSmoke, runner.DefaultPanel(), evals(10), nil, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -140,130 +93,87 @@ func TestBuildPlan_SmokeIsFiveDevSessionsAndNoBaselines(t *testing.T) {
 	if len(p.Probes) != 0 {
 		t.Errorf("%d probes, want none in a smoke tier", len(p.Probes))
 	}
-	// A smoke tier is immediate feedback on the development split. Touching
-	// holdout here would spend the one measurement that is supposed to stay
-	// unseen. With holdout tasks interleaved through the ID range (rather than
-	// clustered at the end), this fails if the DevOnly filter is ever dropped.
-	holdout := map[string]bool{}
-	for _, task := range tasks(10, 3).Tasks {
-		if task.Split == "holdout" {
-			holdout[task.ID] = true
-		}
-	}
-	for _, k := range p.Runs {
-		if holdout[k.TaskID] {
-			t.Errorf("smoke tier planned holdout task %s", k.TaskID)
-		}
-	}
 }
 
-func TestBuildPlan_ExcludesVoidTasksAndSaysSo(t *testing.T) {
-	// t01 and t02 are dev tasks in tasks(12, 3) (holdout is t00, t04, t08);
-	// voiding them still leaves exactly the Full tier's dev (7) and holdout
-	// (3) shares fillable.
-	void := map[string]bool{"t01": true, "t02": true}
-	p, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), tasks(12, 3), void)
+// A void eval is one nothing can be learned from. Planning it would blame a
+// broken eval on the skill.
+func TestBuildPlan_ExcludesVoidEvals(t *testing.T) {
+	void := map[int]bool{2: true, 3: true}
+	p, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), evals(12), void, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 	for _, k := range p.Runs {
-		if void[k.TaskID] {
-			t.Errorf("planned void task %s; a broken task would be blamed on the skill", k.TaskID)
+		if k.TaskID == "2" || k.TaskID == "3" {
+			t.Errorf("planned void eval %s", k.TaskID)
 		}
 	}
 }
 
+// A score computed over four evals and labelled "full" is a claim nothing
+// downstream can check.
 func TestBuildPlan_RefusesATierItCannotFill(t *testing.T) {
-	_, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), tasks(4, 1), nil)
+	_, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), evals(4), nil, triggers(8))
 	if err == nil {
 		t.Fatal("BuildPlan silently produced a smaller Full tier")
 	}
-	// A score computed over four tasks and labelled "full" is a claim nothing
-	// downstream can check. The shortfall has to be named where it can be fixed.
 	if !strings.Contains(err.Error(), "10") || !strings.Contains(err.Error(), "4") {
-		t.Errorf("err = %v, want it to name the required and available task counts", err)
+		t.Errorf("err = %v, want it to name the required and available counts", err)
+	}
+}
+
+// A trigger F1 measured over fewer queries than the tier promises is not the
+// measurement the tier's name claims.
+func TestBuildPlan_RefusesTooFewTriggerQueries(t *testing.T) {
+	_, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), evals(10), nil, triggers(1))
+	if err == nil {
+		t.Fatal("BuildPlan accepted a trigger set too thin for the tier")
+	}
+	if !strings.Contains(err.Error(), "triggers.json") {
+		t.Errorf("err = %v, want it to name the file to fix", err)
 	}
 }
 
 func TestBuildPlan_RefusesAnEmptyPanel(t *testing.T) {
-	if _, err := runner.BuildPlan(runner.TierFull, nil, tasks(10, 3), nil); err == nil {
+	if _, err := runner.BuildPlan(runner.TierFull, nil, evals(10), nil, triggers(8)); err == nil {
 		t.Error("BuildPlan accepted an empty panel")
 	}
 }
 
+// Which evals a tier takes must not depend on the order they were listed in.
 func TestBuildPlan_IsDeterministic(t *testing.T) {
-	// 30 tasks / 9 holdout, against a Full tier's budget of 10 (7 dev + 3
-	// holdout): both pools have more than the budget takes, so which tasks
-	// get truncated away actually depends on order — a suite with exactly the
-	// budget's task count wouldn't exercise that, since taking "all of a
-	// pool" is order-independent.
-	sa := tasks(30, 9)
-	a, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), sa, nil)
+	a, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), evals(30), nil, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	// Same tasks, shuffled input order: a plan that truncates using the
-	// suite's original ordering (rather than sorting before it enumerates)
-	// would select a different subset here.
-	sb := tasks(30, 9)
-	rand.New(rand.NewSource(1)).Shuffle(len(sb.Tasks), func(i, j int) {
-		sb.Tasks[i], sb.Tasks[j] = sb.Tasks[j], sb.Tasks[i]
-	})
-	b, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), sb, nil)
+	shuffled := evals(30)
+	for i, j := 0, len(shuffled.Evals)-1; i < j; i, j = i+1, j-1 {
+		shuffled.Evals[i], shuffled.Evals[j] = shuffled.Evals[j], shuffled.Evals[i]
+	}
+	b, err := runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), shuffled, nil, triggers(8))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	// Resume matches a stored run against a planned key. A plan whose order or
-	// attempt numbering varies makes every resumed run a fresh one.
 	if len(a.Runs) != len(b.Runs) {
-		t.Fatalf("plan sizes differ: %d vs %d", len(a.Runs), len(b.Runs))
+		t.Fatalf("%d runs against %d for the same set in a different order", len(a.Runs), len(b.Runs))
 	}
 	for i := range a.Runs {
 		if a.Runs[i] != b.Runs[i] {
-			t.Fatalf("run %d differs: %+v vs %+v", i, a.Runs[i], b.Runs[i])
+			t.Fatalf("run %d differs: %+v against %+v", i, a.Runs[i], b.Runs[i])
 		}
 	}
 }
 
-func TestDefaultPanel_SpansTwoCapabilityTiers(t *testing.T) {
-	p := runner.DefaultPanel()
-	if len(p) != 2 {
-		t.Fatalf("panel has %d members, want 2", len(p))
-	}
-	// min-across-panel gating and RobustnessGap both need a strong member and a
-	// floor member. One vendor is a known limitation; one capability tier would
-	// make both metrics undefined.
-	seen := map[spec.ModelTier]bool{}
-	for _, m := range p {
-		seen[m.Class] = true
-	}
-	if !seen[spec.TierStrong] || !seen[spec.TierFloor] {
-		t.Errorf("panel classes = %v, want a strong and a floor member", seen)
-	}
-}
-
 func TestParsePanel_RejectsAnUnknownAgent(t *testing.T) {
-	if _, err := runner.ParsePanel([]string{"nonesuch"}, []string{"opus"}); err == nil {
+	if _, err := runner.ParsePanel([]string{"nonesuch"}, []string{"sonnet"}); err == nil {
 		t.Error("ParsePanel accepted an unregistered agent")
 	}
 }
 
-func TestParsePanel_RejectsAPanelWithOnlyOneModel(t *testing.T) {
-	// Class assignment is keyed to the model's index within the agent's inner
-	// loop, so a single model lands in TierStrong with no floor member at all.
-	_, err := runner.ParsePanel([]string{"claude-code"}, []string{"opus"})
-	if err == nil {
-		t.Fatal("ParsePanel accepted a panel with no floor member")
-	}
-	if !strings.Contains(err.Error(), "floor") {
-		t.Errorf("err = %v, want it to name the missing floor class", err)
-	}
-}
-
-func TestParsePanel_OneAgentTwoModelsYieldsAStrongAndAFloorMember(t *testing.T) {
-	p, err := runner.ParsePanel([]string{"claude-code"}, []string{"opus", "haiku"})
+func TestParsePanel_FirstModelIsStrongAndTheRestAreFloor(t *testing.T) {
+	p, err := runner.ParsePanel([]string{"claude-code"}, []string{"sonnet", "haiku"})
 	if err != nil {
 		t.Fatalf("ParsePanel: %v", err)
 	}
@@ -272,5 +182,15 @@ func TestParsePanel_OneAgentTwoModelsYieldsAStrongAndAFloorMember(t *testing.T) 
 	}
 	if p[0].Class != spec.TierStrong || p[1].Class != spec.TierFloor {
 		t.Errorf("panel classes = %v, %v, want strong then floor", p[0].Class, p[1].Class)
+	}
+}
+
+// The default tier scores one member; deep adds the floor.
+func TestPanelFor_WidensOnlyAtTheDeepTier(t *testing.T) {
+	if got := len(runner.PanelFor(runner.TierFull)); got != 1 {
+		t.Errorf("full-tier panel has %d members, want 1", got)
+	}
+	if got := len(runner.PanelFor(runner.TierDeep)); got != 2 {
+		t.Errorf("deep-tier panel has %d members, want 2", got)
 	}
 }

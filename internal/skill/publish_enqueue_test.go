@@ -173,23 +173,13 @@ func (s *enqueueTestServer) registerSuite(t *testing.T, name string) {
 	t.Helper()
 
 	dir := t.TempDir()
-	sfx := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t1",
-				Kind:     "happy",
-				Split:    "holdout",
-				PromptMD: "# Task\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	sfx := &suite.EvalSet{
+		SkillName: name,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing for " + name + ".", Expectations: []string{"it did the thing"}},
 		},
 	}
-	require.NoError(t, sfx.Write(dir))
+	require.NoError(t, suite.WriteEvalSet(dir, sfx))
 	archive, err := evalsuite.PackDir(dir)
 	require.NoError(t, err)
 

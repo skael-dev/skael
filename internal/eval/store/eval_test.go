@@ -33,8 +33,7 @@ func TestClaimRun_IsIdempotentSoAnInterruptedEvalResumes(t *testing.T) {
 	if done {
 		t.Fatal("a fresh run reported as already done")
 	}
-	verifierExit := 0
-	if err := s.FinishRun(runID, store.RunOutcome{VerifierExit: &verifierExit, Status: "ok", ArtifactDir: "d"}); err != nil {
+	if err := s.FinishRun(runID, store.RunOutcome{Status: "ok", ArtifactDir: "d"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,50 +71,32 @@ func TestClaimRun_AnUnfinishedClaimIsRetried(t *testing.T) {
 	}
 }
 
-// TestFinishRun_NilVerifierExitStaysNullNotZero pins the fix for
-// verifier_exit being unable to distinguish "not measured" from "measured
-// and passed": the schema stores it nullable, but FinishRun previously always
-// bound an int, so NULL was unreachable and any of these three cases —
-// a probe with no verifier at all, a run that errored before reaching the
-// verifier, or a run whose verifier genuinely exited 0 — read back
-// identically.
-func TestFinishRun_NilVerifierExitStaysNullNotZero(t *testing.T) {
+// A grade is stored per run key and replaces an earlier one, so a re-graded
+// eval does not abort on a unique-constraint failure.
+func TestSaveGrade_UpsertsOnTheRunKey(t *testing.T) {
 	s := openStore(t)
 	id := newEval(t, s)
+	k := store.RunKey{TaskID: "1", Agent: "claude-code", Model: "sonnet", Condition: "skill", Attempt: 1}
 
-	unmeasured := store.RunKey{TaskID: "t1", Agent: "claude-code", Model: "opus", Condition: "trigger", Attempt: 1}
-	runID, _, err := s.ClaimRun(id, unmeasured)
+	if err := s.SaveGrade(id, store.RunGrade{Key: k, Passed: 1, Total: 3, Doc: []byte(`[{"text":"a"}]`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveGrade(id, store.RunGrade{Key: k, Passed: 3, Total: 3, Doc: []byte(`[{"text":"a"}]`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	gs, err := s.Grades(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishRun(runID, store.RunOutcome{Status: "error", ArtifactDir: "d"}); err != nil {
-		t.Fatal(err)
+	if len(gs) != 1 {
+		t.Fatalf("%d grades, want 1 after an upsert", len(gs))
 	}
-
-	passed := store.RunKey{TaskID: "t2", Agent: "claude-code", Model: "opus", Condition: "skill", Attempt: 1}
-	runID2, _, err := s.ClaimRun(id, passed)
-	if err != nil {
-		t.Fatal(err)
+	if gs[0].Passed != 3 || gs[0].Total != 3 {
+		t.Errorf("grade = %d of %d, want the second write", gs[0].Passed, gs[0].Total)
 	}
-	zero := 0
-	if err := s.FinishRun(runID2, store.RunOutcome{VerifierExit: &zero, Status: "ok", ArtifactDir: "d"}); err != nil {
-		t.Fatal(err)
-	}
-
-	runs, err := s.Runs(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	byKey := map[store.RunKey]store.RunRecord{}
-	for _, r := range runs {
-		byKey[r.Key] = r
-	}
-
-	if v := byKey[unmeasured].Outcome.VerifierExit; v != nil {
-		t.Errorf("unmeasured run's VerifierExit = %d, want nil", *v)
-	}
-	if v := byKey[passed].Outcome.VerifierExit; v == nil || *v != 0 {
-		t.Errorf("passed run's VerifierExit = %v, want a non-nil 0", v)
+	if gs[0].Key != k {
+		t.Errorf("key = %+v, want %+v", gs[0].Key, k)
 	}
 }
 

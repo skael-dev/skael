@@ -15,9 +15,7 @@ var reportHTMLSource string
 var reportHTMLTemplate = template.Must(template.New("report.html.tmpl").Funcs(template.FuncMap{
 	"pct":      pct,
 	"round1":   round1,
-	"gfmt":     gfmt,
 	"shortref": suite.ShortRef,
-	"deref":    deref,
 }).Parse(reportHTMLSource))
 
 // pct renders a [0,1] rate as a one-decimal percentage, e.g. 0.823 -> "82.3%".
@@ -39,30 +37,6 @@ func pct(rate float64) string {
 // round1 renders a float to one decimal place.
 func round1(v float64) string {
 	return fmt.Sprintf("%.1f", v)
-}
-
-// gfmt renders a float with %g: its shortest exact decimal representation.
-// Used where round1's one decimal would quantize away a meaningful
-// borderline, e.g. a judge margin read against a 0.15 threshold.
-func gfmt(v float64) string {
-	return fmt.Sprintf("%g", v)
-}
-
-// deref renders the value behind a *float64 at two decimal places, or the
-// empty string for nil. Two decimals rather than round1 because κ and the
-// robustness gap are read at more than one decimal (e.g. κ = 0.41); %g, which
-// this used before, prints all seventeen significant digits of a computed
-// ratio.
-//
-// deref itself is unitless — it renders both a [0,1] κ and a [0,100]-point
-// robustness gap identically. The template call site is responsible for
-// labelling the unit (the robustness gap's call site appends "points") so
-// the two are never confused for the same scale.
-func deref(v *float64) string {
-	if v == nil {
-		return ""
-	}
-	return fmt.Sprintf("%.2f", *v)
 }
 
 // HTML renders r as a single self-contained HTML document: no external

@@ -104,22 +104,14 @@ func (s *testServer) createSkill(t *testing.T, name string) string {
 func (s *testServer) pushSuite(t *testing.T, skillName string) string {
 	t.Helper()
 	dir := t.TempDir()
-	sp := &suite.Suite{
-		Tasks: []suite.TaskPkg{{
-			ID:       "t1",
-			Kind:     "happy",
-			Split:    "holdout",
-			PromptMD: "# Task\n\nDo the thing for " + skillName + ".\n",
-			Oracle:   "#!/bin/sh\necho ok\n",
-			Verifier: "#!/bin/sh\nexit 0\n",
-		}},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	sp := &suite.EvalSet{
+		SkillName: skillName,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing for " + skillName + ".", Expectations: []string{"it did the thing"}},
 		},
 	}
-	if err := sp.Write(dir); err != nil {
-		t.Fatalf("pushSuite: Write: %v", err)
+	if err := suite.WriteEvalSet(dir, sp); err != nil {
+		t.Fatalf("pushSuite: WriteEvalSet: %v", err)
 	}
 	archive, err := evalsuite.PackDir(dir)
 	if err != nil {
@@ -217,7 +209,7 @@ func reportFixture(skillName, suiteRef string, headline float64) []byte {
 		ModelPanel:    []report.PanelMember{{Agent: "claude-code", Model: "opus", Class: "strong"}},
 		PanelComplete: true,
 		Headline:      headline,
-		Members:       []report.MemberReport{{Healthy: true, DriftGrade: "B"}},
+		Members:       []report.MemberReport{{Healthy: true, Effectiveness: 80}},
 		StartedAt:     time.Now().Add(-time.Minute),
 		FinishedAt:    time.Now(),
 	}
@@ -242,7 +234,7 @@ func reportFixtureWith(skillName, suiteRef string, headline float64, engineVersi
 		ModelPanel:    []report.PanelMember{{Agent: "claude-code", Model: "opus", Class: "strong"}},
 		PanelComplete: true,
 		Headline:      headline,
-		Members:       []report.MemberReport{{Healthy: true, DriftGrade: "B"}},
+		Members:       []report.MemberReport{{Healthy: true, Effectiveness: 80}},
 		StartedAt:     finishedAt.Add(-time.Minute),
 		FinishedAt:    finishedAt,
 	}

@@ -26,7 +26,7 @@ func TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd(t *testing.T) {
 	if _, err := os.Stat(strayPath); err == nil {
 		t.Fatalf("refusing to run: %s already exists", strayPath)
 	}
-	if err := os.WriteFile(strayPath, []byte(`{"reason":"wrong task's reason leaking in"}`), 0o644); err != nil {
+	if err := os.WriteFile(strayPath, []byte(`{"Meta":{"InputTokens":999}}`), 0o644); err != nil {
 		t.Fatalf("staging a stray grading.json in cwd: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(strayPath) })
@@ -43,8 +43,8 @@ func TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd(t *testing.T) {
 
 	out := outcomeFromRecord(rec)
 
-	if out.Reason != "" {
-		t.Errorf("Reason = %q, want empty: the stray cwd grading.json must not have been read", out.Reason)
+	if out.Meta.InputTokens == 999 {
+		t.Error("the stray grading.json in cwd was read: an empty ArtifactDir must not resolve to a relative path")
 	}
 	if !out.MetaPartial {
 		t.Error("MetaPartial = false, want true: an empty ArtifactDir must fall back to the store columns")

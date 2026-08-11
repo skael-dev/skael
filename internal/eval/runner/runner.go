@@ -51,16 +51,12 @@ type Options struct {
 
 // Outcome is what one planned session (skill or baseline) reported.
 type Outcome struct {
-	Key store.RunKey
-	// VerifierExit is nil when the verifier never ran (the session failed
-	// before reaching it, or timed out inside it) and its exit code
-	// otherwise — see store.RunOutcome.VerifierExit, which this feeds.
-	VerifierExit *int
-	Events       []trajectory.Event
-	Meta         agent.Meta
-	ArtifactDir  string
-	Status       string
-	Err          error
+	Key         store.RunKey
+	Events      []trajectory.Event
+	Meta        agent.Meta
+	ArtifactDir string
+	Status      string
+	Err         error
 	// MetaPartial is true when Meta was rebuilt from the store's own columns
 	// rather than from the run's grading.json artifact — on resume, when the
 	// artifact is missing or unreadable. A partial Meta carries only what
@@ -70,11 +66,6 @@ type Outcome struct {
 	// fields (VisibleSkills feeds trigger precision) must check this first.
 	MetaPartial       bool
 	MetaPartialReason string
-	// Reason is the one line the verifier gave for rejecting the run,
-	// distilled from its output. Empty when the verifier passed, never ran,
-	// or printed nothing. It is the only part of a failed run that says why,
-	// so it is carried into the report rather than left in the artifact.
-	Reason string
 }
 
 // ProbeOutcome is what one trigger probe observed. It deliberately carries no

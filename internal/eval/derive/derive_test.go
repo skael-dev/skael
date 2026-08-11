@@ -6,390 +6,80 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/derive"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/runner"
-	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillpkg "github.com/skael-dev/skael/internal/skill"
 )
 
-// derivedTaskCount mirrors derive's unexported taskCount: the fake gateway
-// must draft exactly as many tasks as Derive asks GenerateN for, or
-// runner.BuildPlan's dev/holdout arithmetic below is checked against the
-// wrong denominator.
-const derivedTaskCount = 18
+// derivedEvalCount mirrors derive's unexported evalCount: the fake gateway
+// must draft as many evals as Derive asks for, or BuildPlan is checked
+// against the wrong denominator.
+const derivedEvalCount = 14
 
-// derivedSplitSeed mirrors derive's unexported splitSeed. The two paths (this
-// test's fake driver and the real package) must agree on which tasks land in
-// which split, or voidEveryHoldoutTask votes on the wrong set.
-const derivedSplitSeed int64 = 1
+// fakeGateway answers spec.Recover with a spec and suite.Generate with an
+// eval set, routing on the request's Role rather than on call order — the two
+// calls are made in sequence, but routing on Role survives a reordering.
+type fakeGateway struct{ evals func() string }
 
-// taskMarker is embedded as a comment line in every generated oracle and
-// verifier script, so recordingDriver — which only ever sees a workspace path
-// and an argv, never a task ID — can tell which task package it is running.
-const taskMarker = "# skael-task-id: "
-
-func taskID(n int) string { return fmt.Sprintf("t%02d", n) }
-
-// holdoutTaskIDs runs the real split algorithm over the fake gateway's task
-// IDs, rather than reimplementing Suite.Split's arithmetic — reusing suite.Split
-// directly is what keeps this test from silently drifting out of sync with the
-// production split.
-var holdoutTaskIDs = func() map[string]bool {
-	s := &suite.Suite{}
-	for i := 1; i <= derivedTaskCount; i++ {
-		s.Tasks = append(s.Tasks, suite.TaskPkg{ID: taskID(i)})
-	}
-	s.Split(derivedSplitSeed)
-	out := map[string]bool{}
-	for _, t := range s.Tasks {
-		if t.Split == "holdout" {
-			out[t.ID] = true
-		}
-	}
-	return out
-}()
-
-// behaviourFunc decides one task's oracle gate outcome: the oracle's exit
-// code, the post-oracle verifier's exit code, and the bare-workspace
-// verifier's exit code. See suite.checkOne for what each of the three means.
-type behaviourFunc func(id string) (oracleExit, verifierExit, bareVerifierExit int)
-
-// allTasksPass is a suite whose every task clears the oracle gate cleanly.
-func allTasksPass(string) (int, int, int) { return 0, 0, 1 }
-
-// voidEveryHoldoutTask fails the oracle on every task Split assigns to
-// holdout, leaving the dev set intact. Used to exercise BuildPlan's holdout
-// floor.
-func voidEveryHoldoutTask(id string) (int, int, int) {
-	if holdoutTaskIDs[id] {
-		return 1, 0, 1
-	}
-	return 0, 0, 1
-}
-
-// voidEveryThirdTask fails the oracle for every third task by sorted ID,
-// independent of dev/holdout split — a spread that should still leave both
-// splits with enough eligible tasks for tier "full".
-func voidEveryThirdTask(id string) (int, int, int) {
-	n, err := strconv.Atoi(strings.TrimPrefix(id, "t"))
-	if err != nil {
-		return 0, 0, 1
-	}
-	if n%3 == 0 {
-		return 1, 0, 1
-	}
-	return 0, 0, 1
-}
-
-// fakeGatewayConfig is set up through fakeGatewayOption functions before the
-// gateway is constructed.
-type fakeGatewayConfig struct {
-	setupTask     string
-	failExpansion string
-}
-
-type fakeGatewayOption func(*fakeGatewayConfig)
-
-// withGeneratedSetup makes the fake gateway emit a setup script on the named
-// task, so a test can exercise a derived task that ships its own fixtures.
-func withGeneratedSetup(id string) fakeGatewayOption {
-	return func(c *fakeGatewayConfig) { c.setupTask = id }
-}
-
-// withFailedExpansion makes the fake gateway error on the expansion of the
-// named task, standing in for a truncated or unparseable response.
-func withFailedExpansion(id string) fakeGatewayOption {
-	return func(c *fakeGatewayConfig) { c.failExpansion = id }
-}
-
-// fakeGateway is an llm.Gateway that answers derive's three calls: spec.recover
-// (an already-valid spec, so no repair call is spent), suite.outline (a
-// fixed-size stub list whose task IDs holdoutTaskIDs and voidEveryThirdTask
-// both key off), and suite.expand (one task package per stub). Dispatch is on
-// Req.Role rather than call order, so a change in how many calls a path costs
-// does not silently reshuffle which response goes where.
-type fakeGateway struct {
-	mu    sync.Mutex
-	calls []llm.Req
-	cfg   fakeGatewayConfig
-}
-
-// newFakeGateway builds a fakeGateway. behaviour is accepted for symmetry
-// with newTestDeriver (which threads the same behaviour into the driver) but
-// does not affect what the gateway drafts — only the driver's oracle-gate
-// verdicts vary per scenario.
-func newFakeGateway(t *testing.T, _ behaviourFunc, opts ...fakeGatewayOption) *fakeGateway {
-	t.Helper()
-	var cfg fakeGatewayConfig
-	for _, o := range opts {
-		o(&cfg)
-	}
-	return &fakeGateway{cfg: cfg}
-}
-
-func (g *fakeGateway) Calls() []llm.Req {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return append([]llm.Req(nil), g.calls...)
-}
+func (g *fakeGateway) ModelFor(llm.ModelClass) string { return "fake-model" }
 
 func (g *fakeGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
-	g.mu.Lock()
-	g.calls = append(g.calls, r)
-	g.mu.Unlock()
-
-	switch r.Role {
-	case "spec.recover":
-		return llm.Res{Text: recoveredSpecJSON(), Model: "fake"}, nil
-	case "suite.outline":
-		return llm.Res{Text: outlinedSuiteJSON(), Model: "fake"}, nil
-	case "suite.expand":
-		id, err := expandTargetID(r.Prompt)
-		if err != nil {
-			return llm.Res{}, err
-		}
-		if g.cfg.failExpansion != "" && id == g.cfg.failExpansion {
-			return llm.Res{}, fmt.Errorf("fakeGateway: expansion of %s failed", id)
-		}
-		return llm.Res{Text: expandedTaskJSON(g.cfg, id), Model: "fake"}, nil
-	default:
-		return llm.Res{}, fmt.Errorf("fakeGateway: unexpected role %q", r.Role)
+	if strings.HasPrefix(r.Role, "suite.") {
+		return llm.Res{Text: g.evals(), Model: "fake-model"}, nil
 	}
+	return llm.Res{Text: recoveredSpec, Model: "fake-model"}, nil
 }
 
-// expandTargetID recovers which stub an expand prompt is for, by matching one
-// of the derived task IDs against the prompt text — expandPrompt names the id
-// it was asked to write.
-func expandTargetID(prompt string) (string, error) {
-	for i := 1; i <= derivedTaskCount; i++ {
-		id := taskID(i)
-		if strings.Contains(prompt, id) {
-			return id, nil
-		}
-	}
-	return "", fmt.Errorf("fakeGateway: no known task id found in expand prompt")
-}
+const recoveredSpec = `{
+  "name": "demo",
+  "purpose": "Do demo things.",
+  "description": "Does demo things. Use when the user mentions demos.",
+  "triggers": [{"text": "do demo thing 1"}, {"text": "do demo thing 2"}, {"text": "do demo thing 3"}, {"text": "do demo thing 4"}, {"text": "do an adjacent thing 1", "negative": true}, {"text": "do an adjacent thing 2", "negative": true}, {"text": "do an adjacent thing 3", "negative": true}, {"text": "do an adjacent thing 4", "negative": true}],
+  "steps": [{"id": "s1", "action": "Run scripts/run.sh", "postcondition": "out/demo.txt exists"}],
+  "target_tier": "mid"
+}`
 
-func (g *fakeGateway) ModelFor(llm.ModelClass) string { return "fake" }
-
-// recoveredSpecJSON is a SkillSpec that already passes Validate, so
-// spec.Recover spends exactly one call.
-func recoveredSpecJSON() string {
-	s := spec.SkillSpec{
-		Name:        "demo",
-		Purpose:     "Demonstrate the derive pipeline",
-		Description: "A demo skill recovered from a bundle for tests.",
-		Triggers: []spec.TriggerPhrase{
-			{Text: "do the demo thing"},
-			{Text: "do something unrelated", Negative: true},
-		},
-		Steps: []spec.Step{
-			{ID: "s1", Action: "Do the thing", Postcondition: "The thing is done"},
-		},
-		TargetTier: spec.TierMid,
+// evalsJSON drafts n evals; the first missing many gives a caller a way to
+// make some of them void.
+func evalsJSON(n int, expectations func(i int) []string) string {
+	type ev struct {
+		Prompt         string   `json:"prompt"`
+		ExpectedOutput string   `json:"expected_output"`
+		Expectations   []string `json:"expectations"`
 	}
-	b, err := json.Marshal(s)
-	if err != nil {
-		panic(err)
+	var out struct {
+		Evals []ev `json:"evals"`
 	}
+	for i := 1; i <= n; i++ {
+		out.Evals = append(out.Evals, ev{
+			Prompt:         fmt.Sprintf("Do demo thing %d.", i),
+			ExpectedOutput: "it is done",
+			Expectations:   expectations(i),
+		})
+	}
+	b, _ := json.Marshal(out)
 	return string(b)
 }
 
-// draftScript is one oracle or verifier script body. It never really runs —
-// recordingDriver decides exit codes from its behaviourFunc rather than by
-// executing bash — but it carries taskMarker so the driver can identify which
-// task package a workspace holds.
-func draftScript(id string) string {
-	return "#!/bin/bash\n" + taskMarker + id + "\nexit 0\n"
-}
+func allPass(int) []string { return []string{"it did the thing"} }
 
-// outlinedSuiteJSON outlines derivedTaskCount stubs with deterministic IDs,
-// plus a trigger set large enough for tier "full"'s 16 probes (8 positive, 8
-// negative). Task IDs must match taskID exactly — holdoutTaskIDs and
-// voidEveryThirdTask both key off them.
-func outlinedSuiteJSON() string {
-	type stub struct {
-		ID     string `json:"id"`
-		Kind   string `json:"kind"`
-		Intent string `json:"intent"`
-	}
-	kinds := []string{"happy", "variant", "edge", "negative-trigger"}
-
-	stubs := make([]stub, 0, derivedTaskCount)
-	for i := 1; i <= derivedTaskCount; i++ {
-		id := taskID(i)
-		stubs = append(stubs, stub{ID: id, Kind: kinds[i%len(kinds)], Intent: fmt.Sprintf("Do task %s.", id)})
-	}
-
-	positive := make([]string, 8)
-	negative := make([]string, 8)
-	for i := range positive {
-		positive[i] = fmt.Sprintf("please help with the demo skill, case %d", i)
-		negative[i] = fmt.Sprintf("please help with something adjacent but unrelated, case %d", i)
-	}
-
-	out := struct {
-		Tasks    []stub `json:"tasks"`
-		Triggers struct {
-			Positive []string `json:"positive"`
-			Negative []string `json:"negative"`
-		} `json:"triggers"`
-	}{Tasks: stubs}
-	out.Triggers.Positive = positive
-	out.Triggers.Negative = negative
-
-	b, err := json.Marshal(out)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
-}
-
-// expandedTaskJSON expands one stub into a task package. cfg.setupTask, if it
-// matches id, gets a setup script.
-func expandedTaskJSON(cfg fakeGatewayConfig, id string) string {
-	type task struct {
-		PromptMD string `json:"prompt_md"`
-		Setup    string `json:"setup,omitempty"`
-		Oracle   string `json:"oracle"`
-		Verifier string `json:"verifier"`
-	}
-	var setup string
-	if id == cfg.setupTask {
-		setup = draftScript(id)
-	}
-	b, err := json.Marshal(task{
-		PromptMD: fmt.Sprintf("Do task %s.", id),
-		Setup:    setup, Oracle: draftScript(id), Verifier: draftScript(id),
-	})
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
-}
-
-// recordingDriver is a sandbox.Driver fake. It records every RunSpec.Workspace
-// and answers Run according to behaviour, distinguishing the oracle run from
-// the post-oracle verifier run (same workspace, second call) from the bare
-// verifier run (a workspace that never saw an oracle call) — the same three
-// phases suite.checkOne drives in production. It deliberately does not
-// implement Sweep/EnsureBase, so it does not satisfy derive's imagePreparer
-// interface: prepare() falls back to a zero ImageRef, which is all a fake
-// needs.
-type recordingDriver struct {
-	behaviour behaviourFunc
-
-	mu         sync.Mutex
-	workspaces []string
-	oracleRan  map[string]bool
-}
-
-func (d *recordingDriver) Name() string           { return "recording" }
-func (d *recordingDriver) HardwareIsolated() bool { return false }
-
-func (d *recordingDriver) Prepare(context.Context, sandbox.EnvSpec) (sandbox.ImageRef, error) {
-	return sandbox.ImageRef{}, nil
-}
-
-func (d *recordingDriver) Snapshot(context.Context, sandbox.ImageRef) (sandbox.SnapshotRef, error) {
-	return sandbox.SnapshotRef{}, nil
-}
-
-func (d *recordingDriver) Run(_ context.Context, rs sandbox.RunSpec) (sandbox.RunResult, error) {
-	d.mu.Lock()
-	d.workspaces = append(d.workspaces, rs.Workspace)
-	if d.oracleRan == nil {
-		d.oracleRan = map[string]bool{}
-	}
-	d.mu.Unlock()
-
-	script := rs.Argv[len(rs.Argv)-1]
-	id, err := readTaskMarker(rs.Workspace, script)
-	if err != nil {
-		return sandbox.RunResult{}, err
-	}
-
-	behaviour := d.behaviour
-	if behaviour == nil {
-		behaviour = allTasksPass
-	}
-	oracleExit, verifierExit, bareExit := behaviour(id)
-
-	switch script {
-	case suite.SetupScript:
-		return sandbox.RunResult{ExitCode: 0}, nil
-	case "oracle/solve.sh":
-		d.mu.Lock()
-		d.oracleRan[rs.Workspace] = true
-		d.mu.Unlock()
-		return sandbox.RunResult{ExitCode: oracleExit}, nil
-	case "verifier/test.sh":
-		d.mu.Lock()
-		ranOracle := d.oracleRan[rs.Workspace]
-		d.mu.Unlock()
-		if ranOracle {
-			return sandbox.RunResult{ExitCode: verifierExit}, nil
-		}
-		return sandbox.RunResult{ExitCode: bareExit}, nil
-	default:
-		return sandbox.RunResult{}, fmt.Errorf("recordingDriver: unexpected script %q", script)
-	}
-}
-
-// readTaskMarker recovers a task ID from the taskMarker comment line that
-// draftScript wrote into the script at workspace/script.
-func readTaskMarker(workspace, script string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(workspace, script))
-	if err != nil {
-		return "", fmt.Errorf("recordingDriver: reading %s: %w", script, err)
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, taskMarker) {
-			return strings.TrimSpace(strings.TrimPrefix(line, taskMarker)), nil
-		}
-	}
-	return "", fmt.Errorf("recordingDriver: no task marker in %s", script)
-}
-
-// newTestDeriver builds a Deriver over a fakeGateway and a recordingDriver,
-// both driven by the same behaviour, staged under a fresh temp directory.
-func newTestDeriver(t *testing.T, b behaviourFunc, opts ...fakeGatewayOption) *derive.Deriver {
+func newTestDeriver(t *testing.T, evals func() string) *derive.Deriver {
 	t.Helper()
-	d, err := derive.New(derive.Options{
-		Gateway:   newFakeGateway(t, b, opts...),
-		Driver:    &recordingDriver{behaviour: b},
-		StageRoot: t.TempDir(),
-	})
+	d, err := derive.New(derive.Options{Gateway: &fakeGateway{evals: evals}})
 	if err != nil {
 		t.Fatalf("derive.New: %v", err)
 	}
 	return d
 }
 
-// writeFile creates dir/name with content, creating intermediate directories
-// as needed.
-func writeFile(t *testing.T, dir, name, content string) {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-}
-
-// fixtureBundle packs a minimal published bundle: a SKILL.md and one
-// scripts/ file, the same shape spec.Recover reads from.
+// fixtureBundle packs a minimal published bundle: a SKILL.md and one scripts/
+// file, the shape spec.Recover reads from.
 func fixtureBundle(t *testing.T) []byte {
 	t.Helper()
 	dir := t.TempDir()
@@ -404,8 +94,19 @@ func fixtureBundle(t *testing.T) []byte {
 	return archive
 }
 
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
 func TestDerive_ProducesAnArchiveChecksAndSpec(t *testing.T) {
-	d := newTestDeriver(t, allTasksPass)
+	d := newTestDeriver(t, func() string { return evalsJSON(derivedEvalCount, allPass) })
 	res, err := d.Derive(context.Background(), derive.Input{
 		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
 	})
@@ -415,204 +116,96 @@ func TestDerive_ProducesAnArchiveChecksAndSpec(t *testing.T) {
 	if len(res.Archive) == 0 {
 		t.Fatal("no archive returned")
 	}
-	if len(res.Checks) == 0 {
-		// A suite with no recorded checks cannot tell a broken task from a
-		// broken skill, and evalsuite.Put refuses it.
-		t.Fatal("no checks returned")
+	// An eval set with no recorded checks cannot tell a broken eval from a
+	// broken skill, and evalsuite.Put refuses it.
+	if len(res.Checks) != derivedEvalCount {
+		t.Fatalf("%d checks returned, want %d", len(res.Checks), derivedEvalCount)
 	}
 	if res.Spec == nil || res.Spec.Name != "demo" {
 		t.Fatalf("spec = %+v, want one named demo", res.Spec)
 	}
 }
 
-// A derived task that ships a setup script is ordinary: the gate runs the
-// script, the task is not void, and the script survives into the packed
-// archive so the eval that later runs against it creates the same inputs.
-// This replaces the behaviour where such a task was voided and its script
-// stripped, which cost a derived suite a task for something the engine can
-// simply run.
-func TestDerive_RunsAndPacksATaskSetupScript(t *testing.T) {
-	d := newTestDeriver(t, allTasksPass, withGeneratedSetup("t03"))
+// The archive must carry both files, in Anthropic's layout, or nothing
+// downstream can load it.
+func TestDerive_PacksEvalsAndTriggersInTheAnthropicLayout(t *testing.T) {
+	d := newTestDeriver(t, func() string { return evalsJSON(derivedEvalCount, allPass) })
 	res, err := d.Derive(context.Background(), derive.Input{
 		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
 	})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
-	for _, c := range res.Checks {
-		if c.TaskID == "t03" && c.Void {
-			t.Fatalf("a task with a setup script was voided: %s", c.Reason)
-		}
-	}
 
-	dir := t.TempDir()
-	if err := evalsuite.Unpack(res.Archive, dir); err != nil {
-		t.Fatalf("unpack derived archive: %v", err)
+	out := t.TempDir()
+	if err := evalsuite.Unpack(res.Archive, out); err != nil {
+		t.Fatalf("Unpack: %v", err)
 	}
-	loaded, err := suite.Load(dir)
+	set, err := suite.LoadEvalSet(out)
 	if err != nil {
-		t.Fatalf("load derived suite: %v", err)
+		t.Fatalf("LoadEvalSet: %v", err)
 	}
-	var found bool
-	for _, task := range loaded.Tasks {
-		if task.ID == "t03" {
-			found = task.Setup != ""
-		}
+	if len(set.Evals) != derivedEvalCount {
+		t.Errorf("%d evals in the archive, want %d", len(set.Evals), derivedEvalCount)
 	}
-	if !found {
-		t.Fatal("the packed archive dropped the task's setup script")
+	qs, err := suite.LoadTriggerQueries(out)
+	if err != nil {
+		t.Fatalf("LoadTriggerQueries: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "tasks", "t03", suite.SetupScript)); err != nil {
-		t.Fatalf("the packed archive has no %s: %v", suite.SetupScript, err)
+	// The spec fixture carries four positive phrases and four negatives.
+	if len(qs) != 8 {
+		t.Errorf("%d trigger queries, want the spec's 8", len(qs))
 	}
 }
 
-func TestDerive_RefusesASuiteBuildPlanWouldReject(t *testing.T) {
-	// The gate is a dry run of the real planner, not a reimplementation of its
-	// arithmetic — the two cannot drift apart, and the message is already the
-	// right words.
-	d := newTestDeriver(t, voidEveryHoldoutTask)
+// An eval with nothing to grade is void, and a set too thin to plan is
+// refused before it is pushed and an eval row created.
+func TestDerive_RefusesASetBuildPlanWouldReject(t *testing.T) {
+	noExpectations := func(int) []string { return nil }
+	d := newTestDeriver(t, func() string { return evalsJSON(derivedEvalCount, noExpectations) })
+
 	_, err := d.Derive(context.Background(), derive.Input{
 		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
 	})
 	if err == nil {
-		t.Fatal("Derive accepted a suite with no eligible holdout tasks")
+		t.Fatal("Derive pushed an eval set with nothing to grade")
 	}
-	if !strings.Contains(err.Error(), "holdout") {
-		t.Fatalf("error %q does not name the failing split", err)
-	}
-}
-
-func TestDerive_AcceptsASuiteWithVoidsSpreadEvenly(t *testing.T) {
-	d := newTestDeriver(t, voidEveryThirdTask)
-	if _, err := d.Derive(context.Background(), derive.Input{
-		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
-	}); err != nil {
-		t.Fatalf("Derive refused a suite BuildPlan would accept: %v", err)
+	// The error is the only record of which evals were void and why: no set is
+	// packed, so there are no stored checks for a reader to consult.
+	if !strings.Contains(err.Error(), "no expectations") {
+		t.Errorf("err = %v, want it to name why each eval is void", err)
 	}
 }
 
-func TestDerive_StagesUnderTheConfiguredRunRoot(t *testing.T) {
-	root := t.TempDir()
-	drv := &recordingDriver{behaviour: allTasksPass}
-	d, err := derive.New(derive.Options{
-		Gateway: newFakeGateway(t, allTasksPass), Driver: drv, StageRoot: root,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err := d.Derive(context.Background(), derive.Input{
-		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
-	}); err != nil {
-		// Must not be tolerated: a failed Derive creates no workspaces, and
-		// the assertion below would then pass over an empty slice.
-		t.Fatalf("Derive: %v", err)
-	}
-	if len(drv.workspaces) == 0 {
-		t.Fatal("the oracle gate never ran")
-	}
-	for _, ws := range drv.workspaces {
-		if !strings.HasPrefix(ws, root) {
-			t.Fatalf("oracle workspace %q is outside the run root", ws)
+// Voids are tolerated as long as enough evals survive to fill the tier.
+func TestDerive_AcceptsASetWithSomeVoidEvals(t *testing.T) {
+	someVoid := func(i int) []string {
+		if i <= 3 {
+			return nil
 		}
+		return []string{"it did the thing"}
 	}
-}
-
-func TestDerive_AGenerationDropBecomesAVoidCheck(t *testing.T) {
-	dropped := taskID(2)
-	d := newTestDeriver(t, allTasksPass, withFailedExpansion(dropped))
+	d := newTestDeriver(t, func() string { return evalsJSON(derivedEvalCount, someVoid) })
 
 	res, err := d.Derive(context.Background(), derive.Input{
 		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
 	})
 	if err != nil {
-		t.Fatalf("a single failed expansion killed the derive: %v", err)
+		t.Fatalf("Derive: %v", err)
 	}
-
-	var found *evalsuite.Check
-	for i := range res.Checks {
-		if res.Checks[i].TaskID == dropped {
-			found = &res.Checks[i]
+	void := 0
+	for _, c := range res.Checks {
+		if c.Void {
+			void++
 		}
 	}
-	if found == nil {
-		t.Fatal("the dropped task produced no check")
-	}
-	if !found.Void || found.OK {
-		t.Errorf("check = %+v, want Void true and OK false", *found)
-	}
-	if !strings.Contains(found.Reason, "generation failed") {
-		t.Errorf("Reason = %q, want it to name a generation failure", found.Reason)
+	if void != 3 {
+		t.Errorf("%d void checks, want 3", void)
 	}
 }
 
-// TestDerive_TooThinErrorNamesTheVoidTasks proves the void/drop information
-// Finding 2 flagged as lost survives even though a too-thin suite is never
-// packed or pushed: the error names each void task and reason, and the same
-// summary is logged.
-func TestDerive_TooThinErrorNamesTheVoidTasks(t *testing.T) {
-	var logged []string
-	d, err := derive.New(derive.Options{
-		Gateway:   newFakeGateway(t, voidEveryHoldoutTask),
-		Driver:    &recordingDriver{behaviour: voidEveryHoldoutTask},
-		StageRoot: t.TempDir(),
-		Logger:    func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
-	})
-	if err != nil {
-		t.Fatalf("derive.New: %v", err)
-	}
-
-	_, derr := d.Derive(context.Background(), derive.Input{
-		Skill: "demo", Bundle: fixtureBundle(t), Tier: "full", Panel: runner.DefaultPanel(),
-	})
-	if derr == nil {
-		t.Fatal("Derive accepted a suite with no eligible holdout tasks")
-	}
-
-	// Every holdout task is voided by voidEveryHoldoutTask; t01 is one of
-	// them, so the error must name it and its gate reason.
-	var wantVoidID string
-	for id := range holdoutTaskIDs {
-		wantVoidID = id
-		break
-	}
-	if !strings.Contains(derr.Error(), wantVoidID) {
-		t.Errorf("error %q does not name void task %q", derr.Error(), wantVoidID)
-	}
-	if !strings.Contains(derr.Error(), "of ") || !strings.Contains(derr.Error(), " tasks void") {
-		t.Errorf("error %q does not summarise the void count", derr.Error())
-	}
-
-	var loggedVoid bool
-	for _, l := range logged {
-		if strings.Contains(l, "too thin") && strings.Contains(l, wantVoidID) {
-			loggedVoid = true
-		}
-	}
-	if !loggedVoid {
-		t.Errorf("logged = %v, want an entry naming the void tasks", logged)
-	}
-}
-
-func TestBuildPlan_IgnoresAVoidIDWithNoMatchingTask(t *testing.T) {
-	// TierSmoke is dev-only and needs 5 eligible dev tasks.
-	s := &suite.Suite{Tasks: []suite.TaskPkg{
-		{ID: "kept1", Split: "dev"}, {ID: "kept2", Split: "dev"},
-		{ID: "kept3", Split: "dev"}, {ID: "kept4", Split: "dev"},
-		{ID: "kept5", Split: "dev"},
-	}}
-	void := map[string]bool{"never-generated": true}
-
-	if _, err := runner.BuildPlan(runner.TierSmoke, runner.DefaultPanel(), s, void); err != nil {
-		t.Fatalf("a void id naming no task broke planning: %v", err)
-	}
-}
-
-func TestNew_RequiresAGatewayAndADriver(t *testing.T) {
-	if _, err := derive.New(derive.Options{Driver: &recordingDriver{}}); err == nil {
-		t.Fatal("New accepted a nil gateway")
-	}
-	if _, err := derive.New(derive.Options{Gateway: &fakeGateway{}}); err == nil {
-		t.Fatal("New accepted a nil driver")
+func TestNew_RequiresAGateway(t *testing.T) {
+	if _, err := derive.New(derive.Options{}); err == nil {
+		t.Error("derive.New accepted a nil gateway")
 	}
 }

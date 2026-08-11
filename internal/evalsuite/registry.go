@@ -148,11 +148,11 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 		return nil, fmt.Errorf("evalsuite: Put ref: %w: %w", ErrInvalidArchive, err)
 	}
 
-	s, err := suite.Load(dir)
+	set, err := suite.LoadEvalSet(dir)
 	if err != nil {
 		return nil, fmt.Errorf("evalsuite: Put load: %w: %w", ErrInvalidArchive, err)
 	}
-	taskCount := len(s.Tasks)
+	taskCount := len(set.Evals)
 
 	archivePath := archiveKey(ref)
 	if _, err := r.st.Write(ctx, archivePath, bytes.NewReader(archive)); err != nil {

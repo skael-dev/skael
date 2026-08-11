@@ -82,19 +82,20 @@ func TestStore_LatestIsDeterministicOnTiedScoredAt(t *testing.T) {
 	}
 }
 
-// UpliftSource must survive the round trip: report.Comparable treats it as
+// The grader model must survive the round trip: report.Comparable treats it as
 // one of the fields that determines whether two reports' scores are a fair
 // comparison, alongside SuiteRef/EngineVersion/Tier/ModelPanel/PanelComplete
 // which are already preserved.
-func TestStore_UpliftSourceRoundTrips(t *testing.T) {
+func TestStore_GraderModelRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.SetupTestDB(t)
 	s := quality.NewStore(pool)
 	skillID := insertSkill(t, pool, "deploy-helper")
+	grader := "claude-sonnet-5"
 	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: "r", Tier: "full",
 		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
 		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
-		UpliftSource: "judge", ScoredAt: time.Now()}
+		JudgeModel: &grader, ScoredAt: time.Now()}
 	if err := s.Upsert(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +103,15 @@ func TestStore_UpliftSourceRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UpliftSource != "judge" {
-		t.Fatalf("uplift_source = %q, want %q", got.UpliftSource, "judge")
+	if got.JudgeModel == nil || *got.JudgeModel != "claude-sonnet-5" {
+		t.Fatalf("judge_model = %v, want claude-sonnet-5", got.JudgeModel)
 	}
 	hist, err := s.History(ctx, skillID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hist) != 1 || hist[0].UpliftSource != "judge" {
-		t.Fatalf("history uplift_source lost: %+v", hist)
+	if len(hist) != 1 || hist[0].JudgeModel == nil || *hist[0].JudgeModel != "claude-sonnet-5" {
+		t.Fatalf("history judge_model lost: %+v", hist)
 	}
 }
 

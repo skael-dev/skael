@@ -61,7 +61,10 @@ func TestWarnUnconfiguredPanelModels(t *testing.T) {
 	t.Run("silent when there is nothing wrong", func(t *testing.T) {
 		for _, tc := range []struct{ name, strong, fast, baseURL string }{
 			{name: "nothing set"},
-			{name: "gateway and both models", strong: "a", fast: "b", baseURL: bu},
+			{name: "gateway and the strong model", strong: "a", fast: "b", baseURL: bu},
+			// The floor member only exists at the deep tier, so a missing
+			// fast model is not a misconfiguration on its own.
+			{name: "gateway and only the strong model", strong: "a", baseURL: bu},
 			// The ordinary metered worker: models set for the judge, no
 			// custom panel gateway. Warning here would fire on every start.
 			{name: "models but no gateway", strong: "a", fast: "b"},
@@ -79,7 +82,6 @@ func TestWarnUnconfiguredPanelModels(t *testing.T) {
 			wantNamed          []string
 		}{
 			{name: "neither set", wantNamed: []string{strongModelEnv, fastModelEnv}},
-			{name: "only strong set", strong: "a", wantNamed: []string{fastModelEnv}},
 			{name: "only fast set", fast: "b", wantNamed: []string{strongModelEnv}},
 		} {
 			got := warnUnconfiguredPanelModels(tc.strong, tc.fast, bu)
