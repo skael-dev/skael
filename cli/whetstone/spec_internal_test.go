@@ -11,7 +11,7 @@ import (
 
 // TestRunSpecEdit_ApprovesTheVersionItStores pins the second half of the
 // no-gate rule. An edited spec that stayed unapproved made `whetstone eval`
-// refuse the result until a third command ran, which is a gate on editing.
+// refuse the result until a third command ran. That gates the edit itself.
 func TestRunSpecEdit_ApprovesTheVersionItStores(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)

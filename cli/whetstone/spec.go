@@ -133,10 +133,10 @@ func RunSpecEdit(skill string) error {
 	if err != nil {
 		return err
 	}
-	// The person who edited this document is the author, and `whetstone new`
-	// approves a model-drafted spec without asking. Refusing to approve a
-	// hand-edited one is backwards, and it makes `whetstone eval` refuse a
-	// spec that carries more review than the drafted one it accepts.
+	// The person who edited this document is the author. `whetstone new`
+	// approves a model-drafted spec with no question. A refusal here is
+	// backwards. The edited spec carries more review than the drafted one
+	// `whetstone new` accepts.
 	if err := st.ApproveSpec(edited.Name, version); err != nil {
 		return err
 	}
