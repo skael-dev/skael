@@ -177,7 +177,7 @@ var migrations = []string{
 		PRIMARY KEY (eval_id, task_id, agent, model, condition, attempt)
 	);`,
 
-	// Migration 5: whetstone records the ref of the suite it generated, so
+	// Migration 11: whetstone records the ref of the suite it generated, so
 	// `suite push` can tell an untouched eval set from an edited one. The
 	// server stamps an untouched one as machine-derived. This is why a skill
 	// cannot write its own exam.
