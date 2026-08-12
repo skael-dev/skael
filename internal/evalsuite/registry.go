@@ -60,7 +60,12 @@ type Record struct {
 	// somebody reviews it. UploadedBy cannot answer that question: on a
 	// machine-derived suite it names the worker's own key.
 	ReviewedBy string
-	CreatedAt  time.Time
+	// MachineGenerated is true when a worker built this suite for a skill that
+	// had none. Origin cannot answer that: an unreviewed push is derived too,
+	// and it has a present author. Void tolerance reads this one, never
+	// Origin — see worker.RunInput.AllowVoid.
+	MachineGenerated bool
+	CreatedAt        time.Time
 }
 
 // Origin records how a suite came to exist.
@@ -118,7 +123,15 @@ func archiveKey(ref string) string {
 // construction rather than by convention. specJSON is the pusher's spec.yaml
 // as JSON (may be nil/empty — see Record.Spec).
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, nil)
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, false, nil)
+}
+
+// PutUnreviewed stores a suite whose pusher declared it exactly what the
+// generator wrote. It is derived, so its score cannot release a held version,
+// but a named author pushed it and can repair a void task. That is why it is
+// not machine generated.
+func (r *Registry) PutUnreviewed(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, false, nil)
 }
 
 // PutDerived stores a suite the server has itself established is machine
@@ -129,10 +142,10 @@ func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, ch
 // its own suite authored would defeat internal/skill's refusal to let a
 // derived score clear a scan hold.
 func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, after)
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, true, after)
 }
 
-func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
+func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, machineGenerated bool, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
@@ -198,7 +211,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 	// (the insert is ON CONFLICT DO NOTHING) still ends derived, and an
 	// authored push can never walk a derived suite back.
 	if origin == OriginDerived {
-		if err := r.MarkDerived(ctx, tx, ref); err != nil {
+		if err := r.markDerived(ctx, tx, ref, machineGenerated); err != nil {
 			return nil, err
 		}
 	}
@@ -217,7 +230,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -270,7 +283,7 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 // skillName.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
 		FROM eval_suites
 		WHERE skill_name = $1
 		ORDER BY created_at DESC
@@ -287,10 +300,22 @@ func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Recor
 	return rec, nil
 }
 
-// MarkDerived flags ref as machine-derived. It takes a Queryer so the caller
-// can write it inside the same transaction as the score that justifies it.
+// MarkDerived flags ref as generated by a worker. It takes a Queryer so the
+// caller can write it inside the same transaction as the score that justifies
+// it. Its only caller outside this package is the report handler's derive
+// path, where a worker built the suite, so it sets machine_generated too.
 func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error {
-	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1 WHERE ref = $2`, string(OriginDerived), ref)
+	return r.markDerived(ctx, q, ref, true)
+}
+
+// markDerived is the upgrade-only origin write. machine_generated is OR-ed
+// rather than assigned, so an unreviewed re-push of content a worker already
+// generated cannot walk that fact back and take the run's void tolerance with
+// it.
+func (r *Registry) markDerived(ctx context.Context, q Queryer, ref string, machineGenerated bool) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE eval_suites SET origin = $1, machine_generated = machine_generated OR $2 WHERE ref = $3`,
+		string(OriginDerived), machineGenerated, ref)
 	if err != nil {
 		return fmt.Errorf("evalsuite: MarkDerived %s: %w", ref, err)
 	}
@@ -326,7 +351,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
 	var specJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy); err != nil {
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy, &rec.MachineGenerated); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {

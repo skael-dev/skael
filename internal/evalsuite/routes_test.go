@@ -247,6 +247,9 @@ func TestPostSuite_AVerifiedJobClaimRecordsTheSuiteAsDerived(t *testing.T) {
 		t.Fatalf("origin = %q immediately after the push, want %q — a suite that only becomes derived when a report lands is authored for as long as the run takes, and forever if it never reports",
 			rec.Origin, evalsuite.OriginDerived)
 	}
+	if !rec.MachineGenerated {
+		t.Error("machine_generated = false for a worker's own push, so its run would refuse the voids it was built to absorb")
+	}
 	if srv.claims.gotJobID != "job-7" || srv.claims.gotToken != "tok" || srv.claims.gotSkill != "deploy-helper" {
 		t.Fatalf("claim verified with (%q, %q, %q)", srv.claims.gotJobID, srv.claims.gotToken, srv.claims.gotSkill)
 	}
@@ -318,8 +321,9 @@ func TestPostSuite_APushWithNoJobStaysAuthored(t *testing.T) {
 // hold. Origin is the one flag that says so.
 //
 // The claim path proves a worker derived the suite. This proves nobody read
-// it. Both end at PutDerived, and no path lets a client claim the stronger
-// status.
+// it. Both are recorded derived, and no path lets a client claim the stronger
+// status. They part on machine_generated, which is what decides whether the
+// run tolerates void tasks: this author is present and can repair one.
 func TestPostSuite_AnUnreviewedPushIsRecordedDerived(t *testing.T) {
 	srv := newTestServer(t)
 	srv.createSkill(t, "deploy-helper")
@@ -346,6 +350,9 @@ func TestPostSuite_AnUnreviewedPushIsRecordedDerived(t *testing.T) {
 	}
 	if rec.Origin != evalsuite.OriginDerived {
 		t.Fatalf("origin = %q, want %q", rec.Origin, evalsuite.OriginDerived)
+	}
+	if rec.MachineGenerated {
+		t.Error("machine_generated = true for an author's push; the run would then excuse its void tasks")
 	}
 }
 

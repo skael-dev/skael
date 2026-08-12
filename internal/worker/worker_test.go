@@ -127,9 +127,11 @@ type fakeAPI struct {
 	// before this field existed.
 	spec *spec.SkillSpec
 	// origin is what SuiteMeta reports as the suite's origin. Zero value ("")
-	// is neither OriginDerived nor OriginAuthored, so AllowVoid is false by
-	// default — a test that cares must set it explicitly.
+	// is neither OriginDerived nor OriginAuthored.
 	origin evalsuite.Origin
+	// machineGenerated is what SuiteMeta reports for the flag AllowVoid comes
+	// from. False by default, so a test that cares must set it explicitly.
+	machineGenerated bool
 
 	// job, when set, is claimed once by Claim before the queue is consulted —
 	// a shorthand for tests that only care about a single job, so they don't
@@ -210,7 +212,7 @@ func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error
 }
 
 func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, error) {
-	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec, Origin: f.origin}, nil
+	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec, Origin: f.origin, MachineGenerated: f.machineGenerated}, nil
 }
 
 func (f *fakeAPI) PushSuite(_ context.Context, in worker.PushSuiteInput) (string, error) {
@@ -510,20 +512,23 @@ func TestRunOnce_DerivesWhenTheJobHasNoSuiteRef(t *testing.T) {
 	}
 }
 
-// A derived suite is gated by its own oracles with nobody to repair a task
-// that fails, which is why it asks for 18 rather than 10. That surplus only
-// helps if the run then excludes the void tasks instead of refusing outright.
+// A worker-generated suite is gated by its own oracles with nobody to repair
+// a task that fails, which is why it asks for 18 rather than 10. That surplus
+// only helps if the run then excludes the void tasks instead of refusing
+// outright.
 //
-// AllowVoid is sourced from the suite's recorded origin (SuiteMeta.Origin),
-// not from whether this particular run was the one that derived it — see
+// AllowVoid is sourced from the suite's recorded machine_generated flag
+// (SuiteMeta.MachineGenerated), not from whether this particular run was the
+// one that derived it — see
 // TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite for the
 // retry/follow-up case that distinction exists to fix.
 func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 	derivedRef := fixtureSuiteRef(t)
 	api := &fakeAPI{
-		job:     &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
-		pushRef: derivedRef,
-		origin:  evalsuite.OriginDerived,
+		job:              &evalqueue.Job{ID: "j1", SkillName: "demo", Version: 1, SuiteRef: "", Tier: "full"},
+		pushRef:          derivedRef,
+		origin:           evalsuite.OriginDerived,
+		machineGenerated: true,
 	}
 	r := &fakeRunner{reportSuiteRef: derivedRef}
 	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
@@ -550,6 +555,30 @@ func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 	}
 }
 
+// TestRunOnce_RefusesVoidTasksOnAnUnreviewedPush is the case origin cannot
+// answer. An author who pushes the generator's own eval set untouched has it
+// recorded derived, because nobody read it. That author is present and named,
+// so a void task is theirs to repair. Reading origin here would hand void
+// tolerance to a half-broken suite, which would then score on what was left.
+func TestRunOnce_RefusesVoidTasksOnAnUnreviewedPush(t *testing.T) {
+	ref := fixtureSuiteRef(t)
+	api := &fakeAPI{
+		job:           &evalqueue.Job{ID: "j4", SkillName: "demo", Version: 1, SuiteRef: ref, Tier: "full"},
+		suiteArchives: map[string][]byte{ref: fixtureSuiteArchive(t)},
+		origin:        evalsuite.OriginDerived,
+		// The server records an unreviewed push derived, and never machine
+		// generated.
+		machineGenerated: false,
+	}
+	r := &fakeRunner{reportSuiteRef: ref}
+	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if r.input().AllowVoid {
+		t.Fatal("an unreviewed push was allowed to exclude void tasks; only a worker-generated suite may")
+	}
+}
+
 // TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite proves the
 // retry/follow-up fix: RecordDerivedSuite now stamps eval_jobs.suite_ref at
 // push time, before the panel runs, so a retry after a mid-run failure (or
@@ -557,16 +586,17 @@ func TestRunOnce_AllowsVoidTasksOnlyOnTheDerivePath(t *testing.T) {
 // job.SuiteRef from the start — the old `derivedHere := suiteRef == ""`
 // computation would then set AllowVoid: false and refuse deterministically
 // on voids that were fine to accept the first time. AllowVoid must instead
-// come from the suite's own recorded origin, which SuiteMeta reports on
-// every run, not just the one that derived it.
+// come from the suite's own recorded flag, which SuiteMeta reports on every
+// run, not just the one that derived it.
 func TestRunOnce_AllowsVoidTasksOnAnyRunAgainstAnAlreadyDerivedSuite(t *testing.T) {
 	derivedRef := fixtureSuiteRef(t)
 	api := &fakeAPI{
 		// SuiteRef is already populated, as it would be on a retry or a
 		// fresh follow-up eval — this is the case that was broken.
-		job:           &evalqueue.Job{ID: "j3", SkillName: "demo", Version: 1, SuiteRef: derivedRef, Tier: "full"},
-		suiteArchives: map[string][]byte{derivedRef: fixtureSuiteArchive(t)},
-		origin:        evalsuite.OriginDerived,
+		job:              &evalqueue.Job{ID: "j3", SkillName: "demo", Version: 1, SuiteRef: derivedRef, Tier: "full"},
+		suiteArchives:    map[string][]byte{derivedRef: fixtureSuiteArchive(t)},
+		origin:           evalsuite.OriginDerived,
+		machineGenerated: true,
 	}
 	r := &fakeRunner{reportSuiteRef: derivedRef}
 	if _, err := newTestWorker(t, api, r, &fakeDeriver{}).RunOnce(context.Background()); err != nil {

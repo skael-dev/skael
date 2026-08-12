@@ -67,12 +67,16 @@ type RunInput struct {
 	Panel    evalqueue.Panel
 
 	// AllowVoid excludes void tasks instead of refusing the run. Sourced from
-	// the suite's own recorded origin (evalsuite.Origin), not from whether
-	// this run derived the suite: a derived suite asks for 18 tasks precisely
+	// the suite's recorded machine_generated flag, not from whether this run
+	// derived the suite: a worker-generated suite asks for 18 tasks precisely
 	// so the ones its own oracle gate voids are absorbed, and there is no
 	// author to go repair them — that stays true on a retry or any later run
-	// against an already-derived suite. An authored suite keeps the stricter
-	// contract regardless of which run is asking.
+	// against the same suite.
+	//
+	// Not from the origin. An unreviewed push is derived too, and a present,
+	// named author wrote it, so it keeps the stricter contract. Reading origin
+	// here would hand void tolerance to a half-broken authored suite, which
+	// would then score on whatever tasks were left.
 	AllowVoid bool
 
 	// WorkspaceDir already contains an initialised whetstone workspace with
@@ -92,11 +96,14 @@ type Runner interface {
 type SuiteMeta struct {
 	Checks []evalsuite.Check
 	Spec   *spec.SkillSpec
-	// Origin is how the suite came to exist. It is the source of truth for
-	// void-tolerance (RunInput.AllowVoid): a property of the suite, not of
-	// which run happened to derive it — a retry or any later run against an
-	// already-derived suite must still tolerate its voids.
+	// Origin is how the suite came to exist. A derived suite is one nobody has
+	// read.
 	Origin evalsuite.Origin
+	// MachineGenerated says a worker built this suite. It is the source of
+	// truth for void tolerance (RunInput.AllowVoid): a property of the suite,
+	// not of which run happened to derive it — a retry or any later run
+	// against the same suite must still tolerate its voids.
+	MachineGenerated bool
 }
 
 // API is the server surface the worker needs, so a test can fake it.
@@ -321,11 +328,11 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
-		// Sourced from the suite's own recorded origin, not from whether this
-		// run was the one that derived it: a retry or any later run against
-		// an already-derived suite (job.SuiteRef non-empty from the start)
-		// must still tolerate the voids that suite was built to absorb.
-		AllowVoid: meta.Origin == evalsuite.OriginDerived,
+		// The suite's own recorded flag, not whether this run derived it: a
+		// retry or any later run against the same suite (job.SuiteRef
+		// non-empty from the start) must still tolerate the voids that suite
+		// was built to absorb.
+		AllowVoid: meta.MachineGenerated,
 	})
 
 	cancel()

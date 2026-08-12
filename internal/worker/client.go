@@ -119,7 +119,11 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 	if err != nil {
 		return SuiteMeta{}, err
 	}
-	return SuiteMeta{Checks: checks, Spec: sp, Origin: evalsuite.Origin(meta.Origin)}, nil
+	return SuiteMeta{
+		Checks: checks, Spec: sp,
+		Origin:           evalsuite.Origin(meta.Origin),
+		MachineGenerated: meta.MachineGenerated,
+	}, nil
 }
 
 // PushSuite uploads a derived suite through POST /api/eval/suites and returns

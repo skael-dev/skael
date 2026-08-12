@@ -168,8 +168,8 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}
 
 		if input.Body.Unreviewed {
-			rec, err = reg.PutDerived(ctx, input.Body.Skill, archive, checks,
-				input.Body.SpecVersion, uploadedBy, input.Body.Spec, nil)
+			rec, err = reg.PutUnreviewed(ctx, input.Body.Skill, archive, checks,
+				input.Body.SpecVersion, uploadedBy, input.Body.Spec)
 			return suiteUploadResult(rec, err, input.Body.Skill, "evalsuite: store unreviewed suite failed")
 		}
 
@@ -203,10 +203,11 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			checks[i] = suiteCheck(c)
 		}
 		return &getSuiteMetaOutput{Body: getSuiteMetaBody{
-			Checks:      checks,
-			SpecVersion: rec.SpecVersion,
-			Spec:        rec.Spec,
-			Origin:      string(rec.Origin),
+			Checks:           checks,
+			SpecVersion:      rec.SpecVersion,
+			Spec:             rec.Spec,
+			Origin:           string(rec.Origin),
+			MachineGenerated: rec.MachineGenerated,
 		}}, nil
 	})
 
@@ -373,11 +374,15 @@ type getSuiteMetaBody struct {
 	Checks      []suiteCheck    `json:"checks"`
 	SpecVersion int             `json:"spec_version"`
 	Spec        json.RawMessage `json:"spec,omitempty"`
-	// Origin is how this suite came to exist ("authored" or "derived"), so a
-	// caller can decide void-tolerance from the suite itself rather than from
-	// whether this particular run was the one that derived it — see
-	// worker.RunInput.AllowVoid.
+	// Origin is how this suite came to exist ("authored" or "derived"). A
+	// derived suite is one no person has read, so its score cannot release a
+	// held version.
 	Origin string `json:"origin"`
+	// MachineGenerated says a worker built this suite for a skill that had
+	// none. It is the void-tolerance signal, and Origin is not: an unreviewed
+	// push is derived as well, and it has a present author who can repair a
+	// void task. See worker.RunInput.AllowVoid.
+	MachineGenerated bool `json:"machine_generated"`
 }
 
 type getSuiteMetaOutput struct {

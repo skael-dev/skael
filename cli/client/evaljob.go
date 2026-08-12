@@ -130,6 +130,9 @@ type EvalSuiteMeta struct {
 	SpecVersion int              `json:"spec_version"`
 	Spec        json.RawMessage  `json:"spec,omitempty"`
 	Origin      string           `json:"origin"`
+	// MachineGenerated says a worker built this suite, which is what decides
+	// void tolerance. Origin does not: an unreviewed push is derived too.
+	MachineGenerated bool `json:"machine_generated"`
 }
 
 // FetchEvalSuiteMeta calls GET /api/eval/suites/{ref}/meta and returns the
