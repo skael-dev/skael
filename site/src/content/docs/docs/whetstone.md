@@ -15,7 +15,7 @@ Two halves, in the order you use them.
 
 **Evaluation.** `suite` → `eval` → `drift` → `repair` → `report`. Draft a task suite, gate it on its own oracle and verifier, run a model panel against the skill, read the per-member adherence breakdown, let a repair loop propose minimal edits, and render an HTML report.
 
-`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, ask you to approve it, generate, lint, compile the drift contract, draft the suite. Everything downstream is derived from the spec, so the approval prompt is the one place review is cheap.
+`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, approve it, generate, lint, compile the drift contract, draft the suite. It never stops to ask. Everything downstream is derived from the spec, so the run prints the spec it stored and names the commands that change it — `whetstone spec edit`, then `whetstone gen`.
 
 Everything lives in a `.whetstone` workspace. Commands walk up from the working directory to find it, the way git does. `whetstone init` creates one and refuses to create a nested one — a nested workspace shadows the outer one for every later command, and a mistyped path silently becoming a fresh empty workspace looks exactly like a lost skill.
 
@@ -78,6 +78,8 @@ whetstone suite push my-skill     # register it with the server
 
 `suite push` refuses if no `suite check` has been recorded for the current suite ref. The server can't tell an unchecked suite from a passing one, so it's caught here.
 
+It also declares whether anybody has read the eval set. whetstone records the content hash of what it generated; `suite push` compares the current hash against it. An untouched set is pushed as machine-derived, and the server records it that way. The cost is real: a score against a machine-derived set is still a quality signal, but it cannot release a version the publish gate is holding. A skill must not write its own exam. Open `evals/triggers.json`, read it, change what is wrong — any edit at all clears the flag — or use the review view in the web UI, where an owner or admin can mark the set reviewed without editing a line. `whetstone tune` counts as a machine writer too, so a tuned set stays machine-derived until somebody reads it.
+
 After the push, every `skael publish` for that skill looks up its suite and enqueues an evaluation automatically. A worker claims it, runs it, posts the report back. That's the verified path.
 
 `whetstone eval` runs the exact same engine locally. It does **not** produce a verified score. Local runs are for your own iteration loop — a number you can act on in minutes instead of waiting on a queue. Only a report that came back through the queue counts as verified, and only a verified score can release a version the publish gate is holding.
@@ -94,14 +96,14 @@ See [Quality scoring](/docs/quality) for what a score actually measures, how to 
 | `whetstone doctor` | Check the agent CLI, the LLM gateway, the sandbox runtime, and the registered agent adapters |
 | `whetstone new <intent>` | Interview, store a spec, approve, generate, lint, compile the drift contract, draft the suite |
 | `whetstone spec show <skill>` | Print the latest stored spec and whether it's approved |
-| `whetstone spec edit <skill>` | Open the spec in `$EDITOR` and store the result as a new, unapproved version |
+| `whetstone spec edit <skill>` | Open the spec in `$EDITOR` and store the result as a new, approved version |
 | `whetstone spec approve <skill>` | Mark the latest stored spec version approved |
 | `whetstone gen <skill>` | Regenerate the bundle from the approved spec, then lint it |
 | `whetstone lint <skill\|path>` | Run spec conformance, quality, and injection lint over a bundle |
 | `whetstone pack <skill\|path>` | Lint, then write a spec-valid `tar.gz` with the eval sidecar and spec stripped |
 | `whetstone version` | Print version, commit, and build date |
 
-Approval is per spec version. An edit that changes something stores a new version and drops the approval — otherwise a change that skipped the gate would inherit the last one. An edit that changes nothing stores no version at all. `gen`, `suite gen`, and `repair` all refuse to run from an unapproved spec.
+Approval is per spec version, and both writers approve what they write. `new` approves the spec it drafted. `spec edit` approves what you saved, because you are the author of that document and it carries more review than the drafted one `new` already accepted. An edit that changes nothing stores no version at all. `gen`, `suite gen`, and `repair` all refuse to run from an unapproved spec, which is what `spec approve` is for after a version arrives some other way.
 
 `lint`'s exit code is the CI signal: 0 unless there are errors, `--strict` promotes warnings to errors. `pack` refuses to write an archive from a bundle that fails lint — an archive built from a broken bundle installs fine and fails at use time, a long way from the cause.
 
@@ -112,6 +114,7 @@ Approval is per spec version. An edit that changes something stores a new versio
 | `whetstone suite gen <skill>` | Generate and write the evaluation suite for a skill |
 | `whetstone suite check <skill>` | Gate the suite on its own oracle and verifier |
 | `whetstone suite push <skill>` | Upload the checked suite to a registry |
+| `whetstone tune <skill>` | Tune the description for triggering accuracy against the trigger set |
 | `whetstone eval <skill>` | Run the model panel, score it, write the report |
 | `whetstone drift <skill> [ref]` | Per-member adherence breakdown for one eval |
 | `whetstone repair <skill>` | Cluster failures, propose minimal edits, re-evaluate until the dev split plateaus |
@@ -121,6 +124,8 @@ Approval is per spec version. An edit that changes something stores a new versio
 
 `suite check` asks three questions per task: does the oracle solve it, does the task's own verifier accept that solution, and does the verifier reject an untouched workspace. A task failing any of them is **void** — excluded from a later eval rather than fatal to it. Any void task exits non-zero unless you pass `--allow-void`, which is what makes it usable as a CI gate.
 
+`tune` measures how often a model consults your skill for the queries in `evals/triggers.json`, proposes a better description from what failed, and keeps the one that scores best on the queries it was never tuned against. It holds a fraction of the set back for exactly that reason: a description that wins the queries which tuned it is a description fitted to them. A short trigger set is topped up and written back, so the eval tiers read the grown set too. With `--apply` (the default) the winner is stored as a new approved spec version and written into `SKILL.md`. Confirm it against real agent sessions with `whetstone eval` afterwards — `tune` measures a model's selection decision, not an agent's, so the two can disagree.
+
 `repair` edits your bundle in place. It runs against the dev split only, then evaluates the holdout split exactly once — the holdout score is the reported number, never a dev-split score. The dev/holdout split seed is fixed and deliberately not a flag: re-splitting changes which tasks the repair loop was allowed to see, and makes two scores incomparable.
 
 ### Flags
@@ -128,12 +133,18 @@ Approval is per spec version. An edit that changes something stores a new versio
 | Command | Flag | Default | Description |
 |---|---|---|---|
 | `doctor` | `--judge` | false | Run judge calibration against the labelled set and report Cohen's κ |
-| `new` | `--yes` | false | Skip the spec approval prompt |
 | `lint` | `--strict` | false | Treat warnings as errors |
 | `pack` | `-o, --output` | `<skill>.tar.gz` beside the bundle | Archive path |
 | `suite check` | `--allow-void` | false | Exit 0 even if some tasks are void; they're still excluded from a later eval |
 | `suite push` | `--endpoint` | `$SKAEL_ENDPOINT`, then `~/.skael/config.json` | Skael server URL |
 | `suite push` | `--api-key` | `$SKAEL_API_KEY`, then `~/.skael/config.json` | Skael API key |
+| `tune` | `--queries` | `16` | Trigger queries to tune against; a short set is topped up and written back |
+| `tune` | `--runs` | `2` | Runs per query; at one run the loop rewrites a description to fix a coin flip |
+| `tune` | `--iterations` | `3` | Maximum improvement iterations |
+| `tune` | `--holdout` | `0.4` | Fraction of the set held out for selection; 0 disables it |
+| `tune` | `--threshold` | `0.5` | Trigger rate at which a query counts as fired |
+| `tune` | `--concurrency` | `0` | Maximum concurrent model calls; 0 uses the default |
+| `tune` | `--apply` | true | Write the winner to the spec and to `SKILL.md` |
 | `eval` | `--tier` | `full` | Tier to run: `smoke`, `full`, or `deep` |
 | `eval` | `--agents` | shipped panel | Panel agents (pass with `--models`) |
 | `eval` | `--models` | shipped panel | Panel models (pass with `--agents`) |
