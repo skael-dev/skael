@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getEvalSuiteTriggers, reviewEvalSuite } from "@/api/sdk.gen";
 
 type Query = { query: string; should_trigger: boolean };
@@ -18,6 +18,7 @@ export function TriggerReview({
 }) {
   const [items, setItems] = useState<Query[]>([]);
   const [result, setResult] = useState<{ changed: boolean } | null>(null);
+  const qc = useQueryClient();
 
   const query = useQuery({
     queryKey: ["suite-triggers", suiteRef],
@@ -45,12 +46,20 @@ export function TriggerReview({
     },
     onSuccess: (data) => {
       setResult({ changed: !!data?.changed });
+      // The badge and this button are driven by the skill's quality record,
+      // which the review just changed. Without this they stay on screen until
+      // a manual reload, and the page reads as if the save did nothing.
+      qc.invalidateQueries({ queryKey: ["skill-quality", skillName] });
       onDone?.();
     },
   });
 
   const positive = items.filter((i) => i.should_trigger);
   const negative = items.filter((i) => !i.should_trigger);
+  // The server refuses a blank query and an empty list with a 422, because an
+  // edit becomes a new authored suite that has to be runnable. Caught here so
+  // the reviewer sees it on the row rather than as a failed save.
+  const blocked = items.length === 0 || items.some((i) => i.query.trim() === "");
 
   function update(index: number, patch: Partial<Query>) {
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
@@ -140,7 +149,8 @@ export function TriggerReview({
             </button>
             <button
               onClick={() => save.mutate()}
-              disabled={save.isPending}
+              disabled={save.isPending || blocked}
+              title={blocked ? "Every row needs a query, and the list cannot be empty." : undefined}
               className="text-xs text-accent hover:underline disabled:opacity-50"
             >
               {save.isPending ? "Saving…" : "Save review"}
@@ -152,9 +162,12 @@ export function TriggerReview({
         </>
       )}
 
+      {/* Nothing re-runs the release decision when origin flips, so the old
+          copy ("the existing score can now release a held version") promised
+          something that never happens. The next evaluation is what releases. */}
       {result && !result.changed && (
         <p className="mt-3 text-[13px] text-text-secondary">
-          Marked as reviewed. The existing score can now release a held version.
+          Marked as reviewed. A new evaluation is what releases a held version.
         </p>
       )}
       {result && result.changed && (

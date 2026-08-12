@@ -51,11 +51,20 @@ describe("TriggerReview", () => {
     renderReview({ ref: "edited" });
 
     await userEvent.click(await screen.findByRole("button", { name: /add query/i }));
-    await userEvent.click(screen.getByRole("button", { name: /save review/i }));
+
+    // The server refuses a blank query with a 422, so the save waits for one.
+    const save = screen.getByRole("button", { name: /save review/i });
+    expect(save).toBeDisabled();
+
+    const blank = screen
+      .getAllByRole("textbox")
+      .find((el) => (el as HTMLTextAreaElement).value === "");
+    await userEvent.type(blank!, "a new query");
+    await userEvent.click(save);
 
     expect(await screen.findByText(/re-run the evaluation/i)).toBeInTheDocument();
     expect(posted).toMatchObject({
-      triggers: expect.arrayContaining([{ query: "", should_trigger: true }]),
+      triggers: expect.arrayContaining([{ query: "a new query", should_trigger: true }]),
     });
   });
 

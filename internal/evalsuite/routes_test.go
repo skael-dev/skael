@@ -635,6 +635,32 @@ func TestReview_AnEditStoresANewAuthoredRefAndLeavesTheOldOne(t *testing.T) {
 	}
 }
 
+// TestReview_AnEditMustStayRunnable covers what an edit can produce. An
+// empty list or a blank query becomes an authored suite that BuildPlan later
+// refuses, long after the reviewer has left.
+func TestReview_AnEditMustStayRunnable(t *testing.T) {
+	srv, ref, _ := setupReviewFixture(t)
+
+	cases := map[string][]suite.TriggerQuery{
+		"an empty list": {},
+		"a blank query": {{Query: "  ", ShouldTrigger: true}},
+	}
+	for name, queries := range cases {
+		resp := srv.postJSON(t, "/api/eval/suites/"+ref+"/review", map[string]any{"triggers": queries})
+		if resp.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", name, resp.Code, resp.Body)
+		}
+	}
+
+	rec, err := srv.reg.Get(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Errorf("origin = %q, want it left derived: a refused edit raised the suite", rec.Origin)
+	}
+}
+
 // TestReview_UnknownRefIs404 is a review of a ref that does not exist. It
 // must not create one.
 func TestReview_UnknownRefIs404(t *testing.T) {

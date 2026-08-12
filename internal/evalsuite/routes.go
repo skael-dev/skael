@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -268,6 +269,19 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 				return nil, huma.Error500InternalServerError("review eval suite: internal error")
 			}
 			return &suiteReviewOutput{Body: suiteReviewBody{Ref: input.Ref, Changed: false}}, nil
+		}
+
+		// An edit becomes a new authored suite, so what it carries has to be
+		// runnable. BuildPlan refuses an empty set and a blank query later,
+		// long after the reviewer has left, and the suite is authored by then.
+		if len(input.Body.Triggers) == 0 {
+			return nil, huma.Error422UnprocessableEntity("review eval suite: a review must keep at least one trigger query")
+		}
+		for i, q := range input.Body.Triggers {
+			if strings.TrimSpace(q.Query) == "" {
+				return nil, huma.Error422UnprocessableEntity(
+					fmt.Sprintf("review eval suite: query %d is empty; delete the row or write a query", i+1))
+			}
 		}
 
 		if err := suite.WriteTriggerQueries(dir, input.Body.Triggers); err != nil {
