@@ -229,12 +229,23 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 	// against, so it raises that very ref. A changed review is a different
 	// eval set. It becomes a new suite. The old score keeps its badge,
 	// because it measured the old queries, not these.
+	//
+	// Owner or admin only, like claim-eval-job, cancel-eval-job and
+	// rerun-eval. This route decides whether a score can release a version the
+	// publish gate holds, so an ordinary member must not reach it for a skill
+	// they do not own.
 	huma.Register(api, huma.Operation{
 		OperationID: "review-eval-suite",
 		Method:      http.MethodPost,
 		Path:        "/api/eval/suites/{ref}/review",
 		Summary:     "Record a person's review of a suite's trigger queries",
 	}, func(ctx context.Context, input *suiteReviewInput) (*suiteReviewOutput, error) {
+		u := auth.UserFromContext(ctx)
+		if !u.IsPrivileged() {
+			return nil, huma.Error403Forbidden("review eval suite: privileged callers only")
+		}
+		reviewedBy := u.Email
+
 		current, dir, err := loadTriggers(ctx, reg, input.Ref)
 		if err != nil {
 			return nil, err
@@ -251,7 +262,7 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}
 
 		if sameQueries(current, input.Body.Triggers) {
-			if err := reg.MarkAuthored(ctx, reg.db, input.Ref); err != nil {
+			if err := reg.MarkAuthored(ctx, reg.db, input.Ref, reviewedBy); err != nil {
 				log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: mark authored failed")
 				return nil, huma.Error500InternalServerError("review eval suite: internal error")
 			}
@@ -265,13 +276,16 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		if err != nil {
 			return nil, huma.Error500InternalServerError("review eval suite: internal error")
 		}
-		uploadedBy := "system"
-		if u := auth.UserFromContext(ctx); u != nil {
-			uploadedBy = u.Email
-		}
-		fresh, err := reg.Put(ctx, rec.SkillName, archive, rec.Checks, rec.SpecVersion, uploadedBy, rec.Spec)
+		fresh, err := reg.Put(ctx, rec.SkillName, archive, rec.Checks, rec.SpecVersion, reviewedBy, rec.Spec)
 		if err != nil {
 			log.Error().Err(err).Str("ref", input.Ref).Msg("evalsuite: store reviewed suite failed")
+			return nil, huma.Error500InternalServerError("review eval suite: internal error")
+		}
+		// Put already records the new suite authored. This stamps the reviewer
+		// on it, so one column answers who vouched for a suite whichever
+		// branch produced it.
+		if err := reg.MarkAuthored(ctx, reg.db, fresh.Ref, reviewedBy); err != nil {
+			log.Error().Err(err).Str("ref", fresh.Ref).Msg("evalsuite: record reviewer failed")
 			return nil, huma.Error500InternalServerError("review eval suite: internal error")
 		}
 		return &suiteReviewOutput{Body: suiteReviewBody{Ref: fresh.Ref, Changed: true}}, nil

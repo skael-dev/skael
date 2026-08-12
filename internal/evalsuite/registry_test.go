@@ -155,7 +155,7 @@ func TestRegistry_MarkAuthoredFlipsADerivedSuite(t *testing.T) {
 	if err := reg.MarkDerived(ctx, pool, rec.Ref); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.MarkAuthored(ctx, pool, rec.Ref); err != nil {
+	if err := reg.MarkAuthored(ctx, pool, rec.Ref, "reviewer@example.com"); err != nil {
 		t.Fatalf("MarkAuthored: %v", err)
 	}
 
@@ -170,7 +170,7 @@ func TestRegistry_MarkAuthoredFlipsADerivedSuite(t *testing.T) {
 
 func TestRegistry_MarkAuthoredOnAnUnknownRefIsNotFound(t *testing.T) {
 	reg, pool := newTestRegistry(t)
-	if err := reg.MarkAuthored(ctx, pool, "no-such-ref"); !errors.Is(err, evalsuite.ErrNotFound) {
+	if err := reg.MarkAuthored(ctx, pool, "no-such-ref", "reviewer@example.com"); !errors.Is(err, evalsuite.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }

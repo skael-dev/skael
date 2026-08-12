@@ -56,6 +56,10 @@ type Record struct {
 	Spec       json.RawMessage
 	Origin     Origin
 	UploadedBy string
+	// ReviewedBy is the person who raised this suite to authored. Empty until
+	// somebody reviews it. UploadedBy cannot answer that question: on a
+	// machine-derived suite it names the worker's own key.
+	ReviewedBy string
 	CreatedAt  time.Time
 }
 
@@ -213,7 +217,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -266,7 +270,7 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 // skillName.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by
 		FROM eval_suites
 		WHERE skill_name = $1
 		ORDER BY created_at DESC
@@ -296,16 +300,19 @@ func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error
 	return nil
 }
 
-// MarkAuthored flags ref as reviewed by a person. It takes a Queryer so the
+// MarkAuthored flags ref as reviewed by reviewedBy. It takes a Queryer so the
 // caller can write it inside the same transaction as the review that
 // justifies it.
 //
 // This is the one path that can raise a suite's origin. Its only caller
-// runs behind an authenticated user who acts in the review view. No client
+// runs behind an owner or an admin who acts in the review view. No client
 // declaration reaches it: a pusher that claims authored clears its own scan
 // hold.
-func (r *Registry) MarkAuthored(ctx context.Context, q Queryer, ref string) error {
-	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1 WHERE ref = $2`, string(OriginAuthored), ref)
+//
+// reviewedBy lands in the same statement as the origin. A separate write can
+// fail on its own and leave a raised suite with no accountable name.
+func (r *Registry) MarkAuthored(ctx context.Context, q Queryer, ref, reviewedBy string) error {
+	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1, reviewed_by = $2 WHERE ref = $3`, string(OriginAuthored), reviewedBy, ref)
 	if err != nil {
 		return fmt.Errorf("evalsuite: MarkAuthored %s: %w", ref, err)
 	}
@@ -319,7 +326,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
 	var specJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin); err != nil {
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {

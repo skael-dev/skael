@@ -320,7 +320,7 @@ func TestStore_SuiteDerivedFollowsTheSuiteRecord(t *testing.T) {
 		t.Fatal("suite_derived is false while the suite is derived")
 	}
 
-	if err := reg.MarkAuthored(ctx, pool, suiteRef); err != nil {
+	if err := reg.MarkAuthored(ctx, pool, suiteRef, "reviewer@example.com"); err != nil {
 		t.Fatal(err)
 	}
 

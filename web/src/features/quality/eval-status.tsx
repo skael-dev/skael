@@ -14,6 +14,7 @@ const ACTIVE = new Set(["queued", "running"]);
 // member sees why the button is disabled rather than a 403 after clicking.
 const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
 const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
+const REVIEW_SUITE_DISABLED_REASON = "Only an owner or admin can review an eval set.";
 
 // The models the panel may be pinned to. These are the Claude Code CLI's own
 // aliases, which is what the panel runs — the same vocabulary
@@ -153,8 +154,16 @@ export function EvalStatus({
           </span>
         )}
         {quality?.suite_derived && !hideDerivedBadge && <DerivedSuiteBadge />}
+        {/* review-eval-suite is owner/admin only server-side, the same gate
+            the run buttons carry. Shown disabled rather than hidden, so a
+            member reads why instead of clicking into a 403. */}
         {quality?.suite_derived && suiteRef && (
-          <button onClick={() => setReviewing((v) => !v)} className="text-accent hover:underline">
+          <button
+            onClick={() => setReviewing((v) => !v)}
+            disabled={!canRun}
+            title={!canRun ? REVIEW_SUITE_DISABLED_REASON : undefined}
+            className="text-accent hover:underline disabled:opacity-50"
+          >
             {reviewing ? "Close" : "Review the eval set"}
           </button>
         )}
@@ -201,7 +210,7 @@ export function EvalStatus({
           </span>
         )}
       </span>
-      {reviewing && suiteRef && <TriggerReview suiteRef={suiteRef} skillName={skillName} />}
+      {reviewing && canRun && suiteRef && <TriggerReview suiteRef={suiteRef} skillName={skillName} />}
     </>
   );
 }

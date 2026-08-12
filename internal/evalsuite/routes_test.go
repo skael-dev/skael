@@ -55,6 +55,10 @@ type testServer struct {
 	skills  *skill.Store
 	reg     *evalsuite.Registry
 	claims  *fakeClaims
+	// user is the authenticated caller the fake middleware attaches. A test
+	// changes its Role in place to act as an owner, because review-eval-suite
+	// is owner or admin only.
+	user *auth.User
 }
 
 // fakeClaims stands in for internal/evalqueue's PoolExecutor: it answers
@@ -120,7 +124,7 @@ func newTestServerWithStorage(t *testing.T, storage platform.Storage) *testServe
 	claims := &fakeClaims{}
 	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{Claims: claims})
 
-	return &testServer{handler: r, skills: skillStore, reg: reg, claims: claims}
+	return &testServer{handler: r, skills: skillStore, reg: reg, claims: claims, user: member}
 }
 
 // newUnauthTestServer wires the eval suite routes behind the real
@@ -482,6 +486,10 @@ func setupReviewFixture(t *testing.T) (*testServer, string, []suite.TriggerQuery
 		t.Fatalf("setup unmarshal: %v", err)
 	}
 
+	// The push is a member's to make. The review is not, so every review test
+	// acts as an owner from here on.
+	srv.user.Role = auth.RoleOwner
+
 	// The two queries writeFixtureSuite stores in evals/triggers.json.
 	originalQueries := []suite.TriggerQuery{
 		{Query: "do the thing", ShouldTrigger: true},
@@ -556,6 +564,32 @@ func TestReview_NoEditMarksTheSameRefAuthored(t *testing.T) {
 	if rec.Origin != evalsuite.OriginAuthored {
 		t.Errorf("origin = %q, want authored", rec.Origin)
 	}
+	// uploaded_by still names whoever pushed the suite, so without this column
+	// the database cannot say who vouched for it.
+	if rec.ReviewedBy != srv.user.Email {
+		t.Errorf("reviewed_by = %q, want the reviewer %q", rec.ReviewedBy, srv.user.Email)
+	}
+}
+
+// TestReview_AMemberIsRefused is the gate. This route decides whether a score
+// can release a version the publish gate holds, so it sits with
+// claim-eval-job, cancel-eval-job and rerun-eval rather than with the reads.
+func TestReview_AMemberIsRefused(t *testing.T) {
+	srv, ref, originalQueries := setupReviewFixture(t)
+	srv.user.Role = auth.RoleMember
+
+	resp := srv.postJSON(t, "/api/eval/suites/"+ref+"/review", map[string]any{"triggers": originalQueries})
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", resp.Code, resp.Body)
+	}
+
+	rec, err := srv.reg.Get(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Origin != evalsuite.OriginDerived {
+		t.Errorf("origin = %q, want it left derived: a member raised a suite", rec.Origin)
+	}
 }
 
 // TestReview_AnEditStoresANewAuthoredRefAndLeavesTheOldOne is the honest
@@ -589,12 +623,16 @@ func TestReview_AnEditStoresANewAuthoredRefAndLeavesTheOldOne(t *testing.T) {
 	if fresh.Origin != evalsuite.OriginAuthored {
 		t.Errorf("the new ref is %q, want authored", fresh.Origin)
 	}
+	if fresh.ReviewedBy != srv.user.Email {
+		t.Errorf("reviewed_by = %q, want the reviewer %q", fresh.ReviewedBy, srv.user.Email)
+	}
 }
 
 // TestReview_UnknownRefIs404 is a review of a ref that does not exist. It
 // must not create one.
 func TestReview_UnknownRefIs404(t *testing.T) {
 	srv := newTestServer(t)
+	srv.user.Role = auth.RoleOwner
 
 	resp := srv.postJSON(t, "/api/eval/suites/does-not-exist/review", map[string]any{
 		"triggers": []suite.TriggerQuery{{Query: "q", ShouldTrigger: true}},
