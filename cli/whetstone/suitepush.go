@@ -3,6 +3,7 @@ package whetstone
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -145,30 +146,37 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	}
 	unreviewed := generated != "" && generated == suiteRef
 
-	c := client.New(req.Endpoint, req.APIKey)
-	resp, err := c.UploadEvalSuite(client.EvalSuiteUploadRequest{
+	// One request literal, built once. A field added to the first call and
+	// forgotten on the retry pushes a different suite with no error anywhere.
+	upload := client.EvalSuiteUploadRequest{
 		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON,
 		Archive: archive, Unreviewed: unreviewed,
-	})
+	}
+
+	c := client.New(req.Endpoint, req.APIKey)
+	resp, err := c.UploadEvalSuite(upload)
 	// A server that predates the unreviewed field rejects the whole request,
 	// because Huma refuses an unknown body property. A retry without the
 	// field is the only way an author on an older server can push at all.
 	// The cost is that the suite is then recorded as authored. The retry
 	// below discloses that cost. It does not hide it.
-	if unreviewed {
-		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == http.StatusUnprocessableEntity {
-			resp, err = c.UploadEvalSuite(client.EvalSuiteUploadRequest{
-				Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON,
-				Archive: archive, Unreviewed: false,
-			})
-			if err == nil {
-				// The retry actually recorded the suite as authored, so the
-				// rest of this function must report that, not the original
-				// intent.
-				unreviewed = false
-				ui.Warn("this server does not record an unreviewed eval set")
-				ui.Warn("%s was pushed as authored, so its score can release a held version", req.Skill)
-			}
+	//
+	// The warning cannot lie about which server it met. It prints only after
+	// the retry succeeds, so a 422 both requests share — a validation failure
+	// in the body itself — never reaches it.
+	fellBack := false
+	var apiErr *client.APIError
+	if unreviewed && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+		upload.Unreviewed = false
+		resp, err = c.UploadEvalSuite(upload)
+		if err == nil {
+			// The retry actually recorded the suite as authored, so the
+			// rest of this function must report that, not the original
+			// intent.
+			unreviewed = false
+			fellBack = true
+			ui.Warn("this server does not record an unreviewed eval set")
+			ui.Warn("%s was pushed as authored, so its score can release a held version", req.Skill)
 		}
 	}
 	if err != nil {
@@ -176,11 +184,15 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	}
 
 	if ui.JSONMode {
+		// ui.Warn is a no-op here, so without this field a --json caller
+		// cannot tell an edited eval set from a fallback on an old server.
+		// The two mean opposite things about who read the queries.
 		return ui.PrintJSON(map[string]any{
-			"skill":      req.Skill,
-			"ref":        resp.Ref,
-			"task_count": resp.TaskCount,
-			"unreviewed": unreviewed,
+			"skill":                  req.Skill,
+			"ref":                    resp.Ref,
+			"task_count":             resp.TaskCount,
+			"unreviewed":             unreviewed,
+			"unreviewed_unsupported": fellBack,
 		})
 	}
 	if unreviewed {

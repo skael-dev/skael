@@ -105,6 +105,9 @@ func writeSkillMD(dir string, s *spec.SkillSpec, body, description string) (stri
 // The tuner changes one field. A full regeneration spends several model
 // calls and rewrites prose nobody asked to change. The frontmatter is
 // re-marshalled instead. The body is copied through verbatim.
+//
+// The re-marshalled frontmatter keeps the name and the description, and
+// nothing else. A key somebody added by hand does not survive this call.
 func RewriteDescription(bundleDir, description string) error {
 	path := filepath.Join(bundleDir, "SKILL.md")
 	raw, err := os.ReadFile(path)

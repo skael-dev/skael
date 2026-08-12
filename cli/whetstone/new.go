@@ -57,8 +57,12 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, intent string) 
 	if err != nil {
 		return err
 	}
-	if err := sp.Save(os.Stdout); err != nil {
-		return err
+	// Every ui writer no-ops in JSON mode to keep stdout parseable. This
+	// writes YAML straight to stdout, so it must obey the same rule.
+	if !ui.JSONMode {
+		if err := sp.Save(os.Stdout); err != nil {
+			return err
+		}
 	}
 	ui.Success("stored %s spec version %d", sp.Name, version)
 
@@ -106,6 +110,15 @@ func wrapGenerationError(err error, resumeCmd string) error {
 	return fmt.Errorf("%w; %s", err, hint)
 }
 
+// newYes is read by nothing. `whetstone new` used to ask for the spec to be
+// approved, and --yes skipped that question. The question is gone. The flag
+// stays so a script that still passes it does not fail on an unknown flag.
+var newYes bool
+
 func init() {
+	newCmd.Flags().BoolVar(&newYes, "yes", false, "Deprecated: does nothing")
+	if err := newCmd.Flags().MarkDeprecated("yes", "the approval prompt was removed, so this flag does nothing"); err != nil {
+		panic(err)
+	}
 	rootCmd.AddCommand(newCmd)
 }

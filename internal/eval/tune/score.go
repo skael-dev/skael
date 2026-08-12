@@ -55,8 +55,9 @@ type ScoreOptions struct {
 // beside the shipped distractor pack, so the measurement can discriminate: a
 // selection against no alternatives says nothing about precision. This is a
 // model's selection decision rather than an agent's, so it can disagree with
-// the trigger F1 an evaluation reports. `whetstone tune --confirm` is what
-// checks the winner against the real probe path.
+// the trigger F1 an evaluation reports. `whetstone eval` is what checks the
+// winner against the real probe path, and `whetstone tune` prints that hint
+// at the end of every run.
 func Score(ctx context.Context, g llm.Gateway, skillName, description string,
 	set []suite.TriggerQuery, opts ScoreOptions) (ScoreResult, error) {
 

@@ -93,3 +93,18 @@ func TestSplit_ZeroHoldoutTestsNothing(t *testing.T) {
 		t.Errorf("holdout 0 gave %d train and %d test; want 16 and 0", len(train), len(test))
 	}
 }
+
+// TestSplit_ClampsAHoldoutOfOne covers the setting that measures nothing. An
+// empty train half makes Run exit at iteration 1 and report that every train
+// query passed, which reads like a result and is the absence of one.
+func TestSplit_ClampsAHoldoutOfOne(t *testing.T) {
+	for _, holdout := range []float64{1, 1.5} {
+		train, test := tune.Split(set(4, 4), holdout, 42)
+		if len(train) == 0 {
+			t.Errorf("holdout %v left nothing to train on", holdout)
+		}
+		if len(test) == 0 {
+			t.Errorf("holdout %v held nothing out", holdout)
+		}
+	}
+}
