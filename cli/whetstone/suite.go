@@ -70,15 +70,7 @@ func generateSuite(ctx context.Context, st *store.Store, g llm.Gateway, sp *spec
 		return err
 	}
 
-	// Record what was generated, so `suite push` can tell an untouched eval
-	// set from one a person edited. A failure here must not fail generation:
-	// the artifacts exist. The worst consequence is a push recorded as
-	// authored, which is the status quo.
-	if ref, rerr := suite.Ref(dir); rerr == nil {
-		if err := st.RecordGeneratedRef(sp.Name, ref); err != nil {
-			ui.Warn("could not record the generated eval set ref: %v", err)
-		}
-	}
+	recordGeneratedRef(st, sp.Name, dir)
 
 	if ui.JSONMode {
 		return ui.PrintJSON(map[string]any{
@@ -90,6 +82,28 @@ func generateSuite(ctx context.Context, st *store.Store, g llm.Gateway, sp *spec
 	}
 	ui.Success("wrote %d evals and %d trigger queries to %s", len(set.Evals), len(triggers), dir)
 	return nil
+}
+
+// recordGeneratedRef records the content ref of dir as what a machine wrote
+// into it. `suite push` compares the current ref against this one. A match
+// declares an eval set nobody read, and the server records that as derived.
+//
+// Every machine writer of a suite directory must call this, not only the
+// generator. A stale ref makes the next push declare nothing. The server then
+// records the eval set as authored, and its score can clear a scan hold with
+// no reader.
+//
+// A failure never fails the caller, because the artifacts on disk are good.
+// Both failures warn: a silent miss is the laundered suite above.
+func recordGeneratedRef(st *store.Store, skill, dir string) {
+	ref, err := suite.Ref(dir)
+	if err != nil {
+		ui.Warn("could not hash the eval set for %s, so the next push declares it authored: %v", skill, err)
+		return
+	}
+	if err := st.RecordGeneratedRef(skill, ref); err != nil {
+		ui.Warn("could not record the eval set ref for %s, so the next push declares it authored: %v", skill, err)
+	}
 }
 
 func init() {

@@ -96,6 +96,60 @@ func TestRunTuneWith_WritesTheEnlargedQuerySetBack(t *testing.T) {
 	}
 }
 
+// TestRunTuneWith_RecordsTheGrownEvalSetRef is the laundering guard. A
+// top-up writes into the directory suite.Ref hashes. A recorded ref that
+// still names the pre-tune content makes the next `whetstone suite push`
+// find a mismatch, declare nothing, and let the server record the eval set
+// as authored. Nobody read it, and its score can then clear a scan hold.
+func TestRunTuneWith_RecordsTheGrownEvalSetRef(t *testing.T) {
+	st, _, suiteDir := tuneWorkspace(t)
+
+	before, err := suite.Ref(suiteDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordGeneratedRef("pdf-extract", before); err != nil {
+		t.Fatal(err)
+	}
+
+	g := fake.NewFunc(func(r llm.Req) (string, error) {
+		switch r.Role {
+		case "tune.queries":
+			return `{"queries":[
+			  {"query":"convert the tables in acme_q4.pdf to csv","should_trigger":true},
+			  {"query":"sort the rows of leads.csv by created date","should_trigger":false}
+			]}`, nil
+		case "tune.improve", "tune.shorten":
+			return `{"description":"the tuned description"}`, nil
+		default:
+			return `{"skill":"none"}`, nil
+		}
+	})
+
+	if _, err := RunTuneWith(context.Background(), st, g, TuneRequest{
+		Skill: "pdf-extract", Queries: 6, Runs: 1, Iterations: 1,
+		Threshold: 0.5, Holdout: 0.4, Apply: true,
+	}); err != nil {
+		t.Fatalf("RunTuneWith: %v", err)
+	}
+
+	after, err := suite.Ref(suiteDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("the fixture is broken: the top-up did not change the eval set")
+	}
+
+	got, err := st.GeneratedRef("pdf-extract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != after {
+		t.Errorf("recorded ref = %q, want the grown set's ref %q; a push would declare this set authored", got, after)
+	}
+}
+
 // TestRunTuneWith_ApplyFalseChangesNothing covers the dry run. It asks for
 // more queries than the fixture holds, so a top-up genuinely fires. It
 // checks that none of the three writes RunTuneWith can make land on disk.

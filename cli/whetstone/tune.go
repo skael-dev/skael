@@ -83,6 +83,10 @@ func RunTuneWith(ctx context.Context, st *store.Store, g llm.Gateway, req TuneRe
 			if err := suite.WriteTriggerQueries(suiteDir, grown); err != nil {
 				return nil, err
 			}
+			// The write lands inside the directory suite.Ref hashes, so the
+			// recorded ref is now stale. Leave it stale and the next push
+			// declares nothing, which records this eval set as authored.
+			recordGeneratedRef(st, req.Skill, suiteDir)
 			ui.Info("grew the trigger set from %d to %d queries", len(queries), len(grown))
 		} else {
 			ui.Info("would grow the trigger set from %d to %d queries; rerun with --apply to write it", len(queries), len(grown))
