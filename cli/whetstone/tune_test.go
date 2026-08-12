@@ -2,6 +2,7 @@ package whetstone
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,39 +13,107 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
+	"github.com/skael-dev/skael/internal/eval/tune"
 )
 
 // TestRunTuneWith_WritesTheWinnerToTheSpecAndTheBundle pins the write-back
 // order. A patch to SKILL.md alone does not survive the next `whetstone gen`,
 // because the generator writes the frontmatter from the spec.
+//
+// The tuned description must genuinely win the held-out half. A fake that
+// answers the same way for both descriptions gives them equal scores, and
+// better() then breaks the tie toward the first attempt: res.Best comes back
+// as the fixture's own description and every assertion below passes with the
+// write-back removed. So the test asks Split for the same halves the loop
+// uses. It drives the fake from that membership, the way
+// internal/eval/tune/loop_test.go does.
 func TestRunTuneWith_WritesTheWinnerToTheSpecAndTheBundle(t *testing.T) {
-	st, skillDir, suiteDir := tuneWorkspace(t)
+	st, skillDir, _ := tuneWorkspace(t)
+
+	const (
+		skill = "pdf-extract"
+		tuned = "the tuned description"
+	)
+	_, versionBefore, err := st.LoadSpec(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := fixtureQueries()
+	// The same seed and holdout RunTuneWith passes to tune.Run.
+	train, _ := tune.Split(queries, 0.4, 42)
+	inTrain := map[string]bool{}
+	for _, q := range train {
+		inTrain[q.Query] = true
+	}
+	positive := map[string]bool{}
+	for _, q := range queries {
+		positive[q.Query] = q.ShouldTrigger
+	}
+	// One train query always fails under the fixture's description. Without
+	// it the train half is clean, the loop exits at iteration 1, and it never
+	// proposes a second description to choose between.
+	stumble := train[0].Query
 
 	g := fake.NewFunc(func(r llm.Req) (string, error) {
 		switch r.Role {
 		case "tune.improve", "tune.shorten":
-			return `{"description":"the tuned description"}`, nil
-		default:
-			return `{"skill":"none"}`, nil
+			return `{"description":"` + tuned + `"}`, nil
 		}
+		var q string
+		for candidate := range positive {
+			if strings.Contains(r.Prompt, "\n\n"+candidate+"\n\n") {
+				q = candidate
+				break
+			}
+		}
+		if q == "" {
+			return "", fmt.Errorf("the prompt carries no known query")
+		}
+		// The fixture's description answers the train half correctly and the
+		// held-out half wrongly. The tuned one does the opposite, so it loses
+		// the half that tunes and wins the half that decides.
+		usesTuned := strings.Contains(r.Prompt, skill+": "+tuned)
+		pass := usesTuned != inTrain[q]
+		if !usesTuned && q == stumble {
+			pass = false
+		}
+		if positive[q] == pass {
+			return `{"skill":"` + skill + `"}`, nil
+		}
+		return `{"skill":"none"}`, nil
 	})
 
 	res, err := RunTuneWith(context.Background(), st, g, TuneRequest{
-		Skill: "pdf-extract", Queries: 4, Runs: 1, Iterations: 2,
+		Skill: skill, Queries: 4, Runs: 1, Iterations: 2,
 		Threshold: 0.5, Holdout: 0.4, Apply: true,
 	})
 	if err != nil {
 		t.Fatalf("RunTuneWith: %v", err)
 	}
 
-	sp, version, err := st.LoadSpec("pdf-extract")
+	// Guard the fixture itself. If the tuned description stops winning the
+	// held-out half, this test measures nothing and must be repaired.
+	if len(res.History) != 2 {
+		t.Fatalf("ran %d iterations, want 2; the loop never proposed a second description", len(res.History))
+	}
+	if res.History[1].Test.Passed <= res.History[0].Test.Passed {
+		t.Fatalf("the fixture is broken: %q did not win the held-out half", tuned)
+	}
+	if res.Best != tuned {
+		t.Fatalf("Run chose %q, want the tuned description", res.Best)
+	}
+
+	sp, version, err := st.LoadSpec(skill)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if version <= versionBefore {
+		t.Errorf("spec version is %d, want more than the fixture's %d: the winner was never stored", version, versionBefore)
 	}
 	if sp.Description != res.Best {
 		t.Errorf("spec description = %q, want the winner %q", sp.Description, res.Best)
 	}
-	if !isApproved(st, "pdf-extract", version) {
+	if !isApproved(st, skill, version) {
 		t.Error("the new spec version is not approved, so whetstone eval would refuse it")
 	}
 
@@ -55,7 +124,6 @@ func TestRunTuneWith_WritesTheWinnerToTheSpecAndTheBundle(t *testing.T) {
 	if !strings.Contains(string(md), res.Best) {
 		t.Errorf("SKILL.md does not carry the winner:\n%s", md)
 	}
-	_ = suiteDir
 }
 
 // TestRunTuneWith_WritesTheEnlargedQuerySetBack pins that a top-up is
@@ -249,13 +317,20 @@ func tuneWorkspace(t *testing.T) (*store.Store, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := suite.WriteTriggerQueries(suiteDir, []suite.TriggerQuery{
+	if err := suite.WriteTriggerQueries(suiteDir, fixtureQueries()); err != nil {
+		t.Fatal(err)
+	}
+	return st, skillDir, suiteDir
+}
+
+// fixtureQueries is the trigger set tuneWorkspace writes. A test that has to
+// know which half a query lands in reads it from here, so the two cannot
+// drift apart.
+func fixtureQueries() []suite.TriggerQuery {
+	return []suite.TriggerQuery{
 		{Query: "extract the tables from report.pdf", ShouldTrigger: true},
 		{Query: "get the numbers out of this scanned invoice", ShouldTrigger: true},
 		{Query: "clean up the duplicate rows in contacts.csv", ShouldTrigger: false},
 		{Query: "summarise this markdown file for me", ShouldTrigger: false},
-	}); err != nil {
-		t.Fatal(err)
 	}
-	return st, skillDir, suiteDir
 }
