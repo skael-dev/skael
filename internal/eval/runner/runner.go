@@ -130,7 +130,12 @@ type ExecuteResult struct {
 }
 
 // Runner executes a plan.
-type Runner struct{ o Options }
+type Runner struct {
+	o Options
+	// quotaWarned keeps the approaching-quota notice to one line per run
+	// rather than one per session, across concurrent sessions.
+	quotaWarned sync.Once
+}
 
 // New validates the options and applies defaults: concurrency 4 (§9's
 // scheduling assumption), a 20-minute session timeout, and three rate-limit

@@ -84,7 +84,15 @@ type Meta struct {
 	VisibleSkills     []string
 	PermissionDenials []string
 	RateLimited       bool
-	IsError           bool
+	// RateLimitUtilization is the highest window utilization the session was
+	// told about, 0 when it was never told. A subscription reports this well
+	// before it starts refusing calls, so a run can say "83% of your seven-day
+	// window" while it still works, rather than leaving the operator to
+	// discover the limit as a wall of failed sessions.
+	RateLimitUtilization float64
+	// RateLimitWindow names the window RateLimitUtilization belongs to.
+	RateLimitWindow string
+	IsError         bool
 }
 
 // Result is a parsed session.

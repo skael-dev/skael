@@ -2,8 +2,10 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -249,5 +251,32 @@ func TestResolveAuth_FallsBackToMountsWhenNoEnvVarIsSet(t *testing.T) {
 	}
 	if len(mounts) != 1 {
 		t.Fatalf("mounts = %+v, want the host credential dir mounted", mounts)
+	}
+}
+
+// TestWarnOnQuota_ReportsOnceAboveTheThreshold pins both halves of the
+// approaching-quota notice: it stays quiet while the window has room, and it
+// speaks exactly once no matter how many sessions a tier runs. A line per
+// session across a 36-session tier would bury the one thing the operator
+// needs to read.
+func TestWarnOnQuota_ReportsOnceAboveTheThreshold(t *testing.T) {
+	var lines []string
+	r := &Runner{o: Options{Logger: func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}}}
+
+	r.warnOnQuota(agent.Meta{RateLimitUtilization: 0.82, RateLimitWindow: "seven_day"})
+	if len(lines) != 0 {
+		t.Fatalf("warned at 82%%, below the threshold: %v", lines)
+	}
+
+	for range 5 {
+		r.warnOnQuota(agent.Meta{RateLimitUtilization: 0.94, RateLimitWindow: "seven_day"})
+	}
+	if len(lines) != 1 {
+		t.Fatalf("logged %d lines, want exactly one per run: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "seven_day") || !strings.Contains(lines[0], "94%") {
+		t.Errorf("line = %q, want it to name the window and the utilization", lines[0])
 	}
 }

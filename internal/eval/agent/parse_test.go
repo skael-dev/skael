@@ -142,6 +142,26 @@ func TestParse_RateLimitEventOnlyFlagsAnActualLimit(t *testing.T) {
 			want: false,
 		},
 		{
+			// Recorded from Claude Code 2.1.231 on a subscription past 75% of
+			// its seven-day window. The session it came from SUCCEEDED — the
+			// very next line was result/success. Reading this as a throttle
+			// discards a good session, and once an account is over the warning
+			// threshold every session carries it, so a whole tier retries
+			// itself to death and reports "no scored evals".
+			name: "allowed_warning is a warning, not a hit",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning",` +
+				`"rateLimitType":"seven_day","utilization":0.82,"surpassedThreshold":0.75}}`,
+			want: false,
+		},
+		{
+			// The whole allowed_* family, not just the one status observed:
+			// matching another literal moves the goalposts to whatever ships
+			// next.
+			name: "an unseen allowed_ status is not a hit either",
+			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_overage"}}`,
+			want: false,
+		},
+		{
 			name: "a non-allowed status is a hit",
 			line: `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}`,
 			want: true,

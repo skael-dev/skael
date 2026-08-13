@@ -477,6 +477,8 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 			return nil, raw, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
 		}
 
+		r.warnOnQuota(result.Meta)
+
 		if result.Meta.RateLimited {
 			if attempt+1 < r.o.MaxRateLimitRetries {
 				d := backoff(attempt)
@@ -491,6 +493,31 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 		}
 		return result, raw, "", nil
 	}
+}
+
+// quotaWarnThreshold is the utilization above which a run says so. The agent
+// itself starts reporting at 0.75, which is early enough to be noise across a
+// whole tier; by 0.9 the window is close enough that the operator wants to
+// know before the sessions that fail.
+const quotaWarnThreshold = 0.9
+
+// warnOnQuota reports an approaching subscription window once per run. A
+// subscription announces its utilization long before it refuses anything, and
+// without this the first sign of an exhausted window is a tier of sessions
+// that retried themselves to death — which reads like a broken worker rather
+// than a spent quota.
+func (r *Runner) warnOnQuota(m agent.Meta) {
+	if m.RateLimitUtilization < quotaWarnThreshold {
+		return
+	}
+	r.quotaWarned.Do(func() {
+		window := m.RateLimitWindow
+		if window == "" {
+			window = "current"
+		}
+		r.o.Logger("runner: the agent's %s quota is %.0f%% used; sessions will start failing when it is spent",
+			window, m.RateLimitUtilization*100)
+	})
 }
 
 // backoff is long enough for a per-minute rate-limit window to reset and

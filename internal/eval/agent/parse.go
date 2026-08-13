@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -38,18 +39,34 @@ type streamLine struct {
 }
 
 // rateLimitInfo is the payload of a rate_limit_event line. A session emits
-// one of these routinely as telemetry — "status":"allowed" means the account
-// is nowhere near its limit — so only a non-"allowed" status is an actual
-// throttle. Treating every rate_limit_event as a hit (as an earlier version
-// of this parser did) makes a normal session indistinguishable from one that
-// is actually being rate limited, and the runner backs off and eventually
-// fails it after exhausting its retries for a limit that was never hit. See
-// tests/whetstone/e2e_docker_test.go's stubClaudeBaseTag for the same defect
-// caught against a real recorded transcript, and TestParse_RateLimitEventOnlyFlagsAnActualLimit
-// in parse_test.go for the regression test.
+// one of these routinely as telemetry, so only a status outside the allowed
+// family is an actual throttle. Treating every rate_limit_event as a hit (as
+// an earlier version of this parser did) makes a normal session
+// indistinguishable from one that is actually being rate limited, and the
+// runner backs off and eventually fails it after exhausting its retries for a
+// limit that was never hit. See tests/whetstone/e2e_docker_test.go's
+// stubClaudeBaseTag for the same defect caught against a real recorded
+// transcript, and TestParse_RateLimitEventOnlyFlagsAnActualLimit in
+// parse_test.go for the regression test.
+//
+// The family is matched by prefix, not by a list of literals. The first fix
+// here accepted only "allowed" and was defeated by "allowed_warning", which
+// an account emits on every session once it passes 75% of its window — a
+// whole tier then retried itself to death on sessions that had succeeded.
+// Anthropic names each of these statuses "allowed…" precisely because the
+// call was allowed; a throttle is named otherwise.
 type rateLimitInfo struct {
 	Status string `json:"status"`
+	// Utilization is the fraction of the window consumed, present on the
+	// warning statuses. Carried so an approaching limit is visible before it
+	// starts failing sessions rather than only afterwards.
+	Utilization float64 `json:"utilization"`
+	// RateLimitType names the window, e.g. "seven_day".
+	RateLimitType string `json:"rateLimitType"`
 }
+
+// allowedStatusPrefix marks every status in which the call was served.
+const allowedStatusPrefix = "allowed"
 
 type apiMessage struct {
 	Role    string  `json:"role"`
@@ -172,8 +189,13 @@ func (a *ClaudeCode) Parse(r RawStream) (*Result, error) {
 			add(Event{Type: TypeOpaque, Name: "system/" + sl.Subtype})
 
 		case "rate_limit_event":
-			if sl.RateLimitInfo == nil || (sl.RateLimitInfo.Status != "" && sl.RateLimitInfo.Status != "allowed") {
+			info := sl.RateLimitInfo
+			if info == nil || (info.Status != "" && !strings.HasPrefix(info.Status, allowedStatusPrefix)) {
 				res.Meta.RateLimited = true
+			}
+			if info != nil && info.Utilization > res.Meta.RateLimitUtilization {
+				res.Meta.RateLimitUtilization = info.Utilization
+				res.Meta.RateLimitWindow = info.RateLimitType
 			}
 			add(Event{Type: TypeOpaque, Name: "rate_limit_event"})
 

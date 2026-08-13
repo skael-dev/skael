@@ -59,7 +59,7 @@ services:
       # Must match the volumes below on BOTH sides of the colon.
       WORKER_RUN_ROOT: ${SKAEL_RUN_ROOT:-/var/lib/skael/run}
       WORKER_WORK_ROOT: ${SKAEL_WORK_ROOT:-/var/lib/skael/work}
-      WORKER_CONCURRENCY: 6
+      # WORKER_CONCURRENCY: 2
 
       # ----------------------------------------------------------------------
       # A. Anthropic API key (active). Judge and panel both bill per call
