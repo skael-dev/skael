@@ -45,11 +45,17 @@ var (
 	binPath string
 )
 
-// binary builds whetstone once per test binary, exactly as the release does.
+// binary builds whetstone once per test binary. os.MkdirTemp rather than
+// t.TempDir: the Once captures whichever t calls it first, and t.TempDir
+// is cleaned when that test finishes — deleting the binary while later
+// tests still need it.
 func binary(t *testing.T) string {
 	t.Helper()
 	binOnce.Do(func() {
-		dir := t.TempDir()
+		dir, err := os.MkdirTemp("", "whetstone-e2e-bin-*")
+		if err != nil {
+			t.Fatalf("creating binary dir: %v", err)
+		}
 		binPath = filepath.Join(dir, "whetstone")
 		cmd := exec.Command("go", "build", "-o", binPath, "./../../cmd/whetstone")
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
