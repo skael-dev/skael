@@ -43,6 +43,44 @@ func TestRunEvalWith_ProducesAReportCarryingItsProvenance(t *testing.T) {
 	}
 }
 
+// muteGateway names no model in advance, the way a subscription CLI does. It
+// still names one in every answer, which is the only place that gateway's
+// model ever appears.
+type muteGateway struct{ scriptedGateway }
+
+func (muteGateway) ModelFor(llm.ModelClass) string { return "" }
+
+// TestRunEvalWith_NamesTheJudgeAGatewayDeclared pins the path every existing
+// score takes. A gateway that declares a model stays the authority, so no
+// stored score is reclassified by the fallback below.
+func TestRunEvalWith_NamesTheJudgeAGatewayDeclared(t *testing.T) {
+	d, req := evalHarness(t)
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+	if r.GraderModel != "scripted-strong" {
+		t.Errorf("GraderModel = %q, want the model the gateway declared", r.GraderModel)
+	}
+}
+
+// TestRunEvalWith_NamesTheJudgeFromTheAnswersWhenNoneIsDeclared is the point of
+// this change. A subscription CLI declares nothing, and the run recorded no
+// judge at all. Every such score then grouped with every other unknown one on a
+// trend, so a real judge change read as no change.
+func TestRunEvalWith_NamesTheJudgeFromTheAnswersWhenNoneIsDeclared(t *testing.T) {
+	d, req := evalHarness(t)
+	d.Gateway = muteGateway{}
+
+	r, err := whetstone.RunEvalWith(context.Background(), d, req)
+	if err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+	if r.GraderModel != "scripted-strong" {
+		t.Errorf("GraderModel = %q, want the model the answers reported", r.GraderModel)
+	}
+}
+
 // The score is the share of expectations passed. The scripted grader passes
 // every one, so a clean run must score 100.
 func TestRunEvalWith_ScoresThePassRate(t *testing.T) {

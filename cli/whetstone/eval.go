@@ -390,7 +390,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		TokensMedian: tokensSkill, TokensMedianBaseline: tokensBaseline,
 		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
 		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
-		GraderModel: d.Gateway.ModelFor(llm.ClassStrong),
+		GraderModel: graderModel(d.Gateway, graded),
 		StartedAt:   startedAt, FinishedAt: now(),
 	})
 	if err != nil {
@@ -511,6 +511,45 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 		return nil, errors.Join(errs...)
 	}
 	return out, nil
+}
+
+// graderModel names the judge for a report.
+//
+// A gateway that knows its model in advance is the authority, because it names
+// what every call asked for. A subscription CLI knows nothing in advance, so
+// its answers are the only record of what judged.
+//
+// The declared name wins deliberately. An API gateway resolves an alias such
+// as "sonnet" to a dated id, and a switch to that id makes every new score
+// non-comparable with every existing one. That change stands on its own merits
+// and is not this one.
+func graderModel(g llm.Gateway, graded map[store.RunKey]score.Grade) string {
+	if declared := g.ModelFor(llm.ClassStrong); declared != "" {
+		return declared
+	}
+	return observedGraderModel(graded)
+}
+
+// observedGraderModel names the model or models that graded a run, as the
+// gateway reported them in its answers.
+//
+// Two distinct models join rather than one winning. One score graded by two
+// models is one score with two judges, and Report.Comparable then refuses to
+// chart it beside a single-judge score. That refusal is the honest outcome, and
+// a silent first-wins hides it.
+func observedGraderModel(graded map[store.RunKey]score.Grade) string {
+	seen := map[string]bool{}
+	for _, g := range graded {
+		if g.Model != "" {
+			seen[g.Model] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for m := range seen {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // memberScore is one member's 0–100 score under one condition, and the
