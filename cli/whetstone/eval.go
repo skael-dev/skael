@@ -64,6 +64,11 @@ type EvalDeps struct {
 	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
 	// can name the endpoint that rejected its models.
 	PanelBaseURL string
+	// PanelExcludeEnv names credential variables the panel's sandboxes must
+	// not be given — see provider.Config.PanelExcludeEnv and
+	// runner.Options.PanelExcludeEnv. Resolved values rather than env
+	// lookups, for the same reason PanelModels is.
+	PanelExcludeEnv []string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -218,7 +223,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Store: d.Store, Driver: d.Driver, Adapters: d.Adapters,
 		Concurrency: req.Concurrency, Untrusted: req.Untrusted,
 		Sleep: sleepFn, Logger: ui.Info,
-		WorkspaceRoot: d.WorkspaceRoot,
+		WorkspaceRoot:   d.WorkspaceRoot,
+		PanelExcludeEnv: d.PanelExcludeEnv,
 	})
 	if err != nil {
 		return nil, err
@@ -827,6 +833,7 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
 		PanelModels: p.PanelModels(), PanelBaseURL: p.BaseURL,
+		PanelExcludeEnv: p.PanelExcludeEnv(),
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

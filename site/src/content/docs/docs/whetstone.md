@@ -189,7 +189,7 @@ whetstone picks a gateway in this order:
 
 `ANTHROPIC_API_KEY` sits *below* the CLI on purpose. It's present on plenty of machines that also have the CLI installed.
 
-`LLM_MODEL` overrides the model names — comma-separated, most capable first. It is the same variable the worker reads, resolved by the same code, so one environment configures both. You need it if you point `ANTHROPIC_BASE_URL` at a non-Anthropic gateway: OpenRouter namespaces its identifiers (`anthropic/claude-opus-4`), so asking it for Anthropic's bare names 404s and authoring fails with a confusing "no endpoints found". The full gateway table lives in [Quality scoring](/docs/quality#choosing-a-model-and-a-gateway).
+`LLM_MODEL` overrides the model names — comma-separated, most capable first. It is the same variable the worker reads, resolved by the same code, so one environment configures both. You need it if you point `ANTHROPIC_BASE_URL` at a non-Anthropic gateway: OpenRouter namespaces its identifiers (`anthropic/claude-sonnet-5`), so asking it for Anthropic's bare names 404s and authoring fails with a confusing "no endpoints found". The full gateway table lives in [Quality scoring](/docs/quality#choosing-a-model-and-a-gateway).
 
 `whetstone doctor` tells you which of these it found and why:
 

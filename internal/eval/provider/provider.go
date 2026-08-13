@@ -3,16 +3,25 @@
 // `skael-worker` (scoring, on a server) resolve their gateway here, so a
 // misconfiguration is diagnosed with the same words wherever it is met.
 //
-// Three provider modes, and no variable outside this file selects one:
+// Four provider modes, and no variable outside this file selects one:
 //
 //  1. Anthropic direct       ANTHROPIC_API_KEY
 //  2. Compatible gateway     ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN
 //  3. Subscription CLI       nothing set, and an agent CLI on PATH
+//  4. Split                  mode 2, plus CLAUDE_CODE_OAUTH_TOKEN
 //
 // The judge and the eval panel share ANTHROPIC_BASE_URL. They did not always:
 // the judge had LLM_BASE_URL of its own, which meant one gateway could be
 // configured while the other silently kept dialling Anthropic. Two names for
 // one endpoint bought nothing that two values of one name does not.
+//
+// Mode 4 is the one case where they separate, and it is selected by a
+// combination of names that already existed rather than by a new one. Setting
+// CLAUDE_CODE_OAUTH_TOKEN alongside a gateway states a subscription for the
+// panel; the judge keeps the gateway, because a published score must come
+// from a metered, reproducible backend. The mode is not free: the panel is
+// recorded in model_panel, so turning it on splits a skill's score trend at
+// the changeover. See PanelModels and PanelExcludeEnv.
 package provider
 
 import (
@@ -44,6 +53,11 @@ const (
 	// half-set — a panel with one working member and one that 404s is not an
 	// error but a complete run that scores and can never release anything.
 	ModelEnv = "LLM_MODEL"
+	// OAuthTokenEnv is Claude Code's own subscription credential. It is read
+	// here only to select mode 4 — this package never authenticates a judge
+	// call with it, because a subscription is neither metered nor pinned to a
+	// model, and a released version's score must be both.
+	OAuthTokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
 )
 
 // Kind names the backend serving model calls.
@@ -76,6 +90,12 @@ type Config struct {
 	AuthStyle api.AuthStyle
 	// Models is ModelEnv, split and trimmed. Empty means the shipped defaults.
 	Models []string
+	// PanelSubscription reports mode 4: the judge dials BaseURL, and the eval
+	// panel authenticates with OAuthTokenEnv instead. It changes what the
+	// panel asks for (PanelModels) and what the sandbox is allowed to see
+	// (PanelExcludeEnv); both are required, because either one alone leaves
+	// the panel on the gateway.
+	PanelSubscription bool
 }
 
 // Getenv is os.Getenv, injectable so resolution is testable without touching
@@ -124,6 +144,10 @@ func Resolve(env Getenv, detect Detector) Config {
 	if baseURL != "" {
 		direct.Detail = fmt.Sprintf("compatible gateway %s, authenticated with %s",
 			baseURL, credentialName(token))
+		if env(OAuthTokenEnv) != "" {
+			direct.PanelSubscription = true
+			direct.Detail += fmt.Sprintf("; the eval panel runs on %s instead", OAuthTokenEnv)
+		}
 	} else if token != "" {
 		direct.Detail = fmt.Sprintf("Anthropic's API, authenticated with %s", AuthTokenEnv)
 	}
@@ -193,6 +217,16 @@ func (c Config) Warnings() []string {
 	if c.BaseURL == "" || len(c.Models) > 0 {
 		return nil
 	}
+	if c.PanelSubscription {
+		// The panel is not on the gateway here, so only the judge is at risk
+		// and there is no health probe to catch it. A judge that 404s fails
+		// the run outright, which at least says so.
+		return []string{fmt.Sprintf(
+			"%s points the judge at %s, but %s is not set, so the judge asks that gateway for "+
+				"Anthropic's own model name. A gateway that namespaces its model identifiers rejects "+
+				"that and every run fails. Set %s to an identifier it serves.",
+			BaseURLEnv, c.BaseURL, ModelEnv, ModelEnv)}
+	}
 	// A passthrough proxy in front of Anthropic resolves "sonnet" happily,
 	// which is why this is not a refusal. The panel health probe is the
 	// authority and names the models it was refused.
@@ -211,11 +245,36 @@ func (c Config) Warnings() []string {
 // pick a cheaper judge against Anthropic's own API must keep the panel they
 // had, since a changed panel is recorded in model_panel and splits the score
 // trend. A custom gateway is the case where the shipped aliases cannot work.
+// A panel on the subscription is the other empty case: a subscription serves
+// Anthropic's own aliases, so handing it the gateway's namespaced ids fails
+// every member's health probe — a complete run that scores nothing and can
+// never release the version it was meant to clear.
 func (c Config) PanelModels() []string {
-	if c.BaseURL == "" {
+	if c.BaseURL == "" || c.PanelSubscription {
 		return nil
 	}
 	return c.Models
+}
+
+// PanelExcludeEnv names the credential variables a sandbox must NOT be given,
+// even though the agent adapter declares them. It is empty in every mode but
+// the split.
+//
+// This is the half that actually moves the panel. The claude-code adapter
+// forwards each name it declares that is set, so a worker whose own
+// environment names a gateway hands that gateway to every panel member.
+// PanelModels alone does not help: the member would ask a subscription for
+// the alias it serves and still be pointed at the gateway to ask.
+//
+// The API key is withheld with the gateway's own two names. It is not the
+// judge's credential in this mode, and forwarding it leaves the sandbox
+// holding two competing credentials, which is the ambiguity this mode exists
+// to remove.
+func (c Config) PanelExcludeEnv() []string {
+	if !c.PanelSubscription {
+		return nil
+	}
+	return []string{BaseURLEnv, AuthTokenEnv, APIKeyEnv}
 }
 
 // Options are the per-caller gateway settings that are not provider choices:

@@ -21,3 +21,4 @@ web/*.tsbuildinfo
 # is the one way to check a formula without cutting a release, and it drops
 # every binary for every platform in here.
 dist/
+docker-compose.override*.yml

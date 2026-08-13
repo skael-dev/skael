@@ -49,7 +49,7 @@ Optional, with defaults:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token`. Beside `ANTHROPIC_BASE_URL` it also splits the judge from the panel — see [Keeping the panel on a subscription](#keeping-the-panel-on-a-subscription) |
 | `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
@@ -76,10 +76,25 @@ A complete OpenRouter setup, covering both the judge and the panel:
 ```bash
 ANTHROPIC_BASE_URL=https://openrouter.ai/api
 ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
-LLM_MODEL=anthropic/claude-opus-4,anthropic/claude-3.5-haiku
+LLM_MODEL=anthropic/claude-sonnet-5,anthropic/claude-haiku-4.5
 ```
 
-`LLM_MODEL` is not optional there. OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`), and the panel would otherwise keep asking your gateway for Claude Code's bare alias `sonnet`. A gateway that namespaces its identifiers answers those with a 404; every panel member then fails its health probe and the run refuses with the model names in the error.
+`LLM_MODEL` is not optional there. OpenRouter model identifiers are namespaced (`anthropic/claude-sonnet-5`), unlike Anthropic's bare names (`claude-opus-5`), and the panel would otherwise keep asking your gateway for Claude Code's bare alias `sonnet`. A gateway that namespaces its identifiers answers those with a 404; every panel member then fails its health probe and the run refuses with the model names in the error. Check the ids against your gateway's own catalogue before you set them: a retired id fails the same way a mistyped one does.
+
+### Keeping the panel on a subscription
+
+Set `CLAUDE_CODE_OAUTH_TOKEN` alongside `ANTHROPIC_BASE_URL` and the two separate. The judge keeps the gateway, because a published score must come from a metered, reproducible backend. The panel authenticates with the subscription token instead, and the worker withholds the gateway variables from the sandbox so it cannot follow the judge onto the gateway.
+
+```bash
+ANTHROPIC_BASE_URL=https://openrouter.ai/api
+ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
+LLM_MODEL=anthropic/claude-sonnet-5
+CLAUDE_CODE_OAUTH_TOKEN=<output of: claude setup-token>
+```
+
+`LLM_MODEL` then names the judge alone. The panel asks for the shipped alias, which is what a subscription serves.
+
+This is a local and small-team setup rather than a shared-instance one. The panel it produces is recorded in `model_panel` like any other, so turning it on splits a skill's score trend at the changeover, and a subscription-backed panel is neither metered nor pinned to a model version. `whetstone doctor` and the worker's startup log both name the split when it is active.
 
 The list is ordered. The first entry judges every run and is the panel's primary member. Later entries are the panel's floor members, which only the `deep` tier runs — one list rather than a slot per tier, because a half-configured pair produced a panel with one working member and one that 404s, which is not an error but a *complete* run: it scores, reports `panel_complete: false`, and so can never release a version held for review, after paying for a full tier to get there.
 

@@ -165,3 +165,33 @@ func TestEvalRequestFrom_DefaultsConcurrencyToOne(t *testing.T) {
 		t.Fatalf("Concurrency = %d, want 1", req.Concurrency)
 	}
 }
+
+// TestEvalDepsFrom_CarriesThePanelSplit guards the realRunner -> EvalDeps hop,
+// the sibling of the RunInput -> EvalRequest hop above and the same failure
+// mode: a field dropped here is not an error but a scored run whose panel
+// nobody chose. PanelExcludeEnv is the one that matters most — lose it and the
+// sandbox is handed the judge's gateway, so a panel meant to run on a
+// subscription silently runs on the gateway instead.
+func TestEvalDepsFrom_CarriesThePanelSplit(t *testing.T) {
+	r := &realRunner{
+		runRoot:         "/var/lib/skael/run",
+		panelModels:     []string{"anthropic/claude-sonnet-5"},
+		panelBase:       "https://openrouter.ai/api",
+		panelExcludeEnv: []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"},
+	}
+
+	deps := evalDepsFrom(r, nil)
+
+	if !reflect.DeepEqual(deps.PanelExcludeEnv, r.panelExcludeEnv) {
+		t.Fatalf("PanelExcludeEnv = %v, want %v", deps.PanelExcludeEnv, r.panelExcludeEnv)
+	}
+	if !reflect.DeepEqual(deps.PanelModels, r.panelModels) {
+		t.Fatalf("PanelModels = %v, want %v", deps.PanelModels, r.panelModels)
+	}
+	if deps.PanelBaseURL != r.panelBase {
+		t.Fatalf("PanelBaseURL = %q, want %q", deps.PanelBaseURL, r.panelBase)
+	}
+	if deps.WorkspaceRoot != r.runRoot {
+		t.Fatalf("WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, r.runRoot)
+	}
+}

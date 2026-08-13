@@ -24,6 +24,16 @@ type Options struct {
 	Untrusted      bool
 	AllowDomains   []string
 
+	// PanelExcludeEnv names credential variables that must not reach a
+	// sandbox, even though the agent adapter declares them. It comes from the
+	// resolved provider, which is the only thing that knows whether the
+	// worker's own gateway is meant for the panel as well as the judge.
+	//
+	// This package cannot ask the provider itself: internal/eval/provider
+	// imports this one for DefaultPanel, so the dependency only runs one way.
+	// The caller resolves the names and passes them down as data.
+	PanelExcludeEnv []string
+
 	// WorkspaceRoot is the directory session workspaces are created under.
 	// Empty means os.TempDir(), which is correct for every run whose sandbox
 	// containers are started by the same machine's Docker daemon.

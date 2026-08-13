@@ -261,6 +261,7 @@ func run(cfg workerConfig) error {
 	r := &realRunner{
 		driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot,
 		panelModels: cfg.Provider.PanelModels(), panelBase: cfg.Provider.BaseURL,
+		panelExcludeEnv: cfg.Provider.PanelExcludeEnv(),
 	}
 
 	der, err := derive.New(deriverOptions(gw))
@@ -323,12 +324,33 @@ func pollLoop(ctx context.Context, w *worker.Worker, pollInterval time.Duration)
 // depends on the process's current working directory and this worker has no
 // reason to have one anywhere near the workspace it was just handed.
 type realRunner struct {
-	driver      sandbox.Driver
-	gateway     llm.Gateway
-	concurrency int
-	runRoot     string
-	panelModels []string
-	panelBase   string
+	driver          sandbox.Driver
+	gateway         llm.Gateway
+	concurrency     int
+	runRoot         string
+	panelModels     []string
+	panelBase       string
+	panelExcludeEnv []string
+}
+
+// evalDepsFrom maps the resolved worker onto the deps RunEvalWith consumes.
+// It is a separate function for the same reason evalRequestFrom is: this hop
+// carries panel configuration that nothing downstream can reconstruct, and a
+// field dropped here is not an error but a run against a panel nobody chose.
+func evalDepsFrom(r *realRunner, st *store.Store) whetstone.EvalDeps {
+	return whetstone.EvalDeps{
+		Store:           st,
+		Driver:          r.driver,
+		Gateway:         r.gateway,
+		Adapters:        agent.Get,
+		Now:             time.Now,
+		Sleep:           time.Sleep,
+		EngineVersion:   version,
+		WorkspaceRoot:   r.runRoot,
+		PanelModels:     r.panelModels,
+		PanelBaseURL:    r.panelBase,
+		PanelExcludeEnv: r.panelExcludeEnv,
+	}
 }
 
 func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
@@ -346,18 +368,7 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Str("tier", in.Tier).
 		Msg("skael-worker: claimed job")
 
-	deps := whetstone.EvalDeps{
-		Store:         st,
-		Driver:        r.driver,
-		Gateway:       r.gateway,
-		Adapters:      agent.Get,
-		Now:           time.Now,
-		Sleep:         time.Sleep,
-		EngineVersion: version,
-		WorkspaceRoot: r.runRoot,
-		PanelModels:   r.panelModels,
-		PanelBaseURL:  r.panelBase,
-	}
+	deps := evalDepsFrom(r, st)
 
 	req := evalRequestFrom(in, r.concurrency)
 

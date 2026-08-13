@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -138,7 +139,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -285,7 +286,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
 	if err != nil {
 		return finish(err)
 	}
@@ -518,8 +519,12 @@ func backoff(attempt int) time.Duration {
 //
 // A run must depend on what it was configured with, not on what happens to be
 // lying around in the operator's home directory.
-func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
-	env := authEnv(a.Caps().AuthEnv)
+// exclude names variables the caller has withheld from this sandbox. It is
+// how a worker points the judge at a gateway while the panel authenticates
+// with a subscription: the adapter still declares the gateway's variables,
+// and this run simply does not forward them. See Options.PanelExcludeEnv.
+func resolveAuth(a agent.Adapter, exclude []string, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
+	env := authEnv(a.Caps().AuthEnv, exclude)
 	if len(env) > 0 {
 		return nil, env, nil
 	}
@@ -636,24 +641,20 @@ func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, erro
 // "NAME=" — a value the CLI would treat as present but wrong, instead of
 // absent.
 //
-// These values are secrets: this function must never log them, only the
-// names it forwards (a name reveals nothing; the value does).
-// authEnv forwards the worker's own environment into the sandbox for each
-// name the adapter declares in Caps().AuthEnv that is actually set and
-// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
-// works on a headless host with no interactive login, unlike authMounts
-// above. An unset or empty variable is skipped rather than passed through as
-// "NAME=" — a value the CLI would treat as present but wrong, instead of
-// absent.
+// Names in exclude are skipped even when set, which is what separates a
+// subscription-backed panel from a gateway-backed judge.
 //
 // These values are secrets: this function must never log them, only the
 // names it forwards (a name reveals nothing; the value does).
-func authEnv(names []string) []string {
+func authEnv(names, exclude []string) []string {
 	if len(names) == 0 {
 		return nil
 	}
 	env := make([]string, 0, len(names))
 	for _, name := range names {
+		if slices.Contains(exclude, name) {
+			continue
+		}
 		if v := os.Getenv(name); v != "" {
 			env = append(env, name+"="+v)
 		}

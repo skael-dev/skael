@@ -117,14 +117,14 @@ Optional, with defaults:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token`. Set beside `ANTHROPIC_BASE_URL` it splits the two: the judge keeps the gateway, the panel runs on the subscription |
 | `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
 | `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
 | `ANTHROPIC_AUTH_TOKEN` | — | Credential sent as `Authorization: Bearer` — what OpenRouter issues. An alternative to `ANTHROPIC_API_KEY`, and it wins when both are set |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | An Anthropic-compatible gateway for the judge *and* the panel. Posts to `{base}/v1/messages` |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | An Anthropic-compatible gateway for the judge *and* the panel, unless `CLAUDE_CODE_OAUTH_TOKEN` is also set. Posts to `{base}/v1/messages` |
 | `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members at the deep tier. Required behind a gateway that namespaces its identifiers |
 
 The judge's credential is checked at startup — the worker exits naming the variables to set. The panel agent is not checked at startup: if no credential reaches the sandbox and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today. See [Quality scoring](/docs/quality) for the OpenRouter example and what changing the model means for score comparability.

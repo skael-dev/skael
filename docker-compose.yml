@@ -40,9 +40,10 @@ services:
   # failing, so a wrong root yields a sandbox with no task or no verifier. The
   # worker refuses to start containerized unless both are set.
   #
-  # Pick ONE auth setup below; A is active. The judge always authenticates with
-  # ANTHROPIC_API_KEY whatever gateway it points at, so that is always set —
-  # what changes is the endpoint and how the panel agent is billed.
+  # Pick ONE auth setup below. The judge always authenticates with a key or a
+  # token whatever gateway it points at, because a published score must come
+  # from a metered backend — what changes is the endpoint and how the panel
+  # agent is billed.
   worker:
     build:
       context: .
@@ -58,6 +59,7 @@ services:
       # Must match the volumes below on BOTH sides of the colon.
       WORKER_RUN_ROOT: ${SKAEL_RUN_ROOT:-/var/lib/skael/run}
       WORKER_WORK_ROOT: ${SKAEL_WORK_ROOT:-/var/lib/skael/work}
+      WORKER_CONCURRENCY: 6
 
       # ----------------------------------------------------------------------
       # A. Anthropic API key (active). Judge and panel both bill per call
@@ -78,7 +80,22 @@ services:
       #    precedence, so confirm billing against your usage rather than
       #    assuming.
       # ----------------------------------------------------------------------
-      # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # ----------------------------------------------------------------------
+      # D. OpenRouter for the judge, subscription for the panel. Setup C's
+      #    three variables plus setup B's token, all four set at once.
+      #
+      #    The token beside a base URL selects the split: the judge dials the
+      #    gateway, and the worker withholds the gateway's variables from the
+      #    sandbox so the panel cannot follow it there. LLM_MODEL then names
+      #    the judge alone — the panel asks for the shipped alias, which is
+      #    what a subscription serves.
+      #
+      #    The panel is recorded in model_panel, so switching a shared
+      #    instance into or out of this splits every skill's score trend at
+      #    the changeover. It is a local and small-team setup.
+      # ----------------------------------------------------------------------
 
       # ----------------------------------------------------------------------
       # C. OpenRouter for both judge and panel. Uncomment the three below and
@@ -100,9 +117,9 @@ services:
       #    output budget on thinking tokens returns no text block, and the run
       #    fails rather than scoring something empty.
       # ----------------------------------------------------------------------
-      # ANTHROPIC_BASE_URL: https://openrouter.ai/api
-      # ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:-}
-      # LLM_MODEL: anthropic/claude-opus-4,anthropic/claude-3.5-haiku
+      ANTHROPIC_BASE_URL: https://openrouter.ai/api
+      ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
     volumes:
       # Sibling containers, not Docker-in-Docker: this is the host's daemon.
       - /var/run/docker.sock:/var/run/docker.sock
