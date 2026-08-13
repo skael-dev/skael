@@ -11,44 +11,26 @@ import (
 	"github.com/skael-dev/skael/internal/scan"
 )
 
-// QualityEvidence is the subset of quality.Record that the gate decision
-// depends on. It is declared here rather than taking a quality.Record
-// directly because internal/quality imports internal/skill (for its route
-// wiring, and transitively through internal/eval/report), so importing it
-// back would be a cycle. The caller — which already has both — maps one onto
-// the other; see internal/evalqueue.
+// QualityEvidence is the subset of quality.Record the gate depends on.
+// Declared here to avoid a cycle with internal/quality.
 type QualityEvidence struct {
 	Verified                 bool
 	PanelComplete            bool
 	Headline                 float64
 	CriticalForbidViolations int
-	// SuiteDerived reports that this score came from a machine-derived suite:
-	// tasks generated from the skill's own SKILL.md. It is a usable quality
-	// signal and an unusable security gate — see Reconsider.
+	// SuiteDerived: a machine-derived suite grades the skill against its own
+	// claims and cannot clear a scan hold.
 	SuiteDerived bool
 }
 
 // Releaser re-runs the publish decision for a held version once a quality
-// record exists for it. Without this path nothing clears a hold by itself and
-// the gate is permanent.
+// record exists.
 type Releaser struct{ store *Store }
 
 // NewReleaser builds a Releaser over store.
 func NewReleaser(store *Store) *Releaser { return &Releaser{store: store} }
 
-// Reconsider re-decides one version. It returns the decision and whether the
-// version was released. A version that is not held is a no-op: most evals run
-// against versions that published cleanly, and re-deciding them would be a
-// redundant write at best and a regression at worst.
-//
-// e is the executor to write through, so the caller can compose the release
-// with the quality upsert that justifies it in one transaction.
-//
-// It calls gate.Decide directly rather than DecidePublish: DecidePublish
-// exists to encode "no measurement exists yet" for the create-a-version
-// routes, and passes a nil *QualityState. This path has a real measurement,
-// which is the whole point of it. The rules themselves stay in gate.Decide,
-// so there is still only one definition of them.
+// Reconsider re-decides one held version. A non-held version is a no-op.
 func (r *Releaser) Reconsider(
 	ctx context.Context,
 	e Executor,
@@ -68,10 +50,8 @@ func (r *Releaser) Reconsider(
 		return gate.Decision{}, false, nil
 	}
 
-	// A derived suite grades the skill against its own claims, so a high score
-	// partly means "this skill is self-consistent". Clearing a scanner finding
-	// on that evidence would let a skill write its own exam. The score is
-	// still recorded and still shown; it just does not open the gate.
+	// A derived suite grades the skill against its own claims — clearing a
+	// scan hold on that evidence would let a skill write its own exam.
 	if rec.SuiteDerived {
 		log.Info().
 			Str("skill", skillName).
@@ -83,8 +63,6 @@ func (r *Releaser) Reconsider(
 
 	var rep scan.Report
 	if err := json.Unmarshal(ver.ScanResult, &rep); err != nil {
-		// The stored scan is the only record of why this version was held.
-		// Failing to read it must not silently release the version.
 		return gate.Decision{}, false, fmt.Errorf(
 			"skill.Releaser.Reconsider: unmarshal stored scan for %s v%d: %w", skillName, version, err)
 	}
@@ -95,9 +73,7 @@ func (r *Releaser) Reconsider(
 		Headline:                 rec.Headline,
 		CriticalForbidViolations: rec.CriticalForbidViolations,
 	}
-	// gate.OwnerState{} deliberately: this path re-decides the scan question
-	// on new evidence. Ownership is not re-litigated by an evaluation and is
-	// carried on the version's hold_reasons, which ApproveReason consults.
+	// Empty OwnerState: an evaluation re-decides scan, not ownership.
 	d := gate.Decide(rep, q, gate.OwnerState{}, gate.Policy{Floor: floor})
 
 	if d.Outcome != gate.Allow {
@@ -114,10 +90,8 @@ func (r *Releaser) Reconsider(
 		return d, false, nil
 	}
 
-	// The evaluation is evidence about the skill's behaviour. It answers the
-	// scan question and nothing else: a skill can score beautifully and still
-	// be a change its owner does not want. Clearing the ownership reason here
-	// would make the whole review path decorative.
+	// Clears scan only — clearing ownership here would make the review path
+	// decorative.
 	note := fmt.Sprintf("verified score %.1f cleared the floor of %.1f", rec.Headline, floor)
 	released, err := r.store.ApproveReason(ctx, e, skillName, version,
 		gate.ReasonScan, nil, "system:eval", note)

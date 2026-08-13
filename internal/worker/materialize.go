@@ -22,47 +22,25 @@ type MaterializeInput struct {
 	Bundle       []byte
 	SuiteArchive []byte
 	Checks       []evalsuite.Check
-	// Spec is the authored spec.SkillSpec this suite was checked against
-	// (see evalsuite.Registry.Put's specJSON). Nil when the suite predates
-	// this field, or the pusher genuinely sent none — Materialize falls back
-	// to a placeholder reconstructed from the bundle's SKILL.md frontmatter
-	// in that case, and logs loudly when it does, because that fallback
-	// silently drops the skill's real deps and purpose.
-	Spec *spec.SkillSpec
-	// WantSuiteRef, if set, is checked against the ref of the materialized
-	// suite tree before anything else runs. A mismatch here means the job's
-	// suite_ref and the archive FetchSuite actually returned disagree —
-	// failing fast catches that before an evaluation runs against it for
-	// however long, only to be rejected when the score is posted.
+	// Spec is nil when the suite predates this field; Materialize falls back
+	// to a placeholder from SKILL.md frontmatter.
+	Spec         *spec.SkillSpec
 	WantSuiteRef string
 }
 
 // Materialize builds a whetstone workspace at dir from a downloaded bundle
-// and suite, recording the registry's checks so the eval's oracle gate is
-// satisfied by the author's recorded run rather than bypassed.
+// and suite.
 func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	st, err := store.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("worker: materialize open store: %w", err)
 	}
-	// Every error return below leaves st open unless closed here: dir gets
-	// removed by the caller regardless, but that only deletes the directory
-	// entries — this process keeps its open fds on the deleted db/WAL/SHM
-	// files until the handle itself is closed. A worker retrying the same
-	// kind of failure (a bundle without SKILL.md, a corrupt archive) up to
-	// max_attempts leaks three fds per attempt without this.
 	defer func() {
 		if err != nil {
 			_ = st.Close()
 		}
 	}()
 
-	// Into the skill dir itself: that is what RunEvalWith hands the runner as
-	// BundleDir and what the adapter installs into the sandbox. Unpacking to a
-	// temp dir left it holding only spec.yaml and the eval sidecar, so the
-	// panel ran with no SKILL.md and scored a skill that was never installed.
-	// lint.Excluded keeps both out of a packed archive, so nothing here can
-	// clobber what Materialize writes around it.
 	skillDir, err := st.SkillDir(in.Skill)
 	if err != nil {
 		return nil, fmt.Errorf("worker: materialize skill dir: %w", err)
@@ -85,9 +63,6 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 			return nil, err
 		}
 	} else {
-		// The suite's spec travelled from a different push than this job's
-		// skill name necessarily agrees with; keep the workspace keyed
-		// consistently on the name the job actually names.
 		sp.Name = in.Skill
 		if errs := sp.Validate(); len(errs) > 0 {
 			return nil, fmt.Errorf("worker: materialize: spec recorded for suite is invalid: %v", errs)
@@ -123,16 +98,6 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 
 	rows := make([]store.SuiteCheckRow, len(in.Checks))
 	for i, c := range in.Checks {
-		// SuiteCheckRow has no field for evalsuite.Check.OK: RunEvalWith's
-		// oracle gate (cli/whetstone/eval.go) only ever reads Void — it uses
-		// a check's presence to know the task was gated at all, and Void to
-		// know whether to exclude it. OK is not dropped by mistake; the row
-		// simply has nothing to preserve it into, and nothing downstream
-		// consults it. Void and Reason are copied verbatim, not derived from
-		// OK — a check can be OK:false and Void:false (the oracle failed but
-		// the task itself is not stale), and treating that as void here would
-		// silently exclude a task that recording a check for said should
-		// still be scored.
 		rows[i] = store.SuiteCheckRow{TaskID: c.TaskID, Void: c.Void, Reason: c.Reason}
 	}
 	if err := st.SaveSuiteCheck(in.Skill, ref, rows); err != nil {
@@ -142,10 +107,7 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	return st, nil
 }
 
-// specFromBundle reconstructs just enough of a spec.SkillSpec from the
-// bundle's SKILL.md frontmatter to pass spec.Validate. It exists only as a
-// fallback for a suite pushed with no spec recorded — see MaterializeInput's
-// doc comment.
+// specFromBundle reconstructs a minimal spec from the bundle's frontmatter.
 func specFromBundle(bundleDir, skillName string) (*spec.SkillSpec, error) {
 	raw, err := os.ReadFile(filepath.Join(bundleDir, "SKILL.md"))
 	if err != nil {
@@ -178,14 +140,9 @@ func specFromBundle(bundleDir, skillName string) (*spec.SkillSpec, error) {
 	return sp, nil
 }
 
-// unmarshalSuiteSpec decodes the JSON a suite record carries in its Spec
-// field. Returns (nil, nil) when specJSON is empty or the JSON literal null
-// — a jsonb column holding SQL NULL round-trips through encoding/json as the
-// 4-byte literal "null", not as an empty RawMessage, so both must be treated
-// as "no spec recorded". Without this, the literal null unmarshals into a
-// non-nil but empty *SkillSpec, Materialize takes the "spec provided" branch,
-// Validate() fails, and the job burns every retry instead of falling back to
-// specFromBundle.
+// unmarshalSuiteSpec decodes the JSON a suite record carries. Returns
+// (nil, nil) when empty or the JSON literal null, both of which a jsonb
+// column can produce.
 func unmarshalSuiteSpec(specJSON json.RawMessage) (*spec.SkillSpec, error) {
 	if len(specJSON) == 0 || string(bytes.TrimSpace(specJSON)) == "null" {
 		return nil, nil

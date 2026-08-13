@@ -1,12 +1,5 @@
-// Package derive builds an evaluation suite for a skill that has none. It is
-// the path an imported or hand-published skill takes: whetstone's authoring
-// flow produces a spec.SkillSpec through a human interview, and a published
-// bundle carries no spec.yaml, so everything downstream of the IR has to be
-// reconstructed before a skill can be measured at all.
-//
-// It lives here rather than in cmd/skael-worker because it needs tests, and
-// it is separate from internal/worker so that package keeps needing neither
-// an LLM nor Docker.
+// Package derive builds an eval suite for a skill that has none, by
+// recovering a spec from the bundle and drafting evals from it.
 package derive
 
 import (
@@ -26,13 +19,10 @@ import (
 	skillpkg "github.com/skael-dev/skael/internal/skill"
 )
 
-// evalCount is how many evals a derived set asks for. More than the full
-// tier's budget of 10: there is no author to fix an eval that validation
-// voids, so the surplus is what lets runner.BuildPlan still plan afterwards.
+// evalCount overbudgets so voided evals still leave enough for BuildPlan.
 const evalCount = 14
 
-// Options are the deriver's injected dependencies. There is no sandbox here
-// any more: the oracle gate was the only part that needed one.
+// Options are the deriver's injected dependencies.
 type Options struct {
 	Gateway llm.Gateway
 	Logger  func(format string, args ...any)
@@ -69,12 +59,8 @@ func New(o Options) (*Deriver, error) {
 	return &Deriver{o: o}, nil
 }
 
-// Derive recovers a spec from the bundle, drafts an eval set from it, and
-// validates that set statically.
-//
-// There is no oracle gate any more: with no verifier script to prove correct,
-// what remains to check is that each eval can be run and scored, which needs
-// neither Docker nor a staged workspace.
+// Derive recovers a spec from the bundle, drafts an eval set, and validates
+// it statically.
 func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	bundleDir, err := os.MkdirTemp("", "derive-bundle-*")
 	if err != nil {
@@ -119,9 +105,7 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 		}
 	}
 
-	// A dry run of the real planner, not a reimplementation of its arithmetic:
-	// a flat "N non-void evals" floor would pass sets BuildPlan then rejects,
-	// after the set is already pushed and an eval row created.
+	// Dry-run the real planner to reject thin suites before they are pushed.
 	if _, err := runner.BuildPlan(runner.Tier(in.Tier), in.Panel, set, void, triggers); err != nil {
 		d.o.Logger("derive: too thin, %d of %d evals void: %s", len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "))
 		return nil, fmt.Errorf("derive: the derived eval set is too thin to evaluate (%d of %d evals void: %s): %w",

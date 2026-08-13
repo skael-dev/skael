@@ -1,8 +1,6 @@
-// Package store owns the .whetstone/ workspace: a SQLite index for versioned
-// specs and the completion cache, plus the on-disk artifact layout.
-//
-// The SQLite driver is modernc.org/sqlite (pure Go). The release build is
-// CGO_ENABLED=0 across five platform pairs, so a cgo driver is not an option.
+// Package store owns the .whetstone/ workspace: SQLite index, completion
+// cache, and the on-disk artifact layout. Uses modernc.org/sqlite (pure Go)
+// because the release build is CGO_ENABLED=0.
 package store
 
 import (
@@ -35,17 +33,9 @@ func Open(root string) (*Store, error) {
 		return nil, fmt.Errorf("store.Open mkdir: %w", err)
 	}
 
-	// _pragma settings are driver DSN options: foreign keys on, and WAL so a
-	// reader (a report) does not block a writer (a run in progress).
-	// _txlock=immediate takes the write lock at BEGIN rather than at the first
-	// write. A deferred transaction (the driver default) opens its read
-	// snapshot at BEGIN and only upgrades to a writer on its first write
-	// statement; if another writer commits in between, SQLite invalidates
-	// that snapshot outright (SQLITE_BUSY_SNAPSHOT) instead of retrying it —
-	// busy_timeout cannot help because there is no lock to wait out, only a
-	// stale snapshot. SaveSpec reads (MAX(version)) before it writes, so it
-	// hits exactly this shape; immediate mode takes the write lock up front
-	// and serializes concurrent SaveSpec calls instead of aborting one.
+	// WAL lets readers not block writers. _txlock=immediate prevents
+	// SQLITE_BUSY_SNAPSHOT: a deferred transaction's read snapshot is
+	// invalidated if another writer commits between BEGIN and the first write.
 	dsn := "file:" + filepath.Join(base, "whetstone.db") +
 		"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate"
 
@@ -71,17 +61,8 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) Root() string { return s.root }
 
 // skillDirName validates skill and returns its on-disk directory component.
-//
-// Every path helper below eventually calls this before touching
-// filepath.Join, because a skill name may arrive from a GitHub import or an
-// unpacked archive rather than a validated spec, and this package treats
-// that input as untrusted: filepath.Join("skills", "../../etc") escapes the
-// workspace, and both "" and a lone ":" collapse to the "skills" directory
-// itself — the shared parent of every skill. The check reuses
-// spec.SkillSpec.Validate's name rule (the same one an authored spec is held
-// to) rather than a second, hand-rolled pattern that could drift from it. The
-// other probe fields are filled with values guaranteed to pass validation, so
-// any error Validate returns here is necessarily about the name.
+// Reuses spec.SkillSpec.Validate rather than a separate pattern that could
+// drift. Every path helper below calls this before filepath.Join.
 func skillDirName(skill string) (string, error) {
 	probe := spec.SkillSpec{
 		Name:        skill,
@@ -107,9 +88,7 @@ func (s *Store) SkillDir(skill string) (string, error) {
 	return filepath.Join(s.root, "skills", dir), nil
 }
 
-// SpecPath is the human-editable spec YAML. It sits beside the bundle rather
-// than inside the eval sidecar because the spec is the authored artifact, not
-// eval scaffolding.
+// SpecPath is the spec YAML, beside the bundle rather than in the sidecar.
 func (s *Store) SpecPath(skill string) (string, error) {
 	dir, err := s.SkillDir(skill)
 	if err != nil {
@@ -118,9 +97,7 @@ func (s *Store) SpecPath(skill string) (string, error) {
 	return filepath.Join(dir, "spec.yaml"), nil
 }
 
-// EvalDir is the sidecar directory. lint.Excluded is the one definition of
-// what does not ship as bundle content; everything eval-only must live under
-// this path so pack's exclusion of it stays correct.
+// EvalDir is the eval sidecar directory.
 func (s *Store) EvalDir(skill string) (string, error) {
 	dir, err := s.SkillDir(skill)
 	if err != nil {

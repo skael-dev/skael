@@ -14,13 +14,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// SchemaVersion is the report.json schema's own version, distinct from the
-// spec version of the skill it measures. Load refuses a report from a newer
-// schema rather than misreading it: a field that changed meaning is worse
-// than a field that is missing.
-//
-// Version 2 is the expectation pass rate. Version 1 was a weighted geometric
-// mean of four pillars, on the same 0–100 scale and measuring something else.
+// SchemaVersion is the report schema. Load refuses a newer schema.
+// Version 2 is the expectation pass rate; version 1 was a geometric mean.
 const SchemaVersion = 2
 
 // PanelMember identifies one model-panel entry on the report.
@@ -34,25 +29,19 @@ type PanelMember struct {
 // MemberReport is one panel member's measured result.
 type MemberReport struct {
 	Member PanelMember `json:"member"`
-	// Effectiveness is this member's 0–100 score: the mean of its evals' pass
-	// rates. The field keeps the name it had when it was a geometric mean of
-	// four pillars, because it still answers the same question and renaming it
-	// would break every stored decoder for no gain.
+	// Effectiveness is this member's 0–100 score. The name predates the
+	// pipeline change; renaming it would break stored decoders.
 	Effectiveness float64 `json:"effectiveness"`
-	// Healthy is false when the member's adapter failed its probe. Such a
-	// member contributes nothing to the headline rather than a zero.
+	// Healthy is false when the member's probe failed.
 	Healthy bool   `json:"healthy"`
 	Detail  string `json:"detail,omitempty"`
-	// MetaPartial is true when this member's session metadata was rebuilt from
-	// the store's own columns rather than recovered in full (a resumed run
-	// whose recorded artifact could not be re-read).
+	// MetaPartial is true when session metadata was rebuilt from store columns
+	// rather than the run's artifact.
 	MetaPartial       bool   `json:"meta_partial,omitempty"`
 	MetaPartialReason string `json:"meta_partial_reason,omitempty"`
 }
 
-// ConditionReport is one eval's expectation tally for one condition (skill or
-// baseline), for one model. Passes and Runs are expectations passed and
-// expectations graded, summed over that condition's runs.
+// ConditionReport tallies expectations for one eval/condition/model.
 type ConditionReport struct {
 	Condition store.Condition `json:"condition"`
 	Model     string          `json:"model"`
@@ -60,8 +49,7 @@ type ConditionReport struct {
 	Runs      int             `json:"runs"`
 }
 
-// GradeNote is one graded session, kept so a surprising score can be read back
-// to the expectation and the evidence that produced it.
+// GradeNote is one graded session's expectations and evidence.
 type GradeNote struct {
 	Model        string              `json:"model"`
 	Condition    store.Condition     `json:"condition"`
@@ -76,9 +64,7 @@ type TaskReport struct {
 	Grades     []GradeNote       `json:"grades,omitempty"`
 }
 
-// VoidTask is an eval excluded from scoring, listed rather than merely
-// dropped: a suite quietly losing evals changes what the score means, and the
-// reader has to be able to see it.
+// VoidTask is an eval excluded from scoring, listed so the reader can see it.
 type VoidTask struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason"`
@@ -96,34 +82,23 @@ type Report struct {
 	ModelPanel    []PanelMember `json:"model_panel"`
 	PanelComplete bool          `json:"panel_complete"`
 
-	// Headline is the single published 0–100 score: the lowest member score
-	// across healthy panel members.
+	// Headline is the published 0–100 score: minimum across healthy members.
 	Headline float64 `json:"headline"`
-	// Baseline is the same measurement with no skill installed, and Delta is
-	// Headline minus it. Together they answer "does this skill help", which no
-	// pass rate answers on its own.
-	//
-	// DeltaMeasured is false when no baseline session ran. A zero delta and an
-	// absent delta are different facts: the first says the skill changed
-	// nothing, the second says nobody looked.
+	// Baseline is the no-skill measurement. DeltaMeasured is false when no
+	// baseline ran — a zero delta and an absent delta are different facts.
 	Baseline      float64 `json:"baseline"`
 	Delta         float64 `json:"delta"`
 	DeltaMeasured bool    `json:"delta_measured"`
-	// BaselineWipeout is true when the baseline passed no expectation at all,
-	// which is also what a broken baseline harness looks like.
+	// BaselineWipeout is true when the baseline passed no expectation at all.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 
-	// TokensMedian is the median total token spend of a scored session with the
-	// skill, and TokensMedianBaseline the same without it. Reported beside the
-	// score rather than inside it: a verbose skill that works still works, and
-	// nobody notices one tripling its own token bill unless the figure is here.
+	// TokensMedian is the median token spend with the skill installed;
+	// TokensMedianBaseline is the same without it.
 	TokensMedian         int64 `json:"tokens_median,omitempty"`
 	TokensMedianBaseline int64 `json:"tokens_median_baseline,omitempty"`
 
-	// TriggerF1 is the trigger smoke check: does the skill fire when it should
-	// and stay silent when it should not. It is reported beside the headline
-	// rather than folded into it, and it gates a release rather than scoring
-	// one.
+	// TriggerF1 is the trigger smoke check. Reported beside the headline, not
+	// folded into it.
 	TriggerF1 float64 `json:"trigger_f1"`
 
 	Members []MemberReport `json:"members"`
@@ -132,34 +107,27 @@ type Report struct {
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`
 
 	TriggerInferred bool `json:"trigger_inferred"`
-	// TriggerSource is the single panel member the trigger probes ran on.
-	// Trigger firing is measured once per eval, on this member.
+	// TriggerSource is the panel member the trigger probes ran on.
 	TriggerSource PanelMember `json:"trigger_source,omitempty"`
-	// TriggerUnknown is the count of trigger probes excluded from the trigger
-	// confusion matrix because their session could not be measured — excluded
-	// rather than counted as a miss, so an infrastructure failure does not
-	// masquerade as a recall failure.
+	// TriggerUnknown is the count of probes excluded from the confusion matrix
+	// because their session could not be measured.
 	TriggerUnknown int `json:"trigger_unknown,omitempty"`
 
-	// GraderModel identifies which model graded this run. An operator-
-	// configurable grader means the same panel, on the same suite, can produce
-	// a different Headline purely because a different model did the grading.
+	// GraderModel identifies which model graded this run.
 	GraderModel string `json:"grader_model,omitempty"`
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
 }
 
-// Save writes r as indented JSON: a human opens this file when a score
-// surprises them.
+// Save writes r as indented JSON.
 func (r *Report) Save(w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(r)
 }
 
-// Load reads a Report and rejects one written by a newer schema: a field
-// that changed meaning is worse than a field that is missing.
+// Load reads a Report. Rejects a newer schema version.
 func Load(r io.Reader) (*Report, error) {
 	var probe struct {
 		SchemaVersion int `json:"schema_version"`
@@ -181,15 +149,8 @@ func Load(r io.Reader) (*Report, error) {
 	return &rep, nil
 }
 
-// Comparable reports whether two reports measure the same thing, and why not
-// when they do not.
-//
-// This is the difference between a trend and a misleading chart. A score is a
-// measurement against a specific eval set, run by a specific model panel, at a
-// specific tier, graded by a specific model — change any of those and "the
-// score dropped" is not a fact about the skill. What deliberately does *not*
-// affect comparability is the spec version and the score itself: comparing v3
-// against v4 is the only question this method exists to answer.
+// Comparable reports whether two reports measure the same thing. A changed
+// suite, panel, tier, grader, or engine version makes scores incomparable.
 func (r *Report) Comparable(o *Report) (bool, string) {
 	switch {
 	case r == nil || o == nil:
@@ -216,9 +177,7 @@ func (r *Report) Comparable(o *Report) (bool, string) {
 	return true, ""
 }
 
-// samePanel compares two panels as an ordered multiset of (agent, model,
-// class) triples — panel order is an implementation detail of the planner,
-// so a reordered panel is the same panel.
+// samePanel compares two panels as a sorted multiset of (agent, model, class).
 func samePanel(a, b []PanelMember) bool {
 	if len(a) != len(b) {
 		return false
@@ -241,11 +200,8 @@ func sortedKeys(ms []PanelMember) []string {
 	return out
 }
 
-// sameCLIVersions compares the CLIVersion recorded against each panel member,
-// as a sorted multiset alongside samePanel's identity check. Called only after
-// samePanel has already confirmed the two panels have the same members, so a
-// mismatch here means the same members were measured with different agent CLI
-// builds.
+// sameCLIVersions compares CLIVersion as a sorted multiset. Called after
+// samePanel confirms the members match.
 func sameCLIVersions(a, b []PanelMember) bool {
 	if len(a) != len(b) {
 		return false

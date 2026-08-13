@@ -5,31 +5,20 @@ import (
 	"io"
 )
 
-// Executor adapts a Driver to agent.Exec: each call runs one command in the
-// same environment, with only argv and the output writers changing.
+// Executor adapts a Driver to agent.Exec.
 type Executor struct {
 	d    Driver
 	base RunSpec
 }
 
 // NewExec returns an executor that runs commands under base. base.Argv is
-// ignored — every other field, notably the network policy and the read-only
-// auth mounts, is what makes the session reproducible, so it is carried
-// through unchanged.
+// ignored; network policy and auth mounts are carried through unchanged.
 func NewExec(d Driver, base RunSpec) *Executor { return &Executor{d: d, base: base} }
 
-// Workspace reports the directory a session run through this executor
-// executes against. agent.InvokeSpec deliberately does not carry its own
-// copy of this (the sandbox already knows it, and a second copy an adapter
-// never reads is exactly the trap this exists to avoid) — a caller that
-// needs to know where a session's writes will land reads it from here
-// instead.
+// Workspace is the host-side directory the session runs against.
 func (e *Executor) Workspace() string { return e.base.Workspace }
 
-// WorkDir reports where the workspace appears *inside* the container, which is
-// what an agent's reported paths are relative to. Workspace above is the host
-// path the same directory is mounted from — a caller relativising agent paths
-// needs this one.
+// WorkDir is the container-side mount point of the workspace.
 func (e *Executor) WorkDir() string {
 	if e.base.WorkDir == "" {
 		return DefaultWorkDir
@@ -37,11 +26,7 @@ func (e *Executor) WorkDir() string {
 	return e.base.WorkDir
 }
 
-// Env reports the environment variables ("NAME=value") a session run through
-// this executor will see, the same way Workspace reports where it runs — a
-// caller that needs to verify credential forwarding reads it from here rather
-// than InvokeSpec, which does not carry its own copy for the same reason
-// Workspace's doc comment gives.
+// Env reports the environment variables the sandbox will see.
 func (e *Executor) Env() []string { return e.base.Env }
 
 // Exec runs one command and returns its exit code.

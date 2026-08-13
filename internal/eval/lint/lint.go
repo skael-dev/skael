@@ -1,12 +1,5 @@
-// Package lint validates a generated or imported skill bundle. Three layers,
-// all deterministic: spec conformance (does this satisfy the Agent Skills
-// format), quality (is it written the way skills that actually work are
-// written), and injection (does it carry a security risk).
-//
-// Conformance delegates to internal/skill's validator rather than restating its
-// rules, so a bundle cannot pass lint here and fail compliance at publish.
-// Injection delegates to internal/scan rather than defining a second pattern
-// set, for the same reason.
+// Package lint validates a skill bundle across three layers: spec conformance,
+// quality, and injection (security scan).
 package lint
 
 // Severity classifies how serious a finding is.
@@ -62,8 +55,7 @@ func (r *Result) HasErrors() bool {
 	return r.Errors() > 0
 }
 
-// ExitCode maps a result onto a process exit code. Warnings do not fail: a
-// pre-commit hook that fails on advisory findings is a hook that gets removed.
+// ExitCode maps a result onto a process exit code. Warnings do not fail.
 func (r *Result) ExitCode() int {
 	if r.HasErrors() {
 		return 1
@@ -83,6 +75,3 @@ func Run(bundleDir string) (*Result, error) {
 	}
 	return res, nil
 }
-
-// Quality and Injection are defined in quality.go and injection.go
-// respectively.

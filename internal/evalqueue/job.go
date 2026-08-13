@@ -1,7 +1,4 @@
-// Package evalqueue is the eval job queue. Postgres is the queue: workers
-// claim with SELECT … FOR UPDATE SKIP LOCKED, hold a lease with a heartbeat,
-// and a lapsed lease returns the job to the pool. No new infrastructure — a
-// worker is one more container in the compose file.
+// Package evalqueue is the eval job queue, backed by Postgres claim/lease/heartbeat.
 package evalqueue
 
 import (
@@ -45,18 +42,12 @@ type Job struct {
 	MaxAttempts    int
 	WorkerID       string
 	LeaseExpiresAt *time.Time
-	// LeaseSeconds is the lease duration granted at claim time, persisted so
-	// a heartbeat can re-apply it without the worker resending it and
-	// without the server guessing at a fixed value.
-	LeaseSeconds int
-	LastError    string
-	RequestedBy  string
-	CreatedAt    time.Time
-	// StartedAt is when the job first entered `running`. It is set once and
-	// never moved: a retry re-claims the same job and elapsed time is
-	// measured from when the work began, not from the latest attempt.
-	// Elapsed cannot be derived from LeaseExpiresAt, which every heartbeat
-	// pushes forward.
+	LeaseSeconds   int
+	LastError      string
+	RequestedBy    string
+	CreatedAt      time.Time
+	// StartedAt is set once on the first claim and never moved, so elapsed
+	// time is measured from the start of work, not the latest retry.
 	StartedAt *time.Time
 }
 

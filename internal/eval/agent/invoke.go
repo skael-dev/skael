@@ -9,21 +9,11 @@ import (
 )
 
 // Argv is the command line one evaluation session runs. Exported so the flags
-// are pinned by a test that needs neither a CLI nor a daemon: CLI churn is the
-// known risk, and a silently-dropped --output-format degrades every trajectory
-// to "the agent said something" without failing anything.
+// are pinned by a test without needing a CLI or daemon.
 //
-// --verbose accompanies stream-json because the CLI requires it for streaming
-// output in print mode.
-//
-// --permission-mode bypassPermissions is what lets a skill do file *and* shell
-// work without a prompt no one can answer: the isolation is the sandbox's job,
-// not the CLI's, and a session that stops to ask is a session scored as a
-// failure for the wrong reason. It must not be narrowed back to acceptEdits,
-// which was here first and looks safer while being strictly worse — that mode
-// clears Edit and Write but still prompts for Bash, so a headless session had
-// every shell command denied, and any skill that runs a script scored zero on
-// every task with nothing in the report naming the cause.
+// --permission-mode bypassPermissions: isolation is the sandbox's job, not the
+// CLI's. The narrower acceptEdits prompts for Bash, so a headless session has
+// every shell command denied and scores zero with nothing naming the cause.
 func Argv(s InvokeSpec) ([]string, error) {
 	if strings.TrimSpace(s.Prompt) == "" {
 		return nil, errors.New("claudecode: invoke has no prompt")
@@ -41,9 +31,7 @@ func Argv(s InvokeSpec) ([]string, error) {
 	}, nil
 }
 
-// Invoke runs one headless session through the caller's executor and returns
-// the native stream verbatim. Parsing is a separate step so a transcript is
-// recorded even when parsing fails.
+// Invoke runs one headless session and returns the native stream verbatim.
 func (a *ClaudeCode) Invoke(ctx context.Context, s InvokeSpec) (RawStream, error) {
 	if s.Exec == nil {
 		return nil, ErrNoExecutor
@@ -64,8 +52,6 @@ func (a *ClaudeCode) Invoke(ctx context.Context, s InvokeSpec) (RawStream, error
 	return bytes.NewReader(out.Bytes()), nil
 }
 
-// tail quotes the last of what the CLI said. A whole stream in an error message
-// is unreadable; the end of it is where the reason is.
 func tail(bufs ...*bytes.Buffer) string {
 	const max = 512
 	var b strings.Builder

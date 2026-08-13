@@ -1,8 +1,4 @@
-// Package tune optimizes a skill's description for trigger accuracy. It is a
-// port of skill-creator's run_loop.py and improve_description.py, with one
-// substitution. Every model call goes through internal/eval/llm rather than a
-// claude -p subprocess, because internal/eval/provider is the one place the
-// environment becomes an LLM backend.
+// Package tune optimizes a skill's description for trigger accuracy.
 package tune
 
 import (
@@ -11,21 +7,12 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// maxHoldout is the largest fraction that still leaves a train half. At 0.9
-// a set of ten holds back nine and trains on one, which is a bad split. At
-// 1.0 it trains on nothing at all, which is not a split.
+// maxHoldout caps the fraction so a train half always remains.
 const maxHoldout = 0.9
 
-// Split divides a trigger set into a train half and a held-out test half,
-// stratified so each half carries both positive and negative queries.
-//
-// The winner is selected on the test score, so a split that puts every
-// negative on one side chooses a description on half the question. A
-// holdout of 0 disables the split. The loop then trains on everything.
-//
-// A holdout at or above 1 is clamped to maxHoldout. It would otherwise empty
-// the train half, and Run exits at iteration 1 reporting that every train
-// query passed. That reads like a measurement and is the absence of one.
+// Split divides a trigger set into train and held-out test halves, stratified
+// by positive/negative. A holdout of 0 disables the split; values at or above
+// 1 are clamped to maxHoldout.
 func Split(set []suite.TriggerQuery, holdout float64, seed int64) (train, test []suite.TriggerQuery) {
 	if holdout <= 0 {
 		return append([]suite.TriggerQuery(nil), set...), nil
@@ -57,9 +44,7 @@ func Split(set []suite.TriggerQuery, holdout float64, seed int64) (train, test [
 	return train, test
 }
 
-// holdoutCount is max(1, int(n*holdout)) when there is anything to hold back.
-// One query held back measures little. Zero measures nothing at all. Zero
-// also makes the test score identical to the train score.
+// holdoutCount is max(1, int(n*holdout)) when n > 0.
 func holdoutCount(n int, holdout float64) int {
 	if n == 0 {
 		return 0

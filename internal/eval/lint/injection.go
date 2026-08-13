@@ -7,13 +7,8 @@ import (
 	"github.com/skael-dev/skael/internal/scan"
 )
 
-// Injection runs the platform's security scanner over the bundle and maps its
-// findings onto lint findings.
-//
-// The ruleset is deliberately not duplicated here. internal/scan already
-// handles unicode normalization, zero-width stripping, line-pair matching, and
-// structural shell parsing; a second pattern set in the engine would be
-// strictly worse and would diverge on every scanner fix.
+// Injection runs the security scanner over the bundle and maps its findings
+// onto lint findings.
 func Injection(bundleDir string) ([]Finding, error) {
 	report, err := scan.ScanDir(bundleDir)
 	if err != nil {
@@ -26,11 +21,7 @@ func Injection(bundleDir string) ([]Finding, error) {
 		if relErr != nil {
 			rel = f.File
 		}
-		// The scanner walks the whole directory, so it also reads the eval
-		// sidecar. Nothing under the sidecar is ever packed, and its oracle
-		// and verifier scripts are written to drive a task — an oracle that
-		// provisions its own sandbox is indistinguishable, to a scanner
-		// looking at shipped skill content, from an attack.
+		// Skip the eval sidecar — nothing under it is packed.
 		if slashRel := filepath.ToSlash(rel); Excluded(slashRel) {
 			continue
 		}
@@ -39,20 +30,14 @@ func Injection(bundleDir string) ([]Finding, error) {
 			Severity: severityFor(f.Severity),
 			File:     filepath.ToSlash(rel),
 			Line:     f.Line,
-			// The scanner already masks secret values into f.Message (and
-			// truncates f.Match); carrying Message through unchanged rather
-			// than re-deriving a message from the file preserves that
-			// masking. Re-reading the file here would undo it and reprint a
-			// credential in the finding.
+			// Carry the scanner's message unchanged to preserve its secret masking.
 			Message: f.Message,
 		})
 	}
 	return out, nil
 }
 
-// severityFor maps scanner severities onto lint severities. critical and high
-// become errors: a bundle carrying an exfiltration or credential pattern must
-// not lint clean.
+// severityFor maps scanner severities onto lint severities.
 func severityFor(s string) Severity {
 	switch s {
 	case "critical", "high":

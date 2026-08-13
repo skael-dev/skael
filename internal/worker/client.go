@@ -15,15 +15,12 @@ import (
 	"github.com/skael-dev/skael/internal/evalsuite"
 )
 
-// HTTPAPI implements API over the skael HTTP surface, reusing cli/client's
-// retry-with-backoff behaviour and 30s timeout rather than a bare
-// http.Client (which has none).
+// HTTPAPI implements API over the skael HTTP surface.
 type HTTPAPI struct {
 	c *client.Client
 }
 
-// NewHTTPAPI builds an HTTPAPI talking to endpoint, authenticated with
-// apiKey.
+// NewHTTPAPI builds an HTTPAPI.
 func NewHTTPAPI(endpoint, apiKey string) *HTTPAPI {
 	return &HTTPAPI{c: client.New(endpoint, apiKey)}
 }
@@ -54,24 +51,9 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 	}, token, true, nil
 }
 
-// Heartbeat calls POST /api/eval/jobs/{id}/heartbeat. A 409 response — the
-// job is no longer running, or its lease already lapsed — is surfaced as
-// evalqueue.ErrLeaseLost, exactly as the in-process queue's own Heartbeat
-// does, so the worker's lease-lost handling does not need to know whether it
-// is talking to Postgres directly or through HTTP.
-//
-// A 403 is treated the same way here, specifically for Heartbeat: the
-// server's heartbeat handler (internal/evalqueue/routes.go) returns 403 for
-// "the claim just doesn't verify", which covers both a forged token and the
-// case where the job is still `running` with a technically-live lease but
-// this worker's claim_token_hash no longer matches — the lapse-and-reclaim
-// race. Treating only 409 as lease-lost left that branch heartbeating (and
-// eventually trying to post a report) for a job this worker no longer owns;
-// the server would reject the post, but the abandon-promptly property this
-// package exists for would have silently failed in the meantime. FailJob and
-// PostReport keep the narrower 409-only mapping: a 403 there is far more
-// likely a genuinely invalid claim than a live reclaim race, and treating it
-// as lease-lost buys nothing once the run has already finished.
+// Heartbeat calls POST /api/eval/jobs/{id}/heartbeat. Both 409 (job no longer
+// running) and 403 (claim does not verify, including a lapse-and-reclaim
+// race) map to ErrLeaseLost.
 func (h *HTTPAPI) Heartbeat(_ context.Context, id evalqueue.JobID, token string) error {
 	err := h.c.HeartbeatEvalJob(string(id), token)
 	var apiErr *client.APIError
@@ -126,11 +108,7 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 	}, nil
 }
 
-// PushSuite uploads a derived suite through POST /api/eval/suites and returns
-// its content-addressed ref. spec_version is 0: a derived spec was never
-// saved to a workspace store, so it has no version to name. The job id and
-// claim token are sent so the server can record the suite as derived at push
-// time — see PushSuiteInput.
+// PushSuite uploads a derived suite and returns its content-addressed ref.
 func (h *HTTPAPI) PushSuite(_ context.Context, in PushSuiteInput) (string, error) {
 	wire := make([]client.EvalSuiteCheck, len(in.Checks))
 	for i, c := range in.Checks {
@@ -150,10 +128,7 @@ func (h *HTTPAPI) PushSuite(_ context.Context, in PushSuiteInput) (string, error
 	return out.Ref, nil
 }
 
-// asLeaseLost converts a 409 Conflict — the server's signal that a claim no
-// longer verifies (a cancelled job, or a lease another worker reclaimed) —
-// into evalqueue.ErrLeaseLost, so callers can use errors.Is regardless of
-// transport.
+// asLeaseLost maps a 409 Conflict to ErrLeaseLost.
 func asLeaseLost(err error) error {
 	var apiErr *client.APIError
 	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {

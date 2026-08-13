@@ -1,10 +1,4 @@
-// Package gen writes a skill bundle — SKILL.md plus scripts/, references/,
-// and assets/ — from an approved spec.SkillSpec. Four model passes (outline,
-// body, resources, description) draft the content; assembly writes it to
-// disk, then a lint-and-revise loop (revise.go) asks the body or description
-// pass to fix whatever lint.Run finds, up to two attempts. The bundle is
-// always returned with a nil error — the CLI's own lint gate, not this loop,
-// decides whether generation succeeded.
+// Package gen writes a skill bundle from an approved spec.
 package gen
 
 import (
@@ -23,14 +17,7 @@ type Bundle struct {
 	Files []string
 }
 
-// Generate writes a skill bundle for s into outDir. It runs the outline and
-// body passes, then one resources-pass call per planned resource file (see
-// runResources), then the description pass, then assembles the result and
-// runs reviseUntilClean to fix what lint finds.
-//
-// Resource paths come from the approved spec, not the model: only a file's
-// content is requested per call. assemble still refuses any path that is
-// absolute or escapes the bundle directory, as defense in depth.
+// Generate writes a skill bundle for s into outDir.
 func Generate(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, outDir string) (*Bundle, error) {
 	outline, err := runOutline(ctx, g, s)
 	if err != nil {

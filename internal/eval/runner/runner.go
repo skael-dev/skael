@@ -24,35 +24,17 @@ type Options struct {
 	Untrusted      bool
 	AllowDomains   []string
 
-	// PanelExcludeEnv names credential variables that must not reach a
-	// sandbox, even though the agent adapter declares them. It comes from the
-	// resolved provider, which is the only thing that knows whether the
-	// worker's own gateway is meant for the panel as well as the judge.
-	//
-	// This package cannot ask the provider itself: internal/eval/provider
-	// imports this one for DefaultPanel, so the dependency only runs one way.
-	// The caller resolves the names and passes them down as data.
+	// PanelExcludeEnv withholds credential variables from the sandbox. Comes
+	// from provider.Config.PanelExcludeEnv — this package cannot import
+	// provider (circular), so it receives the names as data.
 	PanelExcludeEnv []string
 
-	// WorkspaceRoot is the directory session workspaces are created under.
-	// Empty means os.TempDir(), which is correct for every run whose sandbox
-	// containers are started by the same machine's Docker daemon.
-	//
-	// It exists for the one case where that is not true: a runner inside a
-	// container, talking to the host daemon over a mounted socket. A
-	// workspace is bind-mounted into each sandbox, and the daemon resolves
-	// that path in the *host's* filesystem — so a path under the runner's own
-	// /tmp names nothing on the host, and Docker silently creates an empty
-	// directory rather than failing. The sandbox then comes up with no task,
-	// which scores as a skill that did nothing. Setting this to a path that
-	// is bind-mounted at the *same* location on both sides makes the path
-	// mean the same thing to both, which is the whole requirement.
+	// WorkspaceRoot overrides os.TempDir() for a containerized runner whose
+	// /tmp is invisible to the host daemon. Must be bind-mounted at the same
+	// path on both sides or Docker silently mounts an empty directory.
 	WorkspaceRoot string
 
-	// Sleep is time.Sleep by default; tests override it so a backoff test does
-	// not actually wait minutes.
-	Sleep func(time.Duration)
-	// Logger receives progress and retry notices. A no-op by default.
+	Sleep  func(time.Duration)
 	Logger func(string, ...any)
 
 	MaxRateLimitRetries int
@@ -66,23 +48,15 @@ type Outcome struct {
 	ArtifactDir string
 	Status      string
 	Err         error
-	// MetaPartial is true when Meta was rebuilt from the store's own columns
-	// rather than from the run's grading.json artifact — on resume, when the
-	// artifact is missing or unreadable. A partial Meta carries only what
-	// those columns hold (tokens, duration, agent version, rate-limited);
-	// Model, NumTurns, VisibleSkills, PermissionDenials, and IsError are
-	// silently zero, so a caller that feeds Meta into anything reading those
-	// fields (VisibleSkills feeds trigger precision) must check this first.
+	// MetaPartial is true when Meta was rebuilt from store columns rather than
+	// the grading.json artifact. Model, NumTurns, VisibleSkills,
+	// PermissionDenials, and IsError are zero in that case.
 	MetaPartial       bool
 	MetaPartialReason string
 }
 
-// ProbeOutcome is what one trigger probe observed. It deliberately carries no
-// pre-computed verdict: whether the skill fired, and whether that
-// determination was explicit or inferred, depends on the adapter's
-// capabilities and is scoring's job, not the runner's — score.DetectFiring
-// (a later task) is the one definition of firing, working from exactly these
-// fields.
+// ProbeOutcome is what one trigger probe observed. No pre-computed verdict:
+// whether the skill fired is scoring's job (score.DetectFiring).
 type ProbeOutcome struct {
 	Probe  Probe
 	Events []agent.Event
@@ -121,11 +95,8 @@ type ExecuteInput struct {
 
 // ExecuteResult is everything Execute produced.
 type ExecuteResult struct {
-	Outcomes []Outcome
-	Probes   []ProbeOutcome
-	// PanelComplete is false when any planned panel member was skipped for
-	// being unhealthy. A false PanelComplete means the eval's scores are
-	// partial, not that the skill scored zero on that member.
+	Outcomes      []Outcome
+	Probes        []ProbeOutcome
 	PanelComplete bool
 }
 
@@ -137,18 +108,11 @@ type Runner struct {
 	quotaWarned sync.Once
 }
 
-// New validates the options and applies defaults: concurrency 4 (§9's
-// scheduling assumption), a 20-minute session timeout, and three rate-limit
-// retries.
+// New validates options and applies defaults.
 func New(o Options) (*Runner, error) {
 	if o.Store == nil || o.Driver == nil || o.Adapters == nil {
 		return nil, errors.New("runner: store, driver, and adapters are required")
 	}
-	// Gated makes the trust decision structural rather than a check every
-	// caller of o.Driver.Run must remember to make: it refuses here for
-	// untrusted work on a shared-kernel driver, and for untrusted work on a
-	// hardware-isolated driver it wraps Run so the same refusal still holds
-	// even if o.Driver is later read out of a struct field.
 	gd, err := sandbox.Gated(o.Driver, o.Untrusted)
 	if err != nil {
 		return nil, err
@@ -175,14 +139,9 @@ func New(o Options) (*Runner, error) {
 	return &Runner{o: o}, nil
 }
 
-// DefaultAllowDomains is the egress an agent session needs and nothing more.
-// A session with no network cannot authenticate; a session with full network
-// makes "did the skill reach out" unanswerable.
 var DefaultAllowDomains = []string{"api.anthropic.com", "statsig.anthropic.com", "sentry.io"}
 
-// Execute runs in.Plan against evalID, claiming each session first so a
-// resumed Execute over the same eval spends nothing on work already
-// recorded.
+// Execute runs in.Plan, skipping sessions already recorded.
 func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*ExecuteResult, error) {
 	if in.Plan == nil {
 		return nil, errors.New("runner: Execute needs a plan")
@@ -190,11 +149,6 @@ func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*E
 
 	panelComplete := true
 	for _, m := range in.Plan.Panel {
-		// This walks the full configured panel, not just the members a given
-		// tier actually schedules (a Smoke tier's PrimaryOnly budget never
-		// touches the floor member, for instance). An unhealthy member the
-		// tier never runs still makes the panel incomplete: PanelComplete
-		// must never overclaim completeness.
 		if !memberHealthy(in.Healthy, m) {
 			panelComplete = false
 		}

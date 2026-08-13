@@ -10,30 +10,22 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// topHeadingLine matches a level-2 markdown heading exactly — "### " does not
-// match, since the character after "##" must be a space.
+// topHeadingLine matches a level-2 markdown heading exactly.
 var topHeadingLine = regexp.MustCompile(`^## (.+)$`)
 
-// slugNonAlnum is everything a slug collapses to a single '-'.
 var slugNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
-// offloadTargetBytes is the body size the offload pass moves content out to —
-// just under the budget rather than well under it. An aggressive target does
-// not fail safe: when a skill's procedure alone approaches the budget, chasing
-// a number the remaining candidates cannot reach empties the body of its
-// overview and orientation sections too, which is worse than being close to
-// the limit.
+// offloadTargetBytes targets just under the budget — an aggressive target
+// strips orientation sections from bodies whose procedure alone approaches it.
 var offloadTargetBytes = int(0.98 * float64(lint.MaxBodyApproxTokens*4))
 
-// bodySection is one top-level slice of a body: everything from a "## "
-// heading line up to (not including) the next one. The first section, before
-// any heading, has an empty heading and is never an offload candidate.
+// bodySection is one "## " slice. The first section (before any heading) has
+// an empty heading and is never an offload candidate.
 type bodySection struct {
 	heading string
 	lines   []string
 }
 
-// splitTopSections splits body at every top-level "## " heading.
 func splitTopSections(body string) []bodySection {
 	lines := strings.Split(body, "\n")
 
@@ -64,7 +56,6 @@ func splitTopSections(body string) []bodySection {
 	return sections
 }
 
-// joinSections reassembles sections back into a single body string.
 func joinSections(sections []bodySection) string {
 	var lines []string
 	for _, sec := range sections {
@@ -77,22 +68,9 @@ func joinSections(sections []bodySection) string {
 	return body
 }
 
-// offloadOverBudgetSections moves the body's largest offloadable sections
-// (see isOffloadable) into references/<slug>.md files until the body fits
-// offloadTargetBytes or spec.MaxReferences files have been produced,
-// whichever comes first. It is pure and makes no gateway call — the model
-// cannot count its own tokens, so closing a body-budget gap by asking it to
-// try harder converges slowly if at all; moving text costs nothing and is
-// guaranteed.
-//
-// Largest-first is what keeps the short orientation sections (Overview, When
-// to use) in the body: the loop stops as soon as the body fits, so they are
-// only ever reached last.
-//
-// existing is the resource plan already destined for the bundle — offloaded
-// slugs must not collide with a reference the model already planned to
-// write. A body that is under budget, or made entirely of procedure, is a
-// no-op rather than something to mangle by moving steps out of the way.
+// offloadOverBudgetSections moves the largest offloadable sections into
+// references/ files until the body fits offloadTargetBytes. Largest-first
+// keeps short orientation sections in the body.
 func offloadOverBudgetSections(body string, existing []resourceFile) (string, []resourceFile) {
 	if len(body) <= offloadTargetBytes {
 		return body, nil
@@ -152,28 +130,16 @@ func offloadOverBudgetSections(body string, existing []resourceFile) (string, []
 	return joinSections(sections), refs
 }
 
-// stepSubheading matches a "### Step 3 — …" subheading. Skills write their
-// procedure this way as often as they use a numbered list, and a section
-// carrying these is a procedure whatever its own heading says.
+// stepSubheading matches "### Step N" subheadings in any section.
 var stepSubheading = regexp.MustCompile(`(?im)^#{3,6}\s*step\b`)
 
-// orientationHeadingWords name sections that must stay in the body even
-// though the linter treats them as declarative. They answer "what is this and
-// when does it apply" — behind a link, an agent reading SKILL.md cannot tell
-// what the skill is without fetching a second file, which is the one thing
-// progressive disclosure must not cost.
+// orientationHeadingWords name sections that must stay in the body — behind
+// a link, an agent cannot tell what the skill is without fetching another file.
 var orientationHeadingWords = []string{"overview", "when to use", "purpose"}
 
-// isOffloadable reports whether a section may leave the body. The steps are
-// the skill's value and stay; everything else is reference material.
-//
-// A section must be positively identified as reference material to move —
-// never merely fail a procedure test. Absence of evidence is not fail-safe
-// here: an early version treated "carries no numbered list" as offloadable
-// and moved a whole 18KB Workflow section, whose steps were "### Step 1 —"
-// subheadings, out of the body. Losing the procedure is far worse than
-// leaving the body over budget, so the allow-list decides and the structural
-// check can only veto.
+// isOffloadable requires a section to be positively identified as reference
+// material. The structural check can only veto — absence of evidence must not
+// move a procedure section whose steps use subheadings instead of a list.
 func isOffloadable(sec bodySection) bool {
 	if !lint.IsDeclarativeSection(sec.heading) {
 		return false
@@ -187,8 +153,6 @@ func isOffloadable(sec bodySection) bool {
 	return !stepSubheading.MatchString(strings.Join(sec.lines, "\n"))
 }
 
-// slugify lowercases a heading and collapses everything but letters and
-// digits to a single '-', producing a bare filename-safe slug.
 func slugify(heading string) string {
 	s := slugNonAlnum.ReplaceAllString(strings.ToLower(heading), "-")
 	s = strings.Trim(s, "-")
@@ -198,9 +162,6 @@ func slugify(heading string) string {
 	return s
 }
 
-// uniqueSlug returns heading's slug, or that slug suffixed with an
-// incrementing number if it's already in used — two sections titled
-// "Notes" must not both become references/notes.md.
 func uniqueSlug(heading string, used map[string]bool) string {
 	base := slugify(heading)
 	slug := base

@@ -74,9 +74,7 @@ func TestCorpus_LintOutputIsStable(t *testing.T) {
 	}
 }
 
-// Every archetype's spec must be valid, and must carry the trigger phrases
-// evals/triggers.json is derived from — a spec with none produces an eval set
-// that cannot measure firing at all.
+// Every archetype's spec must be valid and carry trigger phrases.
 func TestCorpus_SpecsAreValidAndCarryTriggers(t *testing.T) {
 	for _, name := range archetypes(t) {
 		t.Run(name, func(t *testing.T) {
@@ -92,8 +90,6 @@ func TestCorpus_SpecsAreValidAndCarryTriggers(t *testing.T) {
 }
 
 func TestCorpus_OneArchetypeIsCleanAndOneIsNot(t *testing.T) {
-	// The corpus is only a regression net if it exercises both outcomes. Three
-	// bundles that all lint clean would not catch a linter that stopped firing.
 	var clean, dirty int
 	for _, name := range archetypes(t) {
 		res, err := lint.Run(filepath.Join("testdata", "corpus", name))
@@ -126,11 +122,8 @@ func sortFindings(f []expectedFinding) {
 	})
 }
 
-// TestCorpus_ExercisesTheBrokenLinkRule proves the corpus actually feeds the
-// broken-link rule an input. A corpus whose SKILL.md files contain no relative
-// markdown link at all would pass every expectation above while leaving the
-// rule entirely unexercised — so this copies an archetype, removes the file its
-// link resolves to, and requires the finding to appear.
+// TestCorpus_ExercisesTheBrokenLinkRule verifies the broken-link rule fires
+// when a referenced file is removed.
 func TestCorpus_ExercisesTheBrokenLinkRule(t *testing.T) {
 	src := filepath.Join("testdata", "corpus", "document-formatter")
 	dst := filepath.Join(t.TempDir(), "document-formatter")

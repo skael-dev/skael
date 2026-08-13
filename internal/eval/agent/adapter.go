@@ -1,6 +1,4 @@
 // Package agent defines the interface every coding-agent CLI is driven through.
-// Adding an agent means implementing this interface and recording a stream
-// fixture; no scoring code changes.
 package agent
 
 import (
@@ -14,11 +12,9 @@ import (
 // untrusted skill on the host.
 var ErrNoExecutor = errors.New("agent: Invoke needs an executor; a session must run in a sandbox")
 
-// Exec runs one command somewhere an adapter does not choose. Adapters build
-// argv and hand it here; they never exec on the host, because the entire point
-// of running a skill under evaluation is that it runs in a sandbox. Passing the
-// executor in rather than the sandbox keeps flags in the adapter and containers
-// out of it — and makes argv assertable without a daemon.
+// Exec runs one command in a sandbox. Adapters build argv and hand it here;
+// they never exec on the host. Passing the executor in rather than the sandbox
+// keeps flags in the adapter and containers out of it.
 type Exec interface {
 	Exec(ctx context.Context, argv []string, stdout, stderr io.Writer) (exitCode int, err error)
 }
@@ -26,54 +22,31 @@ type Exec interface {
 // RawStream is an agent's native output, verbatim.
 type RawStream = io.Reader
 
-// Caps describes what an adapter can do, so the orchestrator can plan a panel
-// without special-casing agent names.
+// Caps describes what an adapter can do.
 type Caps struct {
-	// EventTier is "A" when the stream distinguishes individual tool calls and
-	// their results, "B" when it only reports messages.
 	EventTier string
-	// ModelFlag is the CLI flag that selects a model, e.g. "--model".
 	ModelFlag string
-	// SkillDir is where a skill bundle installs, relative to the workspace.
-	SkillDir string
-	// AuthDirs are host paths the sandbox mounts read-only so subscription auth
-	// works inside the container. This is a local-development convenience for
-	// a machine that already has an interactive login — it does not work on a
-	// headless worker with no such login, and it carries nothing on macOS for
-	// a CLI that keeps its token in the Keychain rather than on disk.
+	SkillDir  string
+	// AuthDirs are host paths the sandbox mounts read-only for subscription
+	// auth. Local-development convenience only — does not work on headless
+	// workers, and carries nothing on macOS where the CLI uses the Keychain.
 	AuthDirs []string
-	// AuthEnv names the environment variables this adapter's CLI understands
-	// for authentication — names only, never values. The runner forwards any
-	// of these that are set in the worker's own environment into the sandbox.
-	// This is the preferred mechanism: it works on a headless host with no
-	// interactive login, unlike AuthDirs above. Per-adapter by design, since
-	// each agent CLI has its own.
-	AuthEnv []string
-	// SupportsSkillInvocation reports whether the stream exposes an explicit
-	// skill-invocation event. When false, activation must be inferred from a
-	// read of the skill's SKILL.md, which cannot distinguish read from invoked.
+	// AuthEnv names the environment variables this adapter's CLI reads for
+	// authentication. The runner forwards any that are set into the sandbox.
+	// Preferred over AuthDirs: works on headless hosts with no interactive login.
+	AuthEnv                 []string
 	SupportsSkillInvocation bool
 }
 
-// InvokeSpec is one agent session request. Workspace, a session-level
-// Timeout, and the installed skill's name are deliberately not here: the
-// sandbox already knows the workspace and enforces the timeout (both are
-// baked into Exec's underlying sandbox.RunSpec by the runner before Invoke is
-// ever called), and no adapter names the skill in its own invocation — a
-// field an adapter never reads but the runner always populates looks like a
-// bound or a behavior it is not, which is exactly the trap for the next
-// adapter author this exists to remove.
+// InvokeSpec is one agent session request. Workspace and timeout live on the
+// sandbox (baked into Exec by the runner), not here.
 type InvokeSpec struct {
 	Prompt string
 	Model  string
-	// Exec is where the CLI runs. Required.
-	Exec Exec
+	Exec   Exec
 }
 
-// Meta is everything a parsed stream reports about the session itself, as
-// opposed to the trajectory. Token counts are the cost figure reported beside
-// the score, and AgentVersion is recorded per run so a score can be
-// attributed to a specific CLI build.
+// Meta is session-level telemetry reported alongside the trajectory.
 type Meta struct {
 	AgentVersion      string
 	Model             string
@@ -84,15 +57,12 @@ type Meta struct {
 	VisibleSkills     []string
 	PermissionDenials []string
 	RateLimited       bool
-	// RateLimitUtilization is the highest window utilization the session was
-	// told about, 0 when it was never told. A subscription reports this well
-	// before it starts refusing calls, so a run can say "83% of your seven-day
-	// window" while it still works, rather than leaving the operator to
-	// discover the limit as a wall of failed sessions.
+	// RateLimitUtilization is the highest window utilization observed, 0 when
+	// never reported. Carried so an approaching limit is visible before it
+	// starts failing sessions.
 	RateLimitUtilization float64
-	// RateLimitWindow names the window RateLimitUtilization belongs to.
-	RateLimitWindow string
-	IsError         bool
+	RateLimitWindow      string
+	IsError              bool
 }
 
 // Result is a parsed session.

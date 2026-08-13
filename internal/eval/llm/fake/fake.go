@@ -1,6 +1,4 @@
-// Package fake provides an in-memory Gateway for tests: these tests run with
-// no LLM subscription, no API key, and no network, so the fake is how
-// generation and suite behaviour get exercised.
+// Package fake provides an in-memory Gateway for tests.
 package fake
 
 import (
@@ -25,9 +23,8 @@ func New(responses ...string) *Gateway {
 	return &Gateway{responses: responses}
 }
 
-// NewFunc returns a fake that answers from fn. Order-based scripting cannot
-// serve a concurrent fan-out — the reply a goroutine gets depends on which
-// won the lock — so a test of concurrent calls routes on the request instead.
+// NewFunc returns a fake that answers from fn, for concurrent fan-out tests
+// where order-based scripting is nondeterministic.
 func NewFunc(fn func(llm.Req) (string, error)) *Gateway {
 	return &Gateway{fn: fn}
 }
@@ -69,8 +66,7 @@ func (g *Gateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	return llm.Res{Text: g.responses[len(g.calls)-1], Model: "fake"}, nil
 }
 
-// ModelFor implements llm.Gateway with a deterministic, class-distinguishing
-// name, so tests that assert on which model a role used can rely on it.
+// ModelFor implements llm.Gateway.
 func (g *Gateway) ModelFor(c llm.ModelClass) string {
 	if c == llm.ClassFast {
 		return "fake-fast"

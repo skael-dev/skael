@@ -1,7 +1,5 @@
 // Package api implements the LLM gateway against a direct Anthropic-compatible
-// HTTP endpoint. It is strictly additive to the subscription gateway: the local
-// authoring loop does not need it, but a server-side worker cannot run against
-// a personal subscription and so requires it.
+// HTTP endpoint.
 package api
 
 import (
@@ -28,20 +26,12 @@ const (
 	defaultTimeout = 3 * time.Minute
 )
 
-// AuthStyle selects how the API key is presented to the gateway.
+// AuthStyle selects how the API key is presented.
 type AuthStyle string
 
 const (
-	// AuthStyleAnthropic sends `x-api-key`, the direct Anthropic API's own
-	// scheme. This is the default: unset, it is exactly today's behaviour.
 	AuthStyleAnthropic AuthStyle = "x-api-key"
-	// AuthStyleBearer sends `Authorization: Bearer <key>`, which is what
-	// Anthropic-compatible gateways such as OpenRouter
-	// (https://openrouter.ai/api/v1/messages) expect.
-	//
-	// Only the auth header differs. `anthropic-version` is sent either way —
-	// see the comment at the header block for why.
-	AuthStyleBearer AuthStyle = "bearer"
+	AuthStyleBearer    AuthStyle = "bearer"
 )
 
 // Options configures the gateway.
@@ -50,22 +40,17 @@ type Options struct {
 	APIKey      string
 	StrongModel string
 	FastModel   string
-	// AuthStyle selects the auth header sent with every request. Empty
-	// defaults to AuthStyleAnthropic, today's behaviour.
-	AuthStyle  AuthStyle
-	Cache      llm.Cache
-	HTTPClient *http.Client
-	// MaxRetries bounds retries of transient (5xx/429) upstream failures.
-	MaxRetries int
-	// Sleep is the backoff hook, overridden in tests so they do not wait.
-	Sleep func(time.Duration)
+	AuthStyle   AuthStyle
+	Cache       llm.Cache
+	HTTPClient  *http.Client
+	MaxRetries  int
+	Sleep       func(time.Duration)
 }
 
 // Gateway is a direct-API LLM gateway.
 type Gateway struct{ opts Options }
 
-// New returns a gateway. An empty key is an error rather than a warning: a
-// gateway that silently cannot authenticate fails on first use, mid-run.
+// New returns a gateway.
 func New(o Options) (*Gateway, error) {
 	if o.APIKey == "" {
 		return nil, ErrNoAPIKey
@@ -126,7 +111,6 @@ func (g *Gateway) Complete(ctx context.Context, r llm.Req) (llm.Res, error) {
 	var lastErr error
 	for attempt := 0; attempt <= g.opts.MaxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 1s, 2s, 4s.
 			g.opts.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
 		}
 
@@ -145,9 +129,6 @@ func (g *Gateway) Complete(ctx context.Context, r llm.Req) (llm.Res, error) {
 	return llm.Res{}, fmt.Errorf("api: giving up after %d retries: %w", g.opts.MaxRetries, lastErr)
 }
 
-// post makes one request. The bool reports whether a failure is worth
-// retrying: a 5xx or 429 clears on its own, while a 4xx will return the same
-// answer forever, so retrying it only burns quota.
 func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 	prompt := r.Prompt
 	if len(r.Schema) > 0 {
@@ -169,13 +150,8 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, false, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
-	// anthropic-version goes on every request regardless of auth style. The
-	// body is the Anthropic Messages shape either way, and an
-	// Anthropic-compatible gateway is built to receive exactly what an
-	// Anthropic client sends — the Claude Code CLI talks to OpenRouter's
-	// compatible endpoint and sends this header, so it is accepted there.
-	// Sending it when the gateway ignores it costs nothing; omitting it when
-	// the gateway requires it fails every request, so the asymmetry decides.
+	// anthropic-version is sent regardless of auth style: compatible gateways
+	// accept it and Anthropic requires it.
 	req.Header.Set("anthropic-version", apiVersion)
 	switch g.opts.AuthStyle {
 	case AuthStyleBearer:
@@ -186,11 +162,6 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 
 	resp, err := g.opts.HTTPClient.Do(req)
 	if err != nil {
-		// http.Client.Timeout expiry surfaces as a *url.Error wrapping
-		// context.DeadlineExceeded — the same sentinel agentcli's own deadline
-		// wraps, so a caller can branch on llm.ErrTimeout regardless of which
-		// gateway served the call. Not retryable: a second attempt burns
-		// another full timeout for the same result.
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.Res{}, false, fmt.Errorf("api: timeout: no response within %s: %w", g.opts.HTTPClient.Timeout, llm.ErrTimeout)
 		}
@@ -204,8 +175,6 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Best-effort: a malformed error body just falls back to the raw,
-		// trimmed body below rather than failing to report the failure at all.
 		var parsed response
 		_ = json.Unmarshal(raw, &parsed)
 		msg := strings.TrimSpace(string(raw))
@@ -216,13 +185,6 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		return llm.Res{}, retryable, fmt.Errorf("api: %d: %s", resp.StatusCode, msg)
 	}
 
-	// Unlike the error path above, a 200 must decode: a body that doesn't is a
-	// truncating proxy, an HTML error page served with a 200, or a partial
-	// write — never a legitimate empty answer — and swallowing that here would
-	// return a nil error with an empty Text indistinguishable from "the model
-	// said nothing". That silent-wrong-answer failure mode is worse than a
-	// loud one, so it is reported instead. Treated as retryable: it looks like
-	// a transport-level anomaly rather than a considered response.
 	var parsed response
 	if uerr := json.Unmarshal(raw, &parsed); uerr != nil {
 		return llm.Res{}, true, fmt.Errorf("api: malformed response body: %w (body: %.200s)", uerr, raw)
@@ -235,19 +197,9 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		}
 	}
 	if parsed.StopReason == "max_tokens" {
-		// A cut-off text block is still non-empty, so returning it as a
-		// success would hand the caller a truncated JSON string it can only
-		// blame on the model. Not retryable: MaxTokens is fixed per request,
-		// so a retry hits the identical ceiling and truncates identically —
-		// burning another call to learn nothing new.
 		return llm.Res{}, false, fmt.Errorf("api: response truncated at max_tokens (%d); raise the cap or shorten the request", defaultMaxTok)
 	}
 	if sb.Len() == 0 {
-		// A well-formed 200 with no text block is the caller's completion
-		// request going unanswered, not a valid empty completion — not
-		// retryable, since the request was well-formed and got a considered
-		// (if content-free) reply; retrying a deterministic non-text answer
-		// would just spend quota to hear the same thing again.
 		return llm.Res{}, false, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
 	}
 	return llm.Res{Text: sb.String(), Model: parsed.Model}, false, nil
@@ -260,10 +212,7 @@ func (g *Gateway) modelFor(c llm.ModelClass) string {
 	return g.opts.StrongModel
 }
 
-// ModelFor implements llm.Gateway. This gateway always knows its own model:
-// StrongModel and FastModel are configured (or defaulted) in New, so an
-// unrecognized class simply falls back to the strong model, matching
-// modelFor's own convention.
+// ModelFor implements llm.Gateway.
 func (g *Gateway) ModelFor(c llm.ModelClass) string {
 	return g.modelFor(c)
 }

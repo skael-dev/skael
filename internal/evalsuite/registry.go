@@ -72,30 +72,17 @@ type Record struct {
 type Origin string
 
 const (
-	// OriginAuthored is a suite a person wrote and gated through whetstone.
 	OriginAuthored Origin = "authored"
-	// OriginDerived is a suite generated from the skill's own SKILL.md. A
-	// score against one measures the skill against its own claims, which is
-	// why internal/skill's Releaser will not let it clear a scan hold.
+	// OriginDerived scores cannot clear a scan hold.
 	OriginDerived Origin = "derived"
 )
 
-// Queryer is the subset of pgx both a pool and a transaction satisfy, so
-// MarkDerived can be composed into the report handler's transaction rather
-// than landing outside it and surviving a rolled-back score.
+// Queryer is the subset of pgx both a pool and a transaction satisfy.
 type Queryer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// ErrInvalidArchive is wrapped into any Put error caused by the caller's
-// archive itself (unpack failure, unreadable suite tree, missing checks) —
-// bad input that should be reported to the caller as a 4xx, as opposed to a
-// storage or database failure on the server's side.
 var ErrInvalidArchive = errors.New("evalsuite: invalid archive")
-
-// ErrNotFound is wrapped into any Get/LatestForSkill error caused by no
-// matching row existing, as opposed to a database failure while looking one
-// up.
 var ErrNotFound = errors.New("evalsuite: suite not found")
 
 // Registry stores suite archives content-addressably and records their
@@ -115,32 +102,18 @@ func archiveKey(ref string) string {
 	return fmt.Sprintf("suites/%s.tar.gz", ref)
 }
 
-// Put stores a suite archive under suites/{ref}.tar.gz and records it. It is
-// idempotent on ref: the same content uploaded twice is one row.
-//
-// checks must not be empty — a suite with no oracle-gate results cannot tell
-// a broken task from a broken skill, so the check travels with the suite by
-// construction rather than by convention. specJSON is the pusher's spec.yaml
-// as JSON (may be nil/empty — see Record.Spec).
+// Put stores a suite archive and records it. Idempotent on ref.
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
 	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, false, nil)
 }
 
-// PutUnreviewed stores a suite whose pusher declared it exactly what the
-// generator wrote. It is derived, so its score cannot release a held version,
-// but a named author pushed it and can repair a void task. That is why it is
-// not machine generated.
+// PutUnreviewed stores a suite the pusher declared unedited since generation.
 func (r *Registry) PutUnreviewed(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
 	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, false, nil)
 }
 
-// PutDerived stores a suite the server has itself established is machine
-// derived, marking it so in the same transaction as the insert and running
-// after (when non-nil) inside it too — that is how the job row that caused
-// the derivation gets its suite_ref without a second, separately-failable
-// write. Origin is never taken from the pusher: a worker that could declare
-// its own suite authored would defeat internal/skill's refusal to let a
-// derived score clear a scan hold.
+// PutDerived stores a machine-generated suite, running after inside the
+// same transaction. Origin is never taken from the pusher.
 func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
 	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, true, after)
 }
