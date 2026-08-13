@@ -37,18 +37,9 @@ type RecordOutput struct {
 	JobID                    string          `json:"job_id,omitempty"`
 	ScoredAt                 time.Time       `json:"scored_at"`
 	CriticalForbidViolations int             `json:"critical_forbid_violations"`
-	// ReportJSON is json:"-" deliberately. The summary and history endpoints
-	// share this shape and must stay small; the full report is served only by
-	// the per-version endpoint, which wraps this struct rather than widening
-	// it. Struct tags are ignored by the conversion in toRecordOutput, so the
-	// field must still be present here or that conversion stops compiling —
-	// which is exactly the drift alarm it exists to be.
-	ReportJSON json.RawMessage `json:"-"`
+	ReportJSON               json.RawMessage `json:"-"`
 }
 
-// toRecordOutput converts a Record to its wire shape. RecordOutput's fields
-// deliberately match Record's, in order and type, so this is a plain
-// conversion rather than a field-by-field copy.
 func toRecordOutput(rec Record) RecordOutput {
 	return RecordOutput(rec)
 }
@@ -69,9 +60,7 @@ type qualityHistoryOutput struct {
 	Body qualityHistoryBody
 }
 
-// RegisterRoutes wires up the read-only quality endpoints: the skill's most
-// recent scored record across all versions, and its full history
-// newest-first for the version-over-version trend.
+// RegisterRoutes wires up the read-only quality endpoints.
 func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-skill-quality",
@@ -87,12 +76,6 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
 		}
 
-		// Deliberately not pinned to sk.LatestVersion: a skill scored at an
-		// earlier version should keep showing that score while a newer,
-		// not-yet-scored version is current — pinning to LatestVersion would
-		// make the badge vanish on every publish until the next eval lands.
-		// The wire shape carries `version`, so a caller can compare it
-		// against the skill's own latest_version and render staleness.
 		rec, err := store.LatestAcrossVersions(ctx, sk.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get skill quality: internal error", err)
@@ -160,11 +143,6 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 		Name    string `path:"name"`
 		Version int    `path:"version"`
 	}
-	// versionOutput embeds RecordOutput so the aggregate fields stay
-	// byte-identical to the summary endpoint's, and adds the report the
-	// summary deliberately omits. Report is a pointer-free RawMessage that
-	// marshals to `null` when absent, which is the signal the detail page
-	// branches on to render its aggregates-only view.
 	type versionBody struct {
 		RecordOutput
 		Report json.RawMessage `json:"report"`
@@ -196,16 +174,8 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 		body := versionBody{RecordOutput: toRecordOutput(*rec)}
 		body.Report = json.RawMessage("null")
 		if rec.ReportJSON != nil {
-			// The report can contain LLM prose quoting the skill's content
-			// (JudgeNote.Evidence). For a released version that content is
-			// already public via the download/show endpoints, so the report
-			// is unrestricted. For a version still held for review
-			// (gate_state != "released"), skill_versions' description/content
-			// are json:"-" everywhere else — serving the full report here
-			// would leak them indirectly. Only a privileged caller
-			// (owner/admin) may see it; everyone else gets the aggregates
-			// unchanged with report:null, exactly like the existing
-			// "no stored report" case the UI already handles.
+			// The report can quote the skill's content. For a held version that
+			// content is not public elsewhere, so restrict to privileged callers.
 			ver, err := skills.GetVersion(ctx, input.Name, input.Version)
 			if err != nil {
 				return nil, huma.Error500InternalServerError("get skill quality version: internal error", err)

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
@@ -113,4 +114,26 @@ func defaultOpener(path string) error {
 func init() {
 	reportCmd.Flags().BoolVar(&reportOpen, "open", false, "Open the rendered report with the OS default handler")
 	rootCmd.AddCommand(reportCmd)
+}
+
+// resolveReportDoc loads a stored report by eval id, or the latest for a
+// skill when ref is empty or "latest".
+func resolveReportDoc(st *store.Store, skill, ref string) ([]byte, int64, error) {
+	if ref == "" || ref == "latest" {
+		doc, evalID, err := st.LatestReport(skill)
+		if err != nil {
+			return nil, 0, fmt.Errorf("whetstone report: no eval found for %q; run `whetstone eval %s` first", skill, skill)
+		}
+		return doc, evalID, nil
+	}
+
+	evalID, err := strconv.ParseInt(ref, 10, 64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("whetstone report: %q is not a valid eval id or \"latest\"", ref)
+	}
+	doc, err := st.Report(evalID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("whetstone report: no report for eval %d of %q; run `whetstone eval %s` first", evalID, skill, skill)
+	}
+	return doc, evalID, nil
 }

@@ -400,6 +400,9 @@ export function QualityReport({
     (summaryQuery.error as Error & { status?: number })?.status === 404;
 
   if (notScored) {
+    // No score exists yet, so this call site omits suiteRef rather than
+    // passing undefined. The scored call site below passes
+    // summary.suite_ref instead.
     return (
       <div className="text-sm text-text-secondary">
         <EvalStatus skillName={skillName} quality={null} latestVersion={latestVersion} />
@@ -449,6 +452,7 @@ export function QualityReport({
             quality={summary}
             latestVersion={latestVersion}
             hideDerivedBadge
+            suiteRef={summary.suite_ref}
           />
         </div>
       </div>

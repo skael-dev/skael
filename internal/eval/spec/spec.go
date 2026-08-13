@@ -1,8 +1,5 @@
-// Package spec holds the SkillSpec intermediate representation — the source of
-// truth every other eval component derives from. The generator writes a bundle
-// from it, the contract compiler compiles matchers from it, and the suite
-// generator drafts tasks from it. Nothing downstream parses the rendered
-// SKILL.md to recover intent.
+// Package spec holds the SkillSpec IR that generation, suite drafting, and
+// scoring all derive from.
 package spec
 
 // RuleKind distinguishes a positive obligation from a prohibition.
@@ -13,8 +10,7 @@ const (
 	RuleMustNot RuleKind = "must_not"
 )
 
-// Severity grades a constraint. It is carried through to the drift contract's
-// forbid rules, where it weights ViolationScore.
+// Severity grades a constraint.
 type Severity string
 
 const (
@@ -24,15 +20,6 @@ const (
 )
 
 // ModelTier names the capability floor the generator writes for.
-//
-// "Tier" is heavily overloaded in this codebase: runner.Tier is eval depth
-// (smoke/full/deep), ModelTier is model capability (floor/mid/strong),
-// distractor difficulty is graded by distance from the skill (near/mid/far), and
-// agent.Caps.EventTier grades how much fidelity an adapter's event stream
-// carries (A/B/C). Four different axes, one overloaded word. runner.Member
-// uses the field name Class rather than Tier for exactly this reason — its
-// value is still a ModelTier, but the field name doesn't collide with
-// runner.Tier sitting one struct away.
 type ModelTier string
 
 const (
@@ -41,19 +28,13 @@ const (
 	TierStrong ModelTier = "strong"
 )
 
-// MaxModules caps scripts/ + assets/ — the resources that add capability.
-// SkillsBench found focused skills beat exhaustive bundles, so this is a hard
-// limit rather than a warning. references/ is capped separately (see
-// MaxReferences): a reference split out of an over-long body adds no
-// capability, only lower context cost, so it doesn't count against this cap.
+// MaxModules caps scripts/ + assets/. references/ is capped separately by
+// MaxReferences because a reference split out of an over-long body adds no
+// capability.
 const MaxModules = 3
 
-// MaxReferences caps references/, independently of MaxModules — see there for
-// why the two are counted separately. Still bounded rather than unlimited, so
-// progressive disclosure doesn't become a way to bundle unlimited content.
-// Higher than MaxModules because offloading a long body is per-section: a real
-// skill needed five sections moved to fit, and a cap of three silently left it
-// over budget with nothing left to try.
+// MaxReferences caps references/, independently of MaxModules. Higher because
+// body offloading is per-section and a realistic skill can need five moves.
 const MaxReferences = 6
 
 // MaxDescription is the Agent Skills spec limit on frontmatter description.
@@ -62,16 +43,13 @@ const MaxDescription = 1024
 // MaxName is the Agent Skills spec limit on skill name length.
 const MaxName = 64
 
-// TriggerPhrase is one example prompt. Negative phrases are hard negatives —
-// adjacent-domain near-misses. Obviously-irrelevant negatives test nothing, so
-// the interview prompt asks for near-misses explicitly.
+// TriggerPhrase is one example prompt. Negative phrases are near-misses.
 type TriggerPhrase struct {
 	Text     string `yaml:"text" json:"text"`
 	Negative bool   `yaml:"negative,omitempty" json:"negative,omitempty"`
 }
 
-// Step is one action in the skill's workflow. Every step carries a verifiable
-// postcondition; Validation marks the steps that are checkpoints.
+// Step is one action in the skill's workflow.
 type Step struct {
 	ID            string `yaml:"id" json:"id"`
 	Action        string `yaml:"action" json:"action"`
@@ -101,20 +79,17 @@ type ResourcePlan struct {
 	Assets     []ResourceItem `yaml:"assets,omitempty" json:"assets,omitempty"`
 }
 
-// Count returns the total number of planned files across all three kinds —
-// how many resource-pass calls a plan costs, not a cap check.
+// Count returns the total number of planned files.
 func (p ResourcePlan) Count() int {
 	return len(p.Scripts) + len(p.References) + len(p.Assets)
 }
 
-// CapacityCount returns the planned scripts/ + assets/ file count, checked
-// against MaxModules.
+// CapacityCount returns the scripts/ + assets/ count, checked against MaxModules.
 func (p ResourcePlan) CapacityCount() int {
 	return len(p.Scripts) + len(p.Assets)
 }
 
-// ReferenceCount returns the planned references/ file count, checked against
-// MaxReferences.
+// ReferenceCount returns the references/ count, checked against MaxReferences.
 func (p ResourcePlan) ReferenceCount() int {
 	return len(p.References)
 }

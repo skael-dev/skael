@@ -16,7 +16,7 @@ type payload struct {
 func TestCompleteJSON_ParsesFencedResponse(t *testing.T) {
 	g := fake.New("```json\n{\"name\":\"pdf-extract\"}\n```")
 
-	got, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
+	got, _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
 	if err != nil {
 		t.Fatalf("CompleteJSON: %v", err)
 	}
@@ -28,10 +28,47 @@ func TestCompleteJSON_ParsesFencedResponse(t *testing.T) {
 	}
 }
 
+// TestCompleteJSON_ReturnsTheModelThatAnswered pins the reason this function
+// returns a response at all. A gateway that cannot name its model in advance
+// still names it in the answer. A caller that never sees the answer records no
+// judge for the run.
+func TestCompleteJSON_ReturnsTheModelThatAnswered(t *testing.T) {
+	g := fake.New(`{"name":"pdf-extract"}`)
+
+	got, res, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("CompleteJSON: %v", err)
+	}
+	if got.Name != "pdf-extract" {
+		t.Errorf("Name = %q, want pdf-extract", got.Name)
+	}
+	if res.Model != "fake" {
+		t.Errorf("Model = %q, want fake", res.Model)
+	}
+}
+
+// TestCompleteJSON_ReturnsTheRetrysResponse pins which of two responses comes
+// back. The retry is the answer that parsed, so its model is the one that did
+// the work.
+func TestCompleteJSON_ReturnsTheRetrysResponse(t *testing.T) {
+	g := fake.New("not json at all", `{"name":"ok"}`)
+
+	_, res, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("CompleteJSON: %v", err)
+	}
+	if len(g.Calls()) != 2 {
+		t.Fatalf("made %d calls, want 2", len(g.Calls()))
+	}
+	if res.Model != "fake" {
+		t.Errorf("Model = %q, want the retry's model", res.Model)
+	}
+}
+
 func TestCompleteJSON_RetriesOnceQuotingTheParseError(t *testing.T) {
 	g := fake.New("not json at all", `{"name":"ok"}`)
 
-	got, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
+	got, _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "interview", Prompt: "go"})
 	if err != nil {
 		t.Fatalf("CompleteJSON: %v", err)
 	}
@@ -53,7 +90,7 @@ func TestCompleteJSON_RetriesOnceQuotingTheParseError(t *testing.T) {
 func TestCompleteJSON_GivesUpAfterOneRetry(t *testing.T) {
 	g := fake.New("nope", "still nope", `{"name":"never reached"}`)
 
-	if _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "x", Prompt: "y"}); err == nil {
+	if _, _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "x", Prompt: "y"}); err == nil {
 		t.Fatal("CompleteJSON succeeded after two unparseable responses")
 	}
 	if n := len(g.Calls()); n != 2 {
@@ -66,7 +103,7 @@ func TestCompleteJSON_PropagatesGatewayError(t *testing.T) {
 	g := fake.New()
 	g.SetError(sentinel)
 
-	if _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "x", Prompt: "y"}); !errors.Is(err, sentinel) {
+	if _, _, err := llm.CompleteJSON[payload](context.Background(), g, llm.Req{Role: "x", Prompt: "y"}); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want it to wrap %v", err, sentinel)
 	}
 }

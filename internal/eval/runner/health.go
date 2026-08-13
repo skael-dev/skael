@@ -52,7 +52,7 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 	// with environment credentials failed every probe — marking every panel
 	// member unhealthy and turning every evaluation into an incomplete panel,
 	// with no indication that authentication was the cause.
-	mounts, authVars, err := resolveAuth(a, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: err.Error()}
 	}

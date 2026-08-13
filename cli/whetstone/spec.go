@@ -65,9 +65,9 @@ func RunSpecShow(skill string) error {
 	return sp.Save(os.Stdout)
 }
 
-// RunSpecEdit opens the spec YAML in $EDITOR and stores the edited result as a
-// new version. The new version is unapproved: approval is per version, so an
-// edit that skipped the gate would otherwise inherit the previous approval.
+// RunSpecEdit opens the spec YAML in $EDITOR. It stores the edited result as
+// a new, approved version. Approval is per version, so a prior version's
+// approval never carries forward to one nobody has reviewed.
 func RunSpecEdit(skill string) error {
 	st, err := openStore()
 	if err != nil {
@@ -133,11 +133,18 @@ func RunSpecEdit(skill string) error {
 	if err != nil {
 		return err
 	}
+	// The person who edited this document is the author. `whetstone new`
+	// approves a model-drafted spec with no question. A refusal here is
+	// backwards. The edited spec carries more review than the drafted one
+	// `whetstone new` accepts.
+	if err := st.ApproveSpec(edited.Name, version); err != nil {
+		return err
+	}
 
 	if ui.JSONMode {
-		return ui.PrintJSON(map[string]any{"skill": skill, "version": version, "approved": false})
+		return ui.PrintJSON(map[string]any{"skill": skill, "version": version, "approved": true})
 	}
-	ui.Success("stored %s spec version %d; run `whetstone spec approve %s` to approve it", skill, version, skill)
+	ui.Success("stored and approved %s spec version %d", skill, version)
 	return nil
 }
 

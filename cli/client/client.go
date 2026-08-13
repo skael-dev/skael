@@ -425,7 +425,8 @@ type EvalSuiteUpload struct {
 }
 
 // EvalSuiteUploadRequest is one suite upload. Spec may be nil; JobID and
-// ClaimToken are set only by the eval worker's derive path.
+// ClaimToken are set only by the eval worker's derive path; Unreviewed
+// declares that nobody has read this suite. See UploadEvalSuite.
 type EvalSuiteUploadRequest struct {
 	Skill       string
 	SpecVersion int
@@ -434,6 +435,7 @@ type EvalSuiteUploadRequest struct {
 	Archive     []byte
 	JobID       string
 	ClaimToken  string
+	Unreviewed  bool
 }
 
 // UploadEvalSuite uploads an evaluation suite archive, together with the
@@ -450,6 +452,9 @@ type EvalSuiteUploadRequest struct {
 // for a job it currently holds the claim on; the server stamps such a suite
 // as machine-derived at push time. An authored push from whetstone leaves both
 // empty.
+// Unreviewed declares that this suite is exactly what the generator wrote and
+// that nobody has read it. The server records such a suite as machine-derived,
+// so a skill cannot clear a scan hold on its own eval set.
 func (c *Client) UploadEvalSuite(req EvalSuiteUploadRequest) (*EvalSuiteUpload, error) {
 	payload, err := json.Marshal(struct {
 		Skill         string           `json:"skill"`
@@ -459,6 +464,7 @@ func (c *Client) UploadEvalSuite(req EvalSuiteUploadRequest) (*EvalSuiteUpload, 
 		ArchiveBase64 string           `json:"archive_base64"`
 		JobID         string           `json:"job_id,omitempty"`
 		ClaimToken    string           `json:"claim_token,omitempty"`
+		Unreviewed    bool             `json:"unreviewed,omitempty"`
 	}{
 		Skill:         req.Skill,
 		SpecVersion:   req.SpecVersion,
@@ -467,6 +473,7 @@ func (c *Client) UploadEvalSuite(req EvalSuiteUploadRequest) (*EvalSuiteUpload, 
 		ArchiveBase64: base64.StdEncoding.EncodeToString(req.Archive),
 		JobID:         req.JobID,
 		ClaimToken:    req.ClaimToken,
+		Unreviewed:    req.Unreviewed,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal upload eval suite request: %w", err)

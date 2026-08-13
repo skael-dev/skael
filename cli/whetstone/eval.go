@@ -7,19 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
-	"github.com/skael-dev/skael/internal/eval/contract"
-	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
+	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
@@ -54,14 +57,18 @@ type EvalDeps struct {
 	// for the interactive CLI, which always shares a filesystem with the
 	// daemon it starts sandboxes on.
 	WorkspaceRoot string
-	// PanelStrongModel and PanelFastModel override the shipped panel's model
-	// ids. Already-resolved values rather than env lookups, so RunEvalWith
-	// carries no policy — see panelModelsFromEnv.
-	PanelStrongModel string
-	PanelFastModel   string
+	// PanelModels overrides the shipped panel's model ids, most capable
+	// first. Already-resolved values rather than env lookups, so RunEvalWith
+	// carries no policy — see provider.Config.PanelModels.
+	PanelModels []string
 	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
 	// can name the endpoint that rejected its models.
 	PanelBaseURL string
+	// PanelExcludeEnv names credential variables the panel's sandboxes must
+	// not be given — see provider.Config.PanelExcludeEnv and
+	// runner.Options.PanelExcludeEnv. Resolved values rather than env
+	// lookups, for the same reason PanelModels is.
+	PanelExcludeEnv []string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -91,13 +98,18 @@ type baseEnsurer interface {
 	EnsureBase(ctx context.Context, slim bool) error
 }
 
-// RunEvalWith runs one evaluation end to end: load the approved spec and
-// suite, refuse an eval against unchecked or void tasks, plan and execute the
-// panel, score the result, and persist and write the report. See the package
-// doc for the phase-by-phase breakdown; this function follows it in order.
+// RunEvalWith runs one evaluation end to end: load the approved spec and eval
+// set, refuse an eval against unchecked or void evals, plan and execute the
+// panel, grade every session, and persist and write the report.
 func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Report, error) {
 	if d.Store == nil || d.Driver == nil || d.Adapters == nil {
 		return nil, errors.New("whetstone eval: needs a store, a driver, and an adapter registry")
+	}
+	// The score is an expectation pass rate, and expectations are graded by a
+	// model. Without a gateway there is no score at all, so this fails here
+	// rather than after spending a panel's worth of sessions.
+	if d.Gateway == nil {
+		return nil, errors.New("whetstone eval: needs an LLM gateway to grade expectations; run `whetstone doctor` to check your setup")
 	}
 	now := d.Now
 	if now == nil {
@@ -108,7 +120,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		sleepFn = time.Sleep
 	}
 
-	// 1. Approved spec, written suite, and the suite's content ref.
+	// 1. Approved spec, the eval set, and its content ref.
 	sp, specVersion, err := d.Store.LoadSpec(req.Skill)
 	if err != nil {
 		return nil, err
@@ -122,72 +134,69 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err != nil {
 		return nil, err
 	}
-	s, err := suite.Load(suiteDir)
+	set, err := suite.LoadEvalSet(suiteDir)
 	if err != nil {
-		return nil, fmt.Errorf("whetstone eval: loading suite for %s: %w (run `whetstone new %s` first)", req.Skill, err, req.Skill)
+		return nil, fmt.Errorf("whetstone eval: loading the eval set for %s: %w (run `whetstone suite gen %s` first)", req.Skill, err, req.Skill)
 	}
-
+	triggers, err := suite.LoadTriggerQueries(suiteDir)
+	if err != nil {
+		return nil, err
+	}
 	suiteRef, err := suite.Ref(suiteDir)
 	if err != nil {
 		return nil, err
 	}
-	if len(req.TaskFilter) > 0 {
-		keep := make(map[string]bool, len(req.TaskFilter))
-		for _, id := range req.TaskFilter {
-			keep[id] = true
-		}
-		filtered := make([]suite.TaskPkg, 0, len(s.Tasks))
-		for _, t := range s.Tasks {
-			if keep[t.ID] {
-				filtered = append(filtered, t)
-			}
-		}
-		s.Tasks = filtered
-	}
 
-	// 2. The suite must have been gated, and cleanly.
+	// 2. The eval set must have been checked, and cleanly.
 	checks, err := d.Store.SuiteChecks(req.Skill, suiteRef)
 	if err != nil {
 		return nil, err
 	}
 	if len(checks) == 0 {
-		return nil, fmt.Errorf("whetstone eval: no suite check recorded for %s at suite %s; an eval against unchecked tasks cannot tell a broken task from a broken skill — run `whetstone suite check %s` first",
+		return nil, fmt.Errorf("whetstone eval: no check recorded for %s at eval set %s; run `whetstone suite check %s` first",
 			req.Skill, suite.ShortRef(suiteRef), req.Skill)
 	}
-	voidSet := map[string]bool{}
+	voidSet := map[int]bool{}
 	var voidTasks []report.VoidTask
-	var voidCount int
 	for _, c := range checks {
-		if c.Void {
-			voidSet[c.TaskID] = true
-			voidTasks = append(voidTasks, report.VoidTask{TaskID: c.TaskID, Reason: c.Reason})
-			voidCount++
+		if !c.Void {
+			continue
 		}
+		id, cerr := strconv.Atoi(c.TaskID)
+		if cerr != nil {
+			return nil, fmt.Errorf("whetstone eval: recorded check names eval %q, which is not an eval id: %w", c.TaskID, cerr)
+		}
+		voidSet[id] = true
+		voidTasks = append(voidTasks, report.VoidTask{TaskID: c.TaskID, Reason: c.Reason})
 	}
-	if voidCount > 0 && !req.AllowVoid {
-		return nil, fmt.Errorf("whetstone eval: %d of %d tasks are void for %s; fix them and re-run `whetstone suite check %s`, or pass --allow-void to exclude them",
-			voidCount, len(checks), req.Skill, req.Skill)
+	if len(voidSet) > 0 && !req.AllowVoid {
+		return nil, fmt.Errorf("whetstone eval: %d of %d evals are void for %s; fix them and re-run `whetstone suite check %s`, or pass --allow-void to exclude them",
+			len(voidSet), len(checks), req.Skill, req.Skill)
 	}
 
-	// 3. The model panel.
-	//
-	// A caller that named a panel always wins; this only fills the default.
-	// The shipped default is the bare Claude Code aliases opus/haiku, which
+	// 3. The model panel. A caller that named one always wins; this only fills
+	// the default. The shipped default names bare Claude Code aliases, which
 	// mean nothing to a gateway that namespaces its identifiers — so when the
 	// boundary resolved model ids for a custom gateway, build the default out
-	// of those instead. ParsePanel assigns Class positionally, so one agent
-	// with [strong, fast] yields exactly DefaultPanel's shape: a
-	// spec.TierStrong member followed by a spec.TierFloor one. The agent name
-	// comes from DefaultPanel rather than a second "claude-code" literal so
-	// the two cannot drift apart.
+	// of those instead.
 	agents, models := req.Agents, req.Models
-	if len(agents) == 0 && len(models) == 0 && d.PanelStrongModel != "" && d.PanelFastModel != "" {
-		agents = []string{runner.DefaultPanel()[0].Agent}
-		models = []string{d.PanelStrongModel, d.PanelFastModel}
+	if len(agents) == 0 && len(models) == 0 && len(d.PanelModels) > 0 {
+		shipped := runner.PanelFor(req.Tier)
+		agents = []string{shipped[0].Agent}
+		// One configured model per shipped member, in order: the extra models
+		// only mean anything at the deep tier, which is the only tier with a
+		// floor member to give them to.
+		models = d.PanelModels
+		if len(models) > len(shipped) {
+			models = models[:len(shipped)]
+		}
 	}
-	panel, err := runner.ParsePanel(agents, models)
-	if err != nil {
-		return nil, err
+	panel := runner.PanelFor(req.Tier)
+	if len(agents) > 0 || len(models) > 0 {
+		panel, err = runner.ParsePanel(agents, models)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 4. The trust gate, before anything is prepared.
@@ -206,25 +215,22 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err != nil {
 		return nil, fmt.Errorf("whetstone eval: preparing image: %w", err)
 	}
-	// Snapshot is a no-op on the docker driver; it is still called here so a
-	// driver with real checkpoint support (Sprites) needs no change at this
-	// call site.
 	if _, err := d.Driver.Snapshot(ctx, image); err != nil {
 		return nil, fmt.Errorf("whetstone eval: snapshotting image: %w", err)
 	}
 
-	ro := runner.Options{
+	rn, err := runner.New(runner.Options{
 		Store: d.Store, Driver: d.Driver, Adapters: d.Adapters,
 		Concurrency: req.Concurrency, Untrusted: req.Untrusted,
 		Sleep: sleepFn, Logger: ui.Info,
-		WorkspaceRoot: d.WorkspaceRoot,
-	}
-	rn, err := runner.New(ro)
+		WorkspaceRoot:   d.WorkspaceRoot,
+		PanelExcludeEnv: d.PanelExcludeEnv,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	// 6. Health-probe the panel before spending any task session on it.
+	// 6. Health-probe the panel before spending any session on it.
 	health, err := rn.ProbePanel(ctx, panel, image)
 	if err != nil {
 		return nil, err
@@ -246,8 +252,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 	var evalID int64
 	// startedAt is the eval's own start time, not the moment this process
-	// happened to resume it — a resumed eval's report must still say when
-	// the measurement began, not when the Nth resume of it ran.
+	// happened to resume it.
 	startedAt := now()
 	if req.Resume != 0 {
 		existing, err := d.Store.Eval(req.Resume)
@@ -258,7 +263,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			return nil, fmt.Errorf("whetstone eval: --resume %d is an eval for %q, not %q", req.Resume, existing.Skill, req.Skill)
 		}
 		if existing.SuiteRef != suiteRef {
-			return nil, fmt.Errorf("whetstone eval: --resume %d was measured against suite %s, the current suite is %s; resuming across a changed suite would silently mix two measurements",
+			return nil, fmt.Errorf("whetstone eval: --resume %d was measured against eval set %s, the current one is %s; resuming across a change would silently mix two measurements",
 				req.Resume, suite.ShortRef(existing.SuiteRef), suite.ShortRef(suiteRef))
 		}
 		if string(existing.ModelPanel) != string(panelJSON) {
@@ -278,7 +283,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	// 8. Plan and execute.
-	plan, err := runner.BuildPlan(req.Tier, panel, s, voidSet)
+	plan, err := runner.BuildPlan(req.Tier, panel, set, voidSet, triggers)
 	if err != nil {
 		return nil, err
 	}
@@ -298,210 +303,46 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return nil, err
 	}
 
-	// 9. Score.
-	contractPath, err := d.Store.ContractPath(req.Skill)
+	// 9. Grade every session that produced a transcript.
+	grader, err := score.NewGrader(d.Gateway)
 	if err != nil {
 		return nil, err
 	}
-	cf, err := os.Open(contractPath)
-	if err != nil {
-		return nil, fmt.Errorf("whetstone eval: opening contract for %s: %w (run `whetstone new %s` first)", req.Skill, err, req.Skill)
-	}
-	ct, err := contract.Load(cf)
-	_ = cf.Close()
+	graded, err := gradeOutcomes(ctx, grader, plan, execRes.Outcomes, req.Concurrency)
 	if err != nil {
 		return nil, err
 	}
-
-	memberFor := func(agentName, model string) (runner.Member, bool) {
-		for _, m := range panel {
-			if m.Agent == agentName && m.Model == model {
-				return m, true
-			}
+	for key, g := range graded {
+		doc, merr := json.Marshal(g.Expectations)
+		if merr != nil {
+			return nil, merr
 		}
-		return runner.Member{}, false
+		if err := d.Store.SaveGrade(evalID, store.RunGrade{
+			Key: key, Passed: g.Passed, Total: g.Total, Doc: doc,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
-	grouped := map[runner.Member]*memberOutcomes{}
+	// 10. Score each member from its grades.
+	cliVersion := agentCLIVersion()
+	modelPanelOut := make([]report.PanelMember, 0, len(panel))
+	for _, m := range panel {
+		modelPanelOut = append(modelPanelOut, report.PanelMember{
+			Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion})
+	}
+
 	scheduled := map[runner.Member]bool{}
 	for _, k := range plan.Runs {
-		m, ok := memberFor(k.Agent, k.Model)
-		if !ok {
-			continue
-		}
-		scheduled[m] = true
-	}
-	for _, o := range execRes.Outcomes {
-		m, ok := memberFor(o.Key.Agent, o.Key.Model)
-		if !ok {
-			continue
-		}
-		g := grouped[m]
-		if g == nil {
-			g = newMemberOutcomes()
-			grouped[m] = g
-		}
-		switch o.Key.Condition {
-		case runner.CondSkill:
-			g.skill[o.Key.TaskID] = append(g.skill[o.Key.TaskID], o)
-		case runner.CondBaseline:
-			g.baseline[o.Key.TaskID] = append(g.baseline[o.Key.TaskID], o)
-		}
-	}
-
-	// Judge calibration runs once, independent of any particular member: it
-	// answers "is this judge trustworthy at all", against the fixed labelled
-	// set, not against this eval's own sessions.
-	var (
-		judge          *score.Judge
-		judgeTrusted   bool
-		judgeKappa     *float64
-		judgeLabeledBy string
-	)
-	// Every way this can fail ends in the same place — Uplift falls back to
-	// pass rates — so each one says why. Nested `if err == nil` with no else
-	// made a missing gateway, a failed construction, and a judge below the κ
-	// floor indistinguishable: all three surfaced only as
-	// "passrate-fallback". None is fatal; the deterministic pillars are still
-	// a real measurement.
-	judgeUnavailable := ""
-	switch d.Gateway {
-	case nil:
-		judgeUnavailable = "no LLM gateway is configured"
-	default:
-		calSet, cerr := score.Calibration()
-		j, jerr := score.NewJudge(score.JudgeOptions{Gateway: d.Gateway, Spec: sp})
-		switch {
-		case cerr != nil:
-			judgeUnavailable = fmt.Sprintf("the calibration set could not be loaded: %v", cerr)
-		case jerr != nil:
-			judgeUnavailable = fmt.Sprintf("the judge could not be constructed: %v", jerr)
-		default:
-			result, rerr := score.Calibrate(ctx, j, calSet)
-			switch {
-			case rerr != nil:
-				judgeUnavailable = fmt.Sprintf("calibration did not complete: %v", rerr)
-			default:
-				k := result.Kappa
-				judgeKappa = &k
-				judgeLabeledBy = result.LabeledBy
-				judgeTrusted = result.JudgeTrusted()
-				if judgeTrusted {
-					judge = j
-				} else {
-					judgeUnavailable = fmt.Sprintf(
-						"the judge calibrated at κ=%.2f, below the %.2f floor (labels by %s)",
-						result.Kappa, score.KappaFloor, result.LabeledBy)
-				}
+		for _, m := range panel {
+			if m.Agent == k.Agent && m.Model == k.Model {
+				scheduled[m] = true
 			}
 		}
 	}
-	// The judge only ever moves Uplift. With no baseline planned, Uplift is
-	// a structural tie either way, so announcing the fallback reports a
-	// consequence that does not exist.
-	if judgeUnavailable != "" && BaselinePlanned(*plan) {
-		ui.Warn("whetstone eval: scoring Uplift from pass rates rather than the judge — %s", judgeUnavailable)
-	}
 
-	// Trigger firing is measured on the primary panel member only, not on
-	// every member individually, and the single F1 result is then copied into
-	// every scored member's Pillars. That rests on an assumption this eval
-	// does not verify — that trigger firing is model-independent, i.e. a
-	// weaker model infers no less from the skill's description than the
-	// strong one probes ran on. RobustnessGap's own premise is that weaker
-	// models infer less from the same text, so this may be the assumption
-	// most likely to be false; the report at least records which member the
-	// figure came from (report.TriggerSource) rather than presenting it as
-	// measured per member. Planning one probe set per capability class would
-	// remove the assumption but is a larger change than this fix covers.
-	//
-	// A tier that plans no probes (Smoke) measures nothing here; that is
-	// treated as vacuously satisfied, the same convention drift.Score already
-	// uses for a contract with no required steps, rather than as a zero that
-	// would otherwise sink Effectiveness for a fast development check.
-	triggerF1 := 1.0
-	var triggerUnknown int
-	var triggerInferred bool
-	var triggerSource report.PanelMember
-	if len(execRes.Probes) > 0 {
-		probeMember := execRes.Probes[0].Probe.Member
-		triggerSource = report.PanelMember{Agent: probeMember.Agent, Model: probeMember.Model, Class: string(probeMember.Class)}
-		probes := make([]score.Probe, 0, len(execRes.Probes))
-		for _, p := range execRes.Probes {
-			if p.Unknown {
-				probes = append(probes, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Unknown: true, Reason: p.Reason})
-				continue
-			}
-			fired, inferred := score.DetectFiring(req.Skill, p.Caps, p.Events)
-			probes = append(probes, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Fired: fired, Inferred: inferred})
-		}
-		f1, ferr := score.TriggerF1(probes)
-		if ferr != nil {
-			return nil, ferr
-		}
-		triggerF1 = f1.F1
-		triggerUnknown = f1.Unknown
-		triggerInferred = f1.AnyInferred
-	}
-
-	promptFor := func(taskID string) string {
-		for _, t := range plan.Tasks {
-			if t.ID == taskID {
-				return t.PromptMD
-			}
-		}
-		return ""
-	}
-
-	// cliVersion is the same probe `whetstone doctor` reports as
-	// AgentCLIVersion: the version of the agent CLI actually on this host's
-	// PATH. Recorded on every panel member so Report.Comparable can tell a CLI
-	// upgrade between two runs from a change in the skill — without it, every
-	// report asserted an empty CLIVersion and two runs made with different CLI
-	// builds compared as identical.
-	var cliVersion string
-	if bin, err := agentcli.Detect(); err == nil {
-		cliVersion = probeVersion(bin)
-	}
-
-	var modelPanelOut []report.PanelMember
-	for _, m := range panel {
-		modelPanelOut = append(modelPanelOut, report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion})
-	}
-
-	// taskAgg accumulates the per-task carriers (conditions, drift, judge
-	// notes) across every scored member, so the report's Tasks section shows
-	// the same measurements the per-member pillars were computed from,
-	// rather than discarding them once the member loop is done with them.
-	taskMeta := map[string]struct{ Kind, Split string }{}
-	for _, t := range plan.Tasks {
-		taskMeta[t.ID] = struct{ Kind, Split string }{t.Kind, t.Split}
-	}
-	taskAgg := map[string]*report.TaskInput{}
-	getTask := func(taskID string) *report.TaskInput {
-		if ti, ok := taskAgg[taskID]; ok {
-			return ti
-		}
-		meta := taskMeta[taskID]
-		ti := &report.TaskInput{TaskID: taskID, Kind: meta.Kind, Split: meta.Split}
-		taskAgg[taskID] = ti
-		return ti
-	}
-
-	var totalUnevaluable int
-	var unevalDetail []string
-
+	tasks := newTaskAgg()
 	var members []report.MemberInput
-	// scoredMembers and judgeMembers gate the report-wide UpliftSource
-	// label. Uplift itself is already computed per member (reliability,
-	// baseline pass rate, and verdicts all come from that member's own
-	// outcomes) — what is eval-wide is only the single UpliftSource field on
-	// the report, and it must not say "judge" while even one scored member's
-	// Uplift silently came from the pass-rate fallback.
-	var scoredMembers, judgeMembers int
-	// baselineWipeout records that some member's baseline passed no task at
-	// all — see where it is set for why that makes Uplift degenerate.
-	var baselineWipeout bool
 	for _, m := range panel {
 		if !scheduled[m] {
 			continue
@@ -515,223 +356,58 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			members = append(members, mi)
 			continue
 		}
-
-		g := grouped[m]
-		if g == nil {
-			g = newMemberOutcomes()
-		}
-
-		skillTasks, skillPartial, skillPartialReason := taskPasses(g.skill)
-		if len(skillTasks) == 0 {
-			return nil, fmt.Errorf("whetstone eval: member %s/%s produced no measurable skill run", m.Agent, m.Model)
-		}
-		// taskReliability, not score.Reliability directly: a task with an
-		// errored run has fewer surviving samples than the tier planned for
-		// it, and that one task must degrade to a narrower (but still
-		// computable) estimate rather than aborting the whole eval — see
-		// taskReliability's doc.
-		reliability, err := taskReliability(skillTasks, plan.K)
+		s, partial, reason, err := memberScore(plan, execRes.Outcomes, graded, m, runner.CondSkill, tasks)
 		if err != nil {
 			return nil, fmt.Errorf("whetstone eval: member %s/%s: %w", m.Agent, m.Model, err)
 		}
-		for _, t := range skillTasks {
-			ti := getTask(t.TaskID)
-			ti.Conditions = append(ti.Conditions, report.ConditionReport{
-				Condition: runner.CondSkill, Model: m.Model, Passes: t.C, Runs: t.N,
-				Reason: firstFailureReason(g.skill[t.TaskID]),
-			})
-		}
-
-		efficiency := 1.0
-		// Efficiency's neutral default is 1.0 ("no penalty"), not the middle
-		// of its range: with no baseline token data there is nothing the
-		// skill could have spent *more* than, and 1.0 is the only value that
-		// does not accuse an unmeasured member of bloat. Uplift's neutral
-		// default (below) is 0.5, not 1.0, because Uplift is a symmetric
-		// preference score (0 = baseline always wins, 1 = skill always
-		// wins) — an unmeasured comparison is undecided, which is the
-		// midpoint, not a win.
-		skillTok, blTok := tokenTotals(g.skill), tokenTotals(g.baseline)
-		if len(skillTok) > 0 && len(blTok) > 0 {
-			sm, smErr := score.Median(skillTok)
-			if smErr != nil {
-				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, smErr)
-			}
-			bm, bmErr := score.Median(blTok)
-			if bmErr != nil {
-				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, bmErr)
-			}
-			e, eerr := score.Efficiency(sm, bm)
-			if eerr != nil {
-				return nil, fmt.Errorf("whetstone eval: member %s/%s: efficiency: %w", m.Agent, m.Model, eerr)
-			}
-			efficiency = e
-		}
-
-		var upliftVal float64
-		metaPartial, metaPartialReason := skillPartial, skillPartialReason
-		if len(g.baseline) > 0 {
-			scoredMembers++
-			baselineTasks, blPartial, blPartialReason := taskPasses(g.baseline)
-			// baselinePassRate defaults to reliability: when every baseline
-			// run for every task errored (baselineTasks is empty), there is
-			// truly nothing to compare against for this member, and
-			// UpliftFromPassRates(reliability, reliability) evaluates to the
-			// same neutral 0.5 the no-baseline-planned branch below uses
-			// directly.
-			baselinePassRate := reliability
-			if len(baselineTasks) > 0 {
-				bp, berr := taskReliability(baselineTasks, plan.BaselineK)
-				if berr != nil {
-					return nil, fmt.Errorf("whetstone eval: member %s/%s: baseline reliability: %w", m.Agent, m.Model, berr)
-				}
-				baselinePassRate = bp
-			}
-			for _, t := range baselineTasks {
-				ti := getTask(t.TaskID)
-				ti.Conditions = append(ti.Conditions, report.ConditionReport{
-					Condition: runner.CondBaseline, Model: m.Model, Passes: t.C, Runs: t.N,
-					Reason: firstFailureReason(g.baseline[t.TaskID]),
-				})
-			}
-			metaPartial = metaPartial || blPartial
-			if !skillPartial && blPartial {
-				metaPartialReason = blPartialReason
-			}
-
-			// At baseline 0, UpliftFromPassRates collapses to
-			// 0.5+Reliability/2 — a rescaling of a pillar Effectiveness
-			// already weighs. It is also the shape a broken baseline harness
-			// produces, which is why it is worth surfacing rather than just
-			// scoring.
-			if baselinePassRate == 0 && len(baselineTasks) > 0 {
-				baselineWipeout = true
-			}
-
-			upliftVal = score.UpliftFromPassRates(reliability, baselinePassRate)
-			if judgeTrusted && judge != nil {
-				if verdicts, jerr := pairwiseVerdicts(ctx, judge, promptFor, g); jerr == nil && len(verdicts) > 0 {
-					if jv, uerr := score.UpliftFromJudge(verdictSlice(verdicts)); uerr == nil {
-						upliftVal = jv
-						judgeMembers++
-					}
-					for taskID, v := range verdicts {
-						ti := getTask(taskID)
-						ti.Judge = append(ti.Judge, report.JudgeNote{
-							Model: m.Model, Winner: v.Winner, Margin: v.Margin, Evidence: v.Evidence, Votes: v.Votes,
-						})
-					}
-				}
-			}
-		} else {
-			// No baseline was planned for this tier (Smoke): there is nothing
-			// to compare against, so Uplift is left neutral rather than
-			// penalizing (or crediting) the skill for a comparison that was
-			// never run.
-			upliftVal = 0.5
-		}
-		mi.MetaPartial = metaPartial
-		mi.MetaPartialReason = metaPartialReason
-
-		mi.Pillars = score.Pillars{TriggerF1: triggerF1, Reliability: reliability, Uplift: upliftVal, Efficiency: efficiency}
-
-		var driftResults []drift.Result
-		for taskID, outs := range g.skill {
-			for _, o := range outs {
-				semantic := semanticScore(ctx, judge, ct, func() string { return loadTranscript(o.ArtifactDir) })
-				obs, oerr := drift.Observe(ct, o.Events)
-				if oerr != nil {
-					return nil, oerr
-				}
-				dr, derr := drift.Score(obs, semantic, drift.DefaultWeights)
-				if derr != nil {
-					return nil, derr
-				}
-				driftResults = append(driftResults, dr)
-
-				ti := getTask(taskID)
-				ti.Drift = append(ti.Drift, report.RunDrift{
-					Agent: m.Agent, Model: m.Model, Attempt: o.Key.Attempt, Result: dr, Violations: obs.Violations,
-				})
-				totalUnevaluable += obs.Unevaluable
-				unevalDetail = append(unevalDetail, obs.UnevaluableDetail...)
-			}
-		}
-		mi.Drift = driftResults
-
+		mi.Score, mi.MetaPartial, mi.MetaPartialReason = s, partial, reason
 		members = append(members, mi)
 	}
 
-	// usedJudge labels the whole report's UpliftSource as "judge" only when
-	// every scored member (one with baseline runs to compare) actually used
-	// the judge for its own Uplift — not when any single member happened to.
-	// The report carries one UpliftSource for the whole eval, so labelling
-	// it "judge" while even one scored member's Uplift silently came from
-	// pass rates would let a reader believe every member's number carries
-	// the judge's higher fidelity when some of them do not.
-	usedJudge := scoredMembers > 0 && judgeMembers == scoredMembers
-
-	// judgeModel names the model that actually served the judge's calls, so
-	// Report.Comparable can tell "a different judge moved this number" from
-	// "the skill changed" — see Report.JudgeModel. It comes from the gateway
-	// itself, not from any config the caller believes is in effect: the
-	// gateway resolves ModelClass to a concrete model internally, and a
-	// value threaded down separately could name a different model than the
-	// one that actually ran. Judge.Pairwise and Judge.Semantic both request
-	// llm.ClassStrong (see score/judge.go), so that is the class asked
-	// about here. Left empty when no judge was constructed at all — an
-	// empty JudgeModel must mean "no judge", not "unknown judge".
-	var judgeModel string
-	if judge != nil {
-		judgeModel = d.Gateway.ModelFor(llm.ClassStrong)
+	// The baseline runs on the primary member only, so the delta is that
+	// member's score against its own without-skill runs. Comparing it to the
+	// panel minimum would subtract two different members' numbers.
+	var baseline float64
+	var baselineMeasured, baselineWipeout bool
+	if runner.BaselinePlanned(*plan) {
+		primary := panel[0]
+		b, _, _, berr := memberScore(plan, execRes.Outcomes, graded, primary, runner.CondBaseline, tasks)
+		if berr == nil {
+			baseline, baselineMeasured = b, true
+			baselineWipeout = b == 0
+		} else {
+			ui.Warn("whetstone eval: no baseline score — %v", berr)
+		}
 	}
 
-	taskIDs := make([]string, 0, len(taskAgg))
-	for id := range taskAgg {
-		taskIDs = append(taskIDs, id)
-	}
-	sort.Strings(taskIDs)
-	var tasksOut []report.TaskInput
-	for _, id := range taskIDs {
-		ti := taskAgg[id]
-		sort.Slice(ti.Conditions, func(i, j int) bool {
-			if ti.Conditions[i].Condition != ti.Conditions[j].Condition {
-				return ti.Conditions[i].Condition < ti.Conditions[j].Condition
-			}
-			return ti.Conditions[i].Model < ti.Conditions[j].Model
-		})
-		sort.Slice(ti.Drift, func(i, j int) bool {
-			if ti.Drift[i].Model != ti.Drift[j].Model {
-				return ti.Drift[i].Model < ti.Drift[j].Model
-			}
-			return ti.Drift[i].Attempt < ti.Drift[j].Attempt
-		})
-		sort.Slice(ti.Judge, func(i, j int) bool { return ti.Judge[i].Model < ti.Judge[j].Model })
-		tasksOut = append(tasksOut, *ti)
+	tokensSkill := medianTokens(execRes.Outcomes, runner.CondSkill)
+	tokensBaseline := medianTokens(execRes.Outcomes, runner.CondBaseline)
+
+	triggerF1, triggerInferred, triggerUnknown, triggerSource, err := scoreTriggers(req.Skill, execRes.Probes)
+	if err != nil {
+		return nil, err
 	}
 
 	rep, err := report.Compose(report.ComposeInput{
 		Skill: req.Skill, SpecVersion: specVersion, Tier: string(req.Tier), SuiteRef: suiteRef,
 		EngineVersion: d.EngineVersion, ModelPanel: modelPanelOut, PanelComplete: execRes.PanelComplete,
-		Members: members, Tasks: tasksOut, Void: voidTasks,
-		JudgeTrusted: usedJudge, JudgeKappa: judgeKappa, JudgeLabeledBy: judgeLabeledBy, JudgeModel: judgeModel,
-		TriggerInferred: triggerInferred, TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
-		Unevaluable: totalUnevaluable, UnevaluableDetail: unevalDetail,
-		BaselineWipeout: baselineWipeout,
-		StartedAt:       startedAt, FinishedAt: now(),
+		Members: members, Tasks: tasks.slice(), Void: voidTasks,
+		Baseline: baseline, BaselineMeasured: baselineMeasured, BaselineWipeout: baselineWipeout,
+		TokensMedian: tokensSkill, TokensMedianBaseline: tokensBaseline,
+		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
+		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
+		GraderModel: graderModel(d.Gateway, graded),
+		StartedAt:   startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// 10. Persist.
+	// 11. Persist.
 	for _, mr := range rep.Members {
 		if err := d.Store.SaveScore(evalID, store.ScoreRow{
 			Agent: mr.Member.Agent, Model: mr.Member.Model,
-			TriggerF1: mr.Pillars.TriggerF1, Reliability: mr.Pillars.Reliability,
-			Uplift: mr.Pillars.Uplift, Efficiency: mr.Pillars.Efficiency,
-			Effectiveness: mr.Effectiveness, Adherence: mr.Drift.Mean, Drift: 100 - mr.Drift.Mean,
-			Grade: mr.DriftGrade, Healthy: mr.Healthy,
+			Effectiveness: mr.Effectiveness, Healthy: mr.Healthy,
 		}); err != nil {
 			return nil, err
 		}
@@ -742,7 +418,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return nil, err
 	}
 	if err := d.Store.SaveReport(evalID, repBuf.Bytes(), store.ReportMeta{
-		Headline: rep.Headline, PanelComplete: rep.PanelComplete, RobustnessGap: rep.RobustnessGap,
+		Headline: rep.Headline, PanelComplete: rep.PanelComplete,
 	}); err != nil {
 		return nil, err
 	}
@@ -750,7 +426,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return nil, err
 	}
 
-	// 11. Write the sidecar report files and announce the result.
+	// 12. Write the sidecar report files and announce the result.
 	evalDir, err := d.Store.EvalDir(req.Skill)
 	if err != nil {
 		return nil, err
@@ -767,133 +443,293 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	if ui.JSONMode {
-		type jsonFailure struct {
-			TaskID string `json:"task_id"`
-			Reason string `json:"reason,omitempty"`
-		}
-		_, _, failures := taskTally(rep)
-		failed := make([]jsonFailure, 0, len(failures))
-		for _, f := range failures {
-			failed = append(failed, jsonFailure{TaskID: f.taskID, Reason: f.reason})
-		}
 		if err := ui.PrintJSON(map[string]any{
 			"eval_id": evalID, "skill": req.Skill, "tier": string(req.Tier), "suite_ref": suiteRef,
-			"headline": rep.Headline, "panel_complete": rep.PanelComplete, "uplift_source": string(rep.UpliftSource),
-			"failed_tasks": failed,
+			"headline": rep.Headline, "baseline": rep.Baseline, "delta": rep.Delta,
+			"delta_measured": rep.DeltaMeasured, "trigger_f1": rep.TriggerF1,
+			"panel_complete": rep.PanelComplete,
 		}); err != nil {
 			return nil, err
 		}
 	} else {
 		// Every other whetstone human-facing output goes to stderr so --json
 		// stdout stays clean and parseable; this must match.
-		fmt.Fprint(os.Stderr, RenderEvalSummary(rep, evalID, req.Skill, BaselinePlanned(*plan)))
+		fmt.Fprint(os.Stderr, RenderEvalSummary(rep, evalID, req.Skill))
 	}
 
 	return rep, nil
 }
 
-// memberOutcomes groups one panel member's run outcomes by condition and
-// task id.
-type memberOutcomes struct {
-	skill    map[string][]runner.Outcome
-	baseline map[string][]runner.Outcome
-}
+// gradeOutcomes grades every outcome that produced a transcript, keyed by run.
+//
+// Grading is one gateway call per session and the calls are independent, so
+// they run concurrently: done in series, grading would cost more wall clock
+// than the sessions it grades.
+func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs []runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, error) {
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	var (
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+		sem    = make(chan struct{}, concurrency)
+		out    = map[store.RunKey]score.Grade{}
+		errs   []error
+		gradeF = func(o runner.Outcome) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-func newMemberOutcomes() *memberOutcomes {
-	return &memberOutcomes{skill: map[string][]runner.Outcome{}, baseline: map[string][]runner.Outcome{}}
-}
-
-// taskPasses turns one member's per-task outcomes into score.TaskPasses,
-// excluding a task whose runs all errored (score.TaskPasses.Void) — an
-// errored run is neither a pass nor a fail, and a task with no surviving
-// measurement must not be counted as a zero. It also reports whether any run
-// carried a partial Meta (a resume that could not recover the full record),
-// and the first such reason, so a caller can surface it on the report.
-func taskPasses(byTask map[string][]runner.Outcome) (ts []score.TaskPasses, metaPartial bool, reason string) {
-	for taskID, outs := range byTask {
-		tp := score.TaskPasses{TaskID: taskID}
-		for _, o := range outs {
-			if o.Status == store.StatusError || o.Status == store.StatusTimeout {
-				tp.Errored++
-				continue
+			ev, ok := plan.EvalByID(o.Key.TaskID)
+			if !ok || len(ev.Expectations) == 0 {
+				return
 			}
-			tp.N++
-			if o.VerifierExit != nil && *o.VerifierExit == 0 {
-				tp.C++
+			grade, err := g.Grade(ctx, ev.Expectations, score.Run{
+				Prompt:         ev.Prompt,
+				ExpectedOutput: ev.ExpectedOutput,
+				Transcript:     loadTranscript(o.ArtifactDir),
+				Outputs:        renderOutputs(o.ArtifactDir),
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("grading eval %s (%s attempt %d): %w",
+					o.Key.TaskID, o.Key.Condition, o.Key.Attempt, err))
+				return
 			}
-			if o.MetaPartial && !metaPartial {
-				metaPartial = true
-				reason = o.MetaPartialReason
-			}
+			out[o.Key] = grade
 		}
-		if tp.Void() {
+	)
+
+	for _, o := range outs {
+		// A session that errored or timed out produced no measurement. It is
+		// dropped rather than graded as a failure: an infrastructure fault is
+		// not evidence about the skill.
+		if o.Status != store.StatusOK {
 			continue
 		}
-		ts = append(ts, tp)
+		wg.Add(1)
+		go gradeF(o)
 	}
-	sort.Slice(ts, func(i, j int) bool { return ts[i].TaskID < ts[j].TaskID })
-	return ts, metaPartial, reason
+	wg.Wait()
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out, nil
 }
 
-// taskReliability mirrors score.Reliability (the mean of PassAtK over
-// tasks), but clamps k to each task's own N rather than applying the tier's
-// K uniformly. score.Reliability refuses outright when any task's N is below
-// k — which an errored run causes routinely, since taskPasses already
-// excludes errored runs from N. Without this, a single flaky session on one
-// task would abort scoring for the whole member. Clamping degrades just that
-// task to a narrower (k=N, "did every surviving run pass") estimate instead.
-func taskReliability(ts []score.TaskPasses, k int) (float64, error) {
-	if len(ts) == 0 {
-		return 0, errors.New("no tasks measured; an unknown reliability is not a zero one")
+// graderModel names the judge for a report.
+//
+// A gateway that knows its model in advance is the authority, because it names
+// what every call asked for. A subscription CLI knows nothing in advance, so
+// its answers are the only record of what judged.
+//
+// The declared name wins deliberately. An API gateway resolves an alias such
+// as "sonnet" to a dated id, and a switch to that id makes every new score
+// non-comparable with every existing one. That change stands on its own merits
+// and is not this one.
+func graderModel(g llm.Gateway, graded map[store.RunKey]score.Grade) string {
+	if declared := g.ModelFor(llm.ClassStrong); declared != "" {
+		return declared
 	}
-	sum := 0.0
-	for _, t := range ts {
-		tk := k
-		if t.N < tk {
-			tk = t.N
+	return observedGraderModel(graded)
+}
+
+// observedGraderModel names the model or models that graded a run, as the
+// gateway reported them in its answers.
+//
+// Two distinct models join rather than one winning. One score graded by two
+// models is one score with two judges, and Report.Comparable then refuses to
+// chart it beside a single-judge score. That refusal is the honest outcome, and
+// a silent first-wins hides it.
+func observedGraderModel(graded map[store.RunKey]score.Grade) string {
+	seen := map[string]bool{}
+	for _, g := range graded {
+		if g.Model != "" {
+			seen[g.Model] = true
 		}
-		p, err := score.PassAtK(t.N, t.C, tk)
+	}
+	names := make([]string, 0, len(seen))
+	for m := range seen {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// memberScore is one member's 0–100 score under one condition, and the
+// per-eval tallies that back it.
+func memberScore(plan *runner.Plan, outs []runner.Outcome, graded map[store.RunKey]score.Grade,
+	m runner.Member, cond store.Condition, tasks *taskAgg) (float64, bool, string, error) {
+
+	byEval := map[string][]score.Grade{}
+	var metaPartial bool
+	var metaReason string
+	for _, o := range outs {
+		if o.Key.Agent != m.Agent || o.Key.Model != m.Model || o.Key.Condition != cond {
+			continue
+		}
+		if o.MetaPartial && !metaPartial {
+			metaPartial, metaReason = true, o.MetaPartialReason
+		}
+		g, ok := graded[o.Key]
+		if !ok {
+			continue
+		}
+		byEval[o.Key.TaskID] = append(byEval[o.Key.TaskID], g)
+		tasks.addGrade(o.Key.TaskID, report.GradeNote{
+			Model: m.Model, Condition: cond, Attempt: o.Key.Attempt, Expectations: g.Expectations,
+		})
+	}
+
+	ids := make([]string, 0, len(byEval))
+	for id := range byEval {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	rates := make([]float64, 0, len(ids))
+	for _, id := range ids {
+		gs := byEval[id]
+		rate, err := score.EvalRate(gs)
 		if err != nil {
-			return 0, fmt.Errorf("task %s: %w", t.TaskID, err)
+			return 0, metaPartial, metaReason, fmt.Errorf("eval %s: %w", id, err)
 		}
-		sum += p
+		rates = append(rates, rate)
+
+		passed, total := 0, 0
+		for _, g := range gs {
+			passed += g.Passed
+			total += g.Total
+		}
+		tasks.addCondition(id, report.ConditionReport{
+			Condition: cond, Model: m.Model, Passes: passed, Runs: total,
+		})
 	}
-	return sum / float64(len(ts)), nil
+
+	s, err := score.MemberScore(rates)
+	if err != nil {
+		return 0, metaPartial, metaReason, err
+	}
+	return s, metaPartial, metaReason, nil
 }
 
-// tokenTotals is the per-run total token spend (input+output) across every
-// task in byTask, excluding runs that never measured anything.
-func tokenTotals(byTask map[string][]runner.Outcome) []float64 {
-	var out []float64
-	for _, outs := range byTask {
-		for _, o := range outs {
-			if o.Status == store.StatusError || o.Status == store.StatusTimeout {
-				continue
-			}
-			out = append(out, float64(o.Meta.InputTokens+o.Meta.OutputTokens))
+// scoreTriggers turns the trigger smoke check's probes into an F1.
+//
+// A tier that plans no probes measures nothing here and reports 1.0: an
+// unmeasured check must not read as a failed one. The release precondition
+// that reads this figure is applied where a version is released, not here.
+func scoreTriggers(skill string, probes []runner.ProbeOutcome) (f1 float64, inferred bool, unknown int, source report.PanelMember, err error) {
+	if len(probes) == 0 {
+		return 1, false, 0, report.PanelMember{}, nil
+	}
+	pm := probes[0].Probe.Member
+	source = report.PanelMember{Agent: pm.Agent, Model: pm.Model, Class: string(pm.Class)}
+
+	ps := make([]score.Probe, 0, len(probes))
+	for _, p := range probes {
+		if p.Unknown {
+			ps = append(ps, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Unknown: true, Reason: p.Reason})
+			continue
 		}
+		fired, inf := score.DetectFiring(skill, p.Caps, p.Events)
+		ps = append(ps, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Fired: fired, Inferred: inf})
+	}
+	res, err := score.TriggerF1(ps)
+	if err != nil {
+		return 0, false, 0, source, err
+	}
+	return res.F1, res.AnyInferred, res.Unknown, source, nil
+}
+
+// medianTokens is the median total token spend across the sessions run under
+// one condition. Zero when nothing was measured, which the report omits.
+func medianTokens(outs []runner.Outcome, cond store.Condition) int64 {
+	var totals []int64
+	for _, o := range outs {
+		if o.Key.Condition != cond || o.Status != store.StatusOK {
+			continue
+		}
+		totals = append(totals, o.Meta.InputTokens+o.Meta.OutputTokens)
+	}
+	m, err := score.MedianTokens(totals)
+	if err != nil {
+		return 0
+	}
+	return m
+}
+
+// taskAgg accumulates each eval's per-condition tallies and graded runs across
+// every scored member, so the report shows the measurements the member scores
+// were computed from.
+type taskAgg struct{ byID map[string]*report.TaskInput }
+
+func newTaskAgg() *taskAgg { return &taskAgg{byID: map[string]*report.TaskInput{}} }
+
+func (t *taskAgg) get(id string) *report.TaskInput {
+	ti, ok := t.byID[id]
+	if !ok {
+		ti = &report.TaskInput{TaskID: id}
+		t.byID[id] = ti
+	}
+	return ti
+}
+
+func (t *taskAgg) addCondition(id string, c report.ConditionReport) {
+	ti := t.get(id)
+	ti.Conditions = append(ti.Conditions, c)
+}
+
+func (t *taskAgg) addGrade(id string, g report.GradeNote) {
+	ti := t.get(id)
+	ti.Grades = append(ti.Grades, g)
+}
+
+func (t *taskAgg) slice() []report.TaskInput {
+	ids := make([]string, 0, len(t.byID))
+	for id := range t.byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	out := make([]report.TaskInput, 0, len(ids))
+	for _, id := range ids {
+		ti := t.byID[id]
+		sort.Slice(ti.Conditions, func(i, j int) bool {
+			if ti.Conditions[i].Condition != ti.Conditions[j].Condition {
+				return ti.Conditions[i].Condition < ti.Conditions[j].Condition
+			}
+			return ti.Conditions[i].Model < ti.Conditions[j].Model
+		})
+		sort.Slice(ti.Grades, func(i, j int) bool {
+			if ti.Grades[i].Condition != ti.Grades[j].Condition {
+				return ti.Grades[i].Condition < ti.Grades[j].Condition
+			}
+			if ti.Grades[i].Model != ti.Grades[j].Model {
+				return ti.Grades[i].Model < ti.Grades[j].Model
+			}
+			return ti.Grades[i].Attempt < ti.Grades[j].Attempt
+		})
+		out = append(out, *ti)
 	}
 	return out
 }
 
-// firstFailureReason returns the reason from the first outcome of a task that
-// the verifier rejected. One line per task is the budget for a summary; the
-// remaining attempts are in each run's verifier.log.
-func firstFailureReason(outs []runner.Outcome) string {
-	for _, o := range outs {
-		if o.Reason == "" {
-			continue
-		}
-		if o.VerifierExit == nil || *o.VerifierExit != 0 {
-			return o.Reason
-		}
+// agentCLIVersion is the version of the agent CLI on this host's PATH,
+// recorded on every panel member so Report.Comparable can tell a CLI upgrade
+// between two runs from a change in the skill.
+func agentCLIVersion() string {
+	bin, err := agentcli.Detect()
+	if err != nil {
+		return ""
 	}
-	return ""
+	return probeVersion(bin)
 }
 
 // loadTranscript reads a run's recorded transcript, or "" if it cannot be
-// read — a judge call with no transcript degrades to no evidence rather than
-// aborting the eval.
+// read. The grader is told to fail an expectation it cannot verify, so a
+// missing transcript grades hard rather than aborting the eval.
 func loadTranscript(artifactDir string) string {
 	if artifactDir == "" {
 		return ""
@@ -905,75 +741,50 @@ func loadTranscript(artifactDir string) string {
 	return string(b)
 }
 
-// semanticScore averages the judge's per-rule Semantic verdict over a
-// contract's semantic rules for one run's transcript. A contract with no
-// semantic rules — or no judge available to score them — is vacuously
-// satisfied, the same convention drift.Score already applies to a contract
-// with no required steps: an unmeasured component must not read as a failed
-// one.
-func semanticScore(ctx context.Context, judge *score.Judge, ct *contract.Contract, transcript func() string) float64 {
-	if judge == nil || len(ct.Semantic) == 0 {
-		return 1
-	}
-	t := transcript()
-	if t == "" {
-		return 1
-	}
-	var sum float64
-	var n int
-	for _, r := range ct.Semantic {
-		v, _, err := judge.Semantic(ctx, r, score.Sample{Transcript: t})
-		if err != nil {
-			continue
-		}
-		sum += v
-		n++
-	}
-	if n == 0 {
-		return 1
-	}
-	return sum / float64(n)
-}
+// maxOutputBytes bounds how much of one output file reaches the grader. A
+// skill that writes a large artifact would otherwise push the transcript out
+// of the request.
+const maxOutputBytes = 32 << 10
 
-// pairwiseVerdicts judges every task for which this member has both a skill
-// and a baseline run, comparing their first recorded attempt's transcript. A
-// task missing either side, or whose transcript could not be recovered, is
-// skipped rather than failing the whole comparison. The result is keyed by
-// task id so a caller can attribute each verdict back onto its report.TaskInput.
-func pairwiseVerdicts(ctx context.Context, judge *score.Judge, promptFor func(string) string, g *memberOutcomes) (map[string]score.Verdict, error) {
-	verdicts := map[string]score.Verdict{}
-	for taskID, skillOuts := range g.skill {
-		blOuts, ok := g.baseline[taskID]
-		if !ok || len(skillOuts) == 0 || len(blOuts) == 0 {
-			continue
-		}
-		skillT := loadTranscript(skillOuts[0].ArtifactDir)
-		blT := loadTranscript(blOuts[0].ArtifactDir)
-		if skillT == "" || blT == "" {
-			continue
-		}
-		v, err := judge.Pairwise(ctx, score.Pair{
-			TaskID: taskID, Prompt: promptFor(taskID),
-			Skill:    score.Sample{Label: "skill", Transcript: skillT},
-			Baseline: score.Sample{Label: "baseline", Transcript: blT},
-		})
-		if err != nil {
-			return nil, err
-		}
-		verdicts[taskID] = v
+// renderOutputs renders the files a session produced, so the grader can check
+// an expectation against what was written rather than against the agent's own
+// account of it.
+func renderOutputs(artifactDir string) string {
+	if artifactDir == "" {
+		return ""
 	}
-	return verdicts, nil
-}
-
-// verdictSlice flattens pairwiseVerdicts' map into the slice
-// score.UpliftFromJudge takes; order does not matter to it (a mean win rate),
-// only membership.
-func verdictSlice(vs map[string]score.Verdict) []score.Verdict {
-	out := make([]score.Verdict, 0, len(vs))
-	for _, v := range vs {
-		out = append(out, v)
+	root := filepath.Join(artifactDir, "outputs")
+	var b strings.Builder
+	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil {
+			return nil
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		fmt.Fprintf(&b, "### %s\n", filepath.ToSlash(rel))
+		if !utf8.Valid(data) {
+			fmt.Fprintf(&b, "(binary, %d bytes)\n\n", len(data))
+			return nil
+		}
+		if len(data) > maxOutputBytes {
+			b.Write(data[:maxOutputBytes])
+			fmt.Fprintf(&b, "\n… truncated at %d bytes\n\n", maxOutputBytes)
+			return nil
+		}
+		b.Write(data)
+		b.WriteString("\n\n")
+		return nil
+	})
+	if err != nil {
+		return ""
 	}
-	return out
+	return b.String()
 }
 
 // writeReportFile creates path and hands it to write, closing it either way.
@@ -1013,15 +824,16 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		gw = g
 	}
 
-	panelStrong, panelFast, panelBase := panelModelsFromEnv()
-	if w := warnUnconfiguredPanelModels(panelStrong, panelFast, panelBase); w != "" {
+	p := provider.FromEnv()
+	for _, w := range p.Warnings() {
 		ui.Warn("%s", w)
 	}
 
 	d := EvalDeps{
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
-		PanelStrongModel: panelStrong, PanelFastModel: panelFast, PanelBaseURL: panelBase,
+		PanelModels: p.PanelModels(), PanelBaseURL: p.BaseURL,
+		PanelExcludeEnv: p.PanelExcludeEnv(),
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

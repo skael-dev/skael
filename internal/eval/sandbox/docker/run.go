@@ -14,35 +14,14 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 )
 
-// proxyHost is the alias the allowlist proxy is reachable at on a run's
-// private network. It is a name rather than an address because the address is
-// assigned per network.
 const proxyHost = "proxy"
 
-// openWorkspace makes the workspace directory traversable and writable by the
-// container's user before it is bind-mounted.
-//
-// A bind mount carries the host directory's ownership and mode into the
-// container unchanged — the image's "chown runner:runner /workspace" applies
-// to the image layer the mount then covers up, so it decides nothing. Every
-// run executes as uid 1000 ("runner", see imagespec.ContainerHome), while
-// workspaces are created by os.MkdirTemp and testing.T.TempDir, which are
-// 0700 and owned by whoever runs whetstone. When those two uids differ the
-// container cannot even enter its own working directory, and the failure is
-// silent and misattributed: "bash oracle/solve.sh" exits 126, which reads as
-// "the oracle is broken" rather than "the oracle was never readable", so
-// every task in a suite is declared void.
-//
-// The uids differ on Linux whenever the invoking user is not uid 1000 — a
-// GitHub Actions runner is uid 1001 — but not on macOS, where Docker
-// Desktop's filesystem remaps ownership and hides the whole problem. That
-// asymmetry is why this has to be enforced here rather than left to callers:
-// it cannot be reproduced on the machine most of this is written on.
-//
-// 0777 rather than a chown, because chowning to another uid needs root the
-// caller does not have. Widening the mode is safe for what this directory is:
-// a per-run scratch copy holding a task fixture, created fresh and deleted
-// after, never a path a caller supplies from somewhere durable.
+// openWorkspace widens the workspace to 0777 so the container's uid 1000 can
+// enter it. Bind mounts carry host ownership unchanged, and the invoking user
+// is not always uid 1000 (GitHub Actions is 1001). The mismatch is silent on
+// macOS (Docker Desktop remaps) and a voided suite on Linux (exit 126
+// misattributed to a broken oracle). 0777 rather than chown because chowning
+// to another uid needs root.
 func openWorkspace(ws string) error {
 	if ws == "" {
 		return nil // RunSpec.Validate rejects this; nothing to open.
@@ -53,10 +32,6 @@ func openWorkspace(ws string) error {
 	return nil
 }
 
-// runArgs builds the flags shared by "docker create" and, historically,
-// "docker run" — everything except the subcommand itself. Splitting Run into
-// create + start + wait (see Run's doc comment) only changes which
-// subcommand these flags are attached to.
 func runArgs(rs sandbox.RunSpec, o Options, name, network string) ([]string, error) {
 	if err := rs.Validate(); err != nil {
 		return nil, err
@@ -107,12 +82,8 @@ func runArgs(rs sandbox.RunSpec, o Options, name, network string) ([]string, err
 	return append(a, rs.Argv...), nil
 }
 
-// RunArgv assembles the full "docker run" command line — "docker create"'s
-// argv (runArgs) with "run", "--rm" in front. Run itself no longer executes
-// this; it is exported (and still fully tested by argv_test.go with no
-// daemon) because it is the flags-only description of a run's security
-// posture that a test can assert against, and CreateArgv (what Run actually
-// issues) shares every flag runArgs builds.
+// RunArgv is the "docker run" command line. Run itself uses CreateArgv; this
+// is exported for argv_test.go assertions on the security posture.
 func RunArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, error) {
 	args, err := runArgs(rs, o, name, network)
 	if err != nil {
@@ -122,10 +93,9 @@ func RunArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, err
 	return a, nil
 }
 
-// CreateArgv assembles the "docker create" command line Run actually issues:
-// every flag RunArgv would pass to "docker run", minus "--rm" — removal is
-// always explicit (see Run), never left to a flag racing "docker wait" for
-// the exit code it needs to read before the container is gone.
+// CreateArgv is the "docker create" command line Run issues. No --rm: removal
+// is explicit so "docker wait" can read the exit code before the container
+// is gone.
 func CreateArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, error) {
 	args, err := runArgs(rs, o, name, network)
 	if err != nil {
@@ -134,34 +104,10 @@ func CreateArgv(rs sandbox.RunSpec, o Options, name, network string) ([]string, 
 	return append([]string{"create"}, args...), nil
 }
 
-// Run executes one command. A non-zero exit is a result, not an error: a
-// verifier that fails is the measurement. An error means the run could not be
-// performed at all — including when ctx is cancelled out from under it.
-//
-// This is "docker create" + "docker start -a" + "docker wait", not a single
-// "docker run": "docker run" (and "docker start -a") report the container's
-// own exit status as their *own* CLI process's exit status, in the same
-// integer space docker itself uses to report that the client or daemon
-// failed to do what was asked (125 for a CLI/daemon rejection, 126 "not
-// executable", 127 "not found") — there is no way to tell "the verifier
-// legitimately exited 127" apart from "docker couldn't find /verifier/test.sh
-// because the mount failed" by inspecting that one number. "docker create"
-// can only fail for a driver-side reason (bad image, bad mount, bad flag —
-// no user command has run yet), and "docker wait" reports the container's
-// exit code on its own channel, populated only once the container has
-// actually run and exited: wait failing is always a driver problem, wait
-// succeeding always means a container produced that number. "docker start
-// -a"'s own process exit code is deliberately never read for this reason —
-// it mirrors the same ambiguous number "docker run" would have — only its
-// blocking-until-exit behavior (so rs.Stdout/rs.Stderr see the container's
-// output) and its response to context cancellation are used.
-//
-// The container is named and removed explicitly on the way out, from a
-// single deferred cleanup registered once "docker create" has succeeded (the
-// only point at which there is a container to remove). Relying on a --rm
-// flag alone loses a container whose docker client was killed by the
-// context — or races "docker wait" against the container's automatic
-// removal — and sixty of those per eval is a full disk.
+// Run executes one command. A non-zero exit is a result, not an error.
+// Uses create + start -a + wait (not "docker run") so the exit code comes
+// from "docker wait" on its own channel, unambiguous from docker's own 125/
+// 126/127 failures.
 func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult, error) {
 	name, err := containerName()
 	if err != nil {
@@ -193,33 +139,19 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	if createOut, err := d.output(runCtx, createArgv...); err != nil {
 		switch {
 		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-			// Extremely unlikely (create does not run the image's own
-			// command and needs no image pull, since Prepare/EnsureBase
-			// already guarantee the image exists) but handled the same way
-			// as every other timeout: it is not a result.
 			return sandbox.RunResult{TimedOut: true}, nil
 		case ctx.Err() != nil:
 			return sandbox.RunResult{Cancelled: true}, fmt.Errorf("docker: run cancelled: %w", ctx.Err())
 		}
-		// No user command has executed yet, so this can only be the docker
-		// client's or daemon's own failure: a missing image, an unreadable
-		// bind-mount source, an invalid flag.
 		return sandbox.RunResult{}, fmt.Errorf("docker: creating a container for %s: %w\n%s", strings.Join(rs.Argv, " "), err, createOut)
 	}
-
-	// From here on a container exists and must be removed on every return
-	// path, including a panic recovering elsewhere in the caller — this is
-	// the one cleanup Run needs, registered exactly once.
 	defer func() { _, _ = d.output(context.WithoutCancel(ctx), "rm", "-f", name) }()
 
 	start := time.Now()
 	cmd := execCommand(runCtx, d.o.Binary, "start", "-a", name)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = rs.Stdin, rs.Stdout, rs.Stderr
-	// startErr is deliberately not inspected: see Run's doc comment on why
-	// "docker start -a"'s own exit status is never the source of ExitCode.
-	// It still needs to be run to completion (or interrupted by runCtx) so
-	// rs.Stdout/rs.Stderr receive the container's output and so the
-	// container has actually finished by the time "docker wait" is asked.
+	// start -a's own exit code is deliberately ignored — it mirrors the
+	// ambiguous number "docker run" returns. Only "docker wait" is read.
 	_ = cmd.Run()
 	res := sandbox.RunResult{Duration: time.Since(start)}
 
@@ -240,14 +172,6 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	return res, nil
 }
 
-// waitExitCode blocks until name's container has exited and returns its exit
-// code, read from "docker wait"'s own stdout — a bare integer, the container
-// runtime's authoritative record of what the container's own command exited
-// with, on a channel that shares no meaning with any docker client or daemon
-// failure code. By the time Run calls this, "docker start -a" has already
-// returned because the container exited, so this returns immediately rather
-// than actually blocking; it is not skipped, because it is the one place
-// ExitCode is allowed to come from.
 func (d *Driver) waitExitCode(ctx context.Context, name string) (int, error) {
 	out, err := d.output(ctx, "wait", name)
 	if err != nil {
@@ -260,8 +184,6 @@ func (d *Driver) waitExitCode(ctx context.Context, name string) (int, error) {
 	return code, nil
 }
 
-// containerName is unique per run so a timed-out container can be found and
-// removed by name.
 func containerName() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {

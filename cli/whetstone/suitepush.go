@@ -3,7 +3,9 @@ package whetstone
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -134,20 +136,67 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 			req.Skill, len(archive), base64EncodedLen(len(archive)), maxArchiveBytes, maxRequestBodyBytes)
 	}
 
+	// When an eval set's content still matches what the generator wrote,
+	// nobody has read it. The server records such a suite as machine-derived,
+	// so its score cannot clear a scan hold. A read failure here declares
+	// nothing, which keeps the old behaviour rather than a guess.
+	generated, err := req.Store.GeneratedRef(req.Skill)
+	if err != nil {
+		return fmt.Errorf("suite push: %w", err)
+	}
+	unreviewed := generated != "" && generated == suiteRef
+
+	// One request literal, built once. A field added to the first call and
+	// forgotten on the retry pushes a different suite with no error anywhere.
+	upload := client.EvalSuiteUploadRequest{
+		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON,
+		Archive: archive, Unreviewed: unreviewed,
+	}
+
 	c := client.New(req.Endpoint, req.APIKey)
-	resp, err := c.UploadEvalSuite(client.EvalSuiteUploadRequest{
-		Skill: req.Skill, SpecVersion: specVersion, Checks: checks, Spec: specJSON, Archive: archive,
-	})
+	resp, err := c.UploadEvalSuite(upload)
+	// A server that predates the unreviewed field rejects the whole request,
+	// because Huma refuses an unknown body property. A retry without the
+	// field is the only way an author on an older server can push at all.
+	// The cost is that the suite is then recorded as authored. The retry
+	// below discloses that cost. It does not hide it.
+	//
+	// The warning cannot lie about which server it met. It prints only after
+	// the retry succeeds, so a 422 both requests share — a validation failure
+	// in the body itself — never reaches it.
+	fellBack := false
+	var apiErr *client.APIError
+	if unreviewed && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+		upload.Unreviewed = false
+		resp, err = c.UploadEvalSuite(upload)
+		if err == nil {
+			// The retry actually recorded the suite as authored, so the
+			// rest of this function must report that, not the original
+			// intent.
+			unreviewed = false
+			fellBack = true
+			ui.Warn("this server does not record an unreviewed eval set")
+			ui.Warn("%s was pushed as authored, so its score can release a held version", req.Skill)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("suite push: %w", err)
 	}
 
 	if ui.JSONMode {
+		// ui.Warn is a no-op here, so without this field a --json caller
+		// cannot tell an edited eval set from a fallback on an old server.
+		// The two mean opposite things about who read the queries.
 		return ui.PrintJSON(map[string]any{
-			"skill":      req.Skill,
-			"ref":        resp.Ref,
-			"task_count": resp.TaskCount,
+			"skill":                  req.Skill,
+			"ref":                    resp.Ref,
+			"task_count":             resp.TaskCount,
+			"unreviewed":             unreviewed,
+			"unreviewed_unsupported": fellBack,
 		})
+	}
+	if unreviewed {
+		ui.Warn("recorded as machine-derived: nobody has read this eval set, so its score cannot release a held version")
 	}
 	ui.Success("pushed %s: %s (%d tasks)", req.Skill, resp.Ref, resp.TaskCount)
 	return nil

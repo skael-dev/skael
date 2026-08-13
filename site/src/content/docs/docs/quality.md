@@ -26,7 +26,7 @@ Without a worker running, jobs just sit in the queue — nothing gets scored.
 
 The judge and the claude-code panel agent both need Anthropic credentials, and in the simplest setup one variable covers both.
 
-- **The judge.** A separate model compares the two transcripts and scores the result. It authenticates with `ANTHROPIC_API_KEY`, which the worker checks at startup and exits naming if it's missing. It talks to the direct Anthropic API by default, and to any Anthropic-compatible gateway you point it at (see [Choosing a judge model and gateway](#choosing-a-judge-model-and-gateway) below). It never falls back to a subscription CLI on PATH.
+- **The judge.** A separate model compares the two transcripts and scores the result. It authenticates with `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, which the worker checks at startup and exits naming if neither is set. It talks to the direct Anthropic API by default, and to any Anthropic-compatible gateway you point it at (see [Choosing a model and a gateway](#choosing-a-model-and-a-gateway) below). It never falls back to a subscription CLI on PATH.
 - **The panel agent.** The claude-code adapter is the only one wired up (`codex`, `cursor`, and `opencode` are registered but their parsers aren't implemented yet, so they can't run and have no credentials to configure). It reads credentials as environment variables in the worker's own process and forwards whichever are set into the sandbox:
   - `ANTHROPIC_API_KEY` — the same variable the judge uses. API-billed, no login step. This is what the Claude Code CLI uses by default in non-interactive mode, and it's the recommended setup for a server or VPS.
   - `CLAUDE_CODE_OAUTH_TOKEN` — subscription-billed (Pro/Max) instead of pay-per-call. Generate it once on any machine where you can log in interactively: `claude setup-token`. Set the resulting token as this variable on the worker.
@@ -49,7 +49,7 @@ Optional, with defaults:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token`. Beside `ANTHROPIC_BASE_URL` it also splits the judge from the panel — see [Keeping the panel on a subscription](#keeping-the-panel-on-a-subscription) |
 | `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
@@ -58,41 +58,47 @@ Optional, with defaults:
 
 The worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed container, one job at a time per worker process. Run more worker replicas for more throughput.
 
-### Choosing a judge model and gateway
+### Choosing a model and a gateway
 
-By default the judge talks to Anthropic's own API. That's optional: point it at OpenRouter or any Anthropic-compatible gateway instead, and pick which models it uses for the strong and fast model classes. Set none of these and nothing changes.
+Four variables configure every model call. `skael-worker` and `whetstone` read the same four, and the judge that scores a run and the panel agents that attempt the tasks use one gateway. Set none of these and everything talks to Anthropic's own API.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_BASE_URL` | `https://api.anthropic.com` | Gateway base URL. The gateway posts to `{base}/v1/messages`. |
-| `LLM_AUTH_STYLE` | `x-api-key` | `x-api-key` (Anthropic's own scheme) or `bearer` (`Authorization: Bearer`, what OpenRouter expects). |
-| `LLM_STRONG_MODEL` | `claude-opus-5` | Model for the strong class — this is what the judge uses. |
-| `LLM_FAST_MODEL` | `claude-haiku-4-5-20251001` | Model for the fast class. |
+| `ANTHROPIC_API_KEY` | — | Credential, sent as `x-api-key`. |
+| `ANTHROPIC_AUTH_TOKEN` | — | Credential, sent as `Authorization: Bearer` — what OpenRouter issues. Wins when both are set. |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Gateway base URL. It posts to `{base}/v1/messages`, so the base carries no `/v1`. |
+| `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. |
 
-`ANTHROPIC_API_KEY` is still the key the judge authenticates with, whichever gateway it points at.
-
-The panel agent (claude-code) has its own path to the same gateway. Its adapter forwards `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, if set in the worker's environment, into the sandbox — that's what points the panel at OpenRouter instead of Anthropic directly.
+The auth header is inferred from the credential you set, so there is nothing to keep in sync. Run `whetstone doctor` to see what resolved.
 
 A complete OpenRouter setup, covering both the judge and the panel:
 
 ```bash
-LLM_BASE_URL=https://openrouter.ai/api
-LLM_AUTH_STYLE=bearer
-LLM_STRONG_MODEL=anthropic/claude-opus-4
-LLM_FAST_MODEL=anthropic/claude-3.5-haiku
-ANTHROPIC_API_KEY=<your OpenRouter key>
-
 ANTHROPIC_BASE_URL=https://openrouter.ai/api
 ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
+LLM_MODEL=anthropic/claude-sonnet-5,anthropic/claude-haiku-4.5
 ```
 
-OpenRouter model identifiers are namespaced (`anthropic/claude-opus-4`), unlike Anthropic's bare names (`claude-opus-5`).
+`LLM_MODEL` is not optional there. OpenRouter model identifiers are namespaced (`anthropic/claude-sonnet-5`), unlike Anthropic's bare names (`claude-opus-5`), and the panel would otherwise keep asking your gateway for Claude Code's bare alias `sonnet`. A gateway that namespaces its identifiers answers those with a 404; every panel member then fails its health probe and the run refuses with the model names in the error. Check the ids against your gateway's own catalogue before you set them: a retired id fails the same way a mistyped one does.
 
-`LLM_STRONG_MODEL` and `LLM_FAST_MODEL` do double duty here. They are the judge's two models, and — because `ANTHROPIC_BASE_URL` is set — they are also the panel's, filling its strong and floor slots. Without that, the panel would keep asking your gateway for Claude Code's bare aliases `opus` and `haiku`, which a gateway that namespaces its identifiers answers with a 404; every panel member then fails its health probe and the run refuses with those model names in the error.
+### Keeping the panel on a subscription
 
-Set both, not one. They apply together or not at all, deliberately: a panel with one working member and one that 404s is not an error but a *complete* run, and it scores, reports `panel_complete: false`, and so can never release a version held for review — after paying for a full tier to get there. Keeping both slots on the same footing means a half-configured gateway fails fast instead.
+Set `CLAUDE_CODE_OAUTH_TOKEN` alongside `ANTHROPIC_BASE_URL` and the two separate. The judge keeps the gateway, because a published score must come from a metered, reproducible backend. The panel authenticates with the subscription token instead, and the worker withholds the gateway variables from the sandbox so it cannot follow the judge onto the gateway.
 
-Pointing only `LLM_BASE_URL` at a gateway, and leaving `ANTHROPIC_BASE_URL` unset, moves the judge alone: the panel keeps running `opus`/`haiku` against Anthropic directly, which is what you want when only the judge is BYOK.
+```bash
+ANTHROPIC_BASE_URL=https://openrouter.ai/api
+ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
+LLM_MODEL=anthropic/claude-sonnet-5
+CLAUDE_CODE_OAUTH_TOKEN=<output of: claude setup-token>
+```
+
+`LLM_MODEL` then names the judge alone. The panel asks for the shipped alias, which is what a subscription serves.
+
+This is a local and small-team setup rather than a shared-instance one. The panel it produces is recorded in `model_panel` like any other, so turning it on splits a skill's score trend at the changeover, and a subscription-backed panel is neither metered nor pinned to a model version. `whetstone doctor` and the worker's startup log both name the split when it is active.
+
+The list is ordered. The first entry judges every run and is the panel's primary member. Later entries are the panel's floor members, which only the `deep` tier runs — one list rather than a slot per tier, because a half-configured pair produced a panel with one working member and one that 404s, which is not an error but a *complete* run: it scores, reports `panel_complete: false`, and so can never release a version held for review, after paying for a full tier to get there.
+
+Naming a model without a gateway moves the judge alone. The panel keeps running the shipped alias against Anthropic directly, which is what you want when only the judge is BYOK — and it keeps your existing scores comparable, since a changed panel splits the trend line.
 
 You are not limited to Claude models. OpenRouter's Anthropic-compatible endpoint accepts the same request shape whatever model you route to, so `google/gemini-2.5-flash-lite` and the rest of its catalogue work for the judge too. Reasoning models are the one thing to watch: if a model spends its whole output budget on thinking tokens, the reply carries no text block and the run fails rather than scoring something empty. Give those a larger budget or pick a non-reasoning model for the judge.
 

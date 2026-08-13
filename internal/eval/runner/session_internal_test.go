@@ -2,8 +2,10 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
@@ -26,7 +28,7 @@ func TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd(t *testing.T) {
 	if _, err := os.Stat(strayPath); err == nil {
 		t.Fatalf("refusing to run: %s already exists", strayPath)
 	}
-	if err := os.WriteFile(strayPath, []byte(`{"reason":"wrong task's reason leaking in"}`), 0o644); err != nil {
+	if err := os.WriteFile(strayPath, []byte(`{"Meta":{"InputTokens":999}}`), 0o644); err != nil {
 		t.Fatalf("staging a stray grading.json in cwd: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(strayPath) })
@@ -43,8 +45,8 @@ func TestOutcomeFromRecord_EmptyArtifactDirDoesNotReadTheCwd(t *testing.T) {
 
 	out := outcomeFromRecord(rec)
 
-	if out.Reason != "" {
-		t.Errorf("Reason = %q, want empty: the stray cwd grading.json must not have been read", out.Reason)
+	if out.Meta.InputTokens == 999 {
+		t.Error("the stray grading.json in cwd was read: an empty ArtifactDir must not resolve to a relative path")
 	}
 	if !out.MetaPartial {
 		t.Error("MetaPartial = false, want true: an empty ArtifactDir must fall back to the store columns")
@@ -110,7 +112,7 @@ func TestAuthEnv_ForwardsOnlySetNames(t *testing.T) {
 	t.Setenv("SKAEL_TEST_AUTH_EMPTY", "")
 	// Deliberately leave SKAEL_TEST_AUTH_UNSET unset.
 
-	env := authEnv([]string{"SKAEL_TEST_AUTH_SET", "SKAEL_TEST_AUTH_EMPTY", "SKAEL_TEST_AUTH_UNSET"})
+	env := authEnv([]string{"SKAEL_TEST_AUTH_SET", "SKAEL_TEST_AUTH_EMPTY", "SKAEL_TEST_AUTH_UNSET"}, nil)
 
 	if len(env) != 1 {
 		t.Fatalf("authEnv = %v, want exactly one forwarded var", env)
@@ -119,11 +121,61 @@ func TestAuthEnv_ForwardsOnlySetNames(t *testing.T) {
 		t.Errorf("authEnv[0] = %q, want %q", env[0], "SKAEL_TEST_AUTH_SET=super-secret-value")
 	}
 
-	if got := authEnv(nil); got != nil {
+	if got := authEnv(nil, nil); got != nil {
 		t.Errorf("authEnv(nil) = %v, want nil", got)
 	}
-	if got := authEnv([]string{}); got != nil {
+	if got := authEnv([]string{}, nil); got != nil {
 		t.Errorf("authEnv([]) = %v, want nil", got)
+	}
+}
+
+// TestAuthEnv_WithholdsExcludedNames pins the mechanism that keeps a
+// subscription-backed panel off the judge's gateway. The adapter declares the
+// gateway variables because most setups want them forwarded; withholding them
+// per run is what lets one worker point the judge at a gateway while the
+// panel authenticates with a subscription token. Forward them anyway and the
+// panel silently follows the judge, which is a scored run against a model
+// nobody chose.
+func TestAuthEnv_WithholdsExcludedNames(t *testing.T) {
+	t.Setenv("SKAEL_TEST_GATEWAY_URL", "https://openrouter.ai/api")
+	t.Setenv("SKAEL_TEST_GATEWAY_TOKEN", "sk-or-secret")
+	t.Setenv("SKAEL_TEST_SUBSCRIPTION", "sk-ant-oat-secret")
+
+	names := []string{"SKAEL_TEST_GATEWAY_URL", "SKAEL_TEST_GATEWAY_TOKEN", "SKAEL_TEST_SUBSCRIPTION"}
+	env := authEnv(names, []string{"SKAEL_TEST_GATEWAY_URL", "SKAEL_TEST_GATEWAY_TOKEN"})
+
+	if len(env) != 1 || env[0] != "SKAEL_TEST_SUBSCRIPTION=sk-ant-oat-secret" {
+		t.Fatalf("authEnv = %v, want only the name that was not withheld", env)
+	}
+}
+
+// An exclusion must not reopen the credential-directory path. The mounts are
+// suppressed by *any* forwarded variable, and a run configured for a
+// subscription panel still forwards one — so the host's stale login stays out
+// of the sandbox exactly as it does in every other configuration.
+func TestResolveAuth_AnExclusionStillSuppressesTheHostMounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SKAEL_TEST_GATEWAY_URL", "https://openrouter.ai/api")
+	t.Setenv("SKAEL_TEST_SUBSCRIPTION", "sk-ant-oat-secret")
+
+	a := stubAdapter{caps: agent.Caps{
+		AuthDirs: []string{"~/.claude"},
+		AuthEnv:  []string{"SKAEL_TEST_GATEWAY_URL", "SKAEL_TEST_SUBSCRIPTION"},
+	}}
+
+	mounts, env, err := resolveAuth(a, []string{"SKAEL_TEST_GATEWAY_URL"}, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("resolveAuth: %v", err)
+	}
+	if len(mounts) != 0 {
+		t.Fatalf("mounts = %+v, want none", mounts)
+	}
+	if len(env) != 1 || env[0] != "SKAEL_TEST_SUBSCRIPTION=sk-ant-oat-secret" {
+		t.Fatalf("env = %+v, want only the subscription credential", env)
 	}
 }
 
@@ -163,7 +215,7 @@ func TestResolveAuth_EnvVarsSuppressTheHostCredentialMounts(t *testing.T) {
 		AuthEnv:  []string{"SKAEL_TEST_TOKEN"},
 	}}
 
-	mounts, env, err := resolveAuth(a, func(string, ...any) {})
+	mounts, env, err := resolveAuth(a, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("resolveAuth: %v", err)
 	}
@@ -190,7 +242,7 @@ func TestResolveAuth_FallsBackToMountsWhenNoEnvVarIsSet(t *testing.T) {
 		AuthEnv:  []string{"SKAEL_TEST_TOKEN_DEFINITELY_UNSET"},
 	}}
 
-	mounts, env, err := resolveAuth(a, func(string, ...any) {})
+	mounts, env, err := resolveAuth(a, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("resolveAuth: %v", err)
 	}
@@ -199,5 +251,32 @@ func TestResolveAuth_FallsBackToMountsWhenNoEnvVarIsSet(t *testing.T) {
 	}
 	if len(mounts) != 1 {
 		t.Fatalf("mounts = %+v, want the host credential dir mounted", mounts)
+	}
+}
+
+// TestWarnOnQuota_ReportsOnceAboveTheThreshold pins both halves of the
+// approaching-quota notice: it stays quiet while the window has room, and it
+// speaks exactly once no matter how many sessions a tier runs. A line per
+// session across a 36-session tier would bury the one thing the operator
+// needs to read.
+func TestWarnOnQuota_ReportsOnceAboveTheThreshold(t *testing.T) {
+	var lines []string
+	r := &Runner{o: Options{Logger: func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}}}
+
+	r.warnOnQuota(agent.Meta{RateLimitUtilization: 0.82, RateLimitWindow: "seven_day"})
+	if len(lines) != 0 {
+		t.Fatalf("warned at 82%%, below the threshold: %v", lines)
+	}
+
+	for range 5 {
+		r.warnOnQuota(agent.Meta{RateLimitUtilization: 0.94, RateLimitWindow: "seven_day"})
+	}
+	if len(lines) != 1 {
+		t.Fatalf("logged %d lines, want exactly one per run: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "seven_day") || !strings.Contains(lines[0], "94%") {
+		t.Errorf("line = %q, want it to name the window and the utilization", lines[0])
 	}
 }

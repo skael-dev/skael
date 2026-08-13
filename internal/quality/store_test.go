@@ -9,6 +9,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/suite"
+	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/testutil"
 )
@@ -82,19 +85,20 @@ func TestStore_LatestIsDeterministicOnTiedScoredAt(t *testing.T) {
 	}
 }
 
-// UpliftSource must survive the round trip: report.Comparable treats it as
+// The grader model must survive the round trip: report.Comparable treats it as
 // one of the fields that determines whether two reports' scores are a fair
 // comparison, alongside SuiteRef/EngineVersion/Tier/ModelPanel/PanelComplete
 // which are already preserved.
-func TestStore_UpliftSourceRoundTrips(t *testing.T) {
+func TestStore_GraderModelRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.SetupTestDB(t)
 	s := quality.NewStore(pool)
 	skillID := insertSkill(t, pool, "deploy-helper")
+	grader := "claude-sonnet-5"
 	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: "r", Tier: "full",
 		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
 		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
-		UpliftSource: "judge", ScoredAt: time.Now()}
+		JudgeModel: &grader, ScoredAt: time.Now()}
 	if err := s.Upsert(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +106,15 @@ func TestStore_UpliftSourceRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UpliftSource != "judge" {
-		t.Fatalf("uplift_source = %q, want %q", got.UpliftSource, "judge")
+	if got.JudgeModel == nil || *got.JudgeModel != "claude-sonnet-5" {
+		t.Fatalf("judge_model = %v, want claude-sonnet-5", got.JudgeModel)
 	}
 	hist, err := s.History(ctx, skillID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hist) != 1 || hist[0].UpliftSource != "judge" {
-		t.Fatalf("history uplift_source lost: %+v", hist)
+	if len(hist) != 1 || hist[0].JudgeModel == nil || *hist[0].JudgeModel != "claude-sonnet-5" {
+		t.Fatalf("history judge_model lost: %+v", hist)
 	}
 }
 
@@ -286,6 +290,84 @@ func TestStore_GetVersion_MissingVersionIsNilNil(t *testing.T) {
 	if got != nil {
 		t.Fatalf("got %+v, want nil for an unscored version", got)
 	}
+}
+
+// TestStore_SuiteDerivedFollowsTheSuiteRecord pins that the served flag is a
+// live read. It was a column stamped at report time. A later review cannot
+// update that column, even though the review is the exact event that must
+// clear the badge.
+func TestStore_SuiteDerivedFollowsTheSuiteRecord(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.SetupTestDB(t)
+	store := quality.NewStore(pool)
+	skillID := insertSkill(t, pool, "suite-derived")
+
+	reg, suiteRef := insertDerivedSuite(t, pool, "suite-derived")
+
+	rec := quality.Record{SkillID: skillID, Version: 1, SuiteRef: suiteRef, Tier: "full",
+		Pillars: json.RawMessage(`{}`), PanelMatrix: json.RawMessage(`[]`),
+		DriftBreakdown: json.RawMessage(`{}`), ModelPanel: json.RawMessage(`[]`),
+		ScoredAt: time.Now()}
+	if err := store.Upsert(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec2, err := store.Latest(ctx, skillID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec2.SuiteDerived {
+		t.Fatal("suite_derived is false while the suite is derived")
+	}
+
+	if err := reg.MarkAuthored(ctx, pool, suiteRef, "reviewer@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec2, err = store.Latest(ctx, skillID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec2.SuiteDerived {
+		t.Error("suite_derived is still true after the suite was marked authored")
+	}
+}
+
+// insertDerivedSuite registers a fixture suite for skillName. It then marks
+// the suite derived. It returns the registry and the suite's ref. The caller
+// needs the registry to flip that origin later.
+func insertDerivedSuite(t *testing.T, pool *pgxpool.Pool, skillName string) (*evalsuite.Registry, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	st, err := platform.NewLocalStorage(t.TempDir())
+	if err != nil {
+		t.Fatalf("insertDerivedSuite: NewLocalStorage: %v", err)
+	}
+	reg := evalsuite.NewRegistry(pool, st)
+
+	dir := t.TempDir()
+	set := &suite.EvalSet{
+		SkillName: skillName,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
+		},
+	}
+	if err := suite.WriteEvalSet(dir, set); err != nil {
+		t.Fatalf("insertDerivedSuite: WriteEvalSet: %v", err)
+	}
+	archive, err := evalsuite.PackDir(dir)
+	if err != nil {
+		t.Fatalf("insertDerivedSuite: PackDir: %v", err)
+	}
+	rec, err := reg.Put(ctx, skillName, archive, []evalsuite.Check{{TaskID: "t1", OK: true}}, 1, "test@example.com", nil)
+	if err != nil {
+		t.Fatalf("insertDerivedSuite: Put: %v", err)
+	}
+	if err := reg.MarkDerived(ctx, pool, rec.Ref); err != nil {
+		t.Fatalf("insertDerivedSuite: MarkDerived: %v", err)
+	}
+	return reg, rec.Ref
 }
 
 // insertSkill creates the skills row the foreign key needs.

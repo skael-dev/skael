@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // wsSnapshot is what fakeAdapter observed about a session's workspace at the
@@ -25,11 +25,11 @@ import (
 // workspace up, and so the only reliable place left to check what the agent
 // could actually see.
 type wsSnapshot struct {
-	prompt     string
-	workspace  string
-	skillCount int
-	hasOracle  bool
-	env        []string
+	prompt       string
+	workspace    string
+	skillCount   int
+	hasAnswerKey bool
+	env          []string
 }
 
 // skillDirCount reports how many skill directories are present under
@@ -49,9 +49,10 @@ func skillDirCount(ws string) int {
 	return n
 }
 
-// hasOracleFile reports whether ws carries the task's reference solution.
-func hasOracleFile(ws string) bool {
-	_, err := os.Stat(filepath.Join(ws, "oracle", "solve.sh"))
+// hasAnswerKey reports whether ws carries the eval set, which holds the
+// expectations a session is graded against.
+func hasAnswerKey(ws string) bool {
+	_, err := os.Stat(filepath.Join(ws, "evals", "evals.json"))
 	return err == nil
 }
 
@@ -92,7 +93,7 @@ func (f *fakeAdapter) InstallSkill(ws, bundle string) error {
 	f.installs = append(f.installs, ws)
 	return nil
 }
-func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawStream, error) {
+func (f *fakeAdapter) Invoke(ctx context.Context, s agent.InvokeSpec) (agent.RawStream, error) {
 	f.mu.Lock()
 	f.invokes = append(f.invokes, s)
 	// Snapshot the workspace now: it is staged and installed into by this
@@ -107,11 +108,11 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 		env = se.Env()
 	}
 	f.snapshots = append(f.snapshots, wsSnapshot{
-		prompt:     s.Prompt,
-		workspace:  ws,
-		skillCount: skillDirCount(ws),
-		hasOracle:  hasOracleFile(ws),
-		env:        env,
+		prompt:       s.Prompt,
+		workspace:    ws,
+		skillCount:   skillDirCount(ws),
+		hasAnswerKey: hasAnswerKey(ws),
+		env:          env,
 	})
 	f.mu.Unlock()
 	if f.failOnce.CompareAndSwap(true, false) {
@@ -119,6 +120,14 @@ func (f *fakeAdapter) Invoke(_ context.Context, s agent.InvokeSpec) (agent.RawSt
 	}
 	if f.invokeErr != nil {
 		return nil, f.invokeErr
+	}
+	// A real adapter runs its CLI through the executor, which is what puts the
+	// session in a sandbox. Doing the same here keeps driver-level failures
+	// (a cancelled run, a docker error) reachable from these tests.
+	if s.Exec != nil {
+		if _, err := s.Exec.Exec(ctx, []string{"claude", "-p", s.Prompt}, io.Discard, io.Discard); err != nil {
+			return nil, err
+		}
 	}
 	return strings.NewReader(f.stream), nil
 }
@@ -128,7 +137,7 @@ func (f *fakeAdapter) Parse(agent.RawStream) (*agent.Result, error) {
 		m.RateLimited = true
 	}
 	return &agent.Result{
-		Events: []trajectory.Event{{Seq: 1, Type: trajectory.TypeSkillRead, Name: "demo", Paths: []string{"SKILL.md"}}},
+		Events: []agent.Event{{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{"SKILL.md"}}},
 		Meta:   m,
 	}, nil
 }
@@ -201,8 +210,9 @@ type harness struct {
 	adapter   *fakeAdapter
 	adapters  func(name string) (agent.Adapter, bool)
 	opts      runner.Options
-	suite     *suite.Suite
-	fullSuite *suite.Suite
+	evals     *suite.EvalSet
+	fullEvals *suite.EvalSet
+	triggers  []suite.TriggerQuery
 	suiteDir  string
 	bundleDir string
 	image     sandbox.ImageRef
@@ -210,32 +220,19 @@ type harness struct {
 	skill     string
 }
 
-// newTaskSuite builds n tasks with distinct, prefixed ids so two fixtures
-// can share one on-disk suite directory without colliding. holdoutN of them
-// are spread across the id range as holdout, mirroring plan_test.go's
-// fixture shape.
-func newTaskSuite(prefix string, n, holdoutN int) *suite.Suite {
-	s := &suite.Suite{}
-	holdout := map[int]bool{}
-	for i := 0; i < holdoutN; i++ {
-		holdout[i*n/holdoutN] = true
-	}
+// newEvalSet builds n evals whose ids start at first, so two fixtures can
+// share one on-disk eval set without colliding.
+func newEvalSet(first, n int) *suite.EvalSet {
+	set := &suite.EvalSet{SkillName: "demo"}
 	for i := 0; i < n; i++ {
-		id := fmt.Sprintf("%s%02d", prefix, i)
-		split := "dev"
-		if holdout[i] {
-			split = "holdout"
-		}
-		s.Tasks = append(s.Tasks, suite.TaskPkg{
-			ID:       id,
-			Kind:     "happy",
-			Split:    split,
-			PromptMD: "Do the thing for " + id + ".",
-			Oracle:   "#!/bin/sh\ntrue\n",
-			Verifier: "#!/bin/sh\nexit 0\n",
+		id := first + i
+		set.Evals = append(set.Evals, suite.Eval{
+			ID:           id,
+			Prompt:       fmt.Sprintf("Do the thing for eval %d.", id),
+			Expectations: []string{"it did the thing"},
 		})
 	}
-	return s
+	return set
 }
 
 func newHarness(t *testing.T) *harness {
@@ -247,19 +244,25 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	smoke := newTaskSuite("t", 5, 0)
-	full := newTaskSuite("f", 10, 3)
+	smoke := newEvalSet(1, 5)
+	full := newEvalSet(100, 10)
+	var trig []suite.TriggerQuery
 	for i := 0; i < 8; i++ {
-		full.Triggers.Positive = append(full.Triggers.Positive, fmt.Sprintf("please use the demo skill (%d)", i))
-		full.Triggers.Negative = append(full.Triggers.Negative, fmt.Sprintf("do an unrelated thing (%d)", i))
+		trig = append(trig,
+			suite.TriggerQuery{Query: fmt.Sprintf("please use the demo skill (%d)", i), ShouldTrigger: true},
+			suite.TriggerQuery{Query: fmt.Sprintf("do an unrelated thing (%d)", i)})
 	}
 
-	// Both fixtures' tasks are written into one suite directory so a plan
-	// built from either fixture resolves its task directories the same way.
-	combined := &suite.Suite{Tasks: append(append([]suite.TaskPkg{}, smoke.Tasks...), full.Tasks...)}
+	// Both fixtures are written into one eval set directory so a plan built
+	// from either resolves its input files the same way.
+	combined := &suite.EvalSet{SkillName: "demo"}
+	combined.Evals = append(append(combined.Evals, smoke.Evals...), full.Evals...)
 	suiteDir := filepath.Join(t.TempDir(), "suite")
-	if err := combined.Write(suiteDir); err != nil {
-		t.Fatalf("writing suite fixture: %v", err)
+	if err := suite.WriteEvalSet(suiteDir, combined); err != nil {
+		t.Fatalf("writing eval set fixture: %v", err)
+	}
+	if err := suite.WriteTriggerQueries(suiteDir, trig); err != nil {
+		t.Fatalf("writing trigger fixture: %v", err)
 	}
 
 	bundleDir := filepath.Join(t.TempDir(), "bundle")
@@ -289,7 +292,7 @@ func newHarness(t *testing.T) *harness {
 
 	h := &harness{
 		t: t, store: st, driver: driver, adapter: adapter, adapters: adapters,
-		suite: smoke, fullSuite: full, suiteDir: suiteDir, bundleDir: bundleDir,
+		evals: smoke, fullEvals: full, triggers: trig, suiteDir: suiteDir, bundleDir: bundleDir,
 		image: sandbox.ImageRef{Tag: "demo:latest"}, evalID: id, skill: "demo",
 	}
 	h.opts = runner.Options{
@@ -304,7 +307,7 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) options() runner.Options { return h.opts }
 
-// smokePlan is the harness's default plan: every dev task in the five-task
+// smokePlan is the harness's default plan: every eval in the five-eval
 // fixture, run once as skill and once as baseline on the panel's primary
 // member. It is hand-built (not BuildPlan(TierSmoke, ...)) because the real
 // smoke tier plans zero baselines, and several of these tests need a
@@ -313,11 +316,12 @@ func (h *harness) smokePlan() *runner.Plan {
 	panel := runner.DefaultPanel()
 	primary := panel[0]
 	var runs []store.RunKey
-	for _, task := range h.suite.Tasks {
-		runs = append(runs, store.RunKey{TaskID: task.ID, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondSkill, Attempt: 1})
-		runs = append(runs, store.RunKey{TaskID: task.ID, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondBaseline, Attempt: 1})
+	for _, ev := range h.evals.Evals {
+		id := runner.EvalID(ev.ID)
+		runs = append(runs, store.RunKey{TaskID: id, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondSkill, Attempt: 1})
+		runs = append(runs, store.RunKey{TaskID: id, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondBaseline, Attempt: 1})
 	}
-	return &runner.Plan{Tier: runner.TierSmoke, Panel: panel, Runs: runs, N: 1, K: 1, Tasks: h.suite.Tasks}
+	return &runner.Plan{Tier: runner.TierSmoke, Panel: panel, Runs: runs, Evals: h.evals.Evals}
 }
 
 func (h *harness) input() runner.ExecuteInput {
@@ -384,29 +388,10 @@ func TestExecute_ResumeSpendsNoSessionOnACompletedRun(t *testing.T) {
 			t.Errorf("resume reported %+v, which the first run never produced", o.Key)
 			continue
 		}
-		if o.Status != w.Status || !sameVerifierExit(o.VerifierExit, w.VerifierExit) {
-			t.Errorf("resume for %+v = {status=%s exit=%v}, want {status=%s exit=%v}",
-				o.Key, o.Status, verifierExitStr(o.VerifierExit), w.Status, verifierExitStr(w.VerifierExit))
+		if o.Status != w.Status {
+			t.Errorf("resume for %+v = %s, want %s", o.Key, o.Status, w.Status)
 		}
 	}
-}
-
-// sameVerifierExit compares two *int VerifierExit values by their pointed-to
-// value (or by both being nil), never by pointer identity: two separately
-// constructed Outcomes with "the verifier exited 0" must compare equal, and
-// nil must never compare equal to a pointer to 0.
-func sameVerifierExit(a, b *int) bool {
-	if (a == nil) != (b == nil) {
-		return false
-	}
-	return a == nil || *a == *b
-}
-
-func verifierExitStr(v *int) string {
-	if v == nil {
-		return "<nil>"
-	}
-	return fmt.Sprintf("%d", *v)
 }
 
 func TestExecute_BaselineNeverInstallsTheSkill(t *testing.T) {
@@ -559,10 +544,10 @@ func TestExecute_AgentInternalErrorIsRecordedAsNotPerformed(t *testing.T) {
 
 func TestExecute_ACancelledDriverRunIsRecordedAsErrorNotFailed(t *testing.T) {
 	h := newHarness(t)
-	// The verifier run (the only direct r.o.Driver.Run call executeRun makes)
-	// reports a cancelled context, the shape docker.Driver.Run now returns
-	// rather than folding a killed docker client's exit code into a
-	// RunResult. A cancelled run is not a measurement — it must be recorded
+	// The session's own sandbox run reports a cancelled context, the shape
+	// docker.Driver.Run returns rather than folding a killed docker client's
+	// exit code into a RunResult. A cancelled run is not a measurement — it
+	// must be recorded
 	// as StatusError so a resume retries it, never as StatusFailed, which
 	// ClaimRun treats as a completed, permanent skill failure.
 	h.driver.result = func(sandbox.RunSpec) (sandbox.RunResult, error) {
@@ -615,27 +600,21 @@ func TestExecute_AFailingSessionDoesNotAbortTheEval(t *testing.T) {
 	}
 }
 
-func TestExecute_VerifierRunUsesSuitesTimeoutNotTheSessionTimeout(t *testing.T) {
+// A session is one sandbox invocation now. The setup script and the verifier
+// were the other two, and both are gone: input files are copied on the host,
+// and expectations are graded afterwards from the transcript and outputs.
+func TestExecute_ASessionIsOneSandboxInvocation(t *testing.T) {
 	h := newHarness(t)
-	// Deliberately different from suite.VerifierTimeout, so the two cannot
-	// pass this test by coincidence.
-	h.opts.SessionTimeout = 20 * time.Minute
-
-	if _, err := h.run(context.Background()); err != nil {
+	res, err := h.run(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	// recordingDriver.Run is only ever called for the verifier (the agent
-	// session itself goes through fakeAdapter.Invoke, which never touches the
-	// driver) — every recorded run's Timeout must be suite.VerifierTimeout,
-	// the same bound suite.Check uses for the identical script, not
-	// whatever SessionTimeout the panel happens to be configured with.
-	if len(h.driver.runs) == 0 {
-		t.Fatal("no verifier runs were recorded")
+	if len(res.Outcomes) == 0 {
+		t.Fatal("no sessions ran")
 	}
-	for _, rs := range h.driver.runs {
-		if rs.Timeout != suite.VerifierTimeout {
-			t.Errorf("verifier run timeout = %s, want suite.VerifierTimeout (%s)", rs.Timeout, suite.VerifierTimeout)
-		}
+	if len(h.driver.runs) != len(res.Outcomes) {
+		t.Errorf("%d driver runs for %d sessions, want one each: a session should not run a script of its own",
+			len(h.driver.runs), len(res.Outcomes))
 	}
 }
 
@@ -673,7 +652,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 		}
 		return nil, false
 	}
-	panel := append(runner.DefaultPanel(), runner.Member{Agent: "cursor", Model: "auto"})
+	panel := append(runner.DefaultPanel(), runner.Member{Agent: "unregistered-agent", Model: "auto"})
 
 	r, err := runner.New(h.options())
 	if err != nil {
@@ -704,7 +683,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 	for _, x := range hs {
 		in.Healthy[x.Member] = x.OK
 	}
-	in.Plan, _ = runner.BuildPlan(runner.TierSmoke, panel, h.suite, nil)
+	in.Plan, _ = runner.BuildPlan(runner.TierSmoke, panel, h.evals, nil, h.triggers)
 	res, err := r.Execute(context.Background(), h.evalID, in)
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +692,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 		t.Error("PanelComplete = true with an unhealthy member")
 	}
 	for _, o := range res.Outcomes {
-		if o.Key.Agent == "cursor" {
+		if o.Key.Agent == "unregistered-agent" {
 			t.Errorf("ran a session on an unhealthy member: %+v", o.Key)
 		}
 	}
@@ -722,7 +701,7 @@ func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *te
 func TestExecute_TriggerProbesInstallTheDistractorPack(t *testing.T) {
 	h := newHarness(t)
 	in := h.input()
-	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullSuite, nil)
+	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullEvals, nil, h.triggers)
 	in.Distractors = mustDistractors(t)
 
 	r, err := runner.New(h.options())
@@ -738,11 +717,8 @@ func TestExecute_TriggerProbesInstallTheDistractorPack(t *testing.T) {
 	}
 
 	prompts := map[string]bool{}
-	for _, p := range h.fullSuite.Triggers.Positive {
-		prompts[p] = true
-	}
-	for _, p := range h.fullSuite.Triggers.Negative {
-		prompts[p] = true
+	for _, q := range h.triggers {
+		prompts[q.Query] = true
 	}
 
 	var sawProbeSession bool
@@ -767,7 +743,7 @@ func TestExecute_TriggerProbesInstallTheDistractorPack(t *testing.T) {
 func TestExecute_ResumedProbeRecoversEventsFromArtifacts(t *testing.T) {
 	h := newHarness(t)
 	in := h.input()
-	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullSuite, nil)
+	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullEvals, nil, h.triggers)
 	in.Distractors = mustDistractors(t)
 
 	r, err := runner.New(h.options())
@@ -824,7 +800,7 @@ func TestExecute_ResumedProbeRecoversEventsFromArtifacts(t *testing.T) {
 // locate deterministically among the whole plan's concurrent outcomes.
 func (h *harness) targetRunKey() store.RunKey {
 	primary := runner.DefaultPanel()[0]
-	return store.RunKey{TaskID: h.suite.Tasks[0].ID, Agent: primary.Agent, Model: primary.Model, Condition: runner.CondSkill, Attempt: 1}
+	return store.RunKey{TaskID: runner.EvalID(h.evals.Evals[0].ID), Agent: primary.Agent, Model: primary.Model, Condition: runner.CondSkill, Attempt: 1}
 }
 
 // outcomeFor finds the outcome for k among res.Outcomes, failing the test if
@@ -1006,7 +982,7 @@ func TestExecute_TranscriptWriteFailureStillRecordsACompletedMeasurement(t *test
 	}
 }
 
-func TestExecute_NeverStagesTheOracleIntoASessionWorkspace(t *testing.T) {
+func TestExecute_NeverStagesTheAnswerKeyIntoASessionWorkspace(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1016,8 +992,8 @@ func TestExecute_NeverStagesTheOracleIntoASessionWorkspace(t *testing.T) {
 		t.Fatal("no sessions ran")
 	}
 	for _, snap := range snapshots {
-		if snap.hasOracle {
-			t.Errorf("%s carries the oracle; the agent can read the reference solution", snap.workspace)
+		if snap.hasAnswerKey {
+			t.Errorf("%s carries evals.json; the agent can read the expectations it is graded against", snap.workspace)
 		}
 	}
 }

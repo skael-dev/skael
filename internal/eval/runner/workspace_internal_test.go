@@ -4,40 +4,57 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
-// TestStageRunWorkspace_CleansUpOnError pins the fix for every error path in
-// stageRunWorkspace leaking the temp directory MkdirTemp had already
-// created — suite.stageWorkspace, the identical function in the other
-// package, already cleaned up on error; this one previously did not.
-func TestStageRunWorkspace_CleansUpOnError(t *testing.T) {
-	taskDir := t.TempDir()
-	envDir := filepath.Join(taskDir, "environment")
-	if err := os.MkdirAll(envDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(taskDir, "outside-target")
-	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// copyTree refuses symlinks, so staging this environment always fails —
-	// exercising the "staging environment" error return.
-	if err := os.Symlink(target, filepath.Join(envDir, "link")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
+// Every error path must remove the temp directory MkdirTemp already created,
+// or a long eval leaks one workspace per failed session.
+func TestStageEvalWorkspace_CleansUpOnError(t *testing.T) {
+	suiteDir := t.TempDir()
+	ev := suite.Eval{ID: 1, Prompt: "p", Files: []string{"evals/files/missing.csv"}}
 
 	before := tempDirs(t, "skael-run-*")
 
 	// Empty root keeps this test asserting against os.TempDir(), which is
 	// what tempDirs lists.
-	_, err := stageRunWorkspace(taskDir, "")
-	if err == nil {
-		t.Fatal("stageRunWorkspace accepted an environment containing a symlink")
+	if _, err := stageEvalWorkspace(suiteDir, ev, ""); err == nil {
+		t.Fatal("stageEvalWorkspace accepted an eval naming a file the set does not carry")
 	}
 
 	after := tempDirs(t, "skael-run-*")
 	if len(after) != len(before) {
-		t.Errorf("temp workspaces went %d -> %d; stageRunWorkspace leaked its directory on error", len(before), len(after))
+		t.Errorf("temp workspaces went %d -> %d; stageEvalWorkspace leaked its directory on error", len(before), len(after))
+	}
+}
+
+// The expectations are the answer key, so nothing under evals/ may reach the
+// workspace except the input files an eval names.
+func TestStageEvalWorkspace_StagesOnlyTheNamedInputFiles(t *testing.T) {
+	suiteDir := t.TempDir()
+	filesDir := filepath.Join(suiteDir, "evals", "files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filesDir, "in.csv"), []byte("a,b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(suiteDir, "evals", "evals.json"), []byte(`{"skill_name":"s"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ev := suite.Eval{ID: 1, Prompt: "p", Files: []string{"evals/files/in.csv"}}
+	ws, err := stageEvalWorkspace(suiteDir, ev, "")
+	if err != nil {
+		t.Fatalf("stageEvalWorkspace: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(ws) })
+
+	if _, err := os.Stat(filepath.Join(ws, "in.csv")); err != nil {
+		t.Errorf("the named input file is not in the workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "evals")); err == nil {
+		t.Error("the evals directory reached the workspace: the expectations are the answer key")
 	}
 }
 

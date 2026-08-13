@@ -1,34 +1,22 @@
 package scan
 
-// Class groups a scan finding by what kind of claim it makes. Severity says
-// how confident the scanner is; class says whether an empirical measurement
-// could ever overturn it.
+// Class groups a finding by whether an empirical measurement could overturn it.
 type Class string
 
 const (
-	// ClassExfiltration and ClassSecret are unappealable. No evaluation
-	// overrides credential theft: a sandbox observing sixty well-behaved
-	// runs does not prove the sixty-first will not post a token somewhere.
+	// Unappealable: no evaluation overrides credential theft.
 	ClassExfiltration Class = "exfiltration"
 	ClassSecret       Class = "secret"
 
-	// The rest are guesses the scanner makes from shape alone, which is
-	// exactly what running the skill in a network-off sandbox measures
-	// directly.
+	// Appealable: shape-based guesses a sandbox can verify.
 	ClassExecution Class = "execution"
 	ClassInjection Class = "injection"
 	ClassHeuristic Class = "heuristic"
 )
 
-// classByCategory maps a scan rule's Category onto a Class. Two entries are
-// not identity mappings and both are deliberate:
-//
-//   - "secrets" -> ClassSecret is a rename only.
-//   - "obfuscation" -> ClassHeuristic is a judgement. A base64 blob or a
-//     zero-width sequence is a strong smell, not proof; treating it as
-//     unappealable makes a minified vendored dependency permanently
-//     unpublishable. The accepted risk is a payload that stays dormant
-//     under evaluation.
+// "obfuscation" maps to ClassHeuristic, not ClassExfiltration: a base64 blob
+// is a smell, not proof, and treating it as unappealable makes minified
+// vendored dependencies permanently unpublishable.
 var classByCategory = map[string]Class{
 	"exfiltration": ClassExfiltration,
 	"secrets":      ClassSecret,
@@ -37,11 +25,8 @@ var classByCategory = map[string]Class{
 	"obfuscation":  ClassHeuristic,
 }
 
-// ClassOf maps a scan rule category onto a Class. The bool is false for an
-// unmapped category; callers must not substitute a default, because every
-// plausible default is wrong in one direction or the other. Decide treats an
-// unmapped class as Block, and TestEveryRuleHasAClass keeps that unreachable
-// from the native rule set.
+// ClassOf maps a rule category onto a Class. False for an unmapped category;
+// Decide treats unmapped as Block.
 func ClassOf(category string) (Class, bool) {
 	c, ok := classByCategory[category]
 	return c, ok

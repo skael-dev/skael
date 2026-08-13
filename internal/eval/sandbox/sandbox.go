@@ -1,13 +1,5 @@
-// Package sandbox is the seam every evaluation run executes through. A run is
-// one command in one isolated environment with one network policy; nothing
-// above this package knows whether that environment is a container, a
-// microVM, or a fake in a test.
-//
-// The interface exists for a security reason as much as a portability one:
-// Docker shares the host kernel, so it is a legitimate driver for skills you
-// generated yourself and not a legitimate driver for a skill someone sent you.
-// CheckPolicy is where that distinction is enforced, once, rather than in each
-// caller that might forget.
+// Package sandbox is the seam every evaluation run executes through. Nothing
+// above this package knows whether the environment is a container or a fake.
 package sandbox
 
 import (
@@ -21,33 +13,24 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// ErrDriverNotImplemented is returned by a driver that conforms to the
-// interface without implementing it.
 var ErrDriverNotImplemented = errors.New("sandbox: driver not implemented")
 
 // Driver runs commands in isolated environments.
 type Driver interface {
 	Name() string
-	// HardwareIsolated reports whether an escape from a run is contained by
-	// something stronger than a shared kernel. It gates untrusted work.
+	// HardwareIsolated gates untrusted work (shared-kernel drivers refuse it).
 	HardwareIsolated() bool
-	// Prepare builds or reuses the image layer a skill's runs execute in.
 	Prepare(ctx context.Context, e EnvSpec) (ImageRef, error)
-	// Snapshot captures a prepared image so a run can be restored from it
-	// rather than rebuilt. Optional: a driver with no checkpoint support
-	// returns a zero SnapshotRef and no error, and Run ignores it.
+	// Snapshot is optional: a zero SnapshotRef and no error means unsupported.
 	Snapshot(ctx context.Context, r ImageRef) (SnapshotRef, error)
 	Run(ctx context.Context, rs RunSpec) (RunResult, error)
 }
 
 // EnvSpec describes the environment a skill's runs need.
 type EnvSpec struct {
-	// Skill names the skill, for image tagging and diagnostics.
-	Skill string
-	// Deps are baked into a per-skill layer over the base image.
-	Deps spec.DepsDecl
-	// BaseTag is the base image to layer over. Empty means the built-in default.
-	BaseTag string
+	Skill   string
+	Deps    spec.DepsDecl
+	BaseTag string // empty = built-in default
 }
 
 // ImageRef identifies a prepared image.
@@ -56,21 +39,16 @@ type ImageRef struct {
 	DepsDigest string
 }
 
-// SnapshotRef identifies a restorable snapshot. The zero value means none.
+// SnapshotRef identifies a restorable snapshot. Zero value means none.
 type SnapshotRef struct{ ID string }
 
 // NetworkPolicy is what a run may reach.
 type NetworkPolicy string
 
 const (
-	// NetNone is the default: no route out at all. Every oracle and verifier
-	// run uses it.
-	NetNone NetworkPolicy = "none"
-	// NetAllowlist permits exactly the declared domains and nothing else. Every
-	// agent session uses it, because the agent CLI must reach its provider.
+	NetNone      NetworkPolicy = "none"
 	NetAllowlist NetworkPolicy = "allowlist"
-	// NetFull is unrestricted egress. Explicit opt-in, logged loudly.
-	NetFull NetworkPolicy = "full"
+	NetFull      NetworkPolicy = "full"
 )
 
 // Mount is a host path made visible inside a run.
@@ -82,54 +60,37 @@ type Mount struct {
 
 // RunSpec is one command in one environment.
 type RunSpec struct {
-	Image    ImageRef
-	Snapshot SnapshotRef
-	// Workspace is the host directory mounted read-write at WorkDir. It is the
-	// run's only writable surface and the only place artifacts are collected
-	// from.
-	Workspace string
-	// WorkDir is the container path Workspace appears at. Empty means
-	// DefaultWorkDir.
-	WorkDir string
-	Argv    []string
-	Env     []string
-	// Mounts are additional host paths — an adapter's auth directories, always
-	// read-only.
-	Mounts  []Mount
-	Network NetworkPolicy
-	// Allow lists permitted domains. Required when Network is NetAllowlist and
-	// forbidden otherwise.
-	Allow   []string
-	Timeout time.Duration
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Image     ImageRef
+	Snapshot  SnapshotRef
+	Workspace string // host dir, mounted read-write at WorkDir
+	WorkDir   string // container path; empty = DefaultWorkDir
+	Argv      []string
+	Env       []string
+	Mounts    []Mount
+	Network   NetworkPolicy
+	Allow     []string // required for NetAllowlist, forbidden otherwise
+	Timeout   time.Duration
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
 }
 
 // DefaultWorkDir is where a workspace appears inside a run.
 const DefaultWorkDir = "/workspace"
 
-// RunResult is what a finished run reports. A non-zero ExitCode is a result,
-// not an error: a verifier that fails is the measurement.
+// RunResult is what a finished run reports.
 type RunResult struct {
 	ExitCode int
 	TimedOut bool
-	// Cancelled is true when the run did not finish because its context was
-	// cancelled out from under it (as opposed to TimedOut, its own
-	// Timeout elapsing). A driver that sets this always also returns a
-	// non-nil error — the field exists so a caller inspecting a partial
-	// result (rather than only the error) can still tell a cancellation
-	// apart from a genuine measurement, since neither ExitCode nor TimedOut
-	// says so on their own. A cancelled run must never be recorded as
-	// store.StatusFailed: it was not measured, not failed.
+	// Cancelled distinguishes context cancellation from a timeout or a genuine
+	// exit. A cancelled run must never be recorded as store.StatusFailed.
 	Cancelled bool
 	Duration  time.Duration
 }
 
-// Validate reports a RunSpec a driver should refuse. Each check exists because
-// the failure it prevents is silent: a spec with no timeout hangs a 60-session
-// eval on one run, and a network policy that ignores its own allowlist looks
-// restricted while being open.
+// Validate reports a RunSpec a driver should refuse. Every check guards a
+// silent failure: a missing timeout hangs one run, an inconsistent allowlist
+// looks restricted while being open.
 func (rs RunSpec) Validate() error {
 	if len(rs.Argv) == 0 {
 		return errors.New("sandbox: run has no argv")

@@ -137,6 +137,55 @@ var migrations = []string{
 	`ALTER TABLE reports DROP COLUMN robustness_gap;
 	ALTER TABLE reports ADD COLUMN robustness_gap REAL;
 	ALTER TABLE scores ADD COLUMN healthy INTEGER NOT NULL DEFAULT 1;`,
+
+	// Migration 10: the score becomes an expectation pass rate.
+	//
+	// runs.verifier_exit goes because there is no verifier: a run is graded
+	// afterwards from its transcript and outputs, and the grade lands in
+	// run_grades rather than in a single exit code. judgments goes with the
+	// pairwise judge that wrote it. scores loses the four pillars, which no
+	// longer exist, and keeps effectiveness as the member's own 0-100 score.
+	//
+	// Rows written under the old schema are dropped rather than migrated: a
+	// verifier exit code and an expectation pass rate are not the same
+	// measurement, and carrying one forward as the other would put two scales
+	// in one column. A local eval is reproducible by re-running it.
+	`DELETE FROM runs;
+	DELETE FROM judgments;
+	DELETE FROM scores;
+	ALTER TABLE runs DROP COLUMN verifier_exit;
+	DROP TABLE judgments;
+	ALTER TABLE scores DROP COLUMN trigger_f1;
+	ALTER TABLE scores DROP COLUMN reliability;
+	ALTER TABLE scores DROP COLUMN uplift;
+	ALTER TABLE scores DROP COLUMN efficiency;
+	ALTER TABLE scores DROP COLUMN adherence;
+	ALTER TABLE scores DROP COLUMN drift;
+	ALTER TABLE scores DROP COLUMN grade;
+
+	CREATE TABLE run_grades (
+		eval_id    INTEGER NOT NULL REFERENCES evals(id),
+		task_id    TEXT    NOT NULL,
+		agent      TEXT    NOT NULL,
+		model      TEXT    NOT NULL,
+		condition  TEXT    NOT NULL,
+		attempt    INTEGER NOT NULL,
+		passed     INTEGER NOT NULL DEFAULT 0,
+		total      INTEGER NOT NULL DEFAULT 0,
+		doc        TEXT    NOT NULL DEFAULT '[]',
+		created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (eval_id, task_id, agent, model, condition, attempt)
+	);`,
+
+	// Migration 11: whetstone records the ref of the suite it generated, so
+	// `suite push` can tell an untouched eval set from an edited one. The
+	// server stamps an untouched one as machine-derived. This is why a skill
+	// cannot write its own exam.
+	`CREATE TABLE suite_generated (
+		skill_name TEXT NOT NULL PRIMARY KEY,
+		suite_ref  TEXT NOT NULL,
+		written_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
 }
 
 func migrate(db *sql.DB) error {

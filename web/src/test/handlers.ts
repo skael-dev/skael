@@ -221,6 +221,26 @@ export const handlers = [
     });
   }),
 
+  // Default: one query per heading, so TriggerReview's tests see both
+  // "should trigger" and "should not trigger" groups without per-test setup.
+  http.get("/api/eval/suites/:ref/triggers", () => {
+    return HttpResponse.json({
+      triggers: [
+        { query: "Extract the tables from this document into CSV", should_trigger: true },
+        { query: "What is the weather today", should_trigger: false },
+      ],
+    });
+  }),
+
+  // A review of the "edited" ref stands in for a review that changed the
+  // set. The mutation itself never inspects the body, only the path ref.
+  http.post("/api/eval/suites/:ref/review", ({ params }) => {
+    if (params.ref === "edited") {
+      return HttpResponse.json({ ref: "new-ref", changed: true });
+    }
+    return HttpResponse.json({ ref: "same", changed: false });
+  }),
+
   http.put("/api/skills/review", () => {
     return HttpResponse.json({ reviewed: 2 });
   }),

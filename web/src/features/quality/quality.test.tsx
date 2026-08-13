@@ -69,6 +69,19 @@ function withQuery(ui: React.ReactNode) {
   );
 }
 
+// mockRerun captures every re-run request body, so a test asserts what the UI
+// actually sent rather than that it sent something.
+function mockRerun(): unknown[] {
+  const bodies: unknown[] = [];
+  server.use(
+    http.post("/api/skills/:name/evals", async ({ request }) => {
+      bodies.push(await request.json());
+      return HttpResponse.json({ job_id: "job-1" }, { status: 202 });
+    }),
+  );
+  return bodies;
+}
+
 function mockEvals(jobs: Partial<JobOutput>[]) {
   server.use(
     http.get("/api/skills/:name/evals", () => {
@@ -109,6 +122,33 @@ describe("EvalStatus", () => {
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
     expect(await screen.findByRole("button", { name: /quick check/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /full evaluation/i })).toBeInTheDocument();
+  });
+
+  // The UI half of "a model chosen here reaches the worker". The server-side
+  // half — the same body arriving on a claimed job and landing in model_panel
+  // — is tests/e2e/eval_queue_test.go's
+  // TestEvalQueue_APanelModelChosenInTheUIReachesTheWorkerAndTheRecord.
+  it("sends the chosen panel model with the run request", async () => {
+    mockEvals([]);
+    const bodies = mockRerun();
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    await userEvent.selectOptions(await screen.findByLabelText(/panel model/i), "haiku");
+    await userEvent.click(screen.getByRole("button", { name: /full evaluation/i }));
+
+    await waitFor(() => expect(bodies).toEqual([{ models: ["haiku"] }]));
+  });
+
+  // Agents are deliberately absent: one adapter exists and the runner fills it
+  // in. This once fell back to the shipped panel with no error anywhere.
+  it("sends no panel at all when the default model is left alone", async () => {
+    mockEvals([]);
+    const bodies = mockRerun();
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+
+    await userEvent.click(await screen.findByRole("button", { name: /quick check/i }));
+
+    await waitFor(() => expect(bodies).toEqual([{ tier: "smoke" }]));
   });
 
   it("names both versions and offers a re-run when the score is stale", async () => {

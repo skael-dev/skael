@@ -14,16 +14,21 @@ import (
 	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
+// pushRequestBody is the shape suitepush_test.go decodes a captured request
+// body into. Unreviewed carries the field under test below.
+type pushRequestBody struct {
+	Skill  string `json:"skill"`
+	Checks []struct {
+		TaskID string `json:"task_id"`
+		OK     bool   `json:"ok"`
+	} `json:"checks"`
+	Archive    string `json:"archive_base64"`
+	Unreviewed bool   `json:"unreviewed"`
+}
+
 func TestSuitePush_SendsSuiteAndItsChecks(t *testing.T) {
 	ws := newWorkspaceWithCheckedSuite(t)
-	var got struct {
-		Skill  string `json:"skill"`
-		Checks []struct {
-			TaskID string `json:"task_id"`
-			OK     bool   `json:"ok"`
-		} `json:"checks"`
-		Archive string `json:"archive_base64"`
-	}
+	var got pushRequestBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.WriteHeader(http.StatusCreated)
@@ -38,6 +43,125 @@ func TestSuitePush_SendsSuiteAndItsChecks(t *testing.T) {
 	}
 	if got.Skill != "deploy-helper" || len(got.Checks) == 0 || got.Archive == "" {
 		t.Fatalf("request body was incomplete: %+v", got)
+	}
+}
+
+// TestRunSuitePush_UntouchedSetIsDeclaredUnreviewed pins the whole point of
+// the generated-ref record. The generator wrote this set. Nobody opened it.
+// The server must record it as machine-derived.
+func TestRunSuitePush_UntouchedSetIsDeclaredUnreviewed(t *testing.T) {
+	st := newWorkspaceWithCheckedSuite(t)
+	suiteDir, err := st.SuiteDir("deploy-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := suite.Ref(suiteDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordGeneratedRef("deploy-helper", ref); err != nil {
+		t.Fatal(err)
+	}
+
+	var captured pushRequestBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ref":"sha256:deadbeef","task_count":1}`))
+	}))
+	defer srv.Close()
+
+	if err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
+		Store: st, Skill: "deploy-helper", Endpoint: srv.URL, APIKey: "k",
+	}); err != nil {
+		t.Fatalf("RunSuitePush: %v", err)
+	}
+
+	if !captured.Unreviewed {
+		t.Error("unreviewed = false for an untouched eval set")
+	}
+}
+
+// TestRunSuitePush_AnEditedSetIsNotDeclaredUnreviewed pins the other half.
+// One edit is the act of review. The whole incentive to review rests on
+// this branch.
+func TestRunSuitePush_AnEditedSetIsNotDeclaredUnreviewed(t *testing.T) {
+	st := newWorkspaceWithCheckedSuite(t)
+	if err := st.RecordGeneratedRef("deploy-helper", "a-different-ref"); err != nil {
+		t.Fatal(err)
+	}
+
+	var captured pushRequestBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ref":"sha256:deadbeef","task_count":1}`))
+	}))
+	defer srv.Close()
+
+	if err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
+		Store: st, Skill: "deploy-helper", Endpoint: srv.URL, APIKey: "k",
+	}); err != nil {
+		t.Fatalf("RunSuitePush: %v", err)
+	}
+
+	if captured.Unreviewed {
+		t.Error("unreviewed = true for an edited eval set")
+	}
+}
+
+// TestRunSuitePush_FallsBackWhenTheServerRejectsTheField pins the upgrade
+// path. Huma refuses an unknown body property outright, so a server without
+// the unreviewed field fails the whole push rather than ignores it. No
+// protection exists against such a server.
+// A refused push only blocks the author's release.
+func TestRunSuitePush_FallsBackWhenTheServerRejectsTheField(t *testing.T) {
+	st := newWorkspaceWithCheckedSuite(t)
+	suiteDir, err := st.SuiteDir("deploy-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := suite.Ref(suiteDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordGeneratedRef("deploy-helper", ref); err != nil {
+		t.Fatal(err)
+	}
+
+	// A raw map, not pushRequestBody, because the guarantee under test is that
+	// the retry drops the "unreviewed" key. A decoded bool reads false both
+	// when the key is absent and when it is sent as false. A bool field
+	// cannot tell the two cases apart.
+	var requests []map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"detail":"unexpected property unreviewed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ref":"sha256:deadbeef","task_count":1}`))
+	}))
+	defer srv.Close()
+
+	if err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
+		Store: st, Skill: "deploy-helper", Endpoint: srv.URL, APIKey: "k",
+	}); err != nil {
+		t.Fatalf("RunSuitePush: %v", err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("server saw %d requests, want 2", len(requests))
+	}
+	if _, ok := requests[0]["unreviewed"]; !ok {
+		t.Error("first request did not carry the unreviewed key")
+	}
+	if _, ok := requests[1]["unreviewed"]; ok {
+		t.Error("retry still carried the unreviewed key")
 	}
 }
 
@@ -84,29 +208,24 @@ func newWorkspaceWithCheckedSuiteNoSpec(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t00",
-				Kind:     "happy",
-				PromptMD: "Do the thing.",
-				Oracle:   "#!/bin/sh\ntrue\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
+	set := &suite.EvalSet{
+		SkillName: "deploy-helper",
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
 	suiteDir, err := st.SuiteDir("deploy-helper")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Write(suiteDir); err != nil {
-		t.Fatalf("writing suite fixture: %v", err)
+	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
+		t.Fatalf("writing eval set fixture: %v", err)
 	}
 	ref, err := suite.Ref(suiteDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "t00"}}); err != nil {
+	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "1"}}); err != nil {
 		t.Fatalf("SaveSuiteCheck: %v", err)
 	}
 	return st
@@ -128,7 +247,7 @@ func newWorkspaceWithCheckedSuite(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := []store.SuiteCheckRow{{TaskID: "t00"}}
+	rows := []store.SuiteCheckRow{{TaskID: "1"}}
 	if err := st.SaveSuiteCheck("deploy-helper", ref, rows); err != nil {
 		t.Fatalf("SaveSuiteCheck: %v", err)
 	}
@@ -168,23 +287,18 @@ func newWorkspaceWithUncheckedSuite(t *testing.T) *store.Store {
 		t.Fatalf("ApproveSpec: %v", err)
 	}
 
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t00",
-				Kind:     "happy",
-				PromptMD: "Do the thing.",
-				Oracle:   "#!/bin/sh\ntrue\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
+	set := &suite.EvalSet{
+		SkillName: sp.Name,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
 	suiteDir, err := st.SuiteDir(sp.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Write(suiteDir); err != nil {
-		t.Fatalf("writing suite fixture: %v", err)
+	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
+		t.Fatalf("writing eval set fixture: %v", err)
 	}
 
 	return st

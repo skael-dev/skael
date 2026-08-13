@@ -18,7 +18,7 @@ func TestRunDoctor_ReportsAGatewayWithNothingInstalled(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor returned an error for a missing CLI: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -59,13 +59,13 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 }
 
 // TestRunDoctor_ListsEveryRegisteredAdapter is the guard for the blank-import
-// hazard: the adapters register only from init(), so a missing import in the
-// CLI's own package silently drops an agent from every panel with no compile
-// error and no panic.
+// hazard: the adapter registers only from init(), so a missing import in the
+// CLI's own package silently empties every panel with no compile error and no
+// panic.
 func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 	t.Setenv("PATH", "")
 
-	want := []string{"claude-code", "codex", "cursor", "opencode"}
+	want := []string{"claude-code"}
 
 	if got := len(agent.All()); got != len(want) {
 		t.Errorf("registered adapters = %d, want %d: %v", got, len(want), adapterNames())
@@ -76,7 +76,7 @@ func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 		}
 	}
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRunDoctor_ReportsTheDefaultLLMTimeout(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunDoctor_HonoursTheTimeoutOverride(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "45s")
 
-	rep, err := whetstone.RunDoctor(context.Background(), false)
+	rep, err := whetstone.RunDoctor(context.Background())
 	if err != nil {
 		t.Fatalf("RunDoctor: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunDoctor_RejectsAMalformedTimeout(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WHETSTONE_LLM_TIMEOUT", "not-a-duration")
 
-	_, err := whetstone.RunDoctor(context.Background(), false)
+	_, err := whetstone.RunDoctor(context.Background())
 	if err == nil {
 		t.Fatal("RunDoctor accepted a malformed WHETSTONE_LLM_TIMEOUT")
 	}

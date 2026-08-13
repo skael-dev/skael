@@ -1,41 +1,34 @@
 package whetstone
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/skael-dev/skael/internal/eval/contract"
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
-var newYes bool
-
 var newCmd = &cobra.Command{
 	Use:   "new <intent>",
-	Short: "Interview, generate, lint, and evaluate a new skill",
-	Long: "Draft a specification from a plain-language intent, store it, ask you to\n" +
-		"approve it, then generate the bundle, lint it, compile its drift contract,\n" +
-		"and draft its evaluation suite.",
+	Short: "Interview, generate, lint, and draft the eval set for a new skill",
+	Long: "Draft a specification from a plain-language intent, store it, generate\n" +
+		"the bundle, lint it, and draft its evaluation set. Every run ends with\n" +
+		"SKILL.md, evals/evals.json, and evals/triggers.json.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return RunNew(cmd.Context(), args[0], newYes)
+		return RunNew(cmd.Context(), args[0])
 	},
 }
 
 // RunNew runs the full authoring pipeline for a new skill against the
 // workspace and gateway this machine is configured for.
-func RunNew(ctx context.Context, intent string, yes bool) error {
+func RunNew(ctx context.Context, intent string) error {
 	st, err := openStore()
 	if err != nil {
 		return err
@@ -46,15 +39,14 @@ func RunNew(ctx context.Context, intent string, yes bool) error {
 	if err != nil {
 		return err
 	}
-	return runNew(ctx, st, g, os.Stdin, intent, yes)
+	return runNew(ctx, st, g, intent)
 }
 
-// runNew is the pipeline itself, with the store, the gateway, and the
-// approval gate's input passed in. RunNew is the thin wrapper that resolves
-// those from the environment; everything worth testing — the approval gate's
-// parsing, and stopping before the contract when the bundle fails lint — is
-// here, where a fake gateway and a string reader can reach it.
-func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, intent string, yes bool) error {
+// runNew is the pipeline itself, with the store and the gateway passed in.
+// It never asks a question. A person who wants to change the drafted spec
+// edits it afterwards. That is why the run prints the spec and names the
+// next commands at the end.
+func runNew(ctx context.Context, st *store.Store, g llm.Gateway, intent string) error {
 	ui.Info("drafting a specification…")
 	sp, err := spec.Interview(ctx, g, intent)
 	if err != nil {
@@ -65,18 +57,15 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, i
 	if err != nil {
 		return err
 	}
-	ui.Success("stored %s spec version %d", sp.Name, version)
-
-	if !yes {
-		approved, err := confirmSpec(sp, in)
-		if err != nil {
+	// Every ui writer no-ops in JSON mode to keep stdout parseable. This
+	// writes YAML straight to stdout, so it must obey the same rule.
+	if !ui.JSONMode {
+		if err := sp.Save(os.Stdout); err != nil {
 			return err
 		}
-		if !approved {
-			return fmt.Errorf("spec version %d for %s was not approved; edit it with `whetstone spec edit %s`",
-				version, sp.Name, sp.Name)
-		}
 	}
+	ui.Success("stored %s spec version %d", sp.Name, version)
+
 	if err := st.ApproveSpec(sp.Name, version); err != nil {
 		return err
 	}
@@ -92,19 +81,18 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, in io.Reader, i
 	}
 	renderFindings(res)
 	if code != 0 {
-		// Stopping here is deliberate. A contract compiled from a spec whose
-		// bundle does not lint describes a skill that does not exist, and a
-		// suite drafted against it measures nothing.
+		// Stopping here is deliberate. An eval set drafted against a bundle
+		// that does not lint measures a skill that does not exist.
 		return fmt.Errorf("the generated bundle at %s does not lint clean (%s); fix it and re-run `whetstone gen %s`",
 			bundle.Dir, plural(res.Errors(), "error"), sp.Name)
 	}
 
-	if err := writeContract(st, sp); err != nil {
-		return err
-	}
 	if err := generateSuite(ctx, st, g, sp); err != nil {
 		return wrapGenerationError(err, "whetstone suite gen "+sp.Name)
 	}
+
+	ui.Info("edit the skill with %s then %s", ui.Code("whetstone spec edit "+sp.Name), ui.Code("whetstone gen "+sp.Name))
+	ui.Info("score it with %s", ui.Code("whetstone eval "+sp.Name))
 	return nil
 }
 
@@ -122,61 +110,15 @@ func wrapGenerationError(err error, resumeCmd string) error {
 	return fmt.Errorf("%w; %s", err, hint)
 }
 
-// writeContract compiles the drift contract from the spec and writes it into
-// the skill's eval sidecar.
-func writeContract(st *store.Store, sp *spec.SkillSpec) error {
-	c, err := contract.Compile(sp)
-	if err != nil {
-		return err
-	}
-
-	path, err := st.ContractPath(sp.Name)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("whetstone new: %w", err)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("whetstone new: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	if err := c.Save(f); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("whetstone new: writing %s: %w", path, err)
-	}
-	ui.Success("compiled contract to %s", path)
-	return nil
-}
-
-// confirmSpec prints the drafted spec and asks for approval. It is the human
-// gate: everything downstream — the bundle, the contract, the suite — is
-// derived from this document, so it is the only place review is cheap.
-func confirmSpec(sp *spec.SkillSpec, in io.Reader) (bool, error) {
-	if err := sp.Save(os.Stdout); err != nil {
-		return false, err
-	}
-	fmt.Fprintf(os.Stderr, "\n  Approve this spec for %s? [y/N] ", sp.Name)
-
-	// EOF is a decline, not a failure. The prompt is "[y/N]", so a closed or
-	// empty stdin — `whetstone new … < /dev/null`, or any non-interactive
-	// runner — means no consent was given, which is exactly what N means.
-	// Reporting it as an error instead would turn "the gate said no" into "the
-	// gate broke", and the caller cannot tell those apart.
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("whetstone new: reading approval: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
-}
+// newYes is read by nothing. `whetstone new` used to ask for the spec to be
+// approved, and --yes skipped that question. The question is gone. The flag
+// stays so a script that still passes it does not fail on an unknown flag.
+var newYes bool
 
 func init() {
-	newCmd.Flags().BoolVar(&newYes, "yes", false, "Skip the spec approval prompt")
+	newCmd.Flags().BoolVar(&newYes, "yes", false, "Deprecated: does nothing")
+	if err := newCmd.Flags().MarkDeprecated("yes", "the approval prompt was removed, so this flag does nothing"); err != nil {
+		panic(err)
+	}
 	rootCmd.AddCommand(newCmd)
 }

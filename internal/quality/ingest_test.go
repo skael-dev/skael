@@ -4,21 +4,17 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/skael-dev/skael/internal/eval/drift"
 	"github.com/skael-dev/skael/internal/eval/report"
-	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/quality"
 )
 
 func TestFromReport_CarriesTheHeadlineAndPanelState(t *testing.T) {
-	gap := 0.18
 	r := &report.Report{
 		SchemaVersion: report.SchemaVersion, Skill: "deploy-helper", SpecVersion: 4,
 		Tier: "full", SuiteRef: "sha256:abc", EngineVersion: "0.9.1",
 		Headline: 72.5, PanelComplete: true,
-		RobustnessGap: &gap,
-		ModelPanel:    []report.PanelMember{{Agent: "claude-code", Model: "opus", Class: "strong"}},
-		Members:       []report.MemberReport{{Healthy: true, DriftGrade: "B"}},
+		ModelPanel: []report.PanelMember{{Agent: "claude-code", Model: "sonnet", Class: "strong"}},
+		Members:    []report.MemberReport{{Healthy: true, Effectiveness: 72.5}},
 	}
 	rec, err := quality.FromReport(r)
 	if err != nil {
@@ -27,16 +23,13 @@ func TestFromReport_CarriesTheHeadlineAndPanelState(t *testing.T) {
 	if rec.Headline != 72.5 {
 		t.Fatalf("headline lost: %+v", rec)
 	}
-	if rec.RobustnessGap == nil || *rec.RobustnessGap != 0.18 {
-		t.Fatalf("robustness gap = %v, want 0.18", rec.RobustnessGap)
-	}
 	if !rec.PanelComplete || rec.SuiteRef != "sha256:abc" || rec.Tier != "full" {
 		t.Fatalf("provenance lost: %+v", rec)
 	}
 }
 
-func TestFromReport_CarriesJudgeModel(t *testing.T) {
-	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r", JudgeModel: "claude-opus-5"}
+func TestFromReport_CarriesTheGraderModel(t *testing.T) {
+	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r", GraderModel: "claude-opus-5"}
 	rec, err := quality.FromReport(r)
 	if err != nil {
 		t.Fatal(err)
@@ -58,19 +51,6 @@ func TestFromReport_NoJudgeModelStaysNil(t *testing.T) {
 	}
 	if rec.JudgeModel != nil {
 		t.Fatalf("judge model = %v, want nil", *rec.JudgeModel)
-	}
-}
-
-// An absent measurement is a pointer or an error, never a zero. A nil gap must
-// survive as NULL, because 0.0 means "the floor model kept up" — the opposite.
-func TestFromReport_AbsentRobustnessGapStaysAbsent(t *testing.T) {
-	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r", RobustnessGap: nil}
-	rec, err := quality.FromReport(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.RobustnessGap != nil {
-		t.Fatalf("nil gap became %v", *rec.RobustnessGap)
 	}
 }
 
@@ -125,39 +105,5 @@ func TestFromReport_EmptyMembersAndPanelMarshalAsEmptyArrays(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.ModelPanel, &arr); err != nil {
 		t.Fatalf("model_panel did not unmarshal as an array: %v", err)
-	}
-}
-
-func TestFromReport_CountsCriticalForbidViolations(t *testing.T) {
-	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
-	r.Tasks = []report.TaskReport{{
-		TaskID: "t1",
-		Drift: []report.RunDrift{{
-			Agent: "claude-code", Model: "opus", Attempt: 1,
-			Violations: []drift.Violation{
-				{ID: "no-network", Severity: spec.SeverityCritical, Hits: 2},
-				{ID: "no-network", Severity: spec.SeverityCritical, Hits: 1},
-				{ID: "tidy", Severity: spec.SeverityMinor, Hits: 5},
-			},
-		}},
-	}}
-
-	rec, err := quality.FromReport(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.CriticalForbidViolations != 2 {
-		t.Fatalf("critical forbid violations = %d, want 2 — count distinct critical violation records, not hits, and never count non-critical ones", rec.CriticalForbidViolations)
-	}
-}
-
-func TestFromReport_ZeroCriticalForbidViolationsWhenNoneObserved(t *testing.T) {
-	r := &report.Report{SchemaVersion: report.SchemaVersion, Skill: "x", SuiteRef: "r"}
-	rec, err := quality.FromReport(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.CriticalForbidViolations != 0 {
-		t.Fatalf("critical forbid violations = %d, want 0 — a report with no violations must count zero, and zero here genuinely means none, unlike an absent measurement, which is what the gate treats a nil QualityState as", rec.CriticalForbidViolations)
 	}
 }

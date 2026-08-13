@@ -24,6 +24,7 @@ import (
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/report"
+	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
@@ -370,10 +371,11 @@ func (e *evalEnv) rerun(t *testing.T, skillName string, models []string) string 
 
 // qualityResult is the subset of a quality record this scenario checks.
 type qualityResult struct {
-	Headline     float64 `json:"headline_score"`
-	Verified     bool    `json:"verified"`
-	SuiteRef     string  `json:"suite_ref"`
-	SuiteDerived bool    `json:"suite_derived"`
+	Headline     float64              `json:"headline_score"`
+	Verified     bool                 `json:"verified"`
+	SuiteRef     string               `json:"suite_ref"`
+	SuiteDerived bool                 `json:"suite_derived"`
+	ModelPanel   []report.PanelMember `json:"model_panel"`
 }
 
 // getQuality fetches the most recent quality score for skillName.
@@ -457,6 +459,51 @@ func (s stubRunner) Run(_ context.Context, in worker.RunInput) (*report.Report, 
 }
 
 // ---------------------------------------------------------------------------
+// panelRunner is stubRunner's sibling for the panel path: it resolves the
+// claimed job's requested panel exactly as cmd/skael-worker does — through
+// runner.ParsePanel — and reports the members that came out. Everything from
+// the runner inwards (Docker, the sandbox, the sessions) is out of scope; what
+// is in scope is that the panel the UI asked for survives the queue, the claim,
+// and ingestion into model_panel.
+// ---------------------------------------------------------------------------
+
+type panelRunner struct {
+	headline float64
+	// requested records the panel as it arrived over the claim, so the test
+	// can tell "the worker was asked for haiku" from "the worker reported
+	// haiku because ParsePanel happened to default to it".
+	requested *evalqueue.Panel
+}
+
+func (p panelRunner) Run(_ context.Context, in worker.RunInput) (*report.Report, error) {
+	if p.requested != nil {
+		*p.requested = evalqueue.Panel{Agents: in.Panel.Agents, Models: in.Panel.Models}
+	}
+	panel, err := runner.ParsePanel(in.Panel.Agents, in.Panel.Models)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]report.PanelMember, 0, len(panel))
+	for _, m := range panel {
+		members = append(members, report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class)})
+	}
+	now := time.Now()
+	return &report.Report{
+		SchemaVersion: report.SchemaVersion,
+		Skill:         in.Skill,
+		SpecVersion:   1,
+		Tier:          "full",
+		SuiteRef:      in.SuiteRef,
+		EngineVersion: "test",
+		Headline:      p.headline,
+		ModelPanel:    members,
+		PanelComplete: true,
+		StartedAt:     now,
+		FinishedAt:    now,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
 // Fixtures: a minimal skill bundle and a minimal eval suite, matching the
 // shapes internal/worker's own tests use, so a suite ref the test computes
 // matches what the server's suite registry computes from the same archive.
@@ -474,23 +521,17 @@ func fixtureBundle(t *testing.T) []byte {
 
 func writeFixtureSuite(t *testing.T, dir string) {
 	t.Helper()
-	s := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:       "t1",
-				Kind:     "happy",
-				Split:    "holdout",
-				PromptMD: "# Task\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	set := &suite.EvalSet{
+		SkillName: "demo",
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
 		},
 	}
-	require.NoError(t, s.Write(dir))
+	require.NoError(t, suite.WriteEvalSet(dir, set))
+	require.NoError(t, suite.WriteTriggerQueries(dir, []suite.TriggerQuery{
+		{Query: "do the thing", ShouldTrigger: true},
+		{Query: "do something unrelated"},
+	}))
 }
 
 func fixtureSuiteArchive(t *testing.T) []byte {
@@ -561,6 +602,56 @@ func TestEvalQueue_PublishToVerifiedScore(t *testing.T) {
 	}
 	if hist[0].SuiteRef != hist[1].SuiteRef {
 		t.Fatal("the re-run used a different suite; the two scores are not comparable")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: the model a user picks in the UI is the model the score is
+// attributed to. The UI sends models with no agents (there is one adapter),
+// which the queue carries, the worker resolves, and ingestion stores in
+// model_panel — where quality.Comparable reads it to decide which scores may
+// be charted together. Every hop here has silently dropped the panel at least
+// once: the wire format, the RunInput -> EvalRequest map, and ParsePanel's
+// old requirement that agents and models both be present.
+// ---------------------------------------------------------------------------
+
+func TestEvalQueue_APanelModelChosenInTheUIReachesTheWorkerAndTheRecord(t *testing.T) {
+	env := startServer(t)
+
+	env.createSkill(t, "deploy-helper")
+	ref := env.pushSuite(t, "deploy-helper", fixtureSuiteArchive(t))
+	env.publish(t, "deploy-helper", fixtureBundle(t))
+
+	// Drain the job publishing enqueued, so the claim below is the re-run's.
+	w := env.newWorker(t, stubRunner{headline: 68.25, suiteRef: ref})
+	if worked, err := w.RunOnce(context.Background()); err != nil || !worked {
+		t.Fatalf("the publish job did not run: (%v, %v)", worked, err)
+	}
+
+	// Exactly what web/src/features/quality/eval-status.tsx posts when a model
+	// is chosen: models, no agents.
+	env.rerun(t, "deploy-helper", []string{"haiku"})
+
+	var requested evalqueue.Panel
+	w2 := env.newWorker(t, panelRunner{headline: 55.5, requested: &requested})
+	if worked, err := w2.RunOnce(context.Background()); err != nil || !worked {
+		t.Fatalf("the re-run job did not execute: (%v, %v)", worked, err)
+	}
+
+	if len(requested.Models) != 1 || requested.Models[0] != "haiku" {
+		t.Fatalf("the worker was handed models %v, want [haiku]: the chosen model did not survive the queue",
+			requested.Models)
+	}
+
+	rec := env.getQuality(t, "deploy-helper")
+	if len(rec.ModelPanel) != 1 {
+		t.Fatalf("stored model_panel = %+v, want one member", rec.ModelPanel)
+	}
+	if rec.ModelPanel[0].Model != "haiku" {
+		t.Errorf("stored model = %q, want haiku: the score is attributed to a model nobody chose", rec.ModelPanel[0].Model)
+	}
+	if rec.ModelPanel[0].Agent != "claude-code" {
+		t.Errorf("stored agent = %q, want the default adapter filled in", rec.ModelPanel[0].Agent)
 	}
 }
 

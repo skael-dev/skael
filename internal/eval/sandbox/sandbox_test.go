@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/sandbox/sprites"
 )
 
 // fakeDriver is a Driver that records what it was asked to do. Every package
@@ -142,18 +141,5 @@ func TestRunSpec_Validate(t *testing.T) {
 	rs.Allow = []string{"api.anthropic.com"}
 	if err := rs.Validate(); err != nil {
 		t.Errorf("Validate rejected a well-formed allowlist spec: %v", err)
-	}
-}
-
-func TestSprites_IsInterfaceConformingAndFailsLoudly(t *testing.T) {
-	var d sandbox.Driver = sprites.New()
-	if !d.HardwareIsolated() {
-		t.Error("sprites reports a shared kernel; untrusted work would then have no driver at all")
-	}
-	if _, err := d.Prepare(context.Background(), sandbox.EnvSpec{}); !errors.Is(err, sandbox.ErrDriverNotImplemented) {
-		t.Errorf("Prepare err = %v, want ErrDriverNotImplemented", err)
-	}
-	if _, err := d.Run(context.Background(), validSpec()); !errors.Is(err, sandbox.ErrDriverNotImplemented) {
-		t.Errorf("Run err = %v, want ErrDriverNotImplemented", err)
 	}
 }

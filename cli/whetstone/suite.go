@@ -12,28 +12,27 @@ import (
 	"github.com/skael-dev/skael/internal/ui"
 )
 
-// splitSeed fixes the dev/holdout split. It is a constant rather than a flag
-// because the holdout is what a reported score means: re-splitting with a
-// different seed silently changes which tasks the repair loop was allowed to
-// see, and makes two scores incomparable.
-const splitSeed int64 = 1
+// evalCount is how many evals a drafted set asks for. It matches the full
+// tier's budget, so a freshly generated set can be scored without an author
+// having to add more.
+const evalCount = 10
 
 var suiteCmd = &cobra.Command{
 	Use:   "suite",
-	Short: "Work with a skill's evaluation suite",
+	Short: "Work with a skill's eval set",
 }
 
 var suiteGenCmd = &cobra.Command{
 	Use:   "gen <skill>",
-	Short: "Generate and write the evaluation suite for a skill",
+	Short: "Draft the eval set for a skill and write it to evals/",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunSuiteGen(cmd.Context(), args[0])
 	},
 }
 
-// RunSuiteGen drafts an evaluation suite from a skill's approved spec and
-// writes it into the skill's eval sidecar.
+// RunSuiteGen drafts an eval set from a skill's approved spec and writes it
+// into the skill's eval sidecar.
 func RunSuiteGen(ctx context.Context, skill string) error {
 	st, err := openStore()
 	if err != nil {
@@ -53,34 +52,58 @@ func RunSuiteGen(ctx context.Context, skill string) error {
 	return generateSuite(ctx, st, g, sp)
 }
 
-// generateSuite drafts, splits, and writes a suite. Shared with `new`.
+// generateSuite drafts and writes an eval set. Shared with `new`.
 func generateSuite(ctx context.Context, st *store.Store, g llm.Gateway, sp *spec.SkillSpec) error {
-	s, dropped, err := suite.Generate(ctx, g, sp)
+	set, triggers, err := suite.Generate(ctx, g, sp, evalCount)
 	if err != nil {
 		return err
 	}
-	for _, d := range dropped {
-		ui.Warn("whetstone suite gen: task %s could not be generated — %s", d.TaskID, d.Reason)
-	}
-	s.Split(splitSeed)
 
 	dir, err := st.SuiteDir(sp.Name)
 	if err != nil {
 		return err
 	}
-	if err := s.Write(dir); err != nil {
+	if err := suite.WriteEvalSet(dir, set); err != nil {
+		return err
+	}
+	if err := suite.WriteTriggerQueries(dir, triggers); err != nil {
 		return err
 	}
 
+	recordGeneratedRef(st, sp.Name, dir)
+
 	if ui.JSONMode {
 		return ui.PrintJSON(map[string]any{
-			"skill": sp.Name,
-			"suite": dir,
-			"tasks": len(s.Tasks),
+			"skill":    sp.Name,
+			"evals":    len(set.Evals),
+			"triggers": len(triggers),
+			"dir":      dir,
 		})
 	}
-	ui.Success("wrote %d tasks to %s", len(s.Tasks), dir)
+	ui.Success("wrote %d evals and %d trigger queries to %s", len(set.Evals), len(triggers), dir)
 	return nil
+}
+
+// recordGeneratedRef records the content ref of dir as what a machine wrote
+// into it. `suite push` compares the current ref against this one. A match
+// declares an eval set nobody read, and the server records that as derived.
+//
+// Every machine writer of a suite directory must call this, not only the
+// generator. A stale ref makes the next push declare nothing. The server then
+// records the eval set as authored, and its score can clear a scan hold with
+// no reader.
+//
+// A failure never fails the caller, because the artifacts on disk are good.
+// Both failures warn: a silent miss is the laundered suite above.
+func recordGeneratedRef(st *store.Store, skill, dir string) {
+	ref, err := suite.Ref(dir)
+	if err != nil {
+		ui.Warn("could not hash the eval set for %s, so the next push declares it authored: %v", skill, err)
+		return
+	}
+	if err := st.RecordGeneratedRef(skill, ref); err != nil {
+		ui.Warn("could not record the eval set ref for %s, so the next push declares it authored: %v", skill, err)
+	}
 }
 
 func init() {

@@ -56,37 +56,33 @@ type Record struct {
 	Spec       json.RawMessage
 	Origin     Origin
 	UploadedBy string
-	CreatedAt  time.Time
+	// ReviewedBy is the person who raised this suite to authored. Empty until
+	// somebody reviews it. UploadedBy cannot answer that question: on a
+	// machine-derived suite it names the worker's own key.
+	ReviewedBy string
+	// MachineGenerated is true when a worker built this suite for a skill that
+	// had none. Origin cannot answer that: an unreviewed push is derived too,
+	// and it has a present author. Void tolerance reads this one, never
+	// Origin — see worker.RunInput.AllowVoid.
+	MachineGenerated bool
+	CreatedAt        time.Time
 }
 
 // Origin records how a suite came to exist.
 type Origin string
 
 const (
-	// OriginAuthored is a suite a person wrote and gated through whetstone.
 	OriginAuthored Origin = "authored"
-	// OriginDerived is a suite generated from the skill's own SKILL.md. A
-	// score against one measures the skill against its own claims, which is
-	// why internal/skill's Releaser will not let it clear a scan hold.
+	// OriginDerived scores cannot clear a scan hold.
 	OriginDerived Origin = "derived"
 )
 
-// Queryer is the subset of pgx both a pool and a transaction satisfy, so
-// MarkDerived can be composed into the report handler's transaction rather
-// than landing outside it and surviving a rolled-back score.
+// Queryer is the subset of pgx both a pool and a transaction satisfy.
 type Queryer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// ErrInvalidArchive is wrapped into any Put error caused by the caller's
-// archive itself (unpack failure, unreadable suite tree, missing checks) —
-// bad input that should be reported to the caller as a 4xx, as opposed to a
-// storage or database failure on the server's side.
 var ErrInvalidArchive = errors.New("evalsuite: invalid archive")
-
-// ErrNotFound is wrapped into any Get/LatestForSkill error caused by no
-// matching row existing, as opposed to a database failure while looking one
-// up.
 var ErrNotFound = errors.New("evalsuite: suite not found")
 
 // Registry stores suite archives content-addressably and records their
@@ -106,29 +102,23 @@ func archiveKey(ref string) string {
 	return fmt.Sprintf("suites/%s.tar.gz", ref)
 }
 
-// Put stores a suite archive under suites/{ref}.tar.gz and records it. It is
-// idempotent on ref: the same content uploaded twice is one row.
-//
-// checks must not be empty — a suite with no oracle-gate results cannot tell
-// a broken task from a broken skill, so the check travels with the suite by
-// construction rather than by convention. specJSON is the pusher's spec.yaml
-// as JSON (may be nil/empty — see Record.Spec).
+// Put stores a suite archive and records it. Idempotent on ref.
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, nil)
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, false, nil)
 }
 
-// PutDerived stores a suite the server has itself established is machine
-// derived, marking it so in the same transaction as the insert and running
-// after (when non-nil) inside it too — that is how the job row that caused
-// the derivation gets its suite_ref without a second, separately-failable
-// write. Origin is never taken from the pusher: a worker that could declare
-// its own suite authored would defeat internal/skill's refusal to let a
-// derived score clear a scan hold.
+// PutUnreviewed stores a suite the pusher declared unedited since generation.
+func (r *Registry) PutUnreviewed(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, false, nil)
+}
+
+// PutDerived stores a machine-generated suite, running after inside the
+// same transaction. Origin is never taken from the pusher.
 func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, after)
+	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, true, after)
 }
 
-func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
+func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, machineGenerated bool, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
 	}
@@ -148,11 +138,11 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 		return nil, fmt.Errorf("evalsuite: Put ref: %w: %w", ErrInvalidArchive, err)
 	}
 
-	s, err := suite.Load(dir)
+	set, err := suite.LoadEvalSet(dir)
 	if err != nil {
 		return nil, fmt.Errorf("evalsuite: Put load: %w: %w", ErrInvalidArchive, err)
 	}
-	taskCount := len(s.Tasks)
+	taskCount := len(set.Evals)
 
 	archivePath := archiveKey(ref)
 	if _, err := r.st.Write(ctx, archivePath, bytes.NewReader(archive)); err != nil {
@@ -194,7 +184,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 	// (the insert is ON CONFLICT DO NOTHING) still ends derived, and an
 	// authored push can never walk a derived suite back.
 	if origin == OriginDerived {
-		if err := r.MarkDerived(ctx, tx, ref); err != nil {
+		if err := r.markDerived(ctx, tx, ref, machineGenerated); err != nil {
 			return nil, err
 		}
 	}
@@ -213,7 +203,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -226,6 +216,22 @@ func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 		return nil, fmt.Errorf("evalsuite: Get: %w", err)
 	}
 	return rec, nil
+}
+
+// ReadArchive returns a stored suite's archive bytes. A route uses it to
+// look inside a suite. The route does not reach through the registry into
+// storage itself.
+func (r *Registry) ReadArchive(ctx context.Context, ref string) ([]byte, error) {
+	rec, err := r.Get(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := r.st.Read(ctx, rec.ArchivePath)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: ReadArchive %s: %w", ref, err)
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
 }
 
 // Fetch returns the raw archive bytes for ref.
@@ -250,7 +256,7 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 // skillName.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin
+		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
 		FROM eval_suites
 		WHERE skill_name = $1
 		ORDER BY created_at DESC
@@ -267,10 +273,22 @@ func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Recor
 	return rec, nil
 }
 
-// MarkDerived flags ref as machine-derived. It takes a Queryer so the caller
-// can write it inside the same transaction as the score that justifies it.
+// MarkDerived flags ref as generated by a worker. It takes a Queryer so the
+// caller can write it inside the same transaction as the score that justifies
+// it. Its only caller outside this package is the report handler's derive
+// path, where a worker built the suite, so it sets machine_generated too.
 func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error {
-	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1 WHERE ref = $2`, string(OriginDerived), ref)
+	return r.markDerived(ctx, q, ref, true)
+}
+
+// markDerived is the upgrade-only origin write. machine_generated is OR-ed
+// rather than assigned, so an unreviewed re-push of content a worker already
+// generated cannot walk that fact back and take the run's void tolerance with
+// it.
+func (r *Registry) markDerived(ctx context.Context, q Queryer, ref string, machineGenerated bool) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE eval_suites SET origin = $1, machine_generated = machine_generated OR $2 WHERE ref = $3`,
+		string(OriginDerived), machineGenerated, ref)
 	if err != nil {
 		return fmt.Errorf("evalsuite: MarkDerived %s: %w", ref, err)
 	}
@@ -280,11 +298,33 @@ func (r *Registry) MarkDerived(ctx context.Context, q Queryer, ref string) error
 	return nil
 }
 
+// MarkAuthored flags ref as reviewed by reviewedBy. It takes a Queryer so the
+// caller can write it inside the same transaction as the review that
+// justifies it.
+//
+// This is the one path that can raise a suite's origin. Its only caller
+// runs behind an owner or an admin who acts in the review view. No client
+// declaration reaches it: a pusher that claims authored clears its own scan
+// hold.
+//
+// reviewedBy lands in the same statement as the origin. A separate write can
+// fail on its own and leave a raised suite with no accountable name.
+func (r *Registry) MarkAuthored(ctx context.Context, q Queryer, ref, reviewedBy string) error {
+	tag, err := q.Exec(ctx, `UPDATE eval_suites SET origin = $1, reviewed_by = $2 WHERE ref = $3`, string(OriginAuthored), reviewedBy, ref)
+	if err != nil {
+		return fmt.Errorf("evalsuite: MarkAuthored %s: %w", ref, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("evalsuite: MarkAuthored: no suite recorded for ref %s: %w", ref, ErrNotFound)
+	}
+	return nil
+}
+
 func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
 	var specJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin); err != nil {
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy, &rec.MachineGenerated); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {

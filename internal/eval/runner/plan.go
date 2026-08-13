@@ -7,8 +7,8 @@ package runner
 
 import (
 	"fmt"
-	"math"
 	"sort"
+	"strconv"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/spec"
@@ -20,19 +20,19 @@ import (
 type Tier string
 
 const (
-	// TierSmoke is immediate feedback: five development tasks on the primary
-	// member, no baselines, no probes.
+	// TierSmoke is immediate feedback: five evals on one member, no baseline
+	// and no probes.
 	TierSmoke Tier = "smoke"
-	// TierFull is the reportable tier: 60 core sessions plus 16 trigger probes.
+	// TierFull is the reportable tier: 30 task sessions on one member plus a
+	// six-query trigger smoke check.
 	TierFull Tier = "full"
-	// TierDeep is opt-in and takes hours.
+	// TierDeep adds the floor member and a third attempt per eval.
 	TierDeep Tier = "deep"
 )
 
-// Conditions a session runs under. The skill/baseline pair is what Uplift
-// compares; a trigger probe is a short session measuring only whether the skill
-// fired. Typed as store.Condition — the shared representation store.RunKey
-// and report.ConditionReport both use — rather than a bare string.
+// Conditions a session runs under. The skill/baseline pair is what the
+// published delta compares; a trigger probe is a short session measuring only
+// whether the skill fired.
 const (
 	CondSkill    store.Condition = "skill"
 	CondBaseline store.Condition = "baseline"
@@ -43,68 +43,83 @@ const (
 type Member struct {
 	Agent string
 	Model string
-	// Class is the capability tier this member stands for. RobustnessGap is the
-	// difference between the strong member and the floor member, so the class
-	// is part of the panel's identity rather than a label.
 	Class spec.ModelTier
 }
 
-// Panel is the set of members every task is run against.
+// Panel is the set of members every eval is run against.
 type Panel []Member
 
-// tierBudget is §9's table as data. Each field is a hard cap: a tier that
-// cannot be filled is an error, because a smaller run reported under a tier's
-// name is a claim nothing downstream can verify.
+// tierBudget is each tier's session count, as data. Every field is a hard cap:
+// a tier that cannot be filled is an error, because a smaller run reported
+// under a tier's name is a claim nothing downstream can verify.
 type tierBudget struct {
-	Tasks        int
-	Runs         int // attempts per task per member
+	Evals int
+	Runs  int // attempts per eval per member, with the skill
+	// BaselineRuns is attempts per eval with no skill installed, on the primary
+	// member only. The delta is one published number answering one question, so
+	// a per-member baseline buys nothing and costs a session per eval per
+	// member.
 	BaselineRuns int
-	Probes       int // positive + negative, on the primary member
-	N, K         int
-	// BaselineK is the passes-required estimator width for the baseline
-	// condition, separate from K: K is sized to Runs (the skill condition's
-	// attempt count), and BaselineRuns is deliberately smaller (a baseline
-	// session spends budget without measuring the skill at all). Reusing K
-	// against BaselineRuns asks score.PassAtK for k > n on every tier that
-	// has a baseline at all, which score.Reliability refuses.
-	BaselineK   int
-	DevOnly     bool
+	// Probes is the trigger smoke check: how many queries, split evenly
+	// between should-trigger and should-not. The full trigger measurement is a
+	// separate command; this only has to answer "does it fire at all", which is
+	// what the release precondition needs.
+	Probes      int
 	PrimaryOnly bool
 }
 
 var budgets = map[Tier]tierBudget{
-	TierSmoke: {Tasks: 5, Runs: 1, BaselineRuns: 0, Probes: 0, N: 1, K: 1, BaselineK: 0, DevOnly: true, PrimaryOnly: true},
-	TierFull:  {Tasks: 10, Runs: 2, BaselineRuns: 1, Probes: 16, N: 2, K: 2, BaselineK: 1},
-	TierDeep:  {Tasks: 16, Runs: 4, BaselineRuns: 2, Probes: 24, N: 4, K: 3, BaselineK: 2},
+	TierSmoke: {Evals: 5, Runs: 1, BaselineRuns: 0, Probes: 0, PrimaryOnly: true},
+	TierFull:  {Evals: 10, Runs: 2, BaselineRuns: 1, Probes: 6, PrimaryOnly: true},
+	TierDeep:  {Evals: 16, Runs: 3, BaselineRuns: 1, Probes: 16, PrimaryOnly: false},
 }
 
-// DefaultPanel is the shipped panel: one strong member and one floor member of
-// the same vendor.
+// DefaultPanel is the shipped panel: one member.
 //
-// Two capability tiers rather than two vendors, for a recorded reason: the
-// second vendor's CLI is unauthenticated on the machine this was built on, and
-// a parser written from documentation passes its own tests and fails on real
-// output. min-across-panel and RobustnessGap need a strong/floor pair, which
-// this provides; the cross-vendor claim stays unmade until a real stream can be
-// recorded.
+// Sonnet rather than Opus, because it is what most people running claude-code
+// actually run — so it is a truer measurement, not merely a cheaper one. The
+// floor member joins only at TierDeep: "works on the weakest model" is worth
+// measuring, and it is not worth doubling every score's cost to measure.
 func DefaultPanel() Panel {
+	return Panel{{Agent: "claude-code", Model: "sonnet", Class: spec.TierStrong}}
+}
+
+// DeepPanel adds the floor member.
+func DeepPanel() Panel {
 	return Panel{
-		{Agent: "claude-code", Model: "opus", Class: spec.TierStrong},
+		{Agent: "claude-code", Model: "sonnet", Class: spec.TierStrong},
 		{Agent: "claude-code", Model: "haiku", Class: spec.TierFloor},
 	}
 }
 
-// ParsePanel builds a panel from CLI arguments, cross-checking each agent
-// against the adapter registry so a typo is a refusal rather than a panel
-// member that silently never runs.
+// PanelFor returns the shipped panel for a tier.
+func PanelFor(t Tier) Panel {
+	if t == TierDeep {
+		return DeepPanel()
+	}
+	return DefaultPanel()
+}
+
+// ParsePanel builds a panel from caller arguments, cross-checking each agent
+// against the adapter lookup so a typo is a refusal rather than a panel member
+// that silently never runs. The first model is the strong member and any
+// others are floor members.
+//
+// Models alone are enough. The UI and the re-run endpoint offer a model
+// without an agent — there is one adapter to choose from — and requiring both
+// meant a chosen model fell back to the shipped panel with no error anywhere,
+// producing a score against a model nobody asked for.
 func ParsePanel(agents, models []string) (Panel, error) {
-	if len(agents) == 0 || len(models) == 0 {
+	if len(models) == 0 {
 		return DefaultPanel(), nil
+	}
+	if len(agents) == 0 {
+		agents = []string{DefaultPanel()[0].Agent}
 	}
 	var p Panel
 	for _, a := range agents {
 		if _, ok := agent.Get(a); !ok {
-			return nil, fmt.Errorf("runner: no adapter named %q (adapters register from a blank import; run `whetstone doctor` to list them)", a)
+			return nil, fmt.Errorf("runner: no adapter named %q (run `whetstone doctor` to list them)", a)
 		}
 		for i, m := range models {
 			class := spec.TierStrong
@@ -113,24 +128,6 @@ func ParsePanel(agents, models []string) (Panel, error) {
 			}
 			p = append(p, Member{Agent: a, Model: m, Class: class})
 		}
-	}
-
-	// A panel is only useful if it can back both the panel-minimum gate and
-	// RobustnessGap, and both need a strong member and a floor member. Rather
-	// than invent a cleverer class assignment, the panel validates itself: a
-	// single-model panel, or a multi-agent panel given only one model, would
-	// otherwise silently produce an all-strong panel with no error at all.
-	seen := map[spec.ModelTier]bool{}
-	for _, m := range p {
-		seen[m.Class] = true
-	}
-	if !seen[spec.TierStrong] || !seen[spec.TierFloor] {
-		missing := spec.TierFloor
-		if !seen[spec.TierStrong] {
-			missing = spec.TierStrong
-		}
-		return nil, fmt.Errorf("runner: panel has no %s member (agents=%v, models=%v); the panel minimum and the robustness gap both need a strong member and a floor member to mean anything — pass a second model to get a floor member",
-			missing, agents, models)
 	}
 	return p, nil
 }
@@ -150,17 +147,16 @@ type Plan struct {
 	Panel  Panel
 	Runs   []store.RunKey
 	Probes []Probe
-	// N is runs per task per member; K is the passes required by the
-	// Reliability estimator.
-	N, K int
-	// BaselineK is the passes-required estimator width for the baseline
-	// condition — see tierBudget.BaselineK.
-	BaselineK int
-	Tasks     []suite.TaskPkg
+	Evals  []suite.Eval
 }
 
-// BuildPlan enumerates the sessions for a tier.
-func BuildPlan(t Tier, p Panel, s *suite.Suite, void map[string]bool) (*Plan, error) {
+// EvalID renders an eval's id as the run key's task id. Run keys are stored as
+// text and predate evals.json, so the conversion happens in one place.
+func EvalID(id int) string { return strconv.Itoa(id) }
+
+// BuildPlan enumerates the sessions for a tier. void lists evals excluded by
+// suite.Validate, which are planned by nobody and scored by nobody.
+func BuildPlan(t Tier, p Panel, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) (*Plan, error) {
 	b, ok := budgets[t]
 	if !ok {
 		return nil, fmt.Errorf("runner: unknown tier %q", t)
@@ -168,98 +164,68 @@ func BuildPlan(t Tier, p Panel, s *suite.Suite, void map[string]bool) (*Plan, er
 	if len(p) == 0 {
 		return nil, fmt.Errorf("runner: tier %s needs at least one panel member", t)
 	}
+	if set == nil {
+		return nil, fmt.Errorf("runner: tier %s needs an eval set", t)
+	}
 
-	eligible := make([]suite.TaskPkg, 0, len(s.Tasks))
-	for _, task := range s.Tasks {
-		if void[task.ID] {
-			continue
+	eligible := make([]suite.Eval, 0, len(set.Evals))
+	for _, e := range set.Evals {
+		if !void[e.ID] {
+			eligible = append(eligible, e)
 		}
-		if b.DevOnly && task.Split == "holdout" {
-			continue
-		}
-		eligible = append(eligible, task)
 	}
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].ID < eligible[j].ID })
 
-	if len(eligible) < b.Tasks {
-		return nil, fmt.Errorf("runner: tier %s needs %d eligible tasks, the suite has %d (void or holdout tasks are excluded); regenerate the suite or run a smaller tier",
-			t, b.Tasks, len(eligible))
+	if len(eligible) < b.Evals {
+		return nil, fmt.Errorf("runner: tier %s needs %d evals, the set has %d that can be scored (void evals are excluded); add evals or run a smaller tier",
+			t, b.Evals, len(eligible))
 	}
-
-	var selected []suite.TaskPkg
-	if b.DevOnly {
-		selected = eligible[:b.Tasks]
-	} else {
-		// A plain ID-order prefix would keep whichever split happens to sort
-		// first and could starve the other — in particular, silently select
-		// zero holdout tasks. The reported score of an eval *is* the holdout
-		// score, so holdout gets its own reserved share of the budget,
-		// mirroring the fraction Suite.Split itself uses, with the same
-		// max(1, ...) floor and for the same reason: no holdout tasks means
-		// no reportable result at all.
-		var dev, holdout []suite.TaskPkg
-		for _, task := range eligible {
-			if task.Split == "holdout" {
-				holdout = append(holdout, task)
-			} else {
-				dev = append(dev, task)
-			}
-		}
-		holdoutN := int(math.Round(0.3 * float64(b.Tasks)))
-		if holdoutN < 1 {
-			holdoutN = 1
-		}
-		devN := b.Tasks - holdoutN
-
-		if len(dev) < devN {
-			return nil, fmt.Errorf("runner: tier %s needs %d dev tasks, the suite has %d eligible dev tasks (void tasks excluded); regenerate the suite or run a smaller tier",
-				t, devN, len(dev))
-		}
-		if len(holdout) < holdoutN {
-			return nil, fmt.Errorf("runner: tier %s needs %d holdout tasks, the suite has %d eligible holdout tasks (void tasks excluded); regenerate the suite or run a smaller tier",
-				t, holdoutN, len(holdout))
-		}
-
-		selected = make([]suite.TaskPkg, 0, b.Tasks)
-		selected = append(selected, dev[:devN]...)
-		selected = append(selected, holdout[:holdoutN]...)
-		sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
-	}
-	eligible = selected
+	selected := eligible[:b.Evals]
 
 	members := p
 	if b.PrimaryOnly {
 		members = p[:1]
 	}
+	primary := p[0]
 
-	plan := &Plan{Tier: t, Panel: p, N: b.N, K: b.K, BaselineK: b.BaselineK, Tasks: eligible}
-	for _, task := range eligible {
+	plan := &Plan{Tier: t, Panel: p, Evals: selected}
+	for _, e := range selected {
+		id := EvalID(e.ID)
 		for _, m := range members {
 			for attempt := 1; attempt <= b.Runs; attempt++ {
 				plan.Runs = append(plan.Runs, store.RunKey{
-					TaskID: task.ID, Agent: m.Agent, Model: m.Model, Condition: CondSkill, Attempt: attempt,
+					TaskID: id, Agent: m.Agent, Model: m.Model, Condition: CondSkill, Attempt: attempt,
 				})
 			}
-			for attempt := 1; attempt <= b.BaselineRuns; attempt++ {
-				plan.Runs = append(plan.Runs, store.RunKey{
-					TaskID: task.ID, Agent: m.Agent, Model: m.Model, Condition: CondBaseline, Attempt: attempt,
-				})
-			}
+		}
+		for attempt := 1; attempt <= b.BaselineRuns; attempt++ {
+			plan.Runs = append(plan.Runs, store.RunKey{
+				TaskID: id, Agent: primary.Agent, Model: primary.Model, Condition: CondBaseline, Attempt: attempt,
+			})
 		}
 	}
 
 	if b.Probes > 0 {
-		primary := p[0]
 		half := b.Probes / 2
-		for i := 0; i < half && i < len(s.Triggers.Positive); i++ {
-			plan.Probes = append(plan.Probes, Probe{Index: i, Prompt: s.Triggers.Positive[i], Positive: true, Member: primary})
+		var positive, negative []suite.TriggerQuery
+		for _, q := range triggers {
+			if q.ShouldTrigger {
+				positive = append(positive, q)
+			} else {
+				negative = append(negative, q)
+			}
 		}
-		for i := 0; i < half && i < len(s.Triggers.Negative); i++ {
-			plan.Probes = append(plan.Probes, Probe{Index: half + i, Prompt: s.Triggers.Negative[i], Positive: false, Member: primary})
+		if len(positive) < half || len(negative) < half {
+			return nil, fmt.Errorf("runner: tier %s needs %d should-trigger and %d should-not-trigger queries, evals/triggers.json has %d and %d",
+				t, half, half, len(positive), len(negative))
 		}
-		if len(plan.Probes) < b.Probes {
-			return nil, fmt.Errorf("runner: tier %s needs %d trigger prompts, the suite has %d positive and %d negative",
-				t, b.Probes, len(s.Triggers.Positive), len(s.Triggers.Negative))
+		for i := 0; i < half; i++ {
+			plan.Probes = append(plan.Probes,
+				Probe{Index: i, Prompt: positive[i].Query, Positive: true, Member: primary})
+		}
+		for i := 0; i < half; i++ {
+			plan.Probes = append(plan.Probes,
+				Probe{Index: half + i, Prompt: negative[i].Query, Positive: false, Member: primary})
 		}
 	}
 	return plan, nil
@@ -268,23 +234,23 @@ func BuildPlan(t Tier, p Panel, s *suite.Suite, void map[string]bool) (*Plan, er
 // SessionCount is the total number of agent sessions the plan will spend.
 func (p *Plan) SessionCount() int { return len(p.Runs) + len(p.Probes) }
 
-// DevRuns and HoldoutRuns partition the plan by split. The repair loop iterates
-// on DevRuns and reports HoldoutRuns, and it must never see the latter.
-func (p *Plan) DevRuns() []store.RunKey     { return p.runsInSplit("dev") }
-func (p *Plan) HoldoutRuns() []store.RunKey { return p.runsInSplit("holdout") }
+// EvalByID returns the planned eval with the given run-key task id.
+func (p *Plan) EvalByID(taskID string) (suite.Eval, bool) {
+	for _, e := range p.Evals {
+		if EvalID(e.ID) == taskID {
+			return e, true
+		}
+	}
+	return suite.Eval{}, false
+}
 
-func (p *Plan) runsInSplit(split string) []store.RunKey {
-	in := map[string]bool{}
-	for _, t := range p.Tasks {
-		if t.Split == split {
-			in[t.ID] = true
-		}
-	}
-	var out []store.RunKey
+// BaselinePlanned reports whether the plan runs any baseline session, which is
+// what makes the without-skill delta measurable.
+func BaselinePlanned(p Plan) bool {
 	for _, k := range p.Runs {
-		if in[k.TaskID] {
-			out = append(out, k)
+		if k.Condition == CondBaseline {
+			return true
 		}
 	}
-	return out
+	return false
 }

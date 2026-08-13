@@ -149,28 +149,18 @@ func (s *rerunTestServer) registerSuiteForJob(t *testing.T, name, jobID, token s
 	t.Helper()
 
 	dir := t.TempDir()
-	sfx := &suite.Suite{
-		Tasks: []suite.TaskPkg{
-			{
-				ID:   "t1",
-				Kind: "happy",
-				// PromptMD embeds the skill name so two skills' fixture
-				// suites hash to distinct content-addressed refs — refs are
-				// content-addressed independent of the skill field, so two
-				// otherwise-identical fixtures would collide onto one ref.
-				Split:    "holdout",
-				PromptMD: "# Task for " + name + "\n\nDo the thing.\n",
-				Oracle:   "#!/bin/sh\necho ok\n",
-				Verifier: "#!/bin/sh\nexit 0\n",
-			},
-		},
-		Triggers: suite.TriggerSet{
-			Positive: []string{"do the thing"},
-			Negative: []string{"do something unrelated"},
+	// The prompt embeds the skill name so two skills' fixture sets hash to
+	// distinct content-addressed refs — a ref is content-addressed
+	// independent of the skill field, so two identical fixtures would
+	// otherwise collide onto one ref.
+	sfx := &suite.EvalSet{
+		SkillName: name,
+		Evals: []suite.Eval{
+			{ID: 1, Prompt: "Do the thing for " + name + ".", Expectations: []string{"it did the thing"}},
 		},
 	}
-	if err := sfx.Write(dir); err != nil {
-		t.Fatalf("Write suite fixture: %v", err)
+	if err := suite.WriteEvalSet(dir, sfx); err != nil {
+		t.Fatalf("write eval set fixture: %v", err)
 	}
 	archive, err := evalsuite.PackDir(dir)
 	if err != nil {

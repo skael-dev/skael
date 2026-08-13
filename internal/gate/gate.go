@@ -16,9 +16,8 @@ const (
 	Block            Outcome = "block"
 )
 
-// Reason is one finding that drove the decision, together with what would
-// clear it. It is part of the contract, not a debug aid: the CLI renders it
-// and the review UI consumes it.
+// Reason is one finding that drove the decision, rendered by the CLI and
+// consumed by the review UI.
 type Reason struct {
 	Rule     string `json:"rule"`
 	Class    string `json:"class"`
@@ -30,33 +29,23 @@ type Reason struct {
 	Clears string `json:"clears"`
 }
 
-// Hold reason kinds. These are persisted in skill_versions.hold_reasons and
-// in version_approvals.reason, so they are a wire contract: renaming one
-// makes every in-flight hold unclearable.
+// Hold reason kinds. Persisted wire names: renaming one makes every in-flight
+// hold unclearable.
 const (
 	ReasonScan      = "scan"
 	ReasonOwnership = "ownership"
 )
 
-// OwnerRef identifies one owner well enough for a CLI or a UI to name them.
-// Decide is pure and cannot look users up, so the caller passes them in.
+// OwnerRef identifies one owner for display in the CLI and review UI.
 type OwnerRef struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
 }
 
-// OwnerState is what is known about who owns the skill being published to.
-//
-// Evaluated is false when ownership was not determined at all — the CLI's
-// local pre-scan, which has no way to ask. An unevaluated state contributes
-// nothing, so local behaviour is byte-for-byte what it was before ownership
-// existed.
-//
-// IsOwner already folds in instance privilege: an owner or admin is an
-// implicit owner of everything. Resolving that at the HTTP boundary keeps
-// this package free of auth and keeps the privilege check to one call site,
-// exactly as Policy.AdminOverride does.
+// OwnerState is the publisher's ownership standing. Evaluated is false when
+// ownership was not determined (the CLI's local pre-scan). IsOwner folds in
+// instance privilege, resolved at the HTTP boundary.
 type OwnerState struct {
 	Evaluated   bool
 	IsOwner     bool
@@ -65,37 +54,25 @@ type OwnerState struct {
 	Owners      []OwnerRef
 }
 
-// holds reports whether o by itself keeps the version out of circulation.
-// Unowned deliberately does not hold: protection is self-enabling per
-// namespace, so an install that has written no rules behaves exactly as it
-// did before this feature shipped.
+// holds reports whether o keeps the version out of circulation. Unowned does
+// not hold: protection is self-enabling per namespace.
 func (o OwnerState) holds() bool {
 	return o.Evaluated && !o.IsOwner && !o.Unowned
 }
 
-// OwnershipDetail is the ownership half of a decision, rendered by the CLI
-// and the review screen. Naming the humans who can unblock a publisher is
-// what turns a wall into a next step.
+// OwnershipDetail is the ownership half of a decision.
 type OwnershipDetail struct {
 	RulePattern string     `json:"rule_pattern,omitempty"`
 	Owners      []OwnerRef `json:"owners"`
 	Clears      string     `json:"clears"`
 }
 
-// Decision is the whole verdict. It is persisted as an object rather than a
-// bare array of reasons: json.Marshal on a nil slice emits null, and a null
-// in a column declared NOT NULL DEFAULT '[]' makes "no reasons" and "never
-// written" indistinguishable while breaking jsonb_array_length.
+// Decision is the whole verdict.
 type Decision struct {
-	Outcome Outcome  `json:"outcome"`
-	Reasons []Reason `json:"reasons"`
-	// HoldReasons are the reason kinds that must each be cleared before this
-	// version may be served. Empty means nothing is holding it. It is a set,
-	// not a state, because a scan finding and an unowned publisher are two
-	// different questions and neither may be used to launder the other.
-	HoldReasons []string `json:"hold_reasons"`
-	// Ownership is present only when ownership was evaluated.
-	Ownership *OwnershipDetail `json:"ownership,omitempty"`
+	Outcome     Outcome          `json:"outcome"`
+	Reasons     []Reason         `json:"reasons"`
+	HoldReasons []string         `json:"hold_reasons"`
+	Ownership   *OwnershipDetail `json:"ownership,omitempty"`
 }
 
 // Held reports whether this decision keeps the version out of circulation.
@@ -103,21 +80,12 @@ func (d Decision) Held() bool { return d.Outcome == NeedsReview }
 
 // Policy is the deployment's configuration.
 type Policy struct {
-	// Floor is the minimum headline score a verified report must reach to
-	// clear a NeedsReview. 0 means any verified report clears, provided the
-	// other conditions hold.
-	Floor float64
-	// AdminOverride is the already-resolved answer to "may this caller
-	// override, and did they ask to". Resolving it at the HTTP boundary and
-	// passing the answer keeps Decide pure and keeps the privilege check to
-	// exactly one call site, so re-pointing it at an audited authorizer
-	// later is a one-function change.
-	AdminOverride bool
+	Floor         float64 // minimum headline score to clear a hold; 0 accepts any verified report
+	AdminOverride bool    // resolved at the HTTP boundary
 }
 
-// QualityState is what is known about the version's measured behaviour. A nil
-// *QualityState means no measurement exists — never a zero score. A zero
-// headline means the skill scored nothing, which is the opposite claim.
+// QualityState is what is known about the version's measured behaviour. Nil
+// means no measurement exists — not a zero score.
 type QualityState struct {
 	Verified                 bool
 	PanelComplete            bool
@@ -125,44 +93,32 @@ type QualityState struct {
 	CriticalForbidViolations int
 }
 
-// clears reports whether q is evidence strong enough to release a version
-// held on an appealable finding. All four conditions are required.
+// clears reports whether q is strong enough to release a held version.
 func (q *QualityState) clears(floor float64) bool {
 	switch {
 	case q == nil:
 		return false
 	case !q.Verified:
-		// An attested score is a claim, not a measurement.
 		return false
 	case !q.PanelComplete:
-		// A panel member whose adapter failed its health probe contributes
-		// no result. Letting an incomplete panel clear a gate turns CLI
-		// churn or an expired token into a publish approval.
+		// An incomplete panel means a member's adapter failed; letting it
+		// clear a gate turns CLI churn into a publish approval.
 		return false
 	case q.Headline < floor:
 		return false
 	case q.CriticalForbidViolations > 0:
-		// The skill violated its own contract's forbid rules under
-		// observation. This is the one case where the eval is evidence
-		// against the skill, not for it.
+		// The eval is evidence against the skill, not for it.
 		return false
 	}
 	return true
 }
 
-// blocking reports whether a finding's severity is high enough to enter the
-// decision at all. This is deliberately the same threshold the publish route
-// used before the gate existed: this phase changes what happens to a block,
-// not what counts as one.
 func blocking(severity string) bool {
 	return severity == "critical" || severity == "high"
 }
 
-// appealableClears is the single definition of the sentence a held version
-// shows its publisher. A zero floor is special-cased because it is the default
-// configuration: QUALITY_FLOOR defaults to 0, so the unconditional phrasing
-// makes the headline message of the whole feature read "scoring at least 0",
-// which states a threshold that is not one.
+// appealableClears returns the sentence a held version shows its publisher.
+// Zero is special-cased because it is the default QUALITY_FLOOR.
 func appealableClears(floor float64) string {
 	const tail = "with a complete panel and no critical contract violations, or an admin approval"
 	if floor <= 0 {
@@ -171,9 +127,8 @@ func appealableClears(floor float64) string {
 	return fmt.Sprintf("a verified evaluation scoring at least %.0f %s", floor, tail)
 }
 
-// Decide maps a scan report, an optional quality state, and the publisher's
-// ownership standing onto an outcome. It is pure: no database, no HTTP, no
-// clock, no context.
+// Decide maps a scan report, quality state, and ownership onto an outcome.
+// Pure: no database, HTTP, or clock.
 func Decide(rep scan.Report, q *QualityState, o OwnerState, p Policy) Decision {
 	d := Decision{Outcome: Allow, Reasons: []Reason{}, HoldReasons: []string{}}
 
@@ -204,9 +159,7 @@ func Decide(rep scan.Report, q *QualityState, o OwnerState, p Policy) Decision {
 			appealable++
 			r.Clears = appealableClears(p.Floor)
 		default:
-			// Unreachable from the native rule set — TestEveryRuleHasAClass
-			// keeps it so. Fail closed if it happens anyway: an unclassified
-			// blocking finding is one nobody has decided is safe.
+			// Fail closed: an unclassified blocking finding is unappealable.
 			unappealable++
 			r.Clears = fmt.Sprintf("nothing: finding has no recognised class (%q), which is treated as unappealable", f.Class)
 		}
@@ -223,8 +176,6 @@ func Decide(rep scan.Report, q *QualityState, o OwnerState, p Policy) Decision {
 
 	switch {
 	case unappealable > 0:
-		// Unappealable findings create no version row at all, so there is
-		// nothing to hold and ownership cannot be relevant.
 		d.Outcome = Block
 		return d
 	case appealable > 0:
@@ -241,11 +192,6 @@ func Decide(rep scan.Report, q *QualityState, o OwnerState, p Policy) Decision {
 	case len(d.HoldReasons) > 0:
 		d.Outcome = NeedsReview
 	case appealable > 0:
-		// An appealable finding was present but cleared (no ReasonScan
-		// added) and ownership did not hold either: this is a full Allow
-		// even though d.Reasons carries the (non-advisory) finding — falling
-		// through to the generic advisory branch below would misreport a
-		// cleared appealable finding as merely AllowWithWarning.
 		d.Outcome = Allow
 	case len(d.Reasons) > 0:
 		d.Outcome = AllowWithWarning

@@ -96,8 +96,9 @@
     <h1>{{.Skill}}</h1>
     <p class="meta">
       spec v{{.SpecVersion}} &middot; tier <strong>{{.Tier}}</strong>
-      &middot; suite {{shortref .SuiteRef}}
+      &middot; eval set {{shortref .SuiteRef}}
       &middot; engine {{.EngineVersion}}
+      {{if .GraderModel}}&middot; graded by {{.GraderModel}}{{end}}
       &middot; started {{if .StartedAt.IsZero}}<span class="empty">not recorded</span>{{else}}{{.StartedAt.Format "2006-01-02 15:04 MST"}}{{end}}
       {{if not .FinishedAt.IsZero}}&middot; finished {{.FinishedAt.Format "2006-01-02 15:04 MST"}}{{end}}
     </p>
@@ -105,49 +106,45 @@
 
   {{if not .PanelComplete}}
   <div class="banner bad">
-    <strong>Panel incomplete.</strong> Not every planned model panel member contributed to this run.
-    Scores below were computed over fewer members than planned; treat the headline and any
-    minimum-over-panel figure as a lower bound rather than the full picture.
+    <strong>Panel incomplete.</strong> Not every planned panel member contributed to this run. The
+    headline is the lowest score across the members that did, so treat it as a lower bound rather
+    than the full picture.
   </div>
   {{end}}
 
   {{if .BaselineWipeout}}
   <div class="banner">
-    <strong>Baseline passed nothing.</strong> No baseline run passed any task, so Uplift carries no
-    information independent of Reliability &mdash; at a zero baseline the pass-rate fallback reduces
-    to <code>0.5 + Reliability/2</code>, which Effectiveness then weighs a second time. Treat Uplift
-    as uninformative here. The same shape appears when the baseline harness itself is broken, which
-    is worth ruling out before concluding the tasks are impossible without the skill.
+    <strong>Baseline passed nothing.</strong> No baseline run passed a single expectation. That is
+    the shape a genuinely hard eval set takes, and it is also the shape a broken baseline harness
+    takes. Rule the second out before concluding the first.
   </div>
   {{end}}
 
-  {{if .DriftUnmeasurable}}
-  <div class="banner bad">
-    <strong>Contract adherence not measured.</strong> Too many contract checks could not be
-    performed for at least one panel member, so no adherence figure is reported for it. This is an
-    absent measurement, not a low score &mdash; a run whose checks cannot be performed reports zero
-    step coverage and, at the same time, zero detected violations, which would otherwise read as
-    flawless compliance. See the unevaluable checks below for what could not be checked.
+  <h2>Headline</h2>
+  <div class="card">
+    <div class="headline-value">{{round1 .Headline}} / 100</div>
+    <p class="meta">
+      The share of expectations this skill passed, averaged over evals, on the weakest healthy
+      panel member.
+    </p>
+    <p>
+      {{if .DeltaMeasured}}
+        <span class="pill">without the skill: {{round1 .Baseline}}</span>
+        <span class="pill">delta: {{round1 .Delta}}</span>
+      {{else}}
+        <span class="pill">no baseline ran &mdash; delta not measured</span>
+      {{end}}
+      <span class="pill">trigger F1: {{pct .TriggerF1}}</span>
+      {{if .TriggerInferred}}<span class="pill">firing inferred from a read, not an invocation</span>{{end}}
+      {{if .TriggerUnknown}}<span class="pill">{{.TriggerUnknown}} probe(s) unmeasurable</span>{{end}}
+    </p>
   </div>
-  {{end}}
 
-  <h2>Score matrix</h2>
+  <h2>Panel</h2>
   <div class="table-scroll">
   <table>
     <thead>
-      <tr>
-        <th>Member</th>
-        <th>Class</th>
-        <th>Trigger F1 (%)<br><span style="font-weight:normal;color:var(--muted)">measured on {{.TriggerSource.Agent}}/{{.TriggerSource.Model}} only</span></th>
-        <th>Reliability (%)</th>
-        <th>Uplift (%)</th>
-        <th>Efficiency (%)</th>
-        <th>Effectiveness (0&ndash;100)</th>
-        <th>Adherence mean (0&ndash;100)</th>
-        <th>Adherence worst (0&ndash;100)</th>
-        <th>Adherence σ (pp)</th>
-        <th>Health</th>
-      </tr>
+      <tr><th>Member</th><th>Class</th><th>Score (0&ndash;100)</th><th>Health</th></tr>
     </thead>
     <tbody>
       {{range .Members}}
@@ -155,177 +152,63 @@
         <td>{{.Member.Agent}} / {{.Member.Model}}{{if .MetaPartial}} <span class="pill" title="{{.MetaPartialReason}}">partial meta</span>{{end}}</td>
         <td>{{.Member.Class}}</td>
         {{if .Healthy}}
-        <td>{{pct .Pillars.TriggerF1}}</td>
-        <td>{{pct .Pillars.Reliability}}</td>
-        <td>{{pct .Pillars.Uplift}}</td>
-        <td>{{pct .Pillars.Efficiency}}</td>
         <td>{{round1 .Effectiveness}}</td>
-        {{if .DriftUnmeasurable}}
-        <td colspan="3" class="empty">not measured &mdash; too many contract checks could not be performed</td>
+        <td>ok</td>
         {{else}}
-        <td>{{round1 .Drift.Mean}}</td>
-        <td>{{round1 .Drift.Worst}}</td>
-        <td>{{round1 .Drift.Sigma}}</td>
-        {{end}}
-        <td>healthy</td>
-        {{else}}
-        <td colspan="8">not measured &mdash; {{if .Detail}}{{.Detail}}{{else}}no reason recorded{{end}}</td>
-        <td>unhealthy</td>
+        <td colspan="2">not measured &mdash; {{if .Detail}}{{.Detail}}{{else}}no reason recorded{{end}}</td>
         {{end}}
       </tr>
-      {{else}}
-      <tr><td colspan="11" class="empty">no panel members reported a result</td></tr>
       {{end}}
     </tbody>
   </table>
   </div>
 
-  <h2>Headline</h2>
-  <div class="card">
-    <div class="headline-value">{{round1 .Headline}}</div>
-    <div class="headline-ci">lowest effectiveness across the panel, 0&ndash;100</div>
-    <p>
-      <span class="pill">Uplift source: {{.UpliftSource}}</span>
-      {{if .JudgeKappa}}
-        <span class="pill">judge &kappa; = {{deref .JudgeKappa}}{{if .JudgeLabeledBy}} (labeled by {{.JudgeLabeledBy}}){{end}}</span>
-      {{else}}
-        <span class="pill">judge &kappa;: not calibrated for this run</span>
-      {{end}}
-      {{if .TriggerUnknown}}
-        <span class="pill">{{.TriggerUnknown}} trigger probe(s) unmeasured</span>
-      {{end}}
-    </p>
-    <p>
-      Robustness gap (strong vs. floor), in adherence points &mdash; not effectiveness:
-      {{if .RobustnessGap}}
-        {{deref .RobustnessGap}}
-      {{else}}
-        <span class="empty">not computed &mdash; the strong/floor comparison was not well defined for this panel (zero or more than one member in a class, or one member has no drift runs)</span>
-      {{end}}
-    </p>
-  </div>
-
-  <h2>Void tasks</h2>
   {{if .VoidTasks}}
+  <h2>Excluded evals</h2>
   <ul>
     {{range .VoidTasks}}
     <li><code>{{.TaskID}}</code> &mdash; {{.Reason}}</li>
     {{end}}
   </ul>
-  {{else}}
-  <p class="empty">no tasks were voided</p>
   {{end}}
 
-  <h2>Unevaluable checks</h2>
-  {{if or .Unevaluable .UnevaluableDetail}}
-  <p>{{.Unevaluable}} check(s) could not be evaluated.</p>
-  <ul>
-    {{range .UnevaluableDetail}}
-    <li>{{.}}</li>
-    {{end}}
-  </ul>
-  {{else}}
-  <p class="empty">every check could be evaluated</p>
-  {{end}}
-
-  <h2>Tasks</h2>
-  {{if .Tasks}}
+  <h2>Evals</h2>
   {{range .Tasks}}
   <div class="card">
-    <h3>{{.TaskID}} <span class="pill">{{.Kind}}</span> <span class="pill">{{.Split}}</span></h3>
-
+    <h3>eval {{.TaskID}}</h3>
     {{if .Conditions}}
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Condition</th><th>Model</th><th>Passes</th><th>Runs</th><th>Why it failed</th></tr></thead>
+      <thead>
+        <tr><th>Condition</th><th>Model</th><th>Expectations passed</th><th>Graded</th></tr>
+      </thead>
       <tbody>
         {{range .Conditions}}
-        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td><td>{{.Reason}}</td></tr>
+        <tr><td>{{.Condition}}</td><td>{{.Model}}</td><td>{{.Passes}}</td><td>{{.Runs}}</td></tr>
         {{end}}
       </tbody>
     </table>
     </div>
     {{end}}
 
-    {{if .Drift}}
-    <h4>Drift per run</h4>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Model</th><th>Attempt</th><th title="Share of the contract's required steps that were observed">Step recall (%)</th><th title="Share of observed actions that were on-contract">On-contract precision (%)</th><th title="How closely the observed order followed the contract's">Order match (%)</th><th>No violations (%)</th><th>Checkpoints run (%)</th><th>Semantic (%)</th><th>Adherence (0&ndash;100)</th><th>Unevaluable</th></tr></thead>
-      <tbody>
-        {{range .Drift}}
-        <tr>
-          <td>{{.Model}}</td>
-          <td>{{.Attempt}}</td>
-          <td>{{pct .Components.StepCoverage}}</td>
-          <td>{{pct .Components.Focus}}</td>
-          <td>{{pct .Components.Order}}</td>
-          <td>{{pct .Components.Violation}}</td>
-          <td>{{pct .Components.Checkpoint}}</td>
-          <td>{{pct .Components.Semantic}}</td>
-          {{if .Unmeasurable}}
-          <td class="empty">not measured</td>
-          {{else}}
-          <td>{{round1 .Adherence}}</td>
-          {{end}}
-          <td>{{if .Unevaluable}}{{.Unevaluable}}{{if .Attempted}} of {{.Attempted}}{{end}}{{else}}0{{end}}</td>
-        </tr>
+    {{range .Grades}}
+      {{if .Expectations}}
+      <p class="meta">{{.Model}} &middot; {{.Condition}} &middot; attempt {{.Attempt}}</p>
+      <ul>
+        {{range .Expectations}}
+        <li>{{if .Passed}}&check;{{else}}&cross;{{end}} {{.Text}}
+          {{if .Evidence}}<div class="quote">{{.Evidence}}</div>{{end}}
+        </li>
         {{end}}
-      </tbody>
-    </table>
-    </div>
-    {{range .Drift}}
-      {{if .Violations}}
-      <h4>Violations &mdash; {{.Model}} attempt {{.Attempt}}</h4>
-      {{range .Violations}}
-      <p><strong>{{.ID}}</strong> <span class="pill">{{.Severity}}</span> &times;{{.Hits}}</p>
-      {{range .Evidence}}
-      <div class="quote">{{.}}</div>
+      </ul>
       {{end}}
-      {{end}}
-      {{end}}
-    {{end}}
-    {{end}}
-
-    {{if .Judge}}
-    <h4>Judge notes</h4>
-    {{range .Judge}}
-    <p><strong>{{.Model}}</strong> winner: {{.Winner}}, margin {{gfmt .Margin}}, votes {{.Votes}}</p>
-    {{range .Evidence}}
-    <div class="quote">{{.}}</div>
-    {{end}}
-    {{end}}
     {{end}}
   </div>
-  {{end}}
   {{else}}
-  <p class="empty">no tasks were scored</p>
+  <p class="empty">No eval produced a scored run.</p>
   {{end}}
 
-  {{if .Iterations}}
-  <h2>Iteration history</h2>
-  <div class="table-scroll">
-  <table>
-    <thead><tr><th>#</th><th>Dev effectiveness</th><th>Applied</th><th>Pruned</th><th>Notes</th></tr></thead>
-    <tbody>
-      {{range .Iterations}}
-      <tr>
-        <td>{{.N}}</td>
-        <td>{{round1 .DevEffectiveness}}</td>
-        <td>{{.Applied}}</td>
-        <td>{{range .Pruned}}{{.}} {{end}}</td>
-        <td>{{range .Notes}}{{.}} {{end}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  </div>
-  {{end}}
-
-  <footer>
-    Report schema v{{.SchemaVersion}}. Generated by skael eval.
-  </footer>
-
+  <footer>Generated by whetstone.</footer>
 </div>
 </body>
 </html>

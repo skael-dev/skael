@@ -34,7 +34,7 @@ func TestMaterialize_ProducesAWorkspaceThatSatisfiesTheOracleGate(t *testing.T) 
 	if len(checks) == 0 {
 		t.Fatal("the registry's checks were not recorded against the materialized suite ref")
 	}
-	if _, err := suite.Load(suiteDir); err != nil {
+	if _, err := suite.LoadEvalSet(suiteDir); err != nil {
 		t.Fatalf("materialized suite does not load: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,54 +18,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/suite"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
-// findTask returns the task with id from the plan's task list.
-// runTaskSetup runs the task's setup script in ws, under the same NetNone
-// policy and the same bound as the verifier — it is a suite-authored script
-// of the same kind, and it must not be able to fetch anything either. A task
-// with no setup script costs no run.
-func (r *Runner) runTaskSetup(ctx context.Context, image sandbox.ImageRef, ws string, task suite.TaskPkg) error {
-	if strings.TrimSpace(task.Setup) == "" {
-		return nil
-	}
-	if err := suite.StageSetup(ws, task); err != nil {
-		return err
-	}
-	res, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
-		Image:     image,
-		Workspace: ws,
-		Argv:      []string{"bash", suite.SetupScript},
-		Network:   sandbox.NetNone,
-		Timeout:   suite.VerifierTimeout,
-	})
-	if err != nil {
-		return fmt.Errorf("runner: running task setup for %s: %w", task.ID, err)
-	}
-	if res.TimedOut {
-		return fmt.Errorf("runner: task setup for %s exceeded %s", task.ID, suite.VerifierTimeout)
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("runner: task setup for %s failed (exit %d)", task.ID, res.ExitCode)
-	}
-	return nil
-}
-
-func findTask(tasks []suite.TaskPkg, id string) (suite.TaskPkg, bool) {
-	for _, t := range tasks {
-		if t.ID == id {
-			return t, true
-		}
-	}
-	return suite.TaskPkg{}, false
-}
-
-// executeRun runs one skill or baseline session, claiming it first so a
-// resumed Execute skips it entirely once it has finished. Plan.Runs never
-// contains a CondTrigger key — BuildPlan puts trigger probes in Plan.Probes,
-// handled by executeProbe — so this only ever sees CondSkill or CondBaseline.
 func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, byKey map[store.RunKey]store.RunRecord, k store.RunKey) Outcome {
 	out := Outcome{Key: k}
 	startedAt := time.Now().UTC()
@@ -88,15 +43,10 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		}
 	}
 
-	// ws and raw are filled in as the session progresses; finish reads
-	// whatever they hold at call time, so artifacts are recorded even when
-	// the run ends before invoke completes. verifierOut is declared here
-	// (rather than at the verifier call site) so finish can close over it.
 	var (
-		ws          string
-		raw         []byte
-		skipDirs    []string
-		verifierOut tailWriter
+		ws       string
+		raw      []byte
+		skipDirs []string
 	)
 
 	finish := func(status string, ferr error) Outcome {
@@ -107,18 +57,13 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 		if artifactDir != "" && ws != "" {
 			g := Grading{
-				Key: k, VerifierExit: out.VerifierExit, Meta: out.Meta, Status: status, Error: errStr,
-				StartedAt: startedAt, FinishedAt: time.Now().UTC(), Reason: out.Reason,
+				Key: k, Meta: out.Meta, Status: status, Error: errStr,
+				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
 			}
-			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs, verifierOut.Bytes()); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, out.Events, g, ws, skipDirs); wErr != nil {
 				r.o.Logger("runner: writing artifacts for %+v: %v", k, wErr)
-				// Events are the only artifact scoring and resume read back;
-				// losing them must not be recorded as a completed
-				// measurement (StatusOK/StatusFailed), or a later resume
-				// silently degrades to Unknown with nothing durable to show
-				// why. A run already recorded as an error or timeout stays
-				// that way — it is retried regardless, and overwriting its
-				// original error would lose the reason it actually failed.
+				// Lost events degrade a resume to Unknown, so do not record
+				// this as OK or Failed — those statuses skip retries.
 				if errors.Is(wErr, ErrEventsNotWritten) && (status == store.StatusOK || status == store.StatusFailed) {
 					status = store.StatusError
 					ferr = fmt.Errorf("runner: recording trajectory for %+v: %w", k, wErr)
@@ -129,7 +74,6 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 
 		out.Status, out.Err, out.ArtifactDir = status, ferr, artifactDir
 		fo := store.RunOutcome{
-			VerifierExit: out.VerifierExit,
 			InputTokens:  out.Meta.InputTokens,
 			OutputTokens: out.Meta.OutputTokens,
 			DurationMS:   out.Meta.DurationMS,
@@ -149,17 +93,16 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		return finish(store.StatusError, fmt.Errorf("runner: preparing artifact dir: %w", adErr))
 	}
 
-	task, ok := findTask(in.Plan.Tasks, k.TaskID)
+	ev, ok := in.Plan.EvalByID(k.TaskID)
 	if !ok {
-		return finish(store.StatusError, fmt.Errorf("runner: no task %q in the plan", k.TaskID))
+		return finish(store.StatusError, fmt.Errorf("runner: no eval %q in the plan", k.TaskID))
 	}
 	a, ok := r.o.Adapters(k.Agent)
 	if !ok {
 		return finish(store.StatusError, fmt.Errorf("runner: no adapter registered for %q", k.Agent))
 	}
 
-	taskDir := filepath.Join(in.SuiteDir, "tasks", k.TaskID)
-	ws, err = stageRunWorkspace(taskDir, r.o.WorkspaceRoot)
+	ws, err = stageEvalWorkspace(in.SuiteDir, ev, r.o.WorkspaceRoot)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -169,19 +112,6 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		}
 	}()
 
-	// The task's input files are created inside the sandbox before the agent
-	// starts: a task prompt that names a file has nothing else in the run
-	// that creates it. Setup failing is the task's defect, not the skill's,
-	// so it ends the session as an error rather than as a failed measurement
-	// that would be scored against the skill.
-	if err := r.runTaskSetup(ctx, in.Image, ws, task); err != nil {
-		return finish(store.StatusError, err)
-	}
-
-	// The skill installs only for the skill condition. A baseline workspace
-	// carrying the skill would make Uplift measure nothing. skipDirs mirrors
-	// that: a baseline has no installed skill to exclude from outputs/, so
-	// its real outputs are copied in full.
 	if k.Condition == CondSkill {
 		if err := a.InstallSkill(ws, in.BundleDir); err != nil {
 			return finish(store.StatusError, fmt.Errorf("runner: installing skill: %w", err))
@@ -189,7 +119,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -205,7 +135,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	})
 
 	result, invokeRaw, status, err := r.invoke(ctx, a, agent.InvokeSpec{
-		Prompt: task.PromptMD,
+		Prompt: ev.Prompt,
 		Model:  k.Model,
 		Exec:   exec,
 	}, k)
@@ -213,54 +143,11 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	if err != nil {
 		return finish(status, err)
 	}
-	// Relativised here rather than in each adapter, so the invariant holds for
-	// every adapter present and future. See trajectory.Relativize.
-	out.Events, out.Meta = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta
+	out.Events, out.Meta = result.Events, result.Meta
 
-	// The verifier runs under NetNone in the same workspace: it must not be
-	// able to reach the network, or a task could be satisfied by fetching the
-	// answer instead of solving it.
-	//
-	// Timeout is suite.VerifierTimeout, not r.o.SessionTimeout: this is the
-	// same verifier/test.sh suite.Check bounds at that value, and the two
-	// disagreeing by 4x (the runner's SessionTimeout defaults to 20 minutes)
-	// meant a hung verifier script was tolerated four times longer here than
-	// in the oracle gate that is supposed to have already proven it doesn't
-	// hang.
-	vres, err := r.o.Driver.Run(ctx, sandbox.RunSpec{
-		Image:     in.Image,
-		Workspace: ws,
-		Argv:      []string{"bash", "/verifier/test.sh"},
-		Mounts:    []sandbox.Mount{{HostPath: filepath.Join(taskDir, "verifier"), ContainerPath: "/verifier", ReadOnly: true}},
-		Network:   sandbox.NetNone,
-		Timeout:   suite.VerifierTimeout,
-		Stdout:    &verifierOut,
-		Stderr:    &verifierOut,
-	})
-	if err != nil {
-		return finish(store.StatusError, fmt.Errorf("runner: running verifier: %w", err))
-	}
-	if vres.TimedOut {
-		// The verifier did not produce a real exit code; out.VerifierExit
-		// stays nil (not measured) rather than recording the zero value a
-		// timed-out RunResult happens to carry, which would misread as "the
-		// verifier passed."
-		return finish(store.StatusTimeout, fmt.Errorf("runner: verifier timed out: %w", context.DeadlineExceeded))
-	}
-	exitCode := vres.ExitCode
-	out.VerifierExit = &exitCode
-	if vres.ExitCode != 0 {
-		out.Reason = distilReason(verifierOut.Bytes())
-		return finish(store.StatusFailed, nil)
-	}
 	return finish(store.StatusOK, nil)
 }
 
-// executeProbe runs one trigger probe: a short session against a workspace
-// carrying the skill and the distractor pack — without distractors, the
-// skill is the only candidate and always "wins", which measures nothing. The
-// runner only observes the session: it records the trajectory, meta, and
-// adapter capabilities, and leaves the firing determination to scoring.
 func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput, byKey map[store.RunKey]store.RunRecord, p Probe) ProbeOutcome {
 	po := ProbeOutcome{Probe: p}
 	k := probeKey(p)
@@ -285,9 +172,6 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		}
 	}
 
-	// ws, raw, and a are filled in as the probe progresses; finish reads
-	// whatever they hold at call time, so artifacts are recorded even when
-	// the probe ends before invoke completes.
 	var (
 		ws  string
 		raw []byte
@@ -306,17 +190,9 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 				Key: k, Meta: po.Meta, Status: status, Error: errStr,
 				StartedAt: startedAt, FinishedAt: time.Now().UTC(),
 			}
-			// A probe always installs the skill and, when configured, the
-			// distractor pack alongside it — both live under the adapter's
-			// SkillDir, so excluding it keeps every copy of the bundle out
-			// of outputs/ regardless of which distractors were installed.
 			skipDirs := []string{a.Caps().SkillDir}
-			// A trigger probe has no verifier, so there is no output to log.
-			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs, nil); wErr != nil {
+			if _, wErr := WriteArtifacts(artifactDir, raw, po.Events, g, ws, skipDirs); wErr != nil {
 				r.o.Logger("runner: writing artifacts for probe %+v: %v", k, wErr)
-				// Same rule as executeRun: a probe's events are the only
-				// evidence resumeProbeOutcome can recover, so losing them
-				// must not be recorded as a completed measurement.
 				if errors.Is(wErr, ErrEventsNotWritten) && status == store.StatusOK {
 					status = store.StatusError
 					ferr = fmt.Errorf("runner: recording trajectory for probe %+v: %w", k, wErr)
@@ -372,7 +248,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.Logger)
+	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
 	if err != nil {
 		return finish(err)
 	}
@@ -400,7 +276,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	// Relativised as above. Trigger measurement reads only the skill directory
 	// out of a path, so it survived absolute paths where drift did not — but
 	// the two must not disagree about what a recorded path means.
-	po.Events, po.Meta, po.Caps = trajectory.Relativize(result.Events, exec.WorkDir()), result.Meta, a.Caps()
+	po.Events, po.Meta, po.Caps = result.Events, result.Meta, a.Caps()
 	return finish(nil)
 }
 
@@ -435,11 +311,10 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		err = errors.New(rec.Outcome.Error)
 	}
 	out := Outcome{
-		Key:          rec.Key,
-		VerifierExit: rec.Outcome.VerifierExit,
-		ArtifactDir:  rec.Outcome.ArtifactDir,
-		Status:       rec.Outcome.Status,
-		Err:          err,
+		Key:         rec.Key,
+		ArtifactDir: rec.Outcome.ArtifactDir,
+		Status:      rec.Outcome.Status,
+		Err:         err,
 	}
 
 	// filepath.Join("", gradingFileName) resolves to the bare relative name,
@@ -449,7 +324,6 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 	if rec.Outcome.ArtifactDir != "" {
 		if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
 			out.Meta = g.Meta
-			out.Reason = g.Reason
 			return out
 		}
 	}
@@ -513,7 +387,7 @@ func resumeProbeOutcome(adapters func(string) (agent.Adapter, bool), p Probe, re
 
 // loadProbeEvents reads a newline-delimited JSON trajectory from
 // <artifactDir>/events.jsonl.
-func loadProbeEvents(artifactDir string) ([]trajectory.Event, error) {
+func loadProbeEvents(artifactDir string) ([]agent.Event, error) {
 	if artifactDir == "" {
 		return nil, errors.New("no artifact directory recorded")
 	}
@@ -523,10 +397,10 @@ func loadProbeEvents(artifactDir string) ([]trajectory.Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var events []trajectory.Event
+	var events []agent.Event
 	dec := json.NewDecoder(f)
 	for dec.More() {
-		var e trajectory.Event
+		var e agent.Event
 		if err := dec.Decode(&e); err != nil {
 			return nil, fmt.Errorf("decoding event: %w", err)
 		}
@@ -565,6 +439,8 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 			return nil, raw, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
 		}
 
+		r.warnOnQuota(result.Meta)
+
 		if result.Meta.RateLimited {
 			if attempt+1 < r.o.MaxRateLimitRetries {
 				d := backoff(attempt)
@@ -581,9 +457,32 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 	}
 }
 
-// backoff is long enough for a per-minute rate-limit window to reset and
-// short enough that a sixty-session tier still finishes: it doubles from 30s
-// and caps at five minutes.
+// quotaWarnThreshold is the utilization above which a run says so. The agent
+// itself starts reporting at 0.75, which is early enough to be noise across a
+// whole tier; by 0.9 the window is close enough that the operator wants to
+// know before the sessions that fail.
+const quotaWarnThreshold = 0.9
+
+// warnOnQuota reports an approaching subscription window once per run. A
+// subscription announces its utilization long before it refuses anything, and
+// without this the first sign of an exhausted window is a tier of sessions
+// that retried themselves to death — which reads like a broken worker rather
+// than a spent quota.
+func (r *Runner) warnOnQuota(m agent.Meta) {
+	if m.RateLimitUtilization < quotaWarnThreshold {
+		return
+	}
+	r.quotaWarned.Do(func() {
+		window := m.RateLimitWindow
+		if window == "" {
+			window = "current"
+		}
+		r.o.Logger("runner: the agent's %s quota is %.0f%% used; sessions will start failing when it is spent",
+			window, m.RateLimitUtilization*100)
+	})
+}
+
+// backoff doubles from 30s, capped at 5 minutes.
 func backoff(attempt int) time.Duration {
 	d := time.Duration(1<<attempt) * 30 * time.Second
 	const maxBackoff = 5 * time.Minute
@@ -593,22 +492,12 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// resolveAuth decides how a session authenticates. Environment variables win:
-// when any of the adapter's AuthEnv names is set, the host's credential
-// directories are NOT mounted at all.
-//
-// Mounting them alongside is not merely redundant, it breaks runs. An agent
-// CLI that finds stored credentials may prefer them over the environment, so a
-// stale or expired login on the host defeats a correctly configured gateway —
-// observed as `401 OAuth access token has expired` on a run whose environment
-// pointed at a different gateway entirely. The host's settings ride along too:
-// a personal session hook mounted into the sandbox tried to execute a binary
-// that does not exist inside it.
-//
-// A run must depend on what it was configured with, not on what happens to be
-// lying around in the operator's home directory.
-func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
-	env := authEnv(a.Caps().AuthEnv)
+// resolveAuth picks env-var forwarding over credential-directory mounts.
+// Env vars win because a stale host login otherwise defeats a correctly
+// configured gateway. exclude withholds names the panel must not see (the
+// judge's gateway in split mode).
+func resolveAuth(a agent.Adapter, exclude []string, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
+	env := authEnv(a.Caps().AuthEnv, exclude)
 	if len(env) > 0 {
 		return nil, env, nil
 	}
@@ -619,18 +508,8 @@ func resolveAuth(a agent.Adapter, logf func(string, ...any)) ([]sandbox.Mount, [
 	return mounts, nil, nil
 }
 
-// gatewayHosts returns the hosts named by any *_BASE_URL among the forwarded
-// auth variables, so the sandbox's egress allowlist follows the gateway the
-// operator actually configured.
-//
-// Without this the allowlist permits Anthropic's own domains and nothing else,
-// so pointing an agent at a compatible gateway is refused by the sandbox's
-// proxy rather than by anything that explains itself — observed as
-// `403 Filtered` inside the session, which reads like an API rejection.
-//
-// This widens egress only to an endpoint the operator deliberately set as the
-// agent's gateway. The allowlist still exists to keep "did the skill reach
-// out" answerable, and everything not configured here remains blocked.
+// gatewayHosts extracts hostnames from *_BASE_URL variables so the sandbox's
+// egress allowlist permits the operator's configured gateway.
 func gatewayHosts(env []string) []string {
 	var hosts []string
 	for _, kv := range env {
@@ -647,7 +526,6 @@ func gatewayHosts(env []string) []string {
 	return hosts
 }
 
-// allowWith returns base plus extra, without duplicates.
 func allowWith(base, extra []string) []string {
 	if len(extra) == 0 {
 		return base
@@ -664,24 +542,9 @@ func allowWith(base, extra []string) []string {
 	return out
 }
 
-// authMounts expands an adapter's declared auth directories to absolute host
-// paths, mounted read-only so subscription auth works inside the sandbox
-// without the run being able to modify it.
-//
-// The host side and the container side are different filesystems with
-// different users: a "~/..." entry resolves against the host's own home
-// directory for HostPath, but against imagespec.ContainerHome — the home of
-// the "runner" user every run executes as — for ContainerPath. Mounting the
-// host path verbatim inside the container (the previous behavior) put every
-// credential at the host's own path, which the container-side CLI never
-// looks in, so no session could ever authenticate.
-//
-// An auth directory is optional: it holds subscription credentials, not
-// something every run requires, and most of them do not exist on a machine
-// that has not logged into every agent CLI. A missing one is skipped and
-// logged, not an error — failing the run over it, or letting Docker create a
-// root-owned placeholder on the host for a bind mount source that does not
-// exist, would both be worse than just not mounting it.
+// authMounts expands auth dirs to host and container paths. "~/" resolves to
+// the host home for the source and imagespec.ContainerHome for the target,
+// because the container's uid is not the host's. Missing dirs are skipped.
 func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, error) {
 	if len(dirs) == 0 {
 		return nil, nil
@@ -717,32 +580,17 @@ func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, erro
 	return mounts, nil
 }
 
-// authEnv forwards the worker's own environment into the sandbox for each
-// name the adapter declares in Caps().AuthEnv that is actually set and
-// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
-// works on a headless host with no interactive login, unlike authMounts
-// above. An unset or empty variable is skipped rather than passed through as
-// "NAME=" — a value the CLI would treat as present but wrong, instead of
-// absent.
-//
-// These values are secrets: this function must never log them, only the
-// names it forwards (a name reveals nothing; the value does).
-// authEnv forwards the worker's own environment into the sandbox for each
-// name the adapter declares in Caps().AuthEnv that is actually set and
-// non-empty. This is the preferred credential path (see Caps.AuthEnv): it
-// works on a headless host with no interactive login, unlike authMounts
-// above. An unset or empty variable is skipped rather than passed through as
-// "NAME=" — a value the CLI would treat as present but wrong, instead of
-// absent.
-//
-// These values are secrets: this function must never log them, only the
-// names it forwards (a name reveals nothing; the value does).
-func authEnv(names []string) []string {
+// authEnv forwards set, non-empty env vars into the sandbox. Names in
+// exclude are withheld (split mode). Never log the values.
+func authEnv(names, exclude []string) []string {
 	if len(names) == 0 {
 		return nil
 	}
 	env := make([]string, 0, len(names))
 	for _, name := range names {
+		if slices.Contains(exclude, name) {
+			continue
+		}
 		if v := os.Getenv(name); v != "" {
 			env = append(env, name+"="+v)
 		}

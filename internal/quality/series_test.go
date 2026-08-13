@@ -15,8 +15,8 @@ func rec(version int, headline float64, suiteRef, engine, tier string, panel []r
 	return quality.Record{
 		Version: version, Headline: headline, SuiteRef: suiteRef,
 		EngineVersion: engine, Tier: tier, ModelPanel: panelJSON,
-		PanelComplete: complete, UpliftSource: "control",
-		ScoredAt: time.Date(2026, 8, 1, 0, version, 0, 0, time.UTC),
+		PanelComplete: complete,
+		ScoredAt:      time.Date(2026, 8, 1, 0, version, 0, 0, time.UTC),
 	}
 }
 
@@ -83,8 +83,8 @@ func TestBuildSeries_DifferentSuiteSplits(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("series count = %d, want 2", len(got))
 	}
-	if !strings.Contains(got[1].Reason, "suite") {
-		t.Fatalf("reason = %q, want it to name the suite", got[1].Reason)
+	if !strings.Contains(got[1].Reason, "eval set") {
+		t.Fatalf("reason = %q, want it to name the eval set", got[1].Reason)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestBuildSeries_IncompletePanelIsNeverChartedWithComplete(t *testing.T) {
 // judge-model dimension is not inert: two records differing only in which
 // model judged them must land in separate series, or a judge swap would
 // silently read as the skill's score moving.
-func TestBuildSeries_DifferentJudgeModelSplits(t *testing.T) {
+func TestBuildSeries_DifferentGraderModelSplits(t *testing.T) {
 	got := quality.BuildSeries("s", []quality.Record{
 		recJudge(4, 78, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-5"), // newest
 		recJudge(3, 74, "sha-1", "v1.0.0", "full", panelA, true, "claude-opus-4-1"),
@@ -113,8 +113,8 @@ func TestBuildSeries_DifferentJudgeModelSplits(t *testing.T) {
 	if !got[0].Current {
 		t.Fatal("the newest record's series must be first and current")
 	}
-	if !strings.Contains(got[1].Reason, "judge") {
-		t.Fatalf("reason = %q, want it to name the judge", got[1].Reason)
+	if !strings.Contains(got[1].Reason, "grader") {
+		t.Fatalf("reason = %q, want it to name the grader", got[1].Reason)
 	}
 }
 

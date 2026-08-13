@@ -14,7 +14,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/store"
-	"github.com/skael-dev/skael/internal/eval/trajectory"
 )
 
 // ErrEventsNotWritten wraps a failure to write events.jsonl specifically, so
@@ -40,41 +39,31 @@ const gradingFileName = "grading.json"
 
 // Artifacts locates the files WriteArtifacts produced for one run.
 type Artifacts struct {
-	Dir             string
-	TranscriptPath  string
-	EventsPath      string
-	GradingPath     string
-	VerifierLogPath string
-	OutputsDir      string
+	Dir            string
+	TranscriptPath string
+	EventsPath     string
+	GradingPath    string
+	OutputsDir     string
 }
 
-// Grading is the human- and machine-readable record of how one run was
-// graded: the key that identifies it, what the verifier reported, the
-// adapter's session metadata, and its terminal status. It is what a report
-// drills into and what makes a surprising score checkable.
+// Grading is the human- and machine-readable record of one run: the key that
+// identifies it, the adapter's session metadata, and its terminal status. It
+// is what a report drills into and what makes a surprising score checkable.
 type Grading struct {
-	Key store.RunKey
-	// VerifierExit is nil when the verifier never ran — see
-	// store.RunOutcome.VerifierExit, which this mirrors.
-	VerifierExit *int
-	Meta         agent.Meta
-	Status       string
-	Error        string
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	// Reason mirrors Outcome.Reason. It lives in grading.json because that
-	// is what a resumed run reads back — see outcomeFromRecord.
-	Reason string `json:",omitempty"`
+	Key        store.RunKey
+	Meta       agent.Meta
+	Status     string
+	Error      string
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 // WriteArtifacts records the evidence trail for one run into dir:
 // transcript.raw (the agent's native stream, byte for byte), events.jsonl
 // (the normalized trajectory, one compact JSON object per line, in order),
-// grading.json (the Grading record, indented for a human), verifier.log
-// (verifierOut, the verifier's captured stdout/stderr — empty for a run with
-// no verifier, such as a trigger probe), and outputs/ (a copy of the
-// workspace's regular files a verifier inspected, skipping any entry under a
-// directory listed in skipDirs).
+// grading.json (the Grading record, indented for a human), and outputs/ (a
+// copy of the workspace's regular files, skipping any entry under a directory
+// listed in skipDirs).
 //
 // skipDirs exists so the installed skill bundle — and, for a trigger probe,
 // the distractor pack alongside it — is never copied into outputs/: it is
@@ -83,21 +72,20 @@ type Grading struct {
 // value. A baseline session installs no skill, so its caller passes no
 // skipDirs and its real outputs are copied in full.
 //
-// WriteArtifacts is best-effort across the five artifacts: it attempts every
+// WriteArtifacts is best-effort across the four artifacts: it attempts every
 // one rather than stopping at the first failure, so a caller that only cares
 // about (say) the events failure is not also denied the transcript that did
 // write successfully. Every failure is accumulated and returned via
 // errors.Join; a failure to write events.jsonl specifically is wrapped in
 // ErrEventsNotWritten so a caller can single it out with errors.Is without
 // parsing the message.
-func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading, workspace string, skipDirs []string, verifierOut []byte) (Artifacts, error) {
+func WriteArtifacts(dir string, raw []byte, events []agent.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
 	a := Artifacts{
-		Dir:             dir,
-		TranscriptPath:  filepath.Join(dir, "transcript.raw"),
-		EventsPath:      filepath.Join(dir, "events.jsonl"),
-		GradingPath:     filepath.Join(dir, gradingFileName),
-		VerifierLogPath: filepath.Join(dir, "verifier.log"),
-		OutputsDir:      filepath.Join(dir, "outputs"),
+		Dir:            dir,
+		TranscriptPath: filepath.Join(dir, "transcript.raw"),
+		EventsPath:     filepath.Join(dir, "events.jsonl"),
+		GradingPath:    filepath.Join(dir, gradingFileName),
+		OutputsDir:     filepath.Join(dir, "outputs"),
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -110,15 +98,6 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 	// verbatim: no normalization, no re-encoding, no truncation.
 	if err := os.WriteFile(a.TranscriptPath, raw, 0o644); err != nil {
 		errs = append(errs, fmt.Errorf("runner: writing transcript: %w", err))
-	}
-
-	// The full tail, not just the distilled line: when the one-liner is not
-	// enough, this is what a reader opens instead of re-running the verifier
-	// by hand.
-	if len(verifierOut) > 0 {
-		if err := os.WriteFile(a.VerifierLogPath, verifierOut, 0o644); err != nil {
-			errs = append(errs, fmt.Errorf("runner: writing verifier log: %w", err))
-		}
 	}
 
 	if err := writeEvents(a.EventsPath, events); err != nil {
@@ -138,7 +117,7 @@ func WriteArtifacts(dir string, raw []byte, events []trajectory.Event, g Grading
 
 // writeEvents writes one compact JSON object per line, in slice order — the
 // format loadProbeEvents and LoadEvents both expect.
-func writeEvents(path string, events []trajectory.Event) error {
+func writeEvents(path string, events []agent.Event) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("runner: creating events file: %w", err)
@@ -226,7 +205,7 @@ func skipsEntry(rel string, skipDirs []string) bool {
 
 // LoadEvents reads a newline-delimited JSON trajectory written by
 // WriteArtifacts.
-func LoadEvents(path string) ([]trajectory.Event, error) {
+func LoadEvents(path string) ([]agent.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -236,13 +215,13 @@ func LoadEvents(path string) ([]trajectory.Event, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), eventScanBuffer)
 
-	var events []trajectory.Event
+	var events []agent.Event
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
 			continue
 		}
-		var e trajectory.Event
+		var e agent.Event
 		if err := json.Unmarshal(line, &e); err != nil {
 			return nil, fmt.Errorf("runner: decoding event: %w", err)
 		}
