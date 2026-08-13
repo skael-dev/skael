@@ -8,7 +8,22 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /skael-worker ./cmd/skael-worker
+
+# The server refuses a report whose engine_version is "" or "dev" — a constant
+# there defeats report.Comparable's same-build check, so two worker builds
+# would chart as one trend. "dev" is what main.version holds when nothing sets
+# it, so a build without these flags runs a whole tier, scores it, and is then
+# rejected at the last step with nothing to show for the spend.
+#
+# The default is a constant, so it does not make Comparable meaningful — it
+# only clears the guard. Pass a real value for a deployment you intend to keep
+# score history for: --build-arg VERSION=1.4.0, or SKAEL_VERSION in compose.
+# The fallback is applied in the shell, not as the ARG default: an explicitly
+# empty --build-arg (which is what compose passes for an unset variable)
+# overrides an ARG default with "", and "" is rejected exactly like "dev".
+ARG VERSION=
+RUN v="${VERSION:-0.0.0-local}" && \
+    CGO_ENABLED=0 go build -ldflags "-X main.version=${v}" -o /skael-worker ./cmd/skael-worker
 
 # docker-cli is the client only — it talks to whatever daemon the mounted
 # socket belongs to. ca-certificates reaches the Skael API and the LLM gateway.

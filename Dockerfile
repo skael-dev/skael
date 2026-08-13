@@ -23,7 +23,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /app/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -o /skael-server ./cmd/server
+# Stamped for the same reason as Dockerfile.worker, though nothing rejects the
+# server's version — it only makes /api/health and the logs say what is running.
+ARG VERSION=
+RUN v="${VERSION:-0.0.0-local}" && \
+    CGO_ENABLED=0 go build -ldflags "-X main.version=${v}" -o /skael-server ./cmd/server
 
 # Stage 4: Minimal runtime
 FROM gcr.io/distroless/static-debian12

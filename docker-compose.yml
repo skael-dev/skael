@@ -48,6 +48,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      args:
+        # Stamps the binary so the server accepts its reports. Empty falls
+        # back to the Dockerfile's own default, which is enough to run; set it
+        # to your deployed tag on an instance whose score history matters.
+        VERSION: ${SKAEL_VERSION:-}
     profiles: ["worker"]
     environment:
       SKAEL_ENDPOINT: http://server:8080
@@ -59,7 +64,7 @@ services:
       # Must match the volumes below on BOTH sides of the colon.
       WORKER_RUN_ROOT: ${SKAEL_RUN_ROOT:-/var/lib/skael/run}
       WORKER_WORK_ROOT: ${SKAEL_WORK_ROOT:-/var/lib/skael/work}
-      # WORKER_CONCURRENCY: 2
+      WORKER_CONCURRENCY: 6
 
       # ----------------------------------------------------------------------
       # A. Anthropic API key (active). Judge and panel both bill per call

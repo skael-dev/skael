@@ -7,11 +7,20 @@ default:
 # --- Build ---
 
 # Build everything (generate client + build SPA + build Go binaries)
+# The version is stamped from git rather than left at main.version's "dev"
+# default: the server rejects a report from a worker reporting "dev", so an
+# unstamped worker runs a whole tier and is refused at the last step. Using
+# `git describe` rather than a constant also keeps report.Comparable able to
+# tell two local builds apart.
 build: generate web-build
-    CGO_ENABLED=0 go build -o bin/skael-server ./cmd/server
-    CGO_ENABLED=0 go build -o bin/skael ./cmd/skael
-    CGO_ENABLED=0 go build -o bin/whetstone ./cmd/whetstone
-    CGO_ENABLED=0 go build -o bin/skael-worker ./cmd/skael-worker
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v=$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-local)
+    ldflags="-X main.version=${v}"
+    CGO_ENABLED=0 go build -ldflags "$ldflags" -o bin/skael-server ./cmd/server
+    CGO_ENABLED=0 go build -ldflags "$ldflags" -o bin/skael ./cmd/skael
+    CGO_ENABLED=0 go build -ldflags "$ldflags" -o bin/whetstone ./cmd/whetstone
+    CGO_ENABLED=0 go build -ldflags "$ldflags" -o bin/skael-worker ./cmd/skael-worker
 
 # Build server only
 build-server:
