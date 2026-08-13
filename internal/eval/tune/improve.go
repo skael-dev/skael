@@ -41,7 +41,7 @@ func Improve(ctx context.Context, g llm.Gateway, skillName, skillBody, current s
 	}
 
 	prompt := improvePrompt(skillName, skillBody, current, train, history)
-	res, err := llm.CompleteJSON[improveResult](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[improveResult](ctx, g, llm.Req{
 		Role: "tune.improve", Prompt: prompt, Schema: []byte(improveSchema), ModelClass: llm.ClassStrong,
 	})
 	if err != nil {
@@ -68,7 +68,7 @@ the %d character hard limit:
 Rewrite it under the limit. Keep the trigger words and the intent coverage
 that matter most.`, prompt, len(out), spec.MaxDescription, out)
 
-	res, err = llm.CompleteJSON[improveResult](ctx, g, llm.Req{
+	res, _, err = llm.CompleteJSON[improveResult](ctx, g, llm.Req{
 		Role: "tune.shorten", Prompt: shorten, Schema: []byte(improveSchema), ModelClass: llm.ClassStrong,
 	})
 	if err != nil {

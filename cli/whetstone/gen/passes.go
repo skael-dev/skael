@@ -54,12 +54,13 @@ type descriptionRes struct {
 // threaded into the body pass so body writing has explicit structure to fill
 // rather than free rein.
 func runOutline(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (outlineRes, error) {
-	return llm.CompleteJSON[outlineRes](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[outlineRes](ctx, g, llm.Req{
 		Role:       "gen.outline",
 		Prompt:     outlinePrompt(s),
 		Schema:     []byte(`{"type":"object","properties":{"sections":{"type":"array","items":{"type":"string"}}},"required":["sections"]}`),
 		ModelClass: llm.ClassStrong,
 	})
+	return res, err
 }
 
 func outlinePrompt(s *spec.SkillSpec) string {
@@ -78,12 +79,13 @@ func outlinePrompt(s *spec.SkillSpec) string {
 // runBody asks for the full SKILL.md body markdown, under the robustness
 // rules, written to the outline's section plan.
 func runBody(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, outline outlineRes) (bodyRes, error) {
-	return llm.CompleteJSON[bodyRes](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[bodyRes](ctx, g, llm.Req{
 		Role:       "gen.body",
 		Prompt:     bodyPrompt(s, outline),
 		Schema:     []byte(`{"type":"object","properties":{"body":{"type":"string"}},"required":["body"]}`),
 		ModelClass: llm.ClassStrong,
 	})
+	return res, err
 }
 
 func bodyPrompt(s *spec.SkillSpec, outline outlineRes) string {
@@ -136,7 +138,7 @@ func runResources(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (resour
 	var res resourcesRes
 	for _, items := range [][]spec.ResourceItem{s.Resources.Scripts, s.Resources.References, s.Resources.Assets} {
 		for _, item := range items {
-			r, err := llm.CompleteJSON[resourceItemRes](ctx, g, llm.Req{
+			r, _, err := llm.CompleteJSON[resourceItemRes](ctx, g, llm.Req{
 				Role:       "gen.resources:" + item.Path,
 				Prompt:     resourceItemPrompt(s, item),
 				Schema:     []byte(`{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}`),
@@ -175,12 +177,13 @@ func resourceItemPrompt(s *spec.SkillSpec, item spec.ResourceItem) string {
 // field, which is written for a human reviewer and is often terser than what
 // triggers reliable activation.
 func runDescription(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (descriptionRes, error) {
-	return llm.CompleteJSON[descriptionRes](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[descriptionRes](ctx, g, llm.Req{
 		Role:       "gen.description",
 		Prompt:     descriptionPrompt(s),
 		Schema:     []byte(`{"type":"object","properties":{"description":{"type":"string"}},"required":["description"]}`),
 		ModelClass: llm.ClassStrong,
 	})
+	return res, err
 }
 
 func descriptionPrompt(s *spec.SkillSpec) string {

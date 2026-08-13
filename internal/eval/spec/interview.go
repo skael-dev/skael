@@ -92,7 +92,7 @@ func Interview(ctx context.Context, g llm.Gateway, intent string) (*SkillSpec, e
 		return nil, ErrEmptyIntent
 	}
 
-	draft, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
+	draft, _, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
 		Role:       "interview.draft",
 		Prompt:     fmt.Sprintf(draftPrompt, intent),
 		Schema:     []byte(specSchema),
@@ -115,7 +115,7 @@ func Interview(ctx context.Context, g llm.Gateway, intent string) (*SkillSpec, e
 		return nil, err
 	}
 
-	final, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
+	final, _, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
 		Role:       "interview.critique",
 		Prompt:     fmt.Sprintf(critiquePrompt, rendered, buf.String()),
 		Schema:     []byte(specSchema),

@@ -56,7 +56,7 @@ func Generate(ctx context.Context, gw llm.Gateway, sp *spec.SkillSpec, n int) (*
 		return nil, nil, fmt.Errorf("suite: Generate needs at least one eval, got %d", n)
 	}
 
-	res, err := llm.CompleteJSON[evalsResult](ctx, gw, llm.Req{
+	res, _, err := llm.CompleteJSON[evalsResult](ctx, gw, llm.Req{
 		Role:       "suite.evals",
 		Prompt:     evalsPrompt(sp, n),
 		Schema:     []byte(evalsSchema),

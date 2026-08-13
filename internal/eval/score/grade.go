@@ -21,6 +21,11 @@ type Grade struct {
 	Expectations []Expectation `json:"expectations"`
 	Passed       int           `json:"passed"`
 	Total        int           `json:"total"`
+	// Model is the model that produced this grade, as the gateway named it in
+	// the answer. It is empty when the gateway names none. A gateway that can
+	// name its model in advance is read through ModelFor instead, so this
+	// field carries the subscription case, where nothing else records a judge.
+	Model string `json:"model,omitempty"`
 }
 
 // Rate is the fraction of this session's expectations that passed.
@@ -70,7 +75,7 @@ func (g *Grader) Grade(ctx context.Context, expectations []string, r Run) (Grade
 		return Grade{}, errors.New("score.Grade: no expectations to grade")
 	}
 
-	resp, err := llm.CompleteJSON[gradeResponse](ctx, g.gateway, llm.Req{
+	resp, res, err := llm.CompleteJSON[gradeResponse](ctx, g.gateway, llm.Req{
 		Role:       "score.grade",
 		Prompt:     gradePrompt(expectations, r),
 		ModelClass: llm.ClassStrong,
@@ -83,7 +88,11 @@ func (g *Grader) Grade(ctx context.Context, expectations []string, r Run) (Grade
 			len(resp.Expectations), len(expectations))
 	}
 
-	out := Grade{Expectations: make([]Expectation, len(expectations)), Total: len(expectations)}
+	out := Grade{
+		Expectations: make([]Expectation, len(expectations)),
+		Total:        len(expectations),
+		Model:        res.Model,
+	}
 	for i, want := range expectations {
 		v := resp.Expectations[i]
 		// Text comes from the eval, never from the response. A model that

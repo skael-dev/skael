@@ -91,13 +91,19 @@ func CacheKey(r Req) string {
 // once with the parse error quoted. Two attempts, not more: a model that fails
 // twice on a schema is not going to succeed on the third try, and each attempt
 // costs a session from the budget.
-func CompleteJSON[T any](ctx context.Context, g Gateway, r Req) (T, error) {
+//
+// The response comes back beside the decoded value, because a gateway that
+// cannot name its model in advance still names it in the answer. A caller that
+// records which model did the work needs the answer rather than the request.
+// See Gateway.ModelFor. One function returns it rather than two: a lossy
+// sibling is how a caller drops the model again.
+func CompleteJSON[T any](ctx context.Context, g Gateway, r Req) (T, Res, error) {
 	var zero T
 
 	for attempt := 0; attempt < 2; attempt++ {
 		res, err := g.Complete(ctx, r)
 		if err != nil {
-			return zero, fmt.Errorf("llm.CompleteJSON %s: %w", r.Role, err)
+			return zero, Res{}, fmt.Errorf("llm.CompleteJSON %s: %w", r.Role, err)
 		}
 
 		raw, err := ExtractJSON(res.Text)
@@ -105,16 +111,16 @@ func CompleteJSON[T any](ctx context.Context, g Gateway, r Req) (T, error) {
 			var out T
 			uerr := json.Unmarshal(raw, &out)
 			if uerr == nil {
-				return out, nil
+				return out, res, nil
 			}
 			err = uerr
 		}
 
 		if attempt == 1 {
-			return zero, fmt.Errorf("llm.CompleteJSON %s: unparseable after retry: %w", r.Role, err)
+			return zero, Res{}, fmt.Errorf("llm.CompleteJSON %s: unparseable after retry: %w", r.Role, err)
 		}
 		r.Prompt = r.Prompt + "\n\nYour previous response could not be parsed: " +
 			err.Error() + "\nReply with JSON only — no prose, no code fence."
 	}
-	return zero, fmt.Errorf("llm.CompleteJSON %s: unreachable", r.Role)
+	return zero, Res{}, fmt.Errorf("llm.CompleteJSON %s: unreachable", r.Role)
 }

@@ -94,7 +94,7 @@ func Score(ctx context.Context, g llm.Gateway, skillName, description string,
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				res, err := llm.CompleteJSON[selectResult](ctx, g, llm.Req{
+				res, _, err := llm.CompleteJSON[selectResult](ctx, g, llm.Req{
 					Role:   "tune.select",
 					Prompt: prompts[i],
 					Schema: []byte(selectSchema),

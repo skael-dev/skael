@@ -70,7 +70,7 @@ func Recover(ctx context.Context, g llm.Gateway, skillName, bundleDir string) (*
 		return nil, err
 	}
 
-	draft, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
+	draft, _, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
 		Role:       "spec.recover",
 		Prompt:     fmt.Sprintf(recoverPrompt, rendered),
 		Schema:     []byte(specSchema),
@@ -95,7 +95,7 @@ func Recover(ctx context.Context, g llm.Gateway, skillName, bundleDir string) (*
 		return nil, err
 	}
 
-	final, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
+	final, _, err := llm.CompleteJSON[SkillSpec](ctx, g, llm.Req{
 		Role:       "spec.recover.repair",
 		Prompt:     fmt.Sprintf(recoverRepairPrompt, prior, problems.String()),
 		Schema:     []byte(specSchema),

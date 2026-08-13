@@ -19,6 +19,23 @@ func grader(t *testing.T, g llm.Gateway) *score.Grader {
 	return gr
 }
 
+// TestGrade_RecordsTheModelThatGraded pins the carrier for a judge identity.
+// RunEvalWith reads this when the gateway names no model, which is what a
+// subscription CLI does. Without it the run records no judge at all, and every
+// such score groups with every other unknown one on a trend.
+func TestGrade_RecordsTheModelThatGraded(t *testing.T) {
+	gw := fake.New(`{"expectations":[{"passed":true,"evidence":"Step 3 wrote it"}]}`)
+
+	got, err := grader(t, gw).Grade(context.Background(),
+		[]string{"out/tables.csv exists"}, score.Run{Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Grade: %v", err)
+	}
+	if got.Model != "fake" {
+		t.Errorf("Model = %q, want the model the answer reported", got.Model)
+	}
+}
+
 func TestGrade_MarksEachExpectation(t *testing.T) {
 	gw := fake.New(`{"expectations":[
 	  {"passed":true,"evidence":"Step 3 wrote out/tables.csv"},

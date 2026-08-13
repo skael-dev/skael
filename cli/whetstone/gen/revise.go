@@ -162,12 +162,13 @@ func routeFindings(findings []lint.Finding) (body, frontmatter []lint.Finding, f
 // Role "gen.revise.body" (distinct from "gen.body") is what makes the
 // progress decorator and the cache treat it as its own call.
 func runBodyRevision(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, body string, findings []lint.Finding) (bodyRes, error) {
-	return llm.CompleteJSON[bodyRes](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[bodyRes](ctx, g, llm.Req{
 		Role:       "gen.revise.body",
 		Prompt:     bodyRevisionPrompt(s, body, findings),
 		Schema:     []byte(`{"type":"object","properties":{"body":{"type":"string"}},"required":["body"]}`),
 		ModelClass: llm.ClassStrong,
 	})
+	return res, err
 }
 
 func bodyRevisionPrompt(s *spec.SkillSpec, body string, findings []lint.Finding) string {
@@ -216,12 +217,13 @@ func bodyBudgetInstruction(body string) string {
 // runDescriptionRevision asks for a rewritten description that clears the
 // given findings.
 func runDescriptionRevision(ctx context.Context, g llm.Gateway, s *spec.SkillSpec, description string, findings []lint.Finding) (descriptionRes, error) {
-	return llm.CompleteJSON[descriptionRes](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[descriptionRes](ctx, g, llm.Req{
 		Role:       "gen.revise.description",
 		Prompt:     descriptionRevisionPrompt(s, description, findings),
 		Schema:     []byte(`{"type":"object","properties":{"description":{"type":"string"}},"required":["description"]}`),
 		ModelClass: llm.ClassStrong,
 	})
+	return res, err
 }
 
 func descriptionRevisionPrompt(s *spec.SkillSpec, description string, findings []lint.Finding) string {

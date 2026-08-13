@@ -61,7 +61,7 @@ func TopUp(ctx context.Context, g llm.Gateway, skillName, description, skillBody
 		needNegative = 0
 	}
 
-	res, err := llm.CompleteJSON[queriesResult](ctx, g, llm.Req{
+	res, _, err := llm.CompleteJSON[queriesResult](ctx, g, llm.Req{
 		Role:       "tune.queries",
 		Prompt:     queriesPrompt(skillName, description, skillBody, have, needPositive, needNegative),
 		Schema:     []byte(queriesSchema),
