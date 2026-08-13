@@ -191,29 +191,6 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// expectedScore is the committed band for one archetype. Bands rather than exact
-// values because the pipeline composes floating-point aggregates — but narrow
-// bands, because a range wide enough to accept any behaviour asserts nothing.
-type expectedScore struct {
-	HeadlineMin float64 `json:"headline_min"`
-	HeadlineMax float64 `json:"headline_max"`
-	// AdherenceMin/Max bound each member's mean adherence. This replaced a
-	// committed letter grade: the letter bucketed a thirty-point range, so a
-	// real regression could move adherence a long way without changing it.
-	AdherenceMin  float64  `json:"adherence_min"`
-	AdherenceMax  float64  `json:"adherence_max"`
-	MinViolations int      `json:"min_violations"`
-	Violations    []string `json:"violation_ids"`
-	Unevaluable   int      `json:"unevaluable"`
-	// RobustnessGapMin/Max bound strong.Drift.Mean - floor.Drift.Mean (see
-	// drift.RobustnessGap). Committed here because it is the primary input
-	// to the repair loop: an archetype whose two panel members drift
-	// identically cannot regression-test whether that gap is measured at
-	// all.
-	RobustnessGapMin float64 `json:"robustness_gap_min"`
-	RobustnessGapMax float64 `json:"robustness_gap_max"`
-}
-
 // loadSpec reads an archetype's authored spec.
 func loadSpec(t *testing.T, path string) *spec.SkillSpec {
 	t.Helper()

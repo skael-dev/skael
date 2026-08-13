@@ -155,8 +155,3 @@ func FromReportRaw(r *report.Report, raw json.RawMessage) (Record, error) {
 	rec.ReportJSON = raw
 	return rec, nil
 }
-
-// memberKey identifies a panel member within a report's per-member maps.
-func memberKey(m report.PanelMember) string {
-	return m.Agent + "/" + m.Model
-}

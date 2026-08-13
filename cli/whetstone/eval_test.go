@@ -420,12 +420,6 @@ func (scriptedGateway) Complete(_ context.Context, r llm.Req) (llm.Res, error) {
 	if r.Role != "score.grade" {
 		return llm.Res{}, fmt.Errorf("scriptedGateway: no script for role %q", r.Role)
 	}
-	// One verdict per numbered expectation in the prompt, which is what
-	// Grade refuses to accept a mismatch on.
-	n := strings.Count(r.Prompt, "\n1. ")
-	if n == 0 {
-		n = 1
-	}
 	type verdict struct {
 		Passed   bool   `json:"passed"`
 		Evidence string `json:"evidence"`

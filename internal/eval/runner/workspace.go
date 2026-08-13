@@ -2,7 +2,6 @@ package runner
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -70,34 +69,6 @@ func stageProbeWorkspace() (string, error) {
 		return "", fmt.Errorf("runner: creating probe workspace: %w", err)
 	}
 	return ws, nil
-}
-
-// copyTree copies a directory tree, refusing symlinks — the source ultimately
-// traces back to a generated or model-authored suite, so it is untrusted the
-// same way a skill bundle is.
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if d.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("runner: refusing to stage symlink %q", p)
-		}
-		if d.IsDir() {
-			return os.MkdirAll(target, wsDirMode)
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, wsFileMode)
-	})
 }
 
 // distractorFrontmatter is the minimal SKILL.md a distractor needs: enough
