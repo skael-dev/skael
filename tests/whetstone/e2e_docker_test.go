@@ -89,7 +89,7 @@ func TestWhetstone_InitDoctorAndSuiteCheckFromInsideTheBundle(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := run(t, bin, sub, "init"); !strings.Contains(out, "already") {
+	if out, _ := run(t, bin, sub, "init"); !strings.Contains(out, "inside the workspace") {
 		t.Errorf("init inside an existing workspace did not warn:\n%s", out)
 	}
 
