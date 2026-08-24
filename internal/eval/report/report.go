@@ -118,6 +118,10 @@ type Report struct {
 
 	DroppedGrades []DroppedGrade `json:"dropped_grades,omitempty"`
 
+	// ReusedBaselines lists the task ids whose baseline session came from an
+	// earlier eval rather than a fresh run.
+	ReusedBaselines []string `json:"reused_baselines,omitempty"`
+
 	TriggerInferred bool `json:"trigger_inferred"`
 	// TriggerSource is the panel member the trigger probes ran on.
 	TriggerSource PanelMember `json:"trigger_source,omitempty"`

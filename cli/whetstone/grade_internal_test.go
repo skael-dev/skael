@@ -57,7 +57,7 @@ func TestGradeOutcomes_OneFailedGradeDoesNotDiscardTheRun(t *testing.T) {
 		t.Fatalf("NewGrader: %v", err)
 	}
 
-	graded, dropped, err := gradeOutcomes(context.Background(), g, gradePlan(3), gradeOuts(3), 1)
+	graded, dropped, err := gradeOutcomes(context.Background(), g, gradePlan(3), finishedOutcomes(gradeOuts(3)), 1)
 	if err != nil {
 		t.Fatalf("gradeOutcomes: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestGradeOutcomes_ATotalJudgeOutageStillFails(t *testing.T) {
 		t.Fatalf("NewGrader: %v", err)
 	}
 
-	_, _, err = gradeOutcomes(context.Background(), g, gradePlan(2), gradeOuts(2), 1)
+	_, _, err = gradeOutcomes(context.Background(), g, gradePlan(2), finishedOutcomes(gradeOuts(2)), 1)
 	if err == nil {
 		t.Fatal("gradeOutcomes succeeded with every grade call failing")
 	}

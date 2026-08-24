@@ -137,7 +137,7 @@ func TestEvalRequestFrom_CarriesTierAndPanel(t *testing.T) {
 		},
 	}
 
-	req := evalRequestFrom(in, 4)
+	req := evalRequestFrom(in, 4, 8)
 
 	if got, want := string(req.Tier), in.Tier; got != want {
 		t.Fatalf("Tier = %q, want %q", got, want)
@@ -154,15 +154,23 @@ func TestEvalRequestFrom_CarriesTierAndPanel(t *testing.T) {
 	if req.Concurrency != 4 {
 		t.Fatalf("Concurrency = %d, want 4", req.Concurrency)
 	}
+	if req.GradeConcurrency != 8 {
+		t.Fatalf("GradeConcurrency = %d, want 8", req.GradeConcurrency)
+	}
 }
 
 // TestEvalRequestFrom_DefaultsConcurrencyToOne guards against a zero or
 // negative WORKER_CONCURRENCY silently producing an EvalRequest with no
 // panel parallelism at all.
 func TestEvalRequestFrom_DefaultsConcurrencyToOne(t *testing.T) {
-	req := evalRequestFrom(worker.RunInput{Skill: "s"}, 0)
+	req := evalRequestFrom(worker.RunInput{Skill: "s"}, 0, 0)
 	if req.Concurrency != 1 {
 		t.Fatalf("Concurrency = %d, want 1", req.Concurrency)
+	}
+	// Each knob falls back to its own default, never to the other's: a zero
+	// grade concurrency means whetstone's default, not one judge call.
+	if req.GradeConcurrency != 0 {
+		t.Fatalf("GradeConcurrency = %d, want 0 so whetstone applies its own default", req.GradeConcurrency)
 	}
 }
 

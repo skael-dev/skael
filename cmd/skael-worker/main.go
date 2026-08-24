@@ -56,7 +56,8 @@ func judgeGatewayOptions() provider.Options {
 // skael-worker.
 type workerConfig struct {
 	worker.Config
-	Concurrency int
+	Concurrency      int
+	GradeConcurrency int
 	// Provider is the resolved LLM backend: the endpoint, the credential, the
 	// auth header, and the model ids. It serves the judge in this process and
 	// decides the panel's models inside the sandbox — one gateway, resolved
@@ -148,6 +149,18 @@ func configFromEnv() (workerConfig, error) {
 		concurrency = n
 	}
 
+	// A separate knob from WORKER_CONCURRENCY: a sandbox container is bounded
+	// by CPU and memory, a judge call by the account's rate limit. Zero here
+	// falls back to whetstone's own default, not to the session count.
+	gradeConcurrency := 0
+	if v := os.Getenv("WORKER_GRADE_CONCURRENCY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return workerConfig{}, fmt.Errorf("skael-worker: WORKER_GRADE_CONCURRENCY %q is not a positive integer", v)
+		}
+		gradeConcurrency = n
+	}
+
 	runRoot := os.Getenv("WORKER_RUN_ROOT")
 	workRoot := os.Getenv("WORKER_WORK_ROOT")
 	if err := requireHostSharedRoots(runRoot, workRoot, inContainer()); err != nil {
@@ -163,9 +176,10 @@ func configFromEnv() (workerConfig, error) {
 			PollInterval: poll,
 			WorkRoot:     workRoot,
 		},
-		Concurrency: concurrency,
-		Provider:    prov,
-		RunRoot:     runRoot,
+		Concurrency:      concurrency,
+		GradeConcurrency: gradeConcurrency,
+		Provider:         prov,
+		RunRoot:          runRoot,
 	}, nil
 }
 
@@ -269,7 +283,8 @@ func run(cfg workerConfig) error {
 	}
 
 	r := &realRunner{
-		driver: drv, gateway: gw, concurrency: cfg.Concurrency, runRoot: cfg.RunRoot,
+		driver: drv, gateway: gw, concurrency: cfg.Concurrency,
+		gradeConcurrency: cfg.GradeConcurrency, runRoot: cfg.RunRoot,
 		panelModels: cfg.Provider.PanelModels(), panelBase: cfg.Provider.BaseURL,
 		panelExcludeEnv: cfg.Provider.PanelExcludeEnv(),
 	}
@@ -334,13 +349,14 @@ func pollLoop(ctx context.Context, w *worker.Worker, pollInterval time.Duration)
 // depends on the process's current working directory and this worker has no
 // reason to have one anywhere near the workspace it was just handed.
 type realRunner struct {
-	driver          sandbox.Driver
-	gateway         llm.Gateway
-	concurrency     int
-	runRoot         string
-	panelModels     []string
-	panelBase       string
-	panelExcludeEnv []string
+	driver           sandbox.Driver
+	gateway          llm.Gateway
+	concurrency      int
+	gradeConcurrency int
+	runRoot          string
+	panelModels      []string
+	panelBase        string
+	panelExcludeEnv  []string
 }
 
 // evalDepsFrom maps the resolved worker onto the deps RunEvalWith consumes.
@@ -380,7 +396,7 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 
 	deps := evalDepsFrom(r, st)
 
-	req := evalRequestFrom(in, r.concurrency)
+	req := evalRequestFrom(in, r.concurrency, r.gradeConcurrency)
 
 	rep, err := whetstone.RunEvalWith(ctx, deps, req)
 	if err != nil {
@@ -428,16 +444,17 @@ func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worke
 // — onto the whetstone.EvalRequest RunEvalWith actually consumes. This hop
 // is the exact seam a prior task's fix round found broken (Panel silently
 // dropped on the wire); TestEvalRequestFrom_CarriesTierAndPanel guards it.
-func evalRequestFrom(in worker.RunInput, concurrency int) whetstone.EvalRequest {
+func evalRequestFrom(in worker.RunInput, concurrency, gradeConcurrency int) whetstone.EvalRequest {
 	if concurrency < 1 {
 		concurrency = 1
 	}
 	return whetstone.EvalRequest{
-		Skill:       in.Skill,
-		Tier:        runner.Tier(in.Tier),
-		Agents:      in.Panel.Agents,
-		Models:      in.Panel.Models,
-		AllowVoid:   in.AllowVoid,
-		Concurrency: concurrency,
+		Skill:            in.Skill,
+		Tier:             runner.Tier(in.Tier),
+		Agents:           in.Panel.Agents,
+		Models:           in.Panel.Models,
+		AllowVoid:        in.AllowVoid,
+		Concurrency:      concurrency,
+		GradeConcurrency: gradeConcurrency,
 	}
 }

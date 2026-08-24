@@ -37,6 +37,12 @@ type Options struct {
 	Sleep  func(time.Duration)
 	Logger func(string, ...any)
 
+	// OnComplete, when set, is called once per finished session, from that
+	// session's own goroutine. It lets a caller grade a session while the
+	// rest still run: a grade needs that session's artifacts and nothing
+	// else. It is never called for a probe.
+	OnComplete func(Outcome)
+
 	MaxRateLimitRetries int
 }
 
@@ -106,6 +112,8 @@ type Runner struct {
 	// quotaWarned keeps the approaching-quota notice to one line per run
 	// rather than one per session, across concurrent sessions.
 	quotaWarned sync.Once
+	// gate holds new session starts while the account is near its window.
+	gate *quotaGate
 }
 
 // New validates options and applies defaults.
@@ -119,7 +127,10 @@ func New(o Options) (*Runner, error) {
 	}
 	o.Driver = gd
 	if o.Concurrency <= 0 {
-		o.Concurrency = 4
+		// Six rather than four: the quota gate is what holds new starts when
+		// the account nears its window, so the extra slots cost retries only
+		// when there is headroom for them.
+		o.Concurrency = 6
 	}
 	if o.SessionTimeout <= 0 {
 		o.SessionTimeout = 20 * time.Minute
@@ -136,8 +147,14 @@ func New(o Options) (*Runner, error) {
 	if o.Logger == nil {
 		o.Logger = func(string, ...any) {}
 	}
-	return &Runner{o: o}, nil
+	return &Runner{o: o, gate: newQuotaGate(time.Now, o.Sleep)}, nil
 }
+
+// SetOnComplete installs the per-session callback after construction. The
+// runner is built before the plan is (it health-probes the panel first), and
+// the caller's grade pool is sized from the plan, so the callback cannot be
+// known at New time.
+func (r *Runner) SetOnComplete(fn func(Outcome)) { r.o.OnComplete = fn }
 
 var DefaultAllowDomains = []string{"api.anthropic.com", "statsig.anthropic.com", "sentry.io"}
 
@@ -181,14 +198,24 @@ func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*E
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			// Only a start waits. A session already in flight is never
+			// interrupted by the gate.
+			r.gate.Wait(ctx)
 			o := r.executeRun(ctx, evalID, in, byKey, k)
 			mu.Lock()
 			outcomes = append(outcomes, o)
 			mu.Unlock()
+			// Grading one session needs that session's artifacts and nothing
+			// else, so the caller can start it while the rest still run.
+			if r.o.OnComplete != nil {
+				r.o.OnComplete(o)
+			}
 		}(k)
 	}
-	wg.Wait()
 
+	// Probes queue against the same semaphore as the runs. Waiting for every
+	// run first left most of the pool idle at the tail of a run, because a
+	// probe is a short session.
 	for _, p := range in.Plan.Probes {
 		if !memberHealthy(in.Healthy, p.Member) {
 			continue
@@ -198,6 +225,7 @@ func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*E
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			r.gate.Wait(ctx)
 			po := r.executeProbe(ctx, evalID, in, byKey, p)
 			mu.Lock()
 			probes = append(probes, po)

@@ -269,6 +269,85 @@ func (s *Store) ClaimRun(evalID int64, k RunKey) (int64, bool, error) {
 	return id, false, nil
 }
 
+// baselineReuseWindow bounds how old a baseline row may be and still be
+// reused. An agent's behaviour drifts even at a pinned version, so a stale
+// baseline would compare a fresh skill run against a different world.
+const baselineReuseWindow = 30 * 24 * time.Hour
+
+// ReusableBaseline finds a finished baseline session from an earlier eval that
+// the caller may reuse instead of spending a session on it.
+//
+// A baseline installs no skill, so it depends only on the suite, the task, the
+// agent, the model, and the agent's version. Matching all five, plus a status
+// of ok and an age inside baselineReuseWindow, is what makes the prior
+// measurement the same measurement.
+func (s *Store) ReusableBaseline(suiteRef, agentVersion string, k RunKey) (*RunRecord, bool, error) {
+	if suiteRef == "" || agentVersion == "" {
+		return nil, false, nil
+	}
+	cutoff := time.Now().Add(-baselineReuseWindow).UTC().Format("2006-01-02 15:04:05")
+	row := s.db.QueryRow(
+		`SELECT r.id, r.task_id, r.agent, r.model, r.condition, r.attempt, r.artifact_dir,
+		 r.input_tokens, r.output_tokens, r.duration_ms, r.agent_version, r.rate_limited, r.status, r.error
+		 FROM runs r JOIN evals e ON e.id = r.eval_id
+		 WHERE e.suite_ref = ? AND r.task_id = ? AND r.agent = ? AND r.model = ?
+		   AND r.condition = ? AND r.agent_version = ? AND r.status = ? AND r.created_at >= ?
+		 ORDER BY r.id DESC LIMIT 1`,
+		suiteRef, k.TaskID, k.Agent, k.Model, string(k.Condition), agentVersion, StatusOK, cutoff)
+
+	var (
+		rec         RunRecord
+		rateLimited int64
+	)
+	err := row.Scan(&rec.ID, &rec.Key.TaskID, &rec.Key.Agent, &rec.Key.Model, &rec.Key.Condition, &rec.Key.Attempt,
+		&rec.Outcome.ArtifactDir, &rec.Outcome.InputTokens, &rec.Outcome.OutputTokens,
+		&rec.Outcome.DurationMS, &rec.Outcome.AgentVersion, &rateLimited, &rec.Outcome.Status, &rec.Outcome.Error)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store.ReusableBaseline: %w", err)
+	}
+	rec.Outcome.RateLimited = rateLimited != 0
+	return &rec, true, nil
+}
+
+// CopyBaseline writes a prior baseline run and its grade into evalID under
+// key k, so the eval scores it without spending a session on it.
+func (s *Store) CopyBaseline(evalID int64, prior *RunRecord, k RunKey) error {
+	if prior == nil {
+		return errors.New("store.CopyBaseline: prior run is required")
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO runs (eval_id, task_id, agent, model, condition, attempt, artifact_dir,
+		 input_tokens, output_tokens, duration_ms, agent_version, rate_limited, status, error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(eval_id, task_id, agent, model, condition, attempt) DO NOTHING`,
+		evalID, k.TaskID, k.Agent, k.Model, string(k.Condition), k.Attempt, prior.Outcome.ArtifactDir,
+		prior.Outcome.InputTokens, prior.Outcome.OutputTokens, prior.Outcome.DurationMS,
+		prior.Outcome.AgentVersion, boolToInt(prior.Outcome.RateLimited), prior.Outcome.Status,
+		prior.Outcome.Error); err != nil {
+		return fmt.Errorf("store.CopyBaseline: %w", err)
+	}
+
+	var (
+		passed, total int
+		doc           string
+	)
+	err := s.db.QueryRow(
+		`SELECT passed, total, doc FROM run_grades g
+		 JOIN runs r ON r.eval_id = g.eval_id AND r.task_id = g.task_id AND r.agent = g.agent
+		   AND r.model = g.model AND r.condition = g.condition AND r.attempt = g.attempt
+		 WHERE r.id = ?`, prior.ID).Scan(&passed, &total, &doc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store.CopyBaseline grade: %w", err)
+	}
+	return s.SaveGrade(evalID, RunGrade{Key: k, Passed: passed, Total: total, Doc: []byte(doc)})
+}
+
 // FinishRun records a run's outcome. o.Status is expected to be one of
 // StatusOK, StatusFailed, StatusError, or StatusTimeout: the first two make a
 // later ClaimRun of the same key report done, the latter two make it retry.

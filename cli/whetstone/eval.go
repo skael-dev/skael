@@ -78,11 +78,17 @@ type EvalRequest struct {
 	Agents      []string
 	Models      []string
 	Concurrency int
-	Untrusted   bool
-	AllowVoid   bool
+	// GradeConcurrency bounds the judge calls, independently of the sandbox
+	// sessions --concurrency bounds.
+	GradeConcurrency int
+	Untrusted        bool
+	AllowVoid        bool
 	// Resume, when non-zero, reuses that eval id rather than starting a new
 	// one — see RunEvalWith for the suite/panel mismatch guard.
 	Resume int64
+	// FreshBaseline runs every baseline session rather than reusing a
+	// matching one from an earlier eval.
+	FreshBaseline bool
 }
 
 // baseEnsurer is satisfied by *docker.Driver but not by every sandbox.Driver
@@ -289,22 +295,51 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err != nil {
 		return nil, err
 	}
-	execRes, err := rn.Execute(ctx, evalID, runner.ExecuteInput{
-		Skill: req.Skill, BundleDir: bundleDir, SuiteDir: suiteDir, Image: image,
-		Plan: plan, Healthy: healthy, Distractors: distractors,
-	})
+
+	// 8a. Reuse a prior baseline where one matches. A baseline installs no
+	// skill, so it depends only on the suite, the task, the agent, the model
+	// and the agent version — at the full tier they are 10 of 36 sessions,
+	// re-spent on every run of the same skill.
+	reused, err := reuseBaselines(d.Store, evalID, suiteRef, agentCLIVersion(), plan, req.FreshBaseline)
 	if err != nil {
 		return nil, err
 	}
-
-	// 9. Grade every session that produced a transcript.
+	if len(reused) > 0 {
+		ui.Info("reused %s from an earlier eval", plural(len(reused), "baseline session"))
+	}
+	// 9. Grade each session as it finishes, beside the sessions still
+	// running. A grade reads that session's own artifacts only, and in split
+	// mode the judge and the panel hold different credentials, so the overlap
+	// adds no rate-limit pressure.
 	grader, err := score.NewGrader(d.Gateway)
 	if err != nil {
 		return nil, err
 	}
-	graded, dropped, err := gradeOutcomes(ctx, grader, plan, execRes.Outcomes, req.Concurrency)
+	finished := make(chan runner.Outcome, len(plan.Runs))
+	type gradeResult struct {
+		graded  map[store.RunKey]score.Grade
+		dropped []droppedGrade
+		err     error
+	}
+	gradeDone := make(chan gradeResult, 1)
+	go func() {
+		gr, dr, gerr := gradeOutcomes(ctx, grader, plan, finished, req.GradeConcurrency)
+		gradeDone <- gradeResult{gr, dr, gerr}
+	}()
+	rn.SetOnComplete(func(o runner.Outcome) { finished <- o })
+
+	execRes, err := rn.Execute(ctx, evalID, runner.ExecuteInput{
+		Skill: req.Skill, BundleDir: bundleDir, SuiteDir: suiteDir, Image: image,
+		Plan: plan, Healthy: healthy, Distractors: distractors,
+	})
+	close(finished)
+	gres := <-gradeDone
 	if err != nil {
 		return nil, err
+	}
+	graded, dropped := gres.graded, gres.dropped
+	if gres.err != nil {
+		return nil, gres.err
 	}
 	for _, d := range dropped {
 		ui.Warn("whetstone eval: %s (%s attempt %d) was dropped from the score: %s",
@@ -395,7 +430,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
 		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		GraderModel: graderModel(d.Gateway, graded), Dropped: droppedReport(dropped),
-		StartedAt: startedAt, FinishedAt: now(),
+		ReusedBaselines: reused,
+		StartedAt:       startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
@@ -463,6 +499,55 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 // Grading is one gateway call per session and the calls are independent, so
 // they run concurrently: done in series, grading would cost more wall clock
 // than the sessions it grades.
+// reuseBaselines copies every reusable prior baseline into this eval and
+// removes those keys from the plan. It returns the task ids it reused, so the
+// report can tell a reused baseline from a fresh one.
+func reuseBaselines(st *store.Store, evalID int64, suiteRef, agentVersion string, plan *runner.Plan, fresh bool) ([]string, error) {
+	if fresh {
+		return nil, nil
+	}
+	var (
+		keep   []store.RunKey
+		reused []string
+	)
+	for _, k := range plan.Runs {
+		if k.Condition != runner.CondBaseline {
+			keep = append(keep, k)
+			continue
+		}
+		prior, ok, err := st.ReusableBaseline(suiteRef, agentVersion, k)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			keep = append(keep, k)
+			continue
+		}
+		if err := st.CopyBaseline(evalID, prior, k); err != nil {
+			return nil, err
+		}
+		reused = append(reused, k.TaskID)
+	}
+	plan.Runs = keep
+	return reused, nil
+}
+
+// defaultGradeConcurrency bounds the judge calls. It is a separate knob from
+// --concurrency: a sandbox container is bounded by CPU and memory, a judge
+// call by the account's rate limit.
+const defaultGradeConcurrency = 8
+
+// finishedOutcomes feeds a finished slice to gradeOutcomes, which is how a
+// resumed eval grades sessions that ran in an earlier process.
+func finishedOutcomes(outs []runner.Outcome) <-chan runner.Outcome {
+	ch := make(chan runner.Outcome, len(outs))
+	for _, o := range outs {
+		ch <- o
+	}
+	close(ch)
+	return ch
+}
+
 // droppedReport maps dropped runs onto their report form.
 func droppedReport(ds []droppedGrade) []report.DroppedGrade {
 	out := make([]report.DroppedGrade, 0, len(ds))
@@ -481,9 +566,9 @@ type droppedGrade struct {
 	Reason string
 }
 
-func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs []runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, []droppedGrade, error) {
+func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs <-chan runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, []droppedGrade, error) {
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = defaultGradeConcurrency
 	}
 	var (
 		mu      sync.Mutex
@@ -518,7 +603,7 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 		}
 	)
 
-	for _, o := range outs {
+	for o := range outs {
 		// A session that errored or timed out produced no measurement. It is
 		// dropped rather than graded as a failure: an infrastructure fault is
 		// not evidence about the skill.
@@ -897,13 +982,15 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 }
 
 var (
-	evalTier        string
-	evalAgents      []string
-	evalModels      []string
-	evalConcurrency int
-	evalUntrusted   bool
-	evalAllowVoid   bool
-	evalResume      int64
+	evalTier             string
+	evalAgents           []string
+	evalModels           []string
+	evalConcurrency      int
+	evalGradeConcurrency int
+	evalUntrusted        bool
+	evalAllowVoid        bool
+	evalResume           int64
+	evalFreshBaseline    bool
 )
 
 var evalCmd = &cobra.Command{
@@ -913,7 +1000,9 @@ var evalCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunEval(cmd.Context(), EvalRequest{
 			Skill: args[0], Tier: runner.Tier(evalTier), Agents: evalAgents, Models: evalModels,
-			Concurrency: evalConcurrency, Untrusted: evalUntrusted, AllowVoid: evalAllowVoid, Resume: evalResume,
+			Concurrency: evalConcurrency, GradeConcurrency: evalGradeConcurrency,
+			Untrusted: evalUntrusted, AllowVoid: evalAllowVoid, Resume: evalResume,
+			FreshBaseline: evalFreshBaseline,
 		})
 	},
 }
@@ -923,8 +1012,12 @@ func init() {
 	evalCmd.Flags().StringSliceVar(&evalAgents, "agents", nil, "Panel agents (pass with --models); defaults to the shipped panel")
 	evalCmd.Flags().StringSliceVar(&evalModels, "models", nil, "Panel models (pass with --agents); defaults to the shipped panel")
 	evalCmd.Flags().IntVar(&evalConcurrency, "concurrency", 0, "Maximum concurrent sessions (0 uses the runner's default)")
+	evalCmd.Flags().IntVar(&evalGradeConcurrency, "grade-concurrency", 0,
+		fmt.Sprintf("Maximum concurrent judge calls (0 uses %d)", defaultGradeConcurrency))
 	evalCmd.Flags().BoolVar(&evalUntrusted, "untrusted", false, "Treat the skill as untrusted; refused unless the driver is hardware-isolated")
 	evalCmd.Flags().BoolVar(&evalAllowVoid, "allow-void", false, "Proceed with void tasks excluded from scoring rather than refusing")
+	evalCmd.Flags().BoolVar(&evalFreshBaseline, "fresh-baseline", false,
+		"Run every baseline session rather than reusing a matching one from an earlier eval")
 	evalCmd.Flags().Int64Var(&evalResume, "resume", 0, "Resume an existing eval id instead of starting a new one")
 	rootCmd.AddCommand(evalCmd)
 }

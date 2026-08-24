@@ -74,6 +74,8 @@ type ComposeInput struct {
 
 	// Dropped lists sessions the judge could not grade.
 	Dropped []DroppedGrade
+	// ReusedBaselines lists task ids whose baseline came from an earlier eval.
+	ReusedBaselines []string
 
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -149,6 +151,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		Tasks:                tasks,
 		VoidTasks:            in.Void,
 		DroppedGrades:        in.Dropped,
+		ReusedBaselines:      in.ReusedBaselines,
 		TriggerInferred:      in.TriggerInferred,
 		TriggerSource:        in.TriggerSource,
 		TriggerUnknown:       in.TriggerUnknown,

@@ -39,8 +39,19 @@ func RenderEvalSummary(rep *report.Report, evalID int64, skill string) string {
 	fmt.Fprintf(&b, "\n  Fires when it should    %s\n", yesNo(rep.TriggerF1))
 	if rep.DeltaMeasured {
 		fmt.Fprintf(&b, "  Better than no skill    %+.0f points (%.0f without it)\n", rep.Delta, rep.Baseline)
+		if n := len(rep.ReusedBaselines); n > 0 {
+			fmt.Fprintf(&b, "                          %s reused from an earlier eval; --fresh-baseline runs them again\n",
+				plural(n, "baseline session"))
+		}
 	} else {
 		fmt.Fprintf(&b, "  Better than no skill    not measured — %s tier runs no baseline\n", rep.Tier)
+	}
+
+	if n := len(rep.DroppedGrades); n > 0 {
+		fmt.Fprintf(&b, "\n  %s dropped from the score — the judge could not grade them:\n", plural(n, "session"))
+		for _, d := range rep.DroppedGrades {
+			fmt.Fprintf(&b, "    eval %s (%s attempt %d): %s\n", d.TaskID, d.Condition, d.Attempt, d.Reason)
+		}
 	}
 
 	fmt.Fprintf(&b, "\n  The score is the share of expectations passed. Full detail:  whetstone report %d\n", evalID)

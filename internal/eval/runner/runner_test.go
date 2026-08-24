@@ -1012,3 +1012,96 @@ func TestExecute_RemovesTheWorkspaceOnceASessionFinishes(t *testing.T) {
 		}
 	}
 }
+
+// TestExecute_CallsOnCompleteOncePerOutcomeBeforeReturning pins the seam the
+// grade phase now hangs off: a session's grade needs that session's own
+// artifacts, so it can start while the rest of the plan still runs.
+func TestExecute_CallsOnCompleteOncePerOutcomeBeforeReturning(t *testing.T) {
+	h := newHarness(t)
+	var (
+		mu        sync.Mutex
+		reported  []store.RunKey
+		duringRun bool
+	)
+	h.opts.OnComplete = func(o runner.Outcome) {
+		mu.Lock()
+		defer mu.Unlock()
+		reported = append(reported, o.Key)
+	}
+	h.driver.onRun = func(sandbox.RunSpec) {
+		mu.Lock()
+		if len(reported) > 0 {
+			duringRun = true
+		}
+		mu.Unlock()
+	}
+
+	res, err := h.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reported) != len(res.Outcomes) {
+		t.Fatalf("OnComplete fired %d times for %d outcomes, want one each", len(reported), len(res.Outcomes))
+	}
+	seen := map[store.RunKey]int{}
+	for _, k := range reported {
+		seen[k]++
+	}
+	for k, n := range seen {
+		if n != 1 {
+			t.Errorf("OnComplete fired %d times for %v, want exactly once", n, k)
+		}
+	}
+	if !duringRun {
+		t.Error("no outcome was reported while other sessions were still running")
+	}
+}
+
+// TestExecute_RunsAndProbesShareOneWave pins the single wait: probes are short
+// sessions, and waiting for every run before starting them left most of the
+// pool idle at the tail of a run.
+func TestExecute_RunsAndProbesShareOneWave(t *testing.T) {
+	h := newHarness(t)
+	in := h.input()
+	in.Plan, _ = runner.BuildPlan(runner.TierFull, runner.DefaultPanel(), h.fullEvals, nil, h.triggers)
+	in.Distractors = mustDistractors(t)
+
+	r, err := runner.New(h.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Execute(context.Background(), h.evalID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Outcomes) == 0 || len(res.Probes) == 0 {
+		t.Fatalf("plan produced %d outcomes and %d probes, want both", len(res.Outcomes), len(res.Probes))
+	}
+}
+
+// TestNew_DefaultConcurrencyIsSix pins the raise the quota gate makes safe:
+// the gate holds new starts when the account nears its window, so the extra
+// slots cost retries only when there is headroom for them.
+func TestNew_DefaultConcurrencyIsSix(t *testing.T) {
+	h := newHarness(t)
+	h.opts.Concurrency = 0
+	var live, peak atomic.Int32
+	h.driver.onRun = func(sandbox.RunSpec) {
+		cur := live.Add(1)
+		for {
+			p := peak.Load()
+			if cur <= p || peak.CompareAndSwap(p, cur) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		live.Add(-1)
+	}
+
+	if _, err := h.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p := peak.Load(); p > 6 {
+		t.Errorf("peak concurrency %d with no explicit setting, want at most the default 6", p)
+	}
+}

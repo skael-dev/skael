@@ -444,6 +444,9 @@ func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeS
 		if result.Meta.RateLimited {
 			if attempt+1 < r.o.MaxRateLimitRetries {
 				d := backoff(attempt)
+				// Hold new starts for the same window this session waits out,
+				// so the other slots stop feeding the limit that threw it.
+				r.gate.Report(result.Meta.RateLimitUtilization, d)
 				r.o.Logger("runner: %+v rate limited, retrying in %s (attempt %d)", k, d, attempt+1)
 				r.o.Sleep(d)
 				continue
