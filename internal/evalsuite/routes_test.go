@@ -371,15 +371,18 @@ func TestPostSuite_UnknownSkillIs404(t *testing.T) {
 	}
 }
 
-func TestPostSuite_NoChecksIs422(t *testing.T) {
+// TestPostSuite_NoChecksIsAccepted pins the optional field: the pusher's own
+// check results are an audit trail, and suite.Validate is pure, so every
+// reader runs it again. A client that sends none must still push.
+func TestPostSuite_NoChecksIsAccepted(t *testing.T) {
 	srv := newTestServer(t)
 	srv.createSkill(t, "deploy-helper")
 
-	body := map[string]any{"skill": "deploy-helper", "spec_version": 1, "checks": []any{},
+	body := map[string]any{"skill": "deploy-helper", "spec_version": 1,
 		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t))}
 	resp := srv.postJSON(t, "/api/eval/suites", body)
-	if resp.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422: %s", resp.Code, resp.Body)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
 	}
 }
 

@@ -70,6 +70,11 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
 	t.Setenv("SKAEL_API_KEY", "k")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	// `just check` loads .env, so the ambient environment can carry a gateway
+	// this test is asserting the absence of.
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("LLM_MODEL", "")
 	cfg, err := configFromEnv()
 	if err != nil {
 		t.Fatal(err)
