@@ -236,19 +236,6 @@ func (s *Store) Eval(id int64) (*EvalRecord, error) {
 	return e, nil
 }
 
-// LatestEval returns the most recently created eval for a skill.
-func (s *Store) LatestEval(skill string) (*EvalRecord, error) {
-	row := s.db.QueryRow(`SELECT `+evalColumns+` FROM evals WHERE skill_name = ? ORDER BY id DESC LIMIT 1`, skill)
-	e, err := scanEvalRow(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("store.LatestEval: no eval for %q", skill)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("store.LatestEval: %w", err)
-	}
-	return e, nil
-}
-
 // ClaimRun records the intent to execute one run and reports whether it has
 // already finished. Resume is built entirely on this: a finished key is
 // skipped and a claimed-but-unfinished key is handed back for another

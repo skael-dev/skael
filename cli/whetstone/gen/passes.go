@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/skael-dev/skael/internal/eval/lint"
 	"github.com/skael-dev/skael/internal/eval/llm"
@@ -55,10 +56,13 @@ type descriptionRes struct {
 // rather than free rein.
 func runOutline(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (outlineRes, error) {
 	res, _, err := llm.CompleteJSON[outlineRes](ctx, g, llm.Req{
-		Role:       "gen.outline",
-		Prompt:     outlinePrompt(s),
-		Schema:     []byte(`{"type":"object","properties":{"sections":{"type":"array","items":{"type":"string"}}},"required":["sections"]}`),
-		ModelClass: llm.ClassStrong,
+		Role:   "gen.outline",
+		Prompt: outlinePrompt(s),
+		Schema: []byte(`{"type":"object","properties":{"sections":{"type":"array","items":{"type":"string"}}},"required":["sections"]}`),
+		// The outline returns a list of headings. With a single-entry
+		// LLM_MODEL the fast slot is the same model, so this costs a
+		// two-entry setup nothing and saves it a strong call.
+		ModelClass: llm.ClassFast,
 	})
 	return res, err
 }
@@ -129,15 +133,41 @@ func bodyPrompt(s *spec.SkillSpec, outline outlineRes) string {
 	return b.String()
 }
 
+// resourceConcurrency bounds the resource pass. A spec plans at most three
+// files, so this is a ceiling rather than a throttle.
+const resourceConcurrency = 4
+
 // runResources asks for one file per call, not all of them in one: a spec
 // planning several substantial scripts pushes a single response past the
 // gateway's timeout. Each call still gets the whole plan as context, so
-// cross-file references stay consistent. Sequential on purpose — the token
-// cost is the same, and concurrent sessions would scramble progress output.
+// cross-file references stay consistent. The calls run concurrently, and the
+// result keeps plan order rather than completion order.
 func runResources(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (resourcesRes, error) {
-	var res resourcesRes
-	for _, items := range [][]spec.ResourceItem{s.Resources.Scripts, s.Resources.References, s.Resources.Assets} {
-		for _, item := range items {
+	var items []spec.ResourceItem
+	for _, group := range [][]spec.ResourceItem{s.Resources.Scripts, s.Resources.References, s.Resources.Assets} {
+		items = append(items, group...)
+	}
+	if len(items) == 0 {
+		return resourcesRes{}, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	files := make([]resourceFile, len(items))
+	errs := make([]error, len(items))
+	sem := make(chan struct{}, resourceConcurrency)
+	var wg sync.WaitGroup
+	for i, item := range items {
+		wg.Add(1)
+		go func(i int, item spec.ResourceItem) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				errs[i] = ctx.Err()
+				return
+			}
 			r, _, err := llm.CompleteJSON[resourceItemRes](ctx, g, llm.Req{
 				Role:       "gen.resources:" + item.Path,
 				Prompt:     resourceItemPrompt(s, item),
@@ -145,12 +175,23 @@ func runResources(ctx context.Context, g llm.Gateway, s *spec.SkillSpec) (resour
 				ModelClass: llm.ClassStrong,
 			})
 			if err != nil {
-				return resourcesRes{}, err
+				errs[i] = err
+				cancel()
+				return
 			}
-			res.Files = append(res.Files, resourceFile{Path: item.Path, Content: r.Content})
+			files[i] = resourceFile{Path: item.Path, Content: r.Content}
+		}(i, item)
+	}
+	wg.Wait()
+
+	// The first error in plan order, so a failure names the same file whatever
+	// the completion order was.
+	for _, err := range errs {
+		if err != nil {
+			return resourcesRes{}, err
 		}
 	}
-	return res, nil
+	return resourcesRes{Files: files}, nil
 }
 
 func resourceItemPrompt(s *spec.SkillSpec, item spec.ResourceItem) string {

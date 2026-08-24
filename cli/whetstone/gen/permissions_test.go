@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/skael-dev/skael/cli/whetstone/gen"
-	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
@@ -27,16 +26,8 @@ func TestGenerate_ScriptsAreExecutableOtherResourcesAreNot(t *testing.T) {
 		Scripts:    []spec.ResourceItem{{Path: "scripts/extract.py"}},
 		References: []spec.ResourceItem{{Path: "references/format.md"}},
 	}
-	responses := []string{
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
-		`{"content":"#!/usr/bin/env python3\n"}`,
-		`{"content":"# Format\n"}`,
-		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF."}`,
-	}
-
 	out := t.TempDir()
-	b, err := gen.Generate(context.Background(), fake.New(responses...), s, out)
+	b, err := gen.Generate(context.Background(), genFake(t, genRoles{}), s, out)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

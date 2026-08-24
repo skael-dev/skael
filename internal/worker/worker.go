@@ -148,27 +148,6 @@ func New(cfg Config, api API, r Runner, deriver Deriver) (*Worker, error) {
 	return &Worker{cfg: cfg, api: api, runner: r, deriver: deriver}, nil
 }
 
-// Loop calls RunOnce until ctx is cancelled, sleeping PollInterval when idle.
-func (w *Worker) Loop(ctx context.Context) error {
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		worked, err := w.RunOnce(ctx)
-		if err != nil {
-			log.Error().Err(err).Msg("worker: run failed")
-		}
-		if worked {
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(w.cfg.PollInterval):
-		}
-	}
-}
-
 // RunOnce claims at most one job and runs it to completion. It returns
 // (false, nil) when the queue is empty.
 func (w *Worker) RunOnce(ctx context.Context) (worked bool, err error) {

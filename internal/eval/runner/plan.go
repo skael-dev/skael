@@ -231,9 +231,6 @@ func BuildPlan(t Tier, p Panel, set *suite.EvalSet, void map[int]bool, triggers 
 	return plan, nil
 }
 
-// SessionCount is the total number of agent sessions the plan will spend.
-func (p *Plan) SessionCount() int { return len(p.Runs) + len(p.Probes) }
-
 // EvalByID returns the planned eval with the given run-key task id.
 func (p *Plan) EvalByID(taskID string) (suite.Eval, bool) {
 	for _, e := range p.Evals {

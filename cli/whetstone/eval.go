@@ -83,12 +83,6 @@ type EvalRequest struct {
 	// Resume, when non-zero, reuses that eval id rather than starting a new
 	// one — see RunEvalWith for the suite/panel mismatch guard.
 	Resume int64
-	// TaskFilter, when non-empty, restricts scoring to tasks whose ID
-	// appears in it — the repair loop's way of re-running only the affected
-	// dev tasks (or, at the end, only the holdout split) without touching
-	// the suite on disk. Filtering happens after the suite is loaded, so
-	// SuiteRef still identifies the full suite the tasks were drawn from.
-	TaskFilter []string
 }
 
 // baseEnsurer is satisfied by *docker.Driver but not by every sandbox.Driver

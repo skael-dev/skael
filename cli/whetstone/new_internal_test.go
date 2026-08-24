@@ -2,10 +2,15 @@ package whetstone
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/skael-dev/skael/internal/eval/llm"
 
 	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/store"
@@ -50,17 +55,43 @@ const evalSetDraft = `{"evals": [
    "expectations": ["out/tables.csv exists"]}
 ]}`
 
-// newScript returns every scripted gateway response a full `new` run
-// consumes, in order: two interview passes, three generation passes, and one
-// eval set draft. specDraft plans no resource files, so the generator makes
-// no resources-pass call at all — there is no fourth generation response to
-// script.
-func newScript(body string) []string {
-	return []string{
-		specDraft, specDraft,
-		outlinePass, body, descriptionPass,
-		evalSetDraft,
-	}
+// newFake answers a `new` run by role. The bundle generation and the eval set
+// draft now run beside each other, and the generator's own passes run beside
+// each other too, so there is no call order to script against.
+//
+// body is a queue: the first entry answers gen.body, each later one answers a
+// revision call. evalSet of "" makes the eval set draft fail, which is how a
+// test asserts the eval-set half of the run without scripting a success.
+func newFake(t *testing.T, body []string, evalSet string) *fake.Gateway {
+	t.Helper()
+	var mu sync.Mutex
+	return fake.NewFunc(func(r llm.Req) (string, error) {
+		switch r.Role {
+		case "interview.draft", "interview.critique":
+			return specDraft, nil
+		case "gen.outline":
+			return outlinePass, nil
+		case "gen.description", "gen.revise.description":
+			return descriptionPass, nil
+		case "gen.body", "gen.revise.body":
+			mu.Lock()
+			defer mu.Unlock()
+			if len(body) == 0 {
+				return "", fmt.Errorf("fake: no body response left for %s", r.Role)
+			}
+			next := body[0]
+			if len(body) > 1 {
+				body = body[1:]
+			}
+			return next, nil
+		case "suite.evals":
+			if evalSet == "" {
+				return "", errors.New("fake: no eval set scripted")
+			}
+			return evalSet, nil
+		}
+		return "", fmt.Errorf("fake: unscripted role %q", r.Role)
+	})
 }
 
 func newTestStore(t *testing.T) *store.Store {
@@ -79,18 +110,13 @@ func exists(t *testing.T, path string) bool {
 	return err == nil
 }
 
-// TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint is the brief's
-// load-bearing rule: an eval set drafted against a bundle that does not lint
-// measures a skill that does not exist, so it must not be written.
-func TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint(t *testing.T) {
+// TestRunNew_ALintFailureStillFailsAndStillKeepsTheEvalSet pins the shape of
+// the parallel draft: the eval set reads the approved spec, not the bundle, so
+// it is drafted beside the bundle and kept. The lint gate still fails the run,
+// and a person repairing the bundle keeps the drafted set.
+func TestRunNew_ALintFailureStillFailsAndStillKeepsTheEvalSet(t *testing.T) {
 	st := newTestStore(t)
-	// No suite draft is scripted: reaching it is itself the failure this test
-	// is looking for, and the fake reports an unscripted call by name.
-	g := fake.New(
-		specDraft, specDraft,
-		outlinePass, brokenBody, descriptionPass,
-		brokenBody, brokenBody,
-	)
+	g := newFake(t, []string{brokenBody}, evalSetDraft)
 
 	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
@@ -104,15 +130,8 @@ func TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint(t *testing.T) {
 	if perr != nil {
 		t.Fatal(perr)
 	}
-	if exists(t, suiteDir) {
-		t.Error("an eval set was written for a bundle that fails lint")
-	}
-
-	// The eval set draft must not have been requested either: it is the most
-	// expensive call left in the pipeline.
-	if n := len(g.Calls()); n != 7 {
-		t.Errorf("gateway calls = %d, want 7 (2 interview + 3 generation — specDraft plans no resources — "+
-			"+ 2 exhausted body revisions, no suite draft)", n)
+	if _, lerr := suite.LoadEvalSet(suiteDir); lerr != nil {
+		t.Errorf("the drafted eval set was not kept: %v", lerr)
 	}
 }
 
@@ -121,7 +140,7 @@ func TestRunNew_StopsBeforeTheEvalSetWhenTheBundleFailsLint(t *testing.T) {
 // eval set must appear.
 func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 	st := newTestStore(t)
-	g := fake.New(newScript(cleanBody)...)
+	g := newFake(t, []string{cleanBody}, evalSetDraft)
 
 	if err := runNew(context.Background(), st, g, "extract tables from PDFs"); err != nil {
 		t.Fatalf("runNew: %v", err)
@@ -146,9 +165,8 @@ func TestRunNew_WritesTheSidecarWhenTheBundleLintsClean(t *testing.T) {
 // operator to already know that.
 func TestRunNew_GenerationFailureSuggestsResume(t *testing.T) {
 	st := newTestStore(t)
-	// Only the interview is scripted, so the outline call — the first
-	// generation pass — fails with no response left to serve it.
-	g := fake.New(specDraft, specDraft)
+	// No body response is scripted, so the body pass fails.
+	g := newFake(t, nil, evalSetDraft)
 
 	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
@@ -165,7 +183,7 @@ func TestRunNew_GenerationFailureSuggestsResume(t *testing.T) {
 func TestRunNew_SuiteFailureSuggestsResume(t *testing.T) {
 	st := newTestStore(t)
 	// The bundle passes are all scripted; the suite draft is not.
-	g := fake.New(specDraft, specDraft, outlinePass, cleanBody, descriptionPass)
+	g := newFake(t, []string{cleanBody}, "")
 
 	err := runNew(context.Background(), st, g, "extract tables from PDFs")
 	if err == nil {
@@ -188,7 +206,7 @@ func TestRunNew_WritesAllThreeArtifactsWithNoPrompt(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 
-	g := fake.New(newScript(cleanBody)...)
+	g := newFake(t, []string{cleanBody}, evalSetDraft)
 
 	if err := runNew(context.Background(), st, g, "extract tables from pdfs"); err != nil {
 		t.Fatalf("runNew: %v", err)
@@ -229,7 +247,7 @@ func TestRunNew_ApprovesTheSpecItDrafts(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := runNew(context.Background(), st, fake.New(newScript(cleanBody)...), "extract tables from pdfs"); err != nil {
+	if err := runNew(context.Background(), st, newFake(t, []string{cleanBody}, evalSetDraft), "extract tables from pdfs"); err != nil {
 		t.Fatalf("runNew: %v", err)
 	}
 

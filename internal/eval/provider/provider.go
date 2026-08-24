@@ -315,8 +315,8 @@ func (c Config) Gateway(o Options) (llm.Gateway, error) {
 }
 
 // first and last map one ordered list onto the api gateway's two model slots.
-// Only the strong slot is ever requested in production — llm.ClassFast has no
-// caller — so a single-entry list serving both is exactly today's behaviour.
+// gen.outline is the only production caller of llm.ClassFast, so a
+// single-entry list serving both slots resolves to one model.
 func first(ss []string) string {
 	if len(ss) == 0 {
 		return ""

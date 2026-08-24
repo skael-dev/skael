@@ -8,7 +8,6 @@ import (
 
 	"github.com/skael-dev/skael/cli/whetstone/gen"
 	"github.com/skael-dev/skael/internal/eval/lint"
-	"github.com/skael-dev/skael/internal/eval/llm/fake"
 )
 
 // TestGenerate_DescriptionPromptBudgetComesFromLint pins the fix for the
@@ -18,13 +17,12 @@ import (
 // budget line must now be derived from lint.MaxMetadataApproxTokens (and
 // name length), and 1024 must be gone.
 func TestGenerate_DescriptionPromptBudgetComesFromLint(t *testing.T) {
-	g := fake.New(scripted()...)
+	g := genFake(t, genRoles{})
 	if _, err := gen.Generate(context.Background(), g, genSpec(), t.TempDir()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	calls := g.Calls()
-	descPrompt := calls[len(calls)-1].Prompt
+	descPrompt := callsByRole(g)["gen.description"].Prompt
 
 	if strings.Contains(descPrompt, "1024") {
 		t.Errorf("description prompt still states the old fixed 1024-byte budget:\n%s", descPrompt)

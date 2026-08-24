@@ -210,6 +210,3 @@ func missingFile(dir, rel string) string {
 	}
 	return ""
 }
-
-// FilesDir is where an eval's input files live, relative to the skill root.
-func FilesDir() string { return filepath.Join(EvalsDir, filesDir) }

@@ -70,9 +70,19 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, intent string) 
 		return err
 	}
 
-	bundle, err := generateBundle(ctx, st, g, sp)
-	if err != nil {
-		return wrapGenerationError(err, "whetstone gen "+sp.Name)
+	// The eval set is drafted beside the bundle: suite.Generate reads the
+	// approved spec and writes to the suite directory, so it depends on
+	// nothing the bundle's lint gate protects.
+	suiteErrCh := make(chan error, 1)
+	go func() { suiteErrCh <- generateSuite(ctx, st, g, sp) }()
+
+	bundle, bundleErr := generateBundle(ctx, st, g, sp)
+	suiteErr := <-suiteErrCh
+	if bundleErr != nil {
+		if suiteErr != nil {
+			ui.Warn("the eval set also failed: %v", suiteErr)
+		}
+		return wrapGenerationError(bundleErr, "whetstone gen "+sp.Name)
 	}
 
 	res, code, err := lintBundle(bundle.Dir, false)
@@ -81,14 +91,18 @@ func runNew(ctx context.Context, st *store.Store, g llm.Gateway, intent string) 
 	}
 	renderFindings(res)
 	if code != 0 {
-		// Stopping here is deliberate. An eval set drafted against a bundle
-		// that does not lint measures a skill that does not exist.
+		// The lint gate still fails the run. The drafted eval set is kept,
+		// because it is written before the gate reads the bundle, and a
+		// person fixing the bundle needs it.
+		if suiteErr != nil {
+			ui.Warn("the eval set also failed: %v", suiteErr)
+		}
 		return fmt.Errorf("the generated bundle at %s does not lint clean (%s); fix it and re-run `whetstone gen %s`",
 			bundle.Dir, plural(res.Errors(), "error"), sp.Name)
 	}
 
-	if err := generateSuite(ctx, st, g, sp); err != nil {
-		return wrapGenerationError(err, "whetstone suite gen "+sp.Name)
+	if suiteErr != nil {
+		return wrapGenerationError(suiteErr, "whetstone suite gen "+sp.Name)
 	}
 
 	ui.Info("edit the skill with %s then %s", ui.Code("whetstone spec edit "+sp.Name), ui.Code("whetstone gen "+sp.Name))

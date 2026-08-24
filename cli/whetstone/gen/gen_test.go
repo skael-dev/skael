@@ -28,22 +28,9 @@ func genSpec() *spec.SkillSpec {
 	}
 }
 
-// scripted returns the four gateway responses a full generation needs against
-// genSpec(), which plans exactly one resource file: outline, body, one
-// resources-pass call (content only — the path comes from the spec, not this
-// response), description.
-func scripted() []string {
-	return []string{
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n2. Run ` + "`scripts/validate.py out/tables.csv`" + `. Postcondition: exits 0.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
-		`{"content":"#!/usr/bin/env python3\n\"\"\"Extract tables.\"\"\"\nimport sys\nif \"--help\" in sys.argv:\n    print(__doc__); sys.exit(0)\n"}`,
-		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF, a report, or table extraction."}`,
-	}
-}
-
 func TestGenerate_WritesABundle(t *testing.T) {
 	out := t.TempDir()
-	g := fake.New(scripted()...)
+	g := genFake(t, genRoles{})
 
 	b, err := gen.Generate(context.Background(), g, genSpec(), out)
 	if err != nil {
@@ -68,7 +55,7 @@ func TestGenerate_WritesABundle(t *testing.T) {
 
 func TestGenerate_UsesTheDescriptionPassNotTheSpecDescription(t *testing.T) {
 	out := t.TempDir()
-	b, err := gen.Generate(context.Background(), fake.New(scripted()...), genSpec(), out)
+	b, err := gen.Generate(context.Background(), genFake(t, genRoles{}), genSpec(), out)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -96,7 +83,7 @@ func TestGenerate_OutputPassesItsOwnLint(t *testing.T) {
 	// warn-tier finding, tighten this to assert the exact expected finding set
 	// (by rule name) rather than loosening it back to HasErrors().
 	out := t.TempDir()
-	b, err := gen.Generate(context.Background(), fake.New(scripted()...), genSpec(), out)
+	b, err := gen.Generate(context.Background(), genFake(t, genRoles{}), genSpec(), out)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -111,18 +98,17 @@ func TestGenerate_OutputPassesItsOwnLint(t *testing.T) {
 }
 
 func TestGenerate_BodyPassCarriesTheRobustnessRules(t *testing.T) {
-	g := fake.New(scripted()...)
+	g := genFake(t, genRoles{})
 	if _, err := gen.Generate(context.Background(), g, genSpec(), t.TempDir()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	calls := g.Calls()
 	// genSpec() plans exactly one resource file, so the resources segment is
 	// one call: outline, body, 1 resources call, description.
-	if len(calls) != 4 {
+	if calls := g.Calls(); len(calls) != 4 {
 		t.Fatalf("made %d gateway calls, want 4 (outline, body, resources, description)", len(calls))
 	}
-	body := calls[1].Prompt
+	body := callsByRole(g)["gen.body"].Prompt
 	for _, want := range []string{"postcondition", "hedge", "500 lines"} {
 		if !strings.Contains(strings.ToLower(body), strings.ToLower(want)) {
 			t.Errorf("body prompt does not carry the robustness rule about %q", want)
@@ -137,7 +123,7 @@ func TestGenerate_RefusesPathsOutsideTheBundle(t *testing.T) {
 	s.Resources.Scripts[0].Path = "../../escape.sh"
 
 	out := t.TempDir()
-	if _, err := gen.Generate(context.Background(), fake.New(scripted()...), s, out); err == nil {
+	if _, err := gen.Generate(context.Background(), genFake(t, genRoles{}), s, out); err == nil {
 		t.Fatal("Generate accepted a path traversal in a resource path")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(out), "escape.sh")); err == nil {
@@ -149,7 +135,7 @@ func TestGenerate_RefusesAbsolutePaths(t *testing.T) {
 	s := genSpec()
 	s.Resources.Scripts[0].Path = "/tmp/escape.sh"
 
-	if _, err := gen.Generate(context.Background(), fake.New(scripted()...), s, t.TempDir()); err == nil {
+	if _, err := gen.Generate(context.Background(), genFake(t, genRoles{}), s, t.TempDir()); err == nil {
 		t.Fatal("Generate accepted an absolute resource path")
 	}
 }
@@ -171,33 +157,32 @@ func TestGenerate_OneCallPerPlannedResourceFile(t *testing.T) {
 		},
 	}
 
-	responses := []string{
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
-		`{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
-		`{"content":"#!/usr/bin/env python3\nprint(\"validate\")\n"}`,
-		`{"content":"# Format notes\n"}`,
-		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF."}`,
+	// Each planned path answers with its own content, so a mis-mapped file
+	// shows up as content landing at the wrong path.
+	content := map[string]string{
+		"scripts/extract.py":   `{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
+		"scripts/validate.py":  `{"content":"#!/usr/bin/env python3\nprint(\"validate\")\n"}`,
+		"references/format.md": `{"content":"# Format notes\n"}`,
 	}
-	g := fake.New(responses...)
+	g := genFake(t, genRoles{Resource: func(path string) string { return content[path] }})
 
 	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	calls := g.Calls()
+	byRole := callsByRole(g)
 	wantRoles := []string{
 		"gen.outline", "gen.body",
 		"gen.resources:scripts/extract.py", "gen.resources:scripts/validate.py",
 		"gen.resources:references/format.md", "gen.description",
 	}
-	if len(calls) != len(wantRoles) {
-		t.Fatalf("made %d gateway calls, want %d", len(calls), len(wantRoles))
+	if len(g.Calls()) != len(wantRoles) {
+		t.Fatalf("made %d gateway calls, want %d", len(g.Calls()), len(wantRoles))
 	}
-	for i, want := range wantRoles {
-		if calls[i].Role != want {
-			t.Errorf("call %d has role %q, want %q", i, calls[i].Role, want)
+	for _, want := range wantRoles {
+		if _, ok := byRole[want]; !ok {
+			t.Errorf("no gateway call with role %q", want)
 		}
 	}
 
@@ -224,25 +209,19 @@ func TestGenerate_NoPlannedResourcesMakesNoResourcesCall(t *testing.T) {
 	s := genSpec()
 	s.Resources = spec.ResourcePlan{}
 
-	responses := []string{
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		`{"body":"# PDF Extract\n\n1. Run ` + "`scripts/extract.py <input.pdf>`" + `. Postcondition: out/tables.csv exists.\n\nIf a checkpoint cannot be satisfied after one retry, stop and report state.\n"}`,
-		`{"description":"Extracts tables from PDF files into CSV. Use when the user mentions a PDF."}`,
-	}
-	g := fake.New(responses...)
+	g := genFake(t, genRoles{})
 
 	if _, err := gen.Generate(context.Background(), g, s, t.TempDir()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	calls := g.Calls()
-	if len(calls) != 3 {
-		t.Fatalf("made %d gateway calls, want 3 (outline, body, description; no resources call)", len(calls))
+	byRole := callsByRole(g)
+	if len(g.Calls()) != 3 {
+		t.Fatalf("made %d gateway calls, want 3 (outline, body, description; no resources call)", len(g.Calls()))
 	}
-	wantRoles := []string{"gen.outline", "gen.body", "gen.description"}
-	for i, want := range wantRoles {
-		if calls[i].Role != want {
-			t.Errorf("call %d has role %q, want %q", i, calls[i].Role, want)
+	for _, want := range []string{"gen.outline", "gen.body", "gen.description"} {
+		if _, ok := byRole[want]; !ok {
+			t.Errorf("no gateway call with role %q", want)
 		}
 	}
 }

@@ -8,11 +8,10 @@ import (
 
 	"github.com/skael-dev/skael/cli/whetstone/gen"
 	"github.com/skael-dev/skael/internal/eval/lint"
-	"github.com/skael-dev/skael/internal/eval/llm/fake"
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// goodBody and goodDescription are the same content scripted()'s body and
+// goodBody and goodDescription are the same content the default scripted body and
 // description entries use — already proven clean by
 // TestGenerate_OutputPassesItsOwnLint — reused here as the "revision that
 // fixes it" response.
@@ -56,13 +55,10 @@ func descJSON(t *testing.T, desc string) string {
 // clean.
 func TestGenerate_RevisesAnOverBudgetBodyUntilItLints(t *testing.T) {
 	s := genSpec()
-	g := fake.New(
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		bodyJSON(t, oversizedBody),
-		`{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
-		descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF."),
-		bodyJSON(t, goodBody),
-	)
+	g := genFake(t, genRoles{
+		Body:        []string{bodyJSON(t, oversizedBody), bodyJSON(t, goodBody)},
+		Description: []string{descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF.")},
+	})
 
 	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
 	if err != nil {
@@ -105,12 +101,10 @@ var oversizedBodyWithDeclarativeSection = "# PDF Extract\n\n" +
 // sufficient on its own.
 func TestGenerate_OffloadsADeclarativeSectionBeforeCallingTheModel(t *testing.T) {
 	s := genSpec()
-	g := fake.New(
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		bodyJSON(t, oversizedBodyWithDeclarativeSection),
-		`{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
-		descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF."),
-	)
+	g := genFake(t, genRoles{
+		Body:        []string{bodyJSON(t, oversizedBodyWithDeclarativeSection)},
+		Description: []string{descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF.")},
+	})
 
 	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
 	if err != nil {
@@ -148,14 +142,12 @@ func TestGenerate_OffloadsADeclarativeSectionBeforeCallingTheModel(t *testing.T)
 // error — the CLI's own lint gate is what decides failure, not this loop.
 func TestGenerate_RevisionCapsAtTwoAttempts(t *testing.T) {
 	s := genSpec()
-	g := fake.New(
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		bodyJSON(t, oversizedBody),
-		`{"content":"#!/usr/bin/env python3\nprint(\"extract\")\n"}`,
-		descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF."),
-		bodyJSON(t, oversizedBody),
-		bodyJSON(t, oversizedBody),
-	)
+	g := genFake(t, genRoles{
+		Body: []string{
+			bodyJSON(t, oversizedBody), bodyJSON(t, oversizedBody), bodyJSON(t, oversizedBody),
+		},
+		Description: []string{descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF.")},
+	})
 
 	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
 	if err != nil {
@@ -191,15 +183,11 @@ func TestGenerate_UnfixableFindingMakesNoRevisionCall(t *testing.T) {
 		},
 	}
 
-	g := fake.New(
-		`{"sections":["Overview","Steps","Failure handling"]}`,
-		bodyJSON(t, goodBody),
-		`{"content":"print(1)"}`,
-		`{"content":"print(2)"}`,
-		`{"content":"format notes"}`,
-		`{"content":"{}"}`,
-		descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF."),
-	)
+	g := genFake(t, genRoles{
+		Body:        []string{bodyJSON(t, goodBody)},
+		Description: []string{descJSON(t, "Extracts tables from PDF files into CSV. Use when the user mentions a PDF.")},
+		Resource:    func(string) string { return `{"content":"print(1)"}` },
+	})
 
 	b, err := gen.Generate(context.Background(), g, s, t.TempDir())
 	if err != nil {
