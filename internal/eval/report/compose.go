@@ -72,6 +72,9 @@ type ComposeInput struct {
 
 	GraderModel string
 
+	// Dropped lists sessions the judge could not grade.
+	Dropped []DroppedGrade
+
 	StartedAt  time.Time
 	FinishedAt time.Time
 }
@@ -145,6 +148,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		Members:              members,
 		Tasks:                tasks,
 		VoidTasks:            in.Void,
+		DroppedGrades:        in.Dropped,
 		TriggerInferred:      in.TriggerInferred,
 		TriggerSource:        in.TriggerSource,
 		TriggerUnknown:       in.TriggerUnknown,

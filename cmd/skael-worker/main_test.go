@@ -195,3 +195,15 @@ func TestEvalDepsFrom_CarriesThePanelSplit(t *testing.T) {
 		t.Fatalf("WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, r.runRoot)
 	}
 }
+
+// TestJudgeGatewayOptions_RetriesAreSet guards the defect where the worker's
+// judge made exactly one attempt, so one 429 threw away a whole panel run.
+func TestJudgeGatewayOptions_RetriesAreSet(t *testing.T) {
+	o := judgeGatewayOptions()
+	if o.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", o.MaxRetries)
+	}
+	if o.Timeout != judgeTimeout {
+		t.Errorf("Timeout = %s, want %s", o.Timeout, judgeTimeout)
+	}
+}

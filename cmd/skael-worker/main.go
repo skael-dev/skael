@@ -42,6 +42,16 @@ var (
 // waiting ten minutes for.
 const judgeTimeout = 3 * time.Minute
 
+// judgeRetries matches whetstone's. Leaving it at zero made the judge try once,
+// so a single 429 on any of ~30 grade calls threw away the whole panel run.
+const judgeRetries = 3
+
+// judgeGatewayOptions is the worker's gateway configuration, named so a test
+// can assert it without building a gateway.
+func judgeGatewayOptions() provider.Options {
+	return provider.Options{Timeout: judgeTimeout, MaxRetries: judgeRetries}
+}
+
 // workerConfig is the resolved, validated configuration for one run of
 // skael-worker.
 type workerConfig struct {
@@ -246,7 +256,7 @@ func run(cfg workerConfig) error {
 		return fmt.Errorf("skael-worker: docker driver: %w; is Docker installed and running?", err)
 	}
 
-	gw, err := cfg.Provider.Gateway(provider.Options{Timeout: judgeTimeout})
+	gw, err := cfg.Provider.Gateway(judgeGatewayOptions())
 	if err != nil {
 		return fmt.Errorf("skael-worker: LLM gateway: %w", err)
 	}

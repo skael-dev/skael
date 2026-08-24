@@ -308,9 +308,13 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err != nil {
 		return nil, err
 	}
-	graded, err := gradeOutcomes(ctx, grader, plan, execRes.Outcomes, req.Concurrency)
+	graded, dropped, err := gradeOutcomes(ctx, grader, plan, execRes.Outcomes, req.Concurrency)
 	if err != nil {
 		return nil, err
+	}
+	for _, d := range dropped {
+		ui.Warn("whetstone eval: %s (%s attempt %d) was dropped from the score: %s",
+			d.Key.TaskID, d.Key.Condition, d.Key.Attempt, d.Reason)
 	}
 	for key, g := range graded {
 		doc, merr := json.Marshal(g.Expectations)
@@ -396,8 +400,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		TokensMedian: tokensSkill, TokensMedianBaseline: tokensBaseline,
 		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
 		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
-		GraderModel: graderModel(d.Gateway, graded),
-		StartedAt:   startedAt, FinishedAt: now(),
+		GraderModel: graderModel(d.Gateway, graded), Dropped: droppedReport(dropped),
+		StartedAt: startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
@@ -465,17 +469,36 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 // Grading is one gateway call per session and the calls are independent, so
 // they run concurrently: done in series, grading would cost more wall clock
 // than the sessions it grades.
-func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs []runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, error) {
+// droppedReport maps dropped runs onto their report form.
+func droppedReport(ds []droppedGrade) []report.DroppedGrade {
+	out := make([]report.DroppedGrade, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, report.DroppedGrade{
+			TaskID: d.Key.TaskID, Condition: string(d.Key.Condition),
+			Attempt: d.Key.Attempt, Reason: d.Reason,
+		})
+	}
+	return out
+}
+
+// droppedGrade names a run whose grade call failed after every retry.
+type droppedGrade struct {
+	Key    store.RunKey
+	Reason string
+}
+
+func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs []runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, []droppedGrade, error) {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
 	var (
-		mu     sync.Mutex
-		wg     sync.WaitGroup
-		sem    = make(chan struct{}, concurrency)
-		out    = map[store.RunKey]score.Grade{}
-		errs   []error
-		gradeF = func(o runner.Outcome) {
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, concurrency)
+		out     = map[store.RunKey]score.Grade{}
+		dropped []droppedGrade
+		errs    []error
+		gradeF  = func(o runner.Outcome) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -493,8 +516,8 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Errorf("grading eval %s (%s attempt %d): %w",
-					o.Key.TaskID, o.Key.Condition, o.Key.Attempt, err))
+				errs = append(errs, err)
+				dropped = append(dropped, droppedGrade{Key: o.Key, Reason: err.Error()})
 				return
 			}
 			out[o.Key] = grade
@@ -513,10 +536,15 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 	}
 	wg.Wait()
 
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+	// A grade that still fails after the gateway's own retries is treated the
+	// way a failed session is: dropped from the denominator, named in the
+	// report, and the rest of the run kept. score.MemberScore refuses a member
+	// with no scored evals, so a total judge outage still fails loudly — but
+	// only when nothing at all was graded.
+	if len(out) == 0 && len(errs) > 0 {
+		return nil, dropped, fmt.Errorf("whetstone eval: the judge graded no run: %w", errors.Join(errs...))
 	}
-	return out, nil
+	return out, dropped, nil
 }
 
 // graderModel names the judge for a report.
@@ -727,6 +755,20 @@ func agentCLIVersion() string {
 	return probeVersion(bin)
 }
 
+// Caps on what reaches the judge. transcript.raw is the agent's native stream
+// with every tool result inside it, and nothing bounded its size: grade cost
+// and latency scaled with it, and a long session overflowed the context for a
+// 400, which is not retryable. The tail is kept as well as the head because
+// the result line sits at the end.
+const (
+	maxTranscriptBytes  = 256 << 10
+	transcriptHeadBytes = 192 << 10
+	transcriptTailBytes = maxTranscriptBytes - transcriptHeadBytes
+	maxOutputsBytes     = 128 << 10
+)
+
+const transcriptElisionMarker = "\n… transcript truncated in the middle; %d bytes elided …\n"
+
 // loadTranscript reads a run's recorded transcript, or "" if it cannot be
 // read. The grader is told to fail an expectation it cannot verify, so a
 // missing transcript grades hard rather than aborting the eval.
@@ -738,7 +780,18 @@ func loadTranscript(artifactDir string) string {
 	if err != nil {
 		return ""
 	}
-	return string(b)
+	return truncateTranscript(string(b))
+}
+
+// truncateTranscript keeps a head and a tail with a marker between them.
+func truncateTranscript(s string) string {
+	if len(s) <= maxTranscriptBytes {
+		return s
+	}
+	elided := len(s) - maxTranscriptBytes
+	return s[:transcriptHeadBytes] +
+		fmt.Sprintf(transcriptElisionMarker, elided) +
+		s[len(s)-transcriptTailBytes:]
 }
 
 // maxOutputBytes bounds how much of one output file reaches the grader. A
@@ -755,9 +808,16 @@ func renderOutputs(artifactDir string) string {
 	}
 	root := filepath.Join(artifactDir, "outputs")
 	var b strings.Builder
+	capped := false
 	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
 		if err != nil || e.IsDir() {
 			return nil
+		}
+		// The per-file cap bounds one file; the file count is unbounded, so
+		// the block needs its own ceiling.
+		if b.Len() >= maxOutputsBytes {
+			capped = true
+			return fs.SkipAll
 		}
 		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {
@@ -783,6 +843,9 @@ func renderOutputs(artifactDir string) string {
 	})
 	if err != nil {
 		return ""
+	}
+	if capped {
+		fmt.Fprintf(&b, "… further output files omitted at the %d byte total cap\n", maxOutputsBytes)
 	}
 	return b.String()
 }

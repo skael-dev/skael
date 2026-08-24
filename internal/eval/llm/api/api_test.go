@@ -647,3 +647,58 @@ func TestModelFor_ReturnsTheConfiguredModelPerClass(t *testing.T) {
 		t.Errorf("ModelFor(unknown) = %q, want the strong-model fallback %q", got, "claude-opus-5")
 	}
 }
+
+// TestComplete_RetryAfterHeaderDrivesTheSleep asserts a stated wait reaches the
+// injected sleep, jittered but recognisably that value.
+func TestComplete_RetryAfterHeaderDrivesTheSleep(t *testing.T) {
+	var calls int32
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("retry-after", "9")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"model":"m"}`)
+	})
+
+	var slept []time.Duration
+	g := gateway(t, s.URL, func(o *api.Options) {
+		o.MaxRetries = 3
+		o.Sleep = func(d time.Duration) { slept = append(slept, d) }
+	})
+	res, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if res.Text != "ok" {
+		t.Errorf("Text = %q, want ok", res.Text)
+	}
+	if len(slept) != 1 {
+		t.Fatalf("slept %d times, want 1", len(slept))
+	}
+	if slept[0] < 7200*time.Millisecond || slept[0] > 10800*time.Millisecond {
+		t.Errorf("slept %s, want about 9s plus or minus 20%%", slept[0])
+	}
+}
+
+// TestComplete_CancelledContextEndsTheLoopWithoutSleeping pins that a
+// cancellation between attempts returns at once.
+func TestComplete_CancelledContextEndsTheLoopWithoutSleeping(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		cancel()
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+
+	var sleeps int
+	g := gateway(t, s.URL, func(o *api.Options) {
+		o.MaxRetries = 3
+		o.Sleep = func(time.Duration) { sleeps++ }
+	})
+	if _, err := g.Complete(ctx, llm.Req{Role: "x", Prompt: "y"}); err == nil {
+		t.Fatal("Complete succeeded after the context was cancelled")
+	}
+	if sleeps != 0 {
+		t.Errorf("slept %d times after a cancellation, want 0", sleeps)
+	}
+}

@@ -70,6 +70,16 @@ type VoidTask struct {
 	Reason string `json:"reason"`
 }
 
+// DroppedGrade is a session that ran but whose grade call failed after every
+// retry. It is dropped from the denominator rather than scored as a failure,
+// and listed here so the reader can see what the score did not include.
+type DroppedGrade struct {
+	TaskID    string `json:"task_id"`
+	Condition string `json:"condition"`
+	Attempt   int    `json:"attempt"`
+	Reason    string `json:"reason"`
+}
+
 // Report is the machine-readable result of one eval run against one skill.
 type Report struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -105,6 +115,8 @@ type Report struct {
 
 	Tasks     []TaskReport `json:"tasks"`
 	VoidTasks []VoidTask   `json:"void_tasks,omitempty"`
+
+	DroppedGrades []DroppedGrade `json:"dropped_grades,omitempty"`
 
 	TriggerInferred bool `json:"trigger_inferred"`
 	// TriggerSource is the panel member the trigger probes ran on.

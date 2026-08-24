@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,9 @@ const (
 	apiVersion     = "2023-06-01"
 	defaultMaxTok  = 32768
 	defaultTimeout = 3 * time.Minute
+	// maxRetryAfter clamps a server-stated wait. A gateway under load can name
+	// a wait longer than the run is worth.
+	maxRetryAfter = 120 * time.Second
 )
 
 // AuthStyle selects how the API key is presented.
@@ -109,12 +114,16 @@ func (g *Gateway) Complete(ctx context.Context, r llm.Req) (llm.Res, error) {
 	}
 
 	var lastErr error
+	var wait time.Duration
 	for attempt := 0; attempt <= g.opts.MaxRetries; attempt++ {
 		if attempt > 0 {
-			g.opts.Sleep(time.Duration(1<<(attempt-1)) * time.Second)
+			if ctx.Err() != nil {
+				return llm.Res{}, lastErr
+			}
+			g.opts.Sleep(jitter(wait))
 		}
 
-		res, retryable, err := g.post(ctx, r)
+		res, retryable, retryAfter, err := g.post(ctx, r)
 		if err == nil {
 			if g.opts.Cache != nil {
 				_ = g.opts.Cache.Put(key, res.Text)
@@ -125,11 +134,44 @@ func (g *Gateway) Complete(ctx context.Context, r llm.Req) (llm.Res, error) {
 		if !retryable || ctx.Err() != nil {
 			return llm.Res{}, err
 		}
+		wait = backoff(attempt, retryAfter)
 	}
 	return llm.Res{}, fmt.Errorf("api: giving up after %d retries: %w", g.opts.MaxRetries, lastErr)
 }
 
-func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
+// backoff picks the wait before the next attempt. A server-stated retry-after
+// wins over the doubled ladder, clamped to maxRetryAfter. attempt is 0-based.
+func backoff(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > maxRetryAfter {
+			return maxRetryAfter
+		}
+		return retryAfter
+	}
+	return time.Duration(1<<attempt) * time.Second
+}
+
+// jitter spreads concurrent callers by plus or minus 20%, so a shared rate
+// limit does not wake every judge call at the same instant.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	span := float64(d) * 0.4
+	return time.Duration(float64(d)*0.8 + rand.Float64()*span)
+}
+
+// parseRetryAfter reads the header as whole seconds. Anthropic states it that
+// way; an HTTP-date form is ignored rather than guessed at.
+func parseRetryAfter(h string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || secs < 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, time.Duration, error) {
 	prompt := r.Prompt
 	if len(r.Schema) > 0 {
 		prompt += "\n\nReply with JSON only, validating against this schema:\n" + string(r.Schema)
@@ -141,13 +183,13 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		Messages:  []message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return llm.Res{}, false, fmt.Errorf("api: marshal: %w", err)
+		return llm.Res{}, false, 0, fmt.Errorf("api: marshal: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(g.opts.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return llm.Res{}, false, fmt.Errorf("api: request: %w", err)
+		return llm.Res{}, false, 0, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
 	// anthropic-version is sent regardless of auth style: compatible gateways
@@ -163,15 +205,15 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 	resp, err := g.opts.HTTPClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.Res{}, false, fmt.Errorf("api: timeout: no response within %s: %w", g.opts.HTTPClient.Timeout, llm.ErrTimeout)
+			return llm.Res{}, false, 0, fmt.Errorf("api: timeout: no response within %s: %w", g.opts.HTTPClient.Timeout, llm.ErrTimeout)
 		}
-		return llm.Res{}, true, fmt.Errorf("api: post: %w", err)
+		return llm.Res{}, true, 0, fmt.Errorf("api: post: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return llm.Res{}, true, fmt.Errorf("api: read body: %w", err)
+		return llm.Res{}, true, 0, fmt.Errorf("api: read body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -182,12 +224,13 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 			msg = parsed.Error.Message
 		}
 		retryable := resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests
-		return llm.Res{}, retryable, fmt.Errorf("api: %d: %s", resp.StatusCode, msg)
+		return llm.Res{}, retryable, parseRetryAfter(resp.Header.Get("retry-after")),
+			fmt.Errorf("api: %d: %s", resp.StatusCode, msg)
 	}
 
 	var parsed response
 	if uerr := json.Unmarshal(raw, &parsed); uerr != nil {
-		return llm.Res{}, true, fmt.Errorf("api: malformed response body: %w (body: %.200s)", uerr, raw)
+		return llm.Res{}, true, 0, fmt.Errorf("api: malformed response body: %w (body: %.200s)", uerr, raw)
 	}
 
 	var sb strings.Builder
@@ -197,12 +240,12 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, error) {
 		}
 	}
 	if parsed.StopReason == "max_tokens" {
-		return llm.Res{}, false, fmt.Errorf("api: response truncated at max_tokens (%d); raise the cap or shorten the request", defaultMaxTok)
+		return llm.Res{}, false, 0, fmt.Errorf("api: response truncated at max_tokens (%d); raise the cap or shorten the request", defaultMaxTok)
 	}
 	if sb.Len() == 0 {
-		return llm.Res{}, false, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
+		return llm.Res{}, false, 0, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
 	}
-	return llm.Res{Text: sb.String(), Model: parsed.Model}, false, nil
+	return llm.Res{Text: sb.String(), Model: parsed.Model}, false, 0, nil
 }
 
 func (g *Gateway) modelFor(c llm.ModelClass) string {
