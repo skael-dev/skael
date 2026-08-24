@@ -29,14 +29,17 @@ func gradePlan(n int) *runner.Plan {
 	return p
 }
 
-func gradeOuts(n int) []runner.Outcome {
-	var outs []runner.Outcome
+// gradeOuts feeds n finished sessions to gradeOutcomes, the way Execute's
+// OnComplete callback does during a run.
+func gradeOuts(n int) <-chan runner.Outcome {
+	outs := make(chan runner.Outcome, n)
 	for i := 1; i <= n; i++ {
-		outs = append(outs, runner.Outcome{
+		outs <- runner.Outcome{
 			Key:    store.RunKey{TaskID: runner.EvalID(i), Condition: runner.CondSkill, Attempt: 1},
 			Status: store.StatusOK,
-		})
+		}
 	}
+	close(outs)
 	return outs
 }
 
@@ -57,7 +60,7 @@ func TestGradeOutcomes_OneFailedGradeDoesNotDiscardTheRun(t *testing.T) {
 		t.Fatalf("NewGrader: %v", err)
 	}
 
-	graded, dropped, err := gradeOutcomes(context.Background(), g, gradePlan(3), finishedOutcomes(gradeOuts(3)), 1)
+	graded, dropped, err := gradeOutcomes(context.Background(), g, gradePlan(3), gradeOuts(3), 1)
 	if err != nil {
 		t.Fatalf("gradeOutcomes: %v", err)
 	}
@@ -83,7 +86,7 @@ func TestGradeOutcomes_ATotalJudgeOutageStillFails(t *testing.T) {
 		t.Fatalf("NewGrader: %v", err)
 	}
 
-	_, _, err = gradeOutcomes(context.Background(), g, gradePlan(2), finishedOutcomes(gradeOuts(2)), 1)
+	_, _, err = gradeOutcomes(context.Background(), g, gradePlan(2), gradeOuts(2), 1)
 	if err == nil {
 		t.Fatal("gradeOutcomes succeeded with every grade call failing")
 	}

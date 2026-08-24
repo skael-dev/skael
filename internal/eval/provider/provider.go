@@ -10,18 +10,10 @@
 //  3. Subscription CLI       nothing set, and an agent CLI on PATH
 //  4. Split                  mode 2, plus CLAUDE_CODE_OAUTH_TOKEN
 //
-// The judge and the eval panel share ANTHROPIC_BASE_URL. They did not always:
-// the judge had LLM_BASE_URL of its own, which meant one gateway could be
-// configured while the other silently kept dialling Anthropic. Two names for
-// one endpoint bought nothing that two values of one name does not.
-//
-// Mode 4 is the one case where they separate, and it is selected by a
-// combination of names that already existed rather than by a new one. Setting
-// CLAUDE_CODE_OAUTH_TOKEN alongside a gateway states a subscription for the
-// panel; the judge keeps the gateway, because a published score must come
-// from a metered, reproducible backend. The mode is not free: the panel is
-// recorded in model_panel, so turning it on splits a skill's score trend at
-// the changeover. See PanelModels and PanelExcludeEnv.
+// The judge and the eval panel share ANTHROPIC_BASE_URL. Mode 4 is the one
+// case where they separate: the panel bills to a subscription, the judge keeps
+// the gateway. Turning it on changes model_panel, which splits a skill's score
+// trend at the changeover. See Resolve, PanelModels and PanelExcludeEnv.
 package provider
 
 import (

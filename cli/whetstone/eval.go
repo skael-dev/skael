@@ -37,14 +37,13 @@ import (
 // EvalDeps is everything RunEvalWith needs, injected so a test can supply a
 // fake driver, adapter registry, and gateway with no Docker, no network, and
 // no LLM subscription. RunEval (below) resolves these from the environment
-// the same way `whetstone doctor` and `whetstone suite check` do.
+// the same way `whetstone doctor` does.
 type EvalDeps struct {
 	Store  *store.Store
 	Driver sandbox.Driver
-	// Gateway is nil when no LLM backend is available. A nil Gateway degrades
-	// Uplift to the pass-rate fallback; it does not fail the eval — the
-	// deterministic pillars (Reliability, TriggerF1, Efficiency) are still a
-	// usable measurement without a judge.
+	// Gateway grades every expectation. RunEvalWith refuses a nil one: the
+	// score is an expectation pass rate, so there is no measurement without a
+	// judge.
 	Gateway  llm.Gateway
 	Adapters func(name string) (agent.Adapter, bool)
 	// Now defaults to time.Now.
@@ -99,8 +98,8 @@ type baseEnsurer interface {
 }
 
 // RunEvalWith runs one evaluation end to end: load the approved spec and eval
-// set, refuse an eval against unchecked or void evals, plan and execute the
-// panel, grade every session, and persist and write the report.
+// set, refuse an eval against void evals, plan and execute the panel, grade
+// every session as it finishes, and persist and write the report.
 func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Report, error) {
 	if d.Store == nil || d.Driver == nil || d.Adapters == nil {
 		return nil, errors.New("whetstone eval: needs a store, a driver, and an adapter registry")
@@ -527,17 +526,6 @@ func reuseBaselines(st *store.Store, evalID int64, suiteRef, agentVersion string
 // --concurrency: a sandbox container is bounded by CPU and memory, a judge
 // call by the account's rate limit.
 const defaultGradeConcurrency = 8
-
-// finishedOutcomes feeds a finished slice to gradeOutcomes, which is how a
-// resumed eval grades sessions that ran in an earlier process.
-func finishedOutcomes(outs []runner.Outcome) <-chan runner.Outcome {
-	ch := make(chan runner.Outcome, len(outs))
-	for _, o := range outs {
-		ch <- o
-	}
-	close(ch)
-	return ch
-}
 
 // droppedReport maps dropped runs onto their report form.
 func droppedReport(ds []droppedGrade) []report.DroppedGrade {

@@ -220,8 +220,7 @@ func newWorkspaceWithCheckedSuite(t *testing.T) *store.Store {
 }
 
 // newWorkspaceWithUncheckedSuite writes a suite for "deploy-helper" but
-// records no suite check for it — the state right after `whetstone suite
-// gen`, before `whetstone suite check` has run.
+// records nothing else — the state right after `whetstone suite gen`.
 func newWorkspaceWithUncheckedSuite(t *testing.T) *store.Store {
 	t.Helper()
 

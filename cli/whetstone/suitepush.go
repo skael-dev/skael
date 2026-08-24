@@ -72,11 +72,10 @@ const maxRequestBodyBytes = 10 << 20 // 10MB, matches the server's MaxBytesReade
 // the guard without generating a multi-megabyte fixture.
 var maxArchiveBytes = maxRequestBodyBytes * 3 / 4
 
-// RunSuitePush uploads a skill's written suite, together with the oracle-gate
-// results `whetstone suite check` last recorded for it, to a Skael server. It
-// refuses when no check has been recorded for the current suite ref — an
-// uploaded suite without check results is not something the server can
-// distinguish from a passing one, so this is caught here rather than there.
+// RunSuitePush uploads a skill's written suite to a Skael server, together
+// with its own validation result as an audit trail. The check runs here rather
+// than being read back from a stored row: suite.Validate is pure, so a push
+// cannot go out with a stale answer and every later reader repeats it.
 func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 	suiteDir, err := req.Store.SuiteDir(req.Skill)
 	if err != nil {

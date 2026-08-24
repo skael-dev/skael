@@ -251,3 +251,42 @@ func TestLatestMigration_ClearsVerifierEraRowsAndAddsRunGrades(t *testing.T) {
 		t.Errorf("Grades = %+v, want the one grade just written", gs)
 	}
 }
+
+// TestLatestMigration_DropsSuiteChecksAndKeepsTheRest builds a database at
+// the prior version with a suite_checks row in it, then reopens it and
+// asserts the table is gone and the rest of the workspace survived. Built at
+// the prior version rather than opened fully migrated: a test that opens a
+// current database and then "upgrades" it passes with the migration deleted.
+func TestLatestMigration_DropsSuiteChecksAndKeepsTheRest(t *testing.T) {
+	root := t.TempDir()
+	st := openAtVersion(t, root, len(migrations)-1)
+	if _, err := st.SaveSpec(migrationDemoSpec()); err != nil {
+		t.Fatalf("SaveSpec: %v", err)
+	}
+	if _, err := st.db.Exec(
+		`INSERT INTO suite_checks (skill_name, suite_ref, task_id, void, reason) VALUES ('demo','ref','1',0,'')`); err != nil {
+		t.Fatalf("seeding suite_checks: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	var name string
+	err = reopened.db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'suite_checks'`).Scan(&name)
+	if err == nil {
+		t.Error("suite_checks still exists after the upgrade")
+	} else if err != sql.ErrNoRows {
+		t.Fatalf("querying sqlite_master: %v", err)
+	}
+
+	if _, _, err := reopened.LoadSpec("demo"); err != nil {
+		t.Errorf("the stored spec did not survive the upgrade: %v", err)
+	}
+}

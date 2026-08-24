@@ -153,7 +153,7 @@ Agents don't all measure the same thing, so events record how they were observed
 
 ## whetstone: authoring and linting skills
 
-`whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval`, `repair`, and `suite check` need a Docker daemon and an LLM key.
+`whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval` and `repair` need a Docker daemon and an LLM key.
 
 It has its own formula — `brew install skael-dev/skael/whetstone`. The `skael` formula and the curl installer give you `skael` only. `skael-worker` is a release-archive download or `just build`.
 
@@ -167,8 +167,8 @@ whetstone spec approve my-skill   # mark the latest stored spec version approved
 whetstone gen my-skill            # regenerate a skill bundle from its approved spec
 whetstone lint my-skill           # run spec conformance, quality, and injection lint over a bundle
 whetstone suite gen my-skill      # generate and write the evaluation suite for a skill
-whetstone suite check my-skill    # gate the suite on its own oracle and verifier
-whetstone suite push my-skill     # register the checked suite with the server
+whetstone suite check my-skill    # report which evals cannot be scored, and why
+whetstone suite push my-skill     # register the suite with the server
 whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
 whetstone eval my-skill           # run the model panel, score it, write the report
 whetstone drift my-skill          # per-member adherence breakdown for one eval
