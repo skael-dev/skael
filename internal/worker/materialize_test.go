@@ -14,7 +14,6 @@ func TestMaterialize_ProducesAWorkspaceThatSatisfiesTheOracleGate(t *testing.T) 
 	dir := t.TempDir()
 	st, err := worker.Materialize(dir, worker.MaterializeInput{
 		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
-		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,24 +22,11 @@ func TestMaterialize_ProducesAWorkspaceThatSatisfiesTheOracleGate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := suite.Ref(suiteDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checks, err := st.SuiteChecks("deploy-helper", ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(checks) == 0 {
-		t.Fatal("the registry's checks were not recorded against the materialized suite ref")
-	}
 	if _, err := suite.LoadEvalSet(suiteDir); err != nil {
 		t.Fatalf("materialized suite does not load: %v", err)
 	}
 }
 
-// The ref the worker materializes must equal the ref the job asked for, or the
-// score it posts is against different tasks than the job names.
 func TestMaterialize_RefMatchesTheRequestedRef(t *testing.T) {
 	srcDir := t.TempDir()
 	writeFixtureSuite(t, srcDir)
@@ -56,7 +42,6 @@ func TestMaterialize_RefMatchesTheRequestedRef(t *testing.T) {
 	dir := t.TempDir()
 	st, err := worker.Materialize(dir, worker.MaterializeInput{
 		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: archive,
-		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +65,6 @@ func TestMaterialize_FailsFastWhenSuiteRefDoesNotMatchWantSuiteRef(t *testing.T)
 	dir := t.TempDir()
 	_, err := worker.Materialize(dir, worker.MaterializeInput{
 		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
-		Checks:       []evalsuite.Check{{TaskID: "t1", OK: true}},
 		WantSuiteRef: "sha256:not-the-real-ref",
 	})
 	if err == nil {
@@ -108,7 +92,7 @@ func TestMaterialize_UsesTheProvidedSpecInsteadOfReconstructing(t *testing.T) {
 
 	st, err := worker.Materialize(dir, worker.MaterializeInput{
 		Skill: "deploy-helper", Bundle: fixtureBundle(t), SuiteArchive: fixtureSuiteArchive(t),
-		Checks: []evalsuite.Check{{TaskID: "t1", OK: true}}, Spec: sp,
+		Spec: sp,
 	})
 	if err != nil {
 		t.Fatal(err)

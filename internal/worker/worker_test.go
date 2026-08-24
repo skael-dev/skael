@@ -121,7 +121,6 @@ type fakeAPI struct {
 	// ref it declared must register content for it.
 	suiteArchive  []byte
 	suiteArchives map[string][]byte
-	checks        []evalsuite.Check
 	// spec is nil by default: SuiteMeta returns SuiteMeta{Spec: nil}, which
 	// exercises Materialize's frontmatter-reconstruction fallback, same as
 	// before this field existed.
@@ -151,7 +150,6 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		t:            t,
 		bundle:       fixtureBundle(t),
 		suiteArchive: fixtureSuiteArchive(t),
-		checks:       []evalsuite.Check{{TaskID: "t1", OK: true}},
 	}
 }
 
@@ -212,7 +210,7 @@ func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error
 }
 
 func (f *fakeAPI) SuiteMeta(_ context.Context, _ string) (worker.SuiteMeta, error) {
-	return worker.SuiteMeta{Checks: f.checks, Spec: f.spec, Origin: f.origin, MachineGenerated: f.machineGenerated}, nil
+	return worker.SuiteMeta{Spec: f.spec, Origin: f.origin, MachineGenerated: f.machineGenerated}, nil
 }
 
 func (f *fakeAPI) PushSuite(_ context.Context, in worker.PushSuiteInput) (string, error) {
@@ -295,7 +293,7 @@ func (f *fakeDeriver) Derive(_ context.Context, _ worker.DeriveInput) (*worker.D
 	}
 	return &worker.DeriveResult{
 		Archive: []byte("fake-derived-archive"),
-		Checks:  []evalsuite.Check{{TaskID: "t1", OK: true}},
+		Tasks:   1,
 		Spec:    &spec.SkillSpec{Name: "demo"},
 	}, nil
 }
@@ -311,9 +309,6 @@ func newTestWorker(t *testing.T, api *fakeAPI, r *fakeRunner, der worker.Deriver
 	}
 	if api.suiteArchive == nil {
 		api.suiteArchive = fixtureSuiteArchive(t)
-	}
-	if api.checks == nil {
-		api.checks = []evalsuite.Check{{TaskID: "t1", OK: true}}
 	}
 	w, err := worker.New(worker.Config{Endpoint: "http://x", APIKey: "k", WorkerID: "w1", WorkRoot: t.TempDir()}, api, r, der)
 	if err != nil {

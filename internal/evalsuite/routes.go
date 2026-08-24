@@ -29,9 +29,12 @@ type suiteCheck struct {
 }
 
 type suiteBody struct {
-	Skill       string       `json:"skill" minLength:"1"`
-	SpecVersion int          `json:"spec_version"`
-	Checks      []suiteCheck `json:"checks"`
+	Skill       string `json:"skill" minLength:"1"`
+	SpecVersion int    `json:"spec_version"`
+	// Checks is the pusher's own validation result, kept as an audit trail of
+	// what it saw. It is optional: suite.Validate is pure, so every reader
+	// runs it again rather than trusting this copy.
+	Checks []suiteCheck `json:"checks,omitempty"`
 	// Spec is the pusher's spec.yaml as JSON. Optional so an older client
 	// can still push, but a worker materializing this suite later has no
 	// other way to recover it — see evalsuite.Record.Spec.
@@ -120,10 +123,6 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		}
 		if sk == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Body.Skill))
-		}
-
-		if len(input.Body.Checks) == 0 {
-			return nil, huma.Error422UnprocessableEntity("checks must not be empty")
 		}
 
 		archive, err := base64.StdEncoding.DecodeString(input.Body.ArchiveBase64)

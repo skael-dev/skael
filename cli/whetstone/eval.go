@@ -147,31 +147,22 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		return nil, err
 	}
 
-	// 2. The eval set must have been checked, and cleanly.
-	checks, err := d.Store.SuiteChecks(req.Skill, suiteRef)
-	if err != nil {
-		return nil, err
-	}
-	if len(checks) == 0 {
-		return nil, fmt.Errorf("whetstone eval: no check recorded for %s at eval set %s; run `whetstone suite check %s` first",
-			req.Skill, suite.ShortRef(suiteRef), req.Skill)
-	}
+	// 2. Every eval must be runnable and scoreable. suite.Validate is pure
+	// and takes microseconds, so it runs here rather than being read back
+	// from a stored row a separate command had to write first.
+	checks := suite.Validate(suiteDir, set)
 	voidSet := map[int]bool{}
 	var voidTasks []report.VoidTask
 	for _, c := range checks {
 		if !c.Void {
 			continue
 		}
-		id, cerr := strconv.Atoi(c.TaskID)
-		if cerr != nil {
-			return nil, fmt.Errorf("whetstone eval: recorded check names eval %q, which is not an eval id: %w", c.TaskID, cerr)
-		}
-		voidSet[id] = true
-		voidTasks = append(voidTasks, report.VoidTask{TaskID: c.TaskID, Reason: c.Reason})
+		voidSet[c.ID] = true
+		voidTasks = append(voidTasks, report.VoidTask{TaskID: strconv.Itoa(c.ID), Reason: c.Reason})
 	}
 	if len(voidSet) > 0 && !req.AllowVoid {
-		return nil, fmt.Errorf("whetstone eval: %d of %d evals are void for %s; fix them and re-run `whetstone suite check %s`, or pass --allow-void to exclude them",
-			len(voidSet), len(checks), req.Skill, req.Skill)
+		return nil, fmt.Errorf("whetstone eval: %d of %d evals are void for %s; fix them, or pass --allow-void to exclude them",
+			len(voidSet), len(checks), req.Skill)
 	}
 
 	// 3. The model panel. A caller that named one always wins; this only fills

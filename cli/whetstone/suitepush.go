@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -90,18 +91,17 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 		return fmt.Errorf("suite push: %w", err)
 	}
 
-	rows, err := req.Store.SuiteChecks(req.Skill, suiteRef)
+	// The check runs here rather than being read back from a stored row: it
+	// is pure, so a push cannot go out with a stale answer.
+	set, err := suite.LoadEvalSet(suiteDir)
 	if err != nil {
-		return fmt.Errorf("suite push: %w", err)
+		return fmt.Errorf("suite push: loading the eval set for %s: %w", req.Skill, err)
 	}
-	if len(rows) == 0 {
-		return fmt.Errorf("suite push: no suite check recorded for %s; run `whetstone suite check %s` first", req.Skill, req.Skill)
-	}
-
-	checks := make([]client.EvalSuiteCheck, len(rows))
-	for i, r := range rows {
+	results := suite.Validate(suiteDir, set)
+	checks := make([]client.EvalSuiteCheck, len(results))
+	for i, r := range results {
 		checks[i] = client.EvalSuiteCheck{
-			TaskID: r.TaskID,
+			TaskID: strconv.Itoa(r.ID),
 			OK:     !r.Void,
 			Void:   r.Void,
 			Reason: r.Reason,

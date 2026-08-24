@@ -121,14 +121,6 @@ type ReportMeta struct {
 	RobustnessGap *float64
 }
 
-// SuiteCheckRow records whether one task in a suite was found void (its
-// oracle or verifier no longer applies) when the suite was last checked.
-type SuiteCheckRow struct {
-	TaskID string
-	Void   bool
-	Reason string
-}
-
 // boolToInt converts a Go bool to the 0/1 SQLite stores it as. Binding a bool
 // directly is not relied on here — better an explicit conversion than a
 // silent driver-dependent behavior.
@@ -573,59 +565,6 @@ func (s *Store) LatestReport(skill string) ([]byte, int64, error) {
 		return nil, 0, fmt.Errorf("store.LatestReport: %w", err)
 	}
 	return []byte(doc), id, nil
-}
-
-// SaveSuiteCheck upserts, per task, whether it was found void the last time
-// the suite was checked.
-func (s *Store) SaveSuiteCheck(skill, suiteRef string, rows []SuiteCheckRow) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("store.SaveSuiteCheck begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.Prepare(
-		`INSERT INTO suite_checks (skill_name, suite_ref, task_id, void, reason)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(skill_name, suite_ref, task_id) DO UPDATE SET
-		   void = excluded.void, reason = excluded.reason, checked_at = datetime('now')`)
-	if err != nil {
-		return fmt.Errorf("store.SaveSuiteCheck prepare: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-
-	for _, r := range rows {
-		if _, err := stmt.Exec(skill, suiteRef, r.TaskID, boolToInt(r.Void), r.Reason); err != nil {
-			return fmt.Errorf("store.SaveSuiteCheck: %w", err)
-		}
-	}
-	return tx.Commit()
-}
-
-// SuiteChecks lists the last-known void status of every checked task in a
-// suite.
-func (s *Store) SuiteChecks(skill, suiteRef string) ([]SuiteCheckRow, error) {
-	rows, err := s.db.Query(
-		`SELECT task_id, void, reason FROM suite_checks WHERE skill_name = ? AND suite_ref = ? ORDER BY task_id`,
-		skill, suiteRef)
-	if err != nil {
-		return nil, fmt.Errorf("store.SuiteChecks: %w", err)
-	}
-	defer rows.Close()
-
-	var out []SuiteCheckRow
-	for rows.Next() {
-		var (
-			r    SuiteCheckRow
-			void int64
-		)
-		if err := rows.Scan(&r.TaskID, &void, &r.Reason); err != nil {
-			return nil, fmt.Errorf("store.SuiteChecks scan: %w", err)
-		}
-		r.Void = void != 0
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 // sanitizePathComponent replaces characters that could escape or subdivide a

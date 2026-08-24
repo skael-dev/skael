@@ -41,8 +41,11 @@ type Input struct {
 // Result is a derived suite, ready to push to the registry.
 type Result struct {
 	Archive []byte
-	Checks  []evalsuite.Check
-	Spec    *spec.SkillSpec
+	// Tasks is how many evals the suite holds. The per-task check results are
+	// not carried any further: suite.Validate is pure, so every later reader
+	// runs it again rather than trusting a copy.
+	Tasks int
+	Spec  *spec.SkillSpec
 }
 
 // Deriver builds suites. Construct with New.
@@ -116,5 +119,5 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("derive: pack eval set: %w", err)
 	}
-	return &Result{Archive: archive, Checks: checks, Spec: sp}, nil
+	return &Result{Archive: archive, Tasks: len(checks), Spec: sp}, nil
 }

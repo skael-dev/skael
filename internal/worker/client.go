@@ -93,16 +93,12 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 	if err != nil {
 		return SuiteMeta{}, err
 	}
-	checks := make([]evalsuite.Check, len(meta.Checks))
-	for i, c := range meta.Checks {
-		checks[i] = evalsuite.Check{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
-	}
 	sp, err := unmarshalSuiteSpec(meta.Spec)
 	if err != nil {
 		return SuiteMeta{}, err
 	}
 	return SuiteMeta{
-		Checks: checks, Spec: sp,
+		Spec:             sp,
 		Origin:           evalsuite.Origin(meta.Origin),
 		MachineGenerated: meta.MachineGenerated,
 	}, nil
@@ -110,16 +106,12 @@ func (h *HTTPAPI) SuiteMeta(_ context.Context, ref string) (SuiteMeta, error) {
 
 // PushSuite uploads a derived suite and returns its content-addressed ref.
 func (h *HTTPAPI) PushSuite(_ context.Context, in PushSuiteInput) (string, error) {
-	wire := make([]client.EvalSuiteCheck, len(in.Checks))
-	for i, c := range in.Checks {
-		wire[i] = client.EvalSuiteCheck{TaskID: c.TaskID, OK: c.OK, Void: c.Void, Reason: c.Reason}
-	}
 	specJSON, err := json.Marshal(in.Spec)
 	if err != nil {
 		return "", fmt.Errorf("worker: marshal derived spec: %w", err)
 	}
 	out, err := h.c.UploadEvalSuite(client.EvalSuiteUploadRequest{
-		Skill: in.Skill, SpecVersion: 0, Checks: wire, Spec: specJSON, Archive: in.Archive,
+		Skill: in.Skill, SpecVersion: 0, Spec: specJSON, Archive: in.Archive,
 		JobID: string(in.JobID), ClaimToken: in.ClaimToken,
 	})
 	if err != nil {

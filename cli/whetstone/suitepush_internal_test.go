@@ -58,13 +58,6 @@ func TestRunSuitePush_RefusesAnOversizedArchive(t *testing.T) {
 	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
 		t.Fatalf("writing eval set fixture: %v", err)
 	}
-	ref, err := suite.Ref(suiteDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SaveSuiteCheck(sp.Name, ref, []store.SuiteCheckRow{{TaskID: "1"}}); err != nil {
-		t.Fatalf("SaveSuiteCheck: %v", err)
-	}
 
 	err = RunSuitePush(context.Background(), SuitePushRequest{
 		Store: st, Skill: sp.Name, Endpoint: "http://unused", APIKey: "k",

@@ -2,11 +2,9 @@ package whetstone
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
-	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/ui"
 )
@@ -22,13 +20,14 @@ var suiteCheckCmd = &cobra.Command{
 	},
 }
 
-// RunSuiteCheck validates a skill's eval set and records the result.
+// RunSuiteCheck validates a skill's eval set and reports the result.
 //
 // It replaces an oracle gate that ran every task's reference solution in a
 // container. With no verifier script left to prove correct, what remains is
 // static: an eval with nothing to grade, or one naming an input file the set
-// does not carry, cannot produce a measurement. Both are recorded as void so
-// the eval that runs later knows what to exclude.
+// does not carry, cannot produce a measurement. Nothing is persisted: an eval
+// run repeats the same pure check for itself, so a stored row would only be
+// an older copy of an answer it already has.
 //
 // A void eval makes this exit non-zero unless allowVoid is set, which is what
 // makes the command usable as a CI gate.
@@ -47,22 +46,7 @@ func RunSuiteCheck(skill string, allowVoid bool) error {
 	if err != nil {
 		return fmt.Errorf("loading the eval set for %s: %w (run `whetstone suite gen %s` first)", skill, err, skill)
 	}
-	suiteRef, err := suite.Ref(suiteDir)
-	if err != nil {
-		return err
-	}
-
-	results := suite.Validate(suiteDir, set)
-
-	rows := make([]store.SuiteCheckRow, len(results))
-	for i, r := range results {
-		rows[i] = store.SuiteCheckRow{TaskID: strconv.Itoa(r.ID), Void: r.Void, Reason: r.Reason}
-	}
-	if err := st.SaveSuiteCheck(skill, suiteRef, rows); err != nil {
-		return fmt.Errorf("suite check: recording results: %w", err)
-	}
-
-	return reportCheckResults(skill, results, allowVoid)
+	return reportCheckResults(skill, suite.Validate(suiteDir, set), allowVoid)
 }
 
 // reportCheckResults renders one line per eval and returns an error when any

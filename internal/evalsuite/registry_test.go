@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -254,14 +253,17 @@ func TestRegistry_RefMatchesSuiteRefOfTheExtractedTree(t *testing.T) {
 	}
 }
 
-func TestRegistry_RejectsASuiteWithNoChecks(t *testing.T) {
+// TestRegistry_AcceptsASuiteWithNoChecks pins the cut: the pusher's own check
+// results are an audit trail, not a precondition, because suite.Validate is
+// pure and every reader runs it again.
+func TestRegistry_AcceptsASuiteWithNoChecks(t *testing.T) {
 	reg := evalsuite.NewRegistry(testutil.SetupTestDB(t), newTempStorage(t))
-	_, err := reg.Put(ctx, "deploy-helper", fixtureSuiteArchive(t), nil, 1, "nate", nil)
-	if err == nil {
-		t.Fatal("a suite with no oracle-gate results was accepted")
+	rec, err := reg.Put(ctx, "deploy-helper", fixtureSuiteArchive(t), nil, 1, "nate", nil)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
 	}
-	if !strings.Contains(err.Error(), "suite check") {
-		t.Fatalf("error does not name the missing check: %v", err)
+	if rec.Ref == "" {
+		t.Error("stored suite has no ref")
 	}
 }
 

@@ -340,22 +340,6 @@ func seedSkill(t *testing.T, st *store.Store, name string, n int, void map[int]s
 		t.Fatalf("writing trigger fixture: %v", err)
 	}
 
-	ref, err := suite.Ref(suiteDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := make([]store.SuiteCheckRow, 0, n)
-	for i := 1; i <= n; i++ {
-		row := store.SuiteCheckRow{TaskID: fmt.Sprintf("%d", i)}
-		if reason, isVoid := void[i]; isVoid {
-			row.Void, row.Reason = true, reason
-		}
-		rows = append(rows, row)
-	}
-	if err := st.SaveSuiteCheck(name, ref, rows); err != nil {
-		t.Fatalf("SaveSuiteCheck: %v", err)
-	}
-
 	bundleDir, err := st.SkillDir(name)
 	if err != nil {
 		t.Fatal(err)

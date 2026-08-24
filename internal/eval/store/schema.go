@@ -186,6 +186,13 @@ var migrations = []string{
 		suite_ref  TEXT NOT NULL,
 		written_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
+
+	// Migration 12: suite_checks goes. suite.Validate is pure and takes
+	// microseconds, so an eval answers the question for itself rather than
+	// reading back a row a separate command had to write first. Carrying the
+	// answer across a process boundary made `whetstone suite check` a
+	// precondition of `whetstone eval` for nothing.
+	`DROP TABLE suite_checks;`,
 }
 
 func migrate(db *sql.DB) error {

@@ -76,7 +76,6 @@ type Runner interface {
 
 // SuiteMeta is the suite metadata the worker needs beside the archive bytes.
 type SuiteMeta struct {
-	Checks           []evalsuite.Check
 	Spec             *spec.SkillSpec
 	Origin           evalsuite.Origin
 	MachineGenerated bool
@@ -98,7 +97,6 @@ type API interface {
 type PushSuiteInput struct {
 	Skill      string
 	Archive    []byte
-	Checks     []evalsuite.Check
 	Spec       *spec.SkillSpec
 	JobID      evalqueue.JobID
 	ClaimToken string
@@ -115,8 +113,9 @@ type DeriveInput struct {
 // DeriveResult is a suite ready to push to the registry.
 type DeriveResult struct {
 	Archive []byte
-	Checks  []evalsuite.Check
-	Spec    *spec.SkillSpec
+	// Tasks is how many evals the derived suite holds, for the log line only.
+	Tasks int
+	Spec  *spec.SkillSpec
 }
 
 // Deriver builds a suite for a skill that has none.
@@ -205,14 +204,14 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 			return fmt.Errorf("worker: derive suite for %s: %w", job.SkillName, err)
 		}
 		ref, err := w.api.PushSuite(runCtx, PushSuiteInput{
-			Skill: job.SkillName, Archive: res.Archive, Checks: res.Checks,
+			Skill: job.SkillName, Archive: res.Archive,
 			Spec: res.Spec, JobID: job.ID, ClaimToken: token,
 		})
 		if err != nil {
 			return fmt.Errorf("worker: push derived suite for %s: %w", job.SkillName, err)
 		}
 		log.Info().Str("job_id", string(job.ID)).Str("skill", job.SkillName).
-			Str("suite_ref", ref).Int("tasks", len(res.Checks)).
+			Str("suite_ref", ref).Int("tasks", res.Tasks).
 			Msg("worker: derived a suite for a skill that had none")
 		suiteRef = ref
 	}
@@ -228,7 +227,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 
 	st, err := Materialize(workDir, MaterializeInput{
 		Skill: job.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
-		Checks: meta.Checks, Spec: meta.Spec,
+		Spec: meta.Spec,
 		// suiteRef, not job.SuiteRef: the latter is empty on the derive path.
 		WantSuiteRef: suiteRef,
 	})

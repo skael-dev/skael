@@ -165,19 +165,6 @@ func TestRunSuitePush_FallsBackWhenTheServerRejectsTheField(t *testing.T) {
 	}
 }
 
-func TestSuitePush_RefusesWhenNoCheckIsRecorded(t *testing.T) {
-	ws := newWorkspaceWithUncheckedSuite(t)
-	err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
-		Store: ws, Skill: "deploy-helper", Endpoint: "http://unused", APIKey: "k",
-	})
-	if err == nil {
-		t.Fatal("pushed a suite with no recorded check")
-	}
-	if !strings.Contains(err.Error(), "suite check") {
-		t.Fatalf("error does not tell the author what to run: %v", err)
-	}
-}
-
 func TestSuitePush_RefusesWhenSpecCannotBeLoaded(t *testing.T) {
 	ws := newWorkspaceWithCheckedSuiteNoSpec(t)
 	err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
@@ -221,37 +208,15 @@ func newWorkspaceWithCheckedSuiteNoSpec(t *testing.T) *store.Store {
 	if err := suite.WriteEvalSet(suiteDir, set); err != nil {
 		t.Fatalf("writing eval set fixture: %v", err)
 	}
-	ref, err := suite.Ref(suiteDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SaveSuiteCheck("deploy-helper", ref, []store.SuiteCheckRow{{TaskID: "1"}}); err != nil {
-		t.Fatalf("SaveSuiteCheck: %v", err)
-	}
 	return st
 }
 
 // newWorkspaceWithCheckedSuite writes a one-task suite for "deploy-helper"
-// into a fresh workspace and records a passing suite check for it, mirroring
-// what `whetstone suite gen` followed by `whetstone suite check` leaves
-// behind.
+// into a fresh workspace. Nothing records a check any more: suite.Validate is
+// pure, so `suite push` runs it itself.
 func newWorkspaceWithCheckedSuite(t *testing.T) *store.Store {
 	t.Helper()
-	st := newWorkspaceWithUncheckedSuite(t)
-
-	suiteDir, err := st.SuiteDir("deploy-helper")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, err := suite.Ref(suiteDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := []store.SuiteCheckRow{{TaskID: "1"}}
-	if err := st.SaveSuiteCheck("deploy-helper", ref, rows); err != nil {
-		t.Fatalf("SaveSuiteCheck: %v", err)
-	}
-	return st
+	return newWorkspaceWithUncheckedSuite(t)
 }
 
 // newWorkspaceWithUncheckedSuite writes a suite for "deploy-helper" but

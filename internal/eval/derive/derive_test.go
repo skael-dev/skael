@@ -116,10 +116,8 @@ func TestDerive_ProducesAnArchiveChecksAndSpec(t *testing.T) {
 	if len(res.Archive) == 0 {
 		t.Fatal("no archive returned")
 	}
-	// An eval set with no recorded checks cannot tell a broken eval from a
-	// broken skill, and evalsuite.Put refuses it.
-	if len(res.Checks) != derivedEvalCount {
-		t.Fatalf("%d checks returned, want %d", len(res.Checks), derivedEvalCount)
+	if res.Tasks != derivedEvalCount {
+		t.Fatalf("%d tasks reported, want %d", res.Tasks, derivedEvalCount)
 	}
 	if res.Spec == nil || res.Spec.Name != "demo" {
 		t.Fatalf("spec = %+v, want one named demo", res.Spec)
@@ -193,14 +191,10 @@ func TestDerive_AcceptsASetWithSomeVoidEvals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
-	void := 0
-	for _, c := range res.Checks {
-		if c.Void {
-			void++
-		}
-	}
-	if void != 3 {
-		t.Errorf("%d void checks, want 3", void)
+	// The void evals are still packed; a later reader runs suite.Validate
+	// itself and excludes them.
+	if res.Tasks != derivedEvalCount {
+		t.Errorf("%d tasks reported, want all %d including the void ones", res.Tasks, derivedEvalCount)
 	}
 }
 

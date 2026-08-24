@@ -437,7 +437,7 @@ func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worke
 	if err != nil {
 		return nil, err
 	}
-	return &worker.DeriveResult{Archive: res.Archive, Checks: res.Checks, Spec: res.Spec}, nil
+	return &worker.DeriveResult{Archive: res.Archive, Tasks: res.Tasks, Spec: res.Spec}, nil
 }
 
 // evalRequestFrom maps a worker.RunInput — what the queue handed the worker

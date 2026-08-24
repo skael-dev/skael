@@ -21,7 +21,6 @@ type MaterializeInput struct {
 	Skill        string
 	Bundle       []byte
 	SuiteArchive []byte
-	Checks       []evalsuite.Check
 	// Spec is nil when the suite predates this field; Materialize falls back
 	// to a placeholder from SKILL.md frontmatter.
 	Spec         *spec.SkillSpec
@@ -94,14 +93,6 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 	}
 	if in.WantSuiteRef != "" && ref != in.WantSuiteRef {
 		return nil, fmt.Errorf("worker: materialize: suite ref %s does not match the requested ref %s", ref, in.WantSuiteRef)
-	}
-
-	rows := make([]store.SuiteCheckRow, len(in.Checks))
-	for i, c := range in.Checks {
-		rows[i] = store.SuiteCheckRow{TaskID: c.TaskID, Void: c.Void, Reason: c.Reason}
-	}
-	if err := st.SaveSuiteCheck(in.Skill, ref, rows); err != nil {
-		return nil, fmt.Errorf("worker: materialize save suite checks: %w", err)
 	}
 
 	return st, nil

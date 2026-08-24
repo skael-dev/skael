@@ -119,9 +119,9 @@ func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []b
 }
 
 func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, machineGenerated bool, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
-	if len(checks) == 0 {
-		return nil, fmt.Errorf("evalsuite: Put requires at least one suite check result, got none: %w", ErrInvalidArchive)
-	}
+	// checks are an audit trail of what the pusher saw, not a precondition:
+	// suite.Validate is pure, so every reader runs it again. An older client
+	// still sends them; a current one may send none.
 
 	dir, err := os.MkdirTemp("", "evalsuite-put-*")
 	if err != nil {
