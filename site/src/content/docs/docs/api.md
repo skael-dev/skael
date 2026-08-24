@@ -158,8 +158,8 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/skills/{name}/quality/series` | Quality history grouped into comparable runs |
 | `GET` | `/api/skills/{name}/evals` | Evaluation jobs for a skill, newest first |
 | `POST` | `/api/skills/{name}/evals` | Enqueue an evaluation against a different model panel — instance admin only |
-| `POST` | `/api/eval/suites` | Upload an evaluation suite (base64 archive + oracle-gate checks). Stored content-addressably; returns its `ref` |
-| `GET` | `/api/eval/suites/{ref}/meta` | The oracle-gate checks and authored spec recorded for a suite |
+| `POST` | `/api/eval/suites` | Upload an evaluation suite (base64 archive; the pusher's own check results are optional). Stored content-addressably; returns its `ref` |
+| `GET` | `/api/eval/suites/{ref}/meta` | The spec and origin recorded for a suite |
 | `GET` | `/api/eval/suites/{ref}` | Download the suite archive (`application/gzip`) |
 | `GET` | `/api/review/queue` | Every version currently held for review, across all skills |
 | `POST` | `/api/skills/{name}/versions/{version}/review` | Approve or reject one hold reason on a version held for review — see [Review queue](#review-queue) |

@@ -44,6 +44,18 @@ Separately, the request log's `ip` field changed format: it used to log the raw 
 
 Both migrations run automatically at startup, inside a single transaction, and take an `ACCESS EXCLUSIVE` lock on `skill_events` for its duration: each adds a column and backfills it with an `UPDATE`, and 007 additionally validates a new `CHECK` constraint and both migrations build a new index. On a small instance this is milliseconds. On an instance with months of activation history, the lock is held roughly in proportion to the table's size — and while it's held, an old server process still serving traffic will block on any query that touches `skill_events` (activation summaries, event ingestion). Plan the upgrade window accordingly on a busy instance; see [Backup & restore](/docs/backup-restore) if you want to rehearse the timing against a copy of production data first.
 
+## Upgrading to v0.12.0
+
+No server migrations. Nothing to reconfigure. Upgrade the server, the CLI, the worker, and whetstone in any order.
+
+Two things are worth knowing.
+
+**`whetstone suite check` is no longer a step you have to run.** It used to record its result, and both `suite push` and `eval` refused to proceed without a stored row. The check is pure and takes microseconds, so both now run it themselves. The command stays, with the same output and the same exit codes, for use as a CI gate. The local `suite_checks` table is dropped from your `.whetstone` workspace on first run; nothing else in the workspace changes.
+
+**A worker with `WORKER_CONCURRENCY` tuned for the old default may want revisiting.** The runner's own default rose from 4 concurrent sandbox sessions to 6, because a new quota gate holds *new* session starts while a throttled session waits out its backoff. Judge calls are now bounded separately by `WORKER_GRADE_CONCURRENCY` (default 8) rather than sharing the session budget — a container is bounded by CPU and memory, a judge call by your account's rate limit.
+
+If you are coming from v0.10.0, read the v0.11.0 note first: an eval suite derived before v0.11.0 uses the old `tasks/` layout and will not load. Delete the `eval_suites` row and its archive, and the next eval derives a fresh one.
+
 ## Upgrading to v0.10.0
 
 v0.10.0 is a big release. Six things landed: skill evaluation authoring (`whetstone`), evaluation runs and scoring, an eval job queue with a new `skael-worker` binary, a publish gate, a quality section in the dashboard, and skill ownership. Nine migrations come with it, one behavior change everyone will notice, and two new optional pieces of deployment.

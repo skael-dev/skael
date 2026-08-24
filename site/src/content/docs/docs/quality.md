@@ -54,7 +54,8 @@ Optional, with defaults:
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
-| `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
+| `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
+| `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
 
 The worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed container, one job at a time per worker process. Run more worker replicas for more throughput.
 

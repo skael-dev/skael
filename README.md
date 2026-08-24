@@ -153,7 +153,7 @@ Agents don't all measure the same thing, so events record how they were observed
 
 ## whetstone: authoring and linting skills
 
-`whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval` and `repair` need a Docker daemon and an LLM key.
+`whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval` needs a Docker daemon and an LLM key.
 
 It has its own formula — `brew install skael-dev/skael/whetstone`. The `skael` formula and the curl installer give you `skael` only. `skael-worker` is a release-archive download or `just build`.
 
@@ -171,9 +171,7 @@ whetstone suite check my-skill    # report which evals cannot be scored, and why
 whetstone suite push my-skill     # register the suite with the server
 whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
 whetstone eval my-skill           # run the model panel, score it, write the report
-whetstone drift my-skill          # per-member adherence breakdown for one eval
 whetstone report my-skill --open  # render the HTML report
-whetstone repair my-skill         # cluster failures, propose edits, re-evaluate
 whetstone version                 # version, commit, build date
 ```
 
@@ -299,8 +297,8 @@ cmd/whetstone/    → Skill authoring/eval CLI binary
 cmd/skael-worker/ → Eval queue worker binary (claim/materialise/evaluate/report loop)
 internal/         → Server packages (skill, scan, gate, ownership, quality, evalqueue,
                     evalsuite, analytics, auth, platform, server, import, sync, worker)
-internal/eval/    → Evaluation engine (spec, generation, contracts, suite, runner,
-                    sandbox/docker, agent adapters, scoring, repair, report)
+internal/eval/    → Evaluation engine (spec, generation, suite, runner,
+                    sandbox/docker, agent adapters, scoring, report)
 cli/              → CLI packages (commands, client, config, agents, hooks)
 cli/whetstone/    → whetstone commands (authoring + evaluation)
 web/              → React 19 SPA (Vite 8, Tailwind 4, TanStack Query) — embedded into server binary

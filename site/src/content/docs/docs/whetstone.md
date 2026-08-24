@@ -13,9 +13,9 @@ Two halves, in the order you use them.
 
 **Authoring.** `spec` → `gen` → `lint` → `pack`. You describe what the skill should do in a specification, approve that document, generate the bundle from it, lint every layer (spec conformance, quality, prompt injection), and pack a spec-valid archive with the eval sidecar stripped out.
 
-**Evaluation.** `suite` → `eval` → `drift` → `repair` → `report`. Draft a task suite, gate it on its own oracle and verifier, run a model panel against the skill, read the per-member adherence breakdown, let a repair loop propose minimal edits, and render an HTML report.
+**Evaluation.** `suite` → `eval` → `report`. Draft an eval set, run a model panel against the skill, and render an HTML report. A score is the share of expectations the panel's sessions passed, graded by a model against `evals/evals.json`.
 
-`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, approve it, generate, lint, compile the drift contract, draft the suite. It never stops to ask. Everything downstream is derived from the spec, so the run prints the spec it stored and names the commands that change it — `whetstone spec edit`, then `whetstone gen`.
+`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, approve it, generate, lint, and draft the eval set. The bundle and the eval set are drafted at the same time, and so are the passes inside the bundle, which is most of why the command finishes in about half the calls' worth of wall clock it used to. It never stops to ask. Everything downstream is derived from the spec, so the run prints the spec it stored and names the commands that change it — `whetstone spec edit`, then `whetstone gen`.
 
 Everything lives in a `.whetstone` workspace. Commands walk up from the working directory to find it, the way git does. `whetstone init` creates one and refuses to create a nested one — a nested workspace shadows the outer one for every later command, and a mistyped path silently becoming a fresh empty workspace looks exactly like a lost skill.
 
@@ -33,7 +33,7 @@ brew install skael-dev/skael/whetstone
 
 ```bash
 curl -fsSL -o whetstone.tar.gz \
-  https://github.com/skael-dev/skael/releases/download/v0.10.0/whetstone_0.10.0_darwin_arm64.tar.gz
+  https://github.com/skael-dev/skael/releases/download/v0.12.0/whetstone_0.12.0_darwin_arm64.tar.gz
 tar -xzf whetstone.tar.gz whetstone
 sudo mv whetstone /usr/local/bin/
 ```
@@ -72,11 +72,11 @@ whetstone is the only thing that produces a suite:
 
 ```bash
 whetstone suite gen my-skill      # draft it from the approved spec
-whetstone suite check my-skill    # gate it on its own oracle and verifier
+whetstone suite check my-skill    # report which evals cannot be scored, and why
 whetstone suite push my-skill     # register it with the server
 ```
 
-`suite push` refuses if no `suite check` has been recorded for the current suite ref. The server can't tell an unchecked suite from a passing one, so it's caught here.
+`suite check` is a report, not a gate you have to pass first. `suite push` and `eval` run the same check themselves, so neither depends on you having run it.
 
 It also declares whether anybody has read the eval set. whetstone records the content hash of what it generated; `suite push` compares the current hash against it. An untouched set is pushed as machine-derived, and the server records it that way. The cost is real: a score against a machine-derived set is still a quality signal, but it cannot release a version the publish gate is holding. A skill must not write its own exam. Open `evals/triggers.json`, read it, change what is wrong — any edit at all clears the flag — or use the review view in the web UI, where an owner or admin can mark the set reviewed without editing a line. `whetstone tune` counts as a machine writer too, so a tuned set stays machine-derived until somebody reads it.
 
@@ -94,7 +94,7 @@ See [Quality scoring](/docs/quality) for what a score actually measures, how to 
 |---|---|
 | `whetstone init` | Create a `.whetstone` workspace in the current directory |
 | `whetstone doctor` | Check the agent CLI, the LLM gateway, the sandbox runtime, and the registered agent adapters |
-| `whetstone new <intent>` | Interview, store a spec, approve, generate, lint, compile the drift contract, draft the suite |
+| `whetstone new <intent>` | Interview, store a spec, approve, generate, lint, and draft the eval set |
 | `whetstone spec show <skill>` | Print the latest stored spec and whether it's approved |
 | `whetstone spec edit <skill>` | Open the spec in `$EDITOR` and store the result as a new, approved version |
 | `whetstone spec approve <skill>` | Mark the latest stored spec version approved |
@@ -103,7 +103,7 @@ See [Quality scoring](/docs/quality) for what a score actually measures, how to 
 | `whetstone pack <skill\|path>` | Lint, then write a spec-valid `tar.gz` with the eval sidecar and spec stripped |
 | `whetstone version` | Print version, commit, and build date |
 
-Approval is per spec version, and both writers approve what they write. `new` approves the spec it drafted. `spec edit` approves what you saved, because you are the author of that document and it carries more review than the drafted one `new` already accepted. An edit that changes nothing stores no version at all. `gen`, `suite gen`, and `repair` all refuse to run from an unapproved spec, which is what `spec approve` is for after a version arrives some other way.
+Approval is per spec version, and both writers approve what they write. `new` approves the spec it drafted. `spec edit` approves what you saved, because you are the author of that document and it carries more review than the drafted one `new` already accepted. An edit that changes nothing stores no version at all. `gen` and `suite gen` both refuse to run from an unapproved spec, which is what `spec approve` is for after a version arrives some other way.
 
 `lint`'s exit code is the CI signal: 0 unless there are errors, `--strict` promotes warnings to errors. `pack` refuses to write an archive from a bundle that fails lint — an archive built from a broken bundle installs fine and fails at use time, a long way from the cause.
 
@@ -112,21 +112,19 @@ Approval is per spec version, and both writers approve what they write. `new` ap
 | Command | What it does |
 |---|---|
 | `whetstone suite gen <skill>` | Generate and write the evaluation suite for a skill |
-| `whetstone suite check <skill>` | Gate the suite on its own oracle and verifier |
-| `whetstone suite push <skill>` | Upload the checked suite to a registry |
+| `whetstone suite check <skill>` | Report which evals cannot be scored, and why |
+| `whetstone suite push <skill>` | Upload the eval set to a registry |
 | `whetstone tune <skill>` | Tune the description for triggering accuracy against the trigger set |
 | `whetstone eval <skill>` | Run the model panel, score it, write the report |
-| `whetstone drift <skill> [ref]` | Per-member adherence breakdown for one eval |
-| `whetstone repair <skill>` | Cluster failures, propose minimal edits, re-evaluate until the dev split plateaus |
 | `whetstone report <skill> [ref]` | Render the HTML report for one eval |
 
 `ref` is an eval id or `latest`. It defaults to `latest`.
 
-`suite check` asks three questions per task: does the oracle solve it, does the task's own verifier accept that solution, and does the verifier reject an untouched workspace. A task failing any of them is **void** — excluded from a later eval rather than fatal to it. Any void task exits non-zero unless you pass `--allow-void`, which is what makes it usable as a CI gate.
+`suite check` asks whether each eval can produce a measurement at all: an eval with nothing to grade, or one naming an input file the set does not carry, is **void** — excluded from a later eval rather than fatal to it. Any void eval exits non-zero unless you pass `--allow-void`, which is what makes it usable as a CI gate. The check is pure and takes microseconds, so nothing is stored: `eval` and `suite push` repeat it for themselves.
 
 `tune` measures how often a model consults your skill for the queries in `evals/triggers.json`, proposes a better description from what failed, and keeps the one that scores best on the queries it was never tuned against. It holds a fraction of the set back for exactly that reason: a description that wins the queries which tuned it is a description fitted to them. A short trigger set is topped up and written back, so the eval tiers read the grown set too. With `--apply` (the default) the winner is stored as a new approved spec version and written into `SKILL.md`. Confirm it against real agent sessions with `whetstone eval` afterwards — `tune` measures a model's selection decision, not an agent's, so the two can disagree.
 
-`repair` edits your bundle in place. It runs against the dev split only, then evaluates the holdout split exactly once — the holdout score is the reported number, never a dev-split score. The dev/holdout split seed is fixed and deliberately not a flag: re-splitting changes which tasks the repair loop was allowed to see, and makes two scores incomparable.
+`eval` reuses a baseline session from an earlier run when the suite, the eval, the agent, the model and the agent's version all match, the earlier run succeeded, and it is under 30 days old. A baseline installs no skill, so re-running it measures nothing new — at the full tier the baselines are 10 of 36 sessions. Pass `--fresh-baseline` to run them anyway.
 
 ### Flags
 
@@ -135,7 +133,7 @@ Approval is per spec version, and both writers approve what they write. `new` ap
 | `doctor` | `--judge` | false | Run judge calibration against the labelled set and report Cohen's κ |
 | `lint` | `--strict` | false | Treat warnings as errors |
 | `pack` | `-o, --output` | `<skill>.tar.gz` beside the bundle | Archive path |
-| `suite check` | `--allow-void` | false | Exit 0 even if some tasks are void; they're still excluded from a later eval |
+| `suite check` | `--allow-void` | false | Exit 0 even if some evals are void; they're still excluded from a later eval |
 | `suite push` | `--endpoint` | `$SKAEL_ENDPOINT`, then `~/.skael/config.json` | Skael server URL |
 | `suite push` | `--api-key` | `$SKAEL_API_KEY`, then `~/.skael/config.json` | Skael API key |
 | `tune` | `--queries` | `16` | Trigger queries to tune against; a short set is topped up and written back |
@@ -148,12 +146,12 @@ Approval is per spec version, and both writers approve what they write. `new` ap
 | `eval` | `--tier` | `full` | Tier to run: `smoke`, `full`, or `deep` |
 | `eval` | `--agents` | shipped panel | Panel agents (pass with `--models`) |
 | `eval` | `--models` | shipped panel | Panel models (pass with `--agents`) |
-| `eval` | `--concurrency` | `0` | Maximum concurrent sessions; 0 uses the runner's default |
+| `eval` | `--concurrency` | `0` | Maximum concurrent sandbox sessions; 0 uses the runner's default of 6 |
+| `eval` | `--grade-concurrency` | `0` | Maximum concurrent judge calls; 0 uses 8 |
+| `eval` | `--fresh-baseline` | false | Run every baseline session instead of reusing a matching one from an earlier eval |
 | `eval` | `--untrusted` | false | Treat the skill as untrusted; refused unless the driver is hardware-isolated |
 | `eval` | `--allow-void` | false | Proceed with void tasks excluded from scoring rather than refusing |
 | `eval` | `--resume` | `0` | Resume an existing eval id instead of starting a new one |
-| `repair` | `--max-iter` | `3` | Maximum repair iterations |
-| `repair` | `--yes` | false | Skip the repair approval prompt |
 | `report` | `--open` | false | Open the rendered report with the OS default handler |
 
 Global, on every command:
@@ -167,11 +165,11 @@ Global, on every command:
 
 ### Docker
 
-`eval`, `repair`, and `suite check` need a reachable Docker daemon. Every panel session and every oracle/verifier run happens inside a sandboxed container.
+`eval` needs a reachable Docker daemon. Every panel session happens inside a sandboxed container.
 
-`drift` and `report` do not. They read a report the store already holds, so they work on a laptop with Docker stopped.
+`suite check` and `report` do not. One is a pure check over local files, the other reads a report the store already holds, so both work on a laptop with Docker stopped.
 
-Each of the three sandbox commands sweeps stale `whetstone-run-*` / `whetstone-proxy-*` containers and `whetstone-net-*` networks before it starts. A run killed by something stronger than its own context — SIGKILL, a crash — leaves those behind, and over a long-lived host they exhaust Docker's address pool.
+`eval` sweeps stale `whetstone-run-*` / `whetstone-proxy-*` containers and `whetstone-net-*` networks before it starts. A run killed by something stronger than its own context — SIGKILL, a crash — leaves those behind, and over a long-lived host they exhaust Docker's address pool.
 
 Ctrl-C is handled properly: `SIGINT` and `SIGTERM` cancel the command's context, the Docker driver tears down its own containers and networks, and then the process exits. Killing whetstone harder than that skips the cleanup and leaves the leftovers for the next run's sweep.
 

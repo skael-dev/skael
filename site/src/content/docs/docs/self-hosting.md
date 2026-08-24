@@ -122,7 +122,8 @@ Optional, with defaults:
 | `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
 | `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
-| `WORKER_CONCURRENCY` | `1` | Must be a positive integer |
+| `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
+| `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
 | `ANTHROPIC_AUTH_TOKEN` | — | Credential sent as `Authorization: Bearer` — what OpenRouter issues. An alternative to `ANTHROPIC_API_KEY`, and it wins when both are set |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | An Anthropic-compatible gateway for the judge *and* the panel, unless `CLAUDE_CODE_OAUTH_TOKEN` is also set. Posts to `{base}/v1/messages` |
 | `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members at the deep tier. Required behind a gateway that namespaces its identifiers |
