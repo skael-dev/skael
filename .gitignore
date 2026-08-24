@@ -1,7 +1,12 @@
 bin/
+
+# Binaries built at the repo root by `go build ./cmd/...`
+/skael
+/skael-server
+/skael-worker
+/whetstone
 /migrate
 /server
-/skael
 .env
 data/
 *.tar.gz
