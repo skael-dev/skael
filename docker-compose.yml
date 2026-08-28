@@ -45,6 +45,8 @@ services:
   # from a metered backend — what changes is the endpoint and how the panel
   # agent is billed.
   worker:
+    # Built from source here. For a deployment, use the published image
+    # instead: ghcr.io/skael-dev/skael-worker:latest
     build:
       context: .
       dockerfile: Dockerfile.worker

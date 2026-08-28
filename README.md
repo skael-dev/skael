@@ -155,7 +155,7 @@ Agents don't all measure the same thing, so events record how they were observed
 
 `whetstone` is a separate, standalone CLI for drafting, linting, and scoring skills before they're published. It's not the registry client — that's `skael`. The authoring half works entirely on local files; `suite push` needs a server, and `eval` needs a Docker daemon and an LLM key.
 
-It has its own formula — `brew install skael-dev/skael/whetstone`. The `skael` formula and the curl installer give you `skael` only. `skael-worker` is a release-archive download or `just build`.
+It has its own formula — `brew install skael-dev/skael/whetstone`. The `skael` formula and the curl installer give you `skael` only. `skael-worker` is a release-archive download, a `just build`, or the `ghcr.io/skael-dev/skael-worker` image.
 
 ```bash
 whetstone init                    # create a .whetstone workspace in the current directory

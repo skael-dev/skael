@@ -50,6 +50,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
+  # Every published image is one entry in this matrix. A new binary that ships
+  # as a container is added here, not as a copied step — the worker image went
+  # unpublished for several releases because there was only ever one step and
+  # it hard-coded the server's Dockerfile.
+  images:
+    needs: release
+    runs-on: ubuntu-latest
+    # Inherited from the workflow, restated so a later edit to the top-level
+    # block cannot silently remove the push credential.
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: skael
+            dockerfile: Dockerfile
+          - image: skael-worker
+            dockerfile: Dockerfile.worker
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -65,12 +87,20 @@ jobs:
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
+      # VERSION is not cosmetic for the worker: the server rejects a report
+      # whose engine_version is "" or "dev", and a constant defeats
+      # report.Comparable, so every build would chart as one trend.
+      - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.tag }}
           tags: |
-            ghcr.io/skael-dev/skael:${{ steps.version.outputs.tag }}
-            ghcr.io/skael-dev/skael:latest
+            ghcr.io/skael-dev/${{ matrix.image }}:${{ steps.version.outputs.tag }}
+            ghcr.io/skael-dev/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

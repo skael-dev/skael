@@ -99,7 +99,28 @@ skael-worker
 
 This is enough for a VPS: no interactive login step, no credential directory to provision. `ANTHROPIC_API_KEY` covers both the judge and the claude-code panel agent, since the worker forwards it into the sandbox as an environment variable.
 
-**Why not a Compose service?** The worker bind-mounts its own working directory into each sandbox container through the Docker socket, and that mount is resolved by the host's Docker daemon. A worker running inside a container would hand the daemon a path that exists only in its own filesystem, so the mount would come up empty. Running it on the host keeps that path real.
+### In a container
+
+The worker also ships as an image, published with every release:
+
+```bash
+docker run -d \
+  -e SKAEL_ENDPOINT=http://localhost:8080 \
+  -e SKAEL_API_KEY=<a personal API key> \
+  -e ANTHROPIC_API_KEY=<your direct Anthropic API key> \
+  -e WORKER_RUN_ROOT=/var/lib/skael/run \
+  -e WORKER_WORK_ROOT=/var/lib/skael/work \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /var/lib/skael/run:/var/lib/skael/run \
+  -v /var/lib/skael/work:/var/lib/skael/work \
+  ghcr.io/skael-dev/skael-worker:latest
+```
+
+`docker compose --profile worker up` runs the same thing from source.
+
+Two rules govern the container, and both are load-bearing. The worker starts sandbox containers as *siblings* through the mounted socket, so the host daemon resolves every bind source. `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must therefore be bound at the **same path on both sides** — never a named volume. Docker creates a missing bind source as an empty directory instead of failing, so a container-local path yields a sandbox with no task and no verifier, which scores as a skill that did nothing. The worker refuses to start containerized unless both are set.
+
+Auth must also arrive as environment variables rather than as a mounted `~/.claude`. A subscription-billed panel works in a container through `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`), which is a token rather than a directory.
 
 ### Worker configuration
 

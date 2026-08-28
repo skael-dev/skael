@@ -172,7 +172,9 @@ release:
       ghcr.io/skael-dev/skael:{{.Version}}
     ```
 
-    Migrations run automatically on startup. Or use `docker compose up -d` to bundle Postgres. Then sign up at `http://localhost:8080` to create your first account and personal API key.
+    Migrations run automatically on startup. Or use `docker compose up -d` to bundle Postgres.
+
+    The optional evaluation worker is published beside it, as `ghcr.io/skael-dev/skael-worker:{{.Version}}`. It needs a Docker socket and an LLM key, so it runs separately from the server. Then sign up at `http://localhost:8080` to create your first account and personal API key.
 
     ## What's in this release
   footer: |
