@@ -4,6 +4,24 @@ on:
   push:
     tags:
       - "v*"
+  # Publish an image without cutting a release: a tag whose image build failed,
+  # or a new image added after the tag it belongs to. It builds from the named
+  # tag, never from a branch, so a republished image is the same source as the
+  # release it claims to be.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build the images from, for example v0.12.0"
+        required: true
+      images:
+        description: "Which image to publish"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - skael
+          - skael-worker
 
 permissions:
   contents: write
@@ -11,6 +29,9 @@ permissions:
 
 jobs:
   release:
+    # A manual run publishes images only. GoReleaser has already run for the
+    # tag, and `release --clean` on an existing one fails.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +77,9 @@ jobs:
   # it hard-coded the server's Dockerfile.
   images:
     needs: release
+    # `always()` because the release job is skipped on a manual run, and a
+    # skipped dependency would otherwise skip this job too.
+    if: always() && needs.release.result != 'failure' && needs.release.result != 'cancelled'
     runs-on: ubuntu-latest
     # Inherited from the workflow, restated so a later edit to the top-level
     # block cannot silently remove the push credential.
@@ -71,6 +95,8 @@ jobs:
             dockerfile: Dockerfile.worker
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -83,14 +109,29 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Extract version tag
+      # A manual run does not move `latest`. It exists to republish a named
+      # tag, and that tag is not always the newest one.
+      - name: Resolve tags
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          IMAGE: ghcr.io/skael-dev/${{ matrix.image }}
+        run: |
+          ref="${INPUT_TAG:-${GITHUB_REF#refs/tags/}}"
+          version="${ref#v}"
+          echo "tag=${version}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:${version}"
+            if [ -z "$INPUT_TAG" ]; then echo "${IMAGE}:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       # VERSION is not cosmetic for the worker: the server rejects a report
       # whose engine_version is "" or "dev", and a constant defeats
       # report.Comparable, so every build would chart as one trend.
       - name: Build and push ${{ matrix.image }}
+        if: inputs.images == '' || inputs.images == 'all' || inputs.images == matrix.image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -99,8 +140,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.version.outputs.tag }}
-          tags: |
-            ghcr.io/skael-dev/${{ matrix.image }}:${{ steps.version.outputs.tag }}
-            ghcr.io/skael-dev/${{ matrix.image }}:latest
+          tags: ${{ steps.version.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
