@@ -23,3 +23,13 @@ func TestPrintBaseDockerfile_EmitsImagespecsOwnBytes(t *testing.T) {
 		}
 	}
 }
+
+// The workflow that publishes the base image derives its tag from this, not
+// from parsing imagespec.go's source text, so a reformatted constant either
+// keeps working or fails to compile.
+func TestPrintBaseTag_MatchesDefaultBaseTagSuffix(t *testing.T) {
+	_, want, _ := strings.Cut(imagespec.DefaultBaseTag, ":")
+	if got := printBaseTag(); got != want {
+		t.Errorf("printBaseTag() = %q, want %q", got, want)
+	}
+}

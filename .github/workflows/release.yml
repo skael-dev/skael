@@ -146,12 +146,11 @@ jobs:
       - name: Resolve the base image's own tag
         id: base_version
         if: matrix.image == 'whetstone-base'
-        # Read straight from the constant rather than restating it here, so
-        # this step cannot drift from imagespec.DefaultBaseTag out of sight.
+        # Reads the suffix from the constant via the whetstone binary rather
+        # than parsing imagespec.go's source text, so a reformatted constant
+        # either keeps working or fails to compile, never silently desyncs.
         run: |
-          const_line="$(grep -o 'DefaultBaseTag = "whetstone-base:[0-9]*"' internal/eval/sandbox/imagespec/imagespec.go)"
-          full_tag="${const_line##*whetstone-base:}"
-          suffix="${full_tag%\"}"
+          suffix="$(go run ./cmd/whetstone --print-base-tag)"
           echo "tags=ghcr.io/skael-dev/whetstone-base:${suffix}" >> "$GITHUB_OUTPUT"
 
       # VERSION is not cosmetic for the worker: the server rejects a report
