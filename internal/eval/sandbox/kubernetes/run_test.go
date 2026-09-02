@@ -90,29 +90,63 @@ func TestRun_ReturnsTheCommandsExitCodeAsAResult(t *testing.T) {
 	}
 }
 
-// A leaked pod holds cluster capacity and, with a policy attached, a leaked
-// policy silently changes the next session's egress.
+// A leaked pod holds cluster capacity; a leaked ConfigMap or NetworkPolicy is
+// worse, since a stale policy silently changes the *next* session's egress
+// rather than erroring. Cases mix NetFull (nothing but the pod is created) and
+// NetAllowlist (pod, proxy pod, ConfigMap and policy), so an assertion here
+// only holds if there was something to leak.
 func TestRun_DeletesEveryResourceOnEveryExitPath(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		o    Options
+		rs   func(*testing.T) sandbox.RunSpec
 		ex   execer
 	}{
-		{"clean exit", &scriptedExecer{remote: t.TempDir()}},
-		{"argv fails", &scriptedExecer{remote: t.TempDir(), argvCode: 1}},
-		{"stage-in fails", &scriptedExecer{remote: t.TempDir(), stageErr: errors.New("no")}},
+		{"clean exit", validOptions(), runnableSpec, &scriptedExecer{remote: t.TempDir()}},
+		{"argv fails", validOptions(), runnableSpec, &scriptedExecer{remote: t.TempDir(), argvCode: 1}},
+		{"stage-in fails", validOptions(), runnableSpec, &scriptedExecer{remote: t.TempDir(), stageErr: errors.New("no")}},
+		{"allowlist clean exit", enforcedOptions(), allowlistSpec, &scriptedExecer{remote: t.TempDir()}},
+		{"allowlist stage-in fails", enforcedOptions(), allowlistSpec, &scriptedExecer{remote: t.TempDir(), stageErr: errors.New("no")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, cs := runDriver(t, validOptions(), tc.ex)
-			_, _ = d.Run(context.Background(), runnableSpec(t))
-			pods, err := cs.CoreV1().Pods(validOptions().Namespace).List(context.Background(), metav1.ListOptions{})
+			d, cs := runDriver(t, tc.o, tc.ex)
+			_, _ = d.Run(context.Background(), tc.rs(t))
+			ns := validOptions().Namespace
+
+			pods, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(pods.Items) != 0 {
 				t.Errorf("%d pods left behind", len(pods.Items))
 			}
+
+			cms, err := cs.CoreV1().ConfigMaps(ns).List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cms.Items) != 0 {
+				t.Errorf("%d config maps left behind", len(cms.Items))
+			}
+
+			policies, err := cs.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(policies.Items) != 0 {
+				t.Errorf("%d network policies left behind", len(policies.Items))
+			}
 		})
 	}
+}
+
+// allowlistSpec is runnableSpec with NetAllowlist, so prepareNetwork creates
+// the proxy pod, its ConfigMap and the NetworkPolicy for the leak check above
+// to have something to find.
+func allowlistSpec(t *testing.T) sandbox.RunSpec {
+	rs := runnableSpec(t)
+	rs.Network, rs.Allow = sandbox.NetAllowlist, []string{"api.anthropic.com"}
+	return rs
 }
 
 func TestRun_CreatesTheProxyAndThePolicyForAnAllowlistRun(t *testing.T) {
