@@ -29,9 +29,8 @@ type Options struct {
 	HardwareIsolated      bool
 	NetworkPolicyEnforced bool
 
-	CPUs      string
-	Memory    string
-	PidsLimit int64
+	CPUs   string
+	Memory string
 
 	Logger func(format string, args ...any)
 }
@@ -64,9 +63,6 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Memory == "" {
 		o.Memory = "4Gi"
-	}
-	if o.PidsLimit == 0 {
-		o.PidsLimit = 512
 	}
 	if o.Logger == nil {
 		o.Logger = func(string, ...any) {}

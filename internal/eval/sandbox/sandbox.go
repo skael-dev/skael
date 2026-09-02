@@ -68,6 +68,12 @@ type RunSpec struct {
 	// driver that fails to mirror back must return an error, never a short
 	// result: a partial mirror is indistinguishable from a skill that produced
 	// nothing.
+	//
+	// A copying driver's mirror-back is a merge, not a sync: it writes what
+	// the run produced but does not remove a file the run deleted, so a
+	// deleted file can survive locally. A bind-mounting driver has no such
+	// gap, because there is only ever one copy. The Kubernetes driver is the
+	// copying case today; do not assume the two drivers agree on deletions.
 	Workspace string
 	WorkDir   string // container path; empty = DefaultWorkDir
 	Argv      []string
