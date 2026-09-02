@@ -38,11 +38,34 @@ func TestKubernetesDriver_ActuallyBlocksEgressUnderNetNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
+	const probe = "curl -sS -m 5 https://example.com"
+
+	// Control: the same probe must succeed under NetFull, or a non-zero exit
+	// under NetNone below proves nothing. Without this, the probe failing for
+	// an unrelated reason — no DNS, a typo, a missing curl — reads exactly
+	// like enforcement working, and the test goes green while enforcing
+	// nothing.
+	var controlErr strings.Builder
+	control, err := d.Run(context.Background(), sandbox.RunSpec{
+		Image:     img,
+		Workspace: t.TempDir(),
+		Argv:      []string{"sh", "-c", probe},
+		Network:   sandbox.NetFull,
+		Timeout:   2 * time.Minute,
+		Stderr:    &controlErr,
+	})
+	if err != nil {
+		t.Fatalf("control Run under NetFull: %v", err)
+	}
+	if control.ExitCode != 0 {
+		t.Skipf("probe is broken, not the enforcement: %q exited %d under NetFull: %s", probe, control.ExitCode, controlErr.String())
+	}
+
 	var stderr strings.Builder
 	res, err := d.Run(context.Background(), sandbox.RunSpec{
 		Image:     img,
 		Workspace: t.TempDir(),
-		Argv:      []string{"sh", "-c", "curl -sS -m 5 https://example.com"},
+		Argv:      []string{"sh", "-c", probe},
 		Network:   sandbox.NetNone,
 		Timeout:   2 * time.Minute,
 		Stderr:    &stderr,

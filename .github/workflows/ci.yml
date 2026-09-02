@@ -48,6 +48,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # kind is not preinstalled on the runner image, unlike kubectl and
+      # docker. install_only skips the action's own cluster creation, because
+      # this job needs the no-CNI config below rather than the action's
+      # default one.
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
       # The default CNI ignores NetworkPolicy, which would let the egress test
       # pass while enforcing nothing.
       - name: Create a kind cluster with no CNI
@@ -82,7 +91,9 @@ jobs:
           SANDBOX_K8S_NAMESPACE: skael-sandbox
           SANDBOX_K8S_IMAGE: whetstone-base-ci:1
           SANDBOX_K8S_NETWORK_POLICY: "true"
-        run: just test-k8s
+        # Every other job in this workflow calls go test directly; just is
+        # not installed on the runner and no step here installs it either.
+        run: go test -count=1 -tags=kubernetes ./internal/eval/sandbox/kubernetes/ -v
 
   lint:
     runs-on: ubuntu-latest
