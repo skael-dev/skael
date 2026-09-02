@@ -94,15 +94,31 @@ func (d *Driver) collectOut(ctx context.Context, pod, workdir, local string) err
 	}()
 
 	untarErr := untarInto(local, pr)
+	// GNU tar pads its stream to fill a blocking factor after the end-of-archive
+	// marker that untarInto stops reading at. Nothing else reads that padding,
+	// so the exec's stdout copier blocks on pw forever and resCh never fires.
+	// Unblock it before waiting: drain a bounded remainder on success (the
+	// unbounded case would trade this deadlock for one where a misbehaving
+	// sandbox streams forever), or close with the error immediately on
+	// failure, so a size-cap error is not defeated by a drain that swallows it.
+	if untarErr != nil {
+		pr.CloseWithError(untarErr)
+	} else {
+		io.CopyN(io.Discard, pr, 1<<20) //nolint:errcheck // draining is best-effort; pr.Close below unblocks the writer regardless
+		pr.Close()
+	}
 	res := <-resCh
+	// untarErr is checked first: once the pipe is closed above, a real
+	// untarInto failure makes the exec's copy fail too, with a closed-pipe
+	// error that would mask the actual cause if checked before it.
+	if untarErr != nil {
+		return fmt.Errorf("kubernetes: unpacking the workspace from %s: %w (tar exit %d: %s)", pod, untarErr, res.code, stderr.String())
+	}
 	if res.err != nil {
 		return fmt.Errorf("kubernetes: collecting the workspace from %s: %w\n%s", pod, res.err, stderr.String())
 	}
 	if res.code != 0 {
 		return fmt.Errorf("kubernetes: collecting the workspace from %s: tar exited %d\n%s", pod, res.code, stderr.String())
-	}
-	if untarErr != nil {
-		return fmt.Errorf("kubernetes: unpacking the workspace from %s: %w", pod, untarErr)
 	}
 	return nil
 }

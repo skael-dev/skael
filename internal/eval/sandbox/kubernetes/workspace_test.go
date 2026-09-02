@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // tarExecer answers a stage-in by unpacking what it is given, and a
@@ -68,6 +69,61 @@ func TestCollectOut_ReturnsAnErrorRatherThanASilentlyEmptyWorkspace(t *testing.T
 	d := &Driver{o: validOptions().withDefaults(), ex: &tarExecer{remote: t.TempDir(), failOut: true}}
 	if err := d.collectOut(context.Background(), "pod", "/workspace", local); err == nil {
 		t.Fatal("collectOut: want an error when the copy back fails")
+	}
+}
+
+// paddedTarExecer answers a collect-out the way real GNU tar does: it writes a
+// clean archive and then keeps writing padding to fill its blocking factor,
+// after the end-of-archive marker that untarInto stops reading at. io.Pipe's
+// Write blocks until something reads, so this recreates the real deadlock -
+// collectOut must drain and close the pipe itself, before it waits on Exec.
+type paddedTarExecer struct {
+	remote string
+}
+
+func (e *paddedTarExecer) Exec(_ context.Context, r execRequest) (int, error) {
+	if err := tarDir(e.remote, r.Stdout); err != nil {
+		return 1, err
+	}
+	// Padding well past the 1 MiB drain bound would still hang forever if the
+	// fix regresses to an unbounded io.Copy; keep it comfortably under that
+	// bound instead, since this test is about the drain-and-close existing at
+	// all, not about the bound's exact size (that is maxWorkspaceFileSize's
+	// job elsewhere).
+	if _, err := r.Stdout.Write(bytes.Repeat([]byte{0}, 4096)); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
+// Regression test for the deadlock CI hit against a real kind cluster: GNU
+// tar's trailing padding was never read, so collectOut's stdout copier blocked
+// on the pipe forever and the whole call hung until the context deadline.
+func TestCollectOut_DrainsTrailingPaddingAfterTheTarEndMarker(t *testing.T) {
+	local, remote := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(remote, "out.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Driver{o: validOptions().withDefaults(), ex: &paddedTarExecer{remote: remote}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- d.collectOut(ctx, "pod", "/workspace", local) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("collectOut: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("collectOut: deadlocked on trailing tar padding instead of draining it")
+	}
+
+	got, err := os.ReadFile(filepath.Join(local, "out.txt"))
+	if err != nil || string(got) != "world" {
+		t.Fatalf("collected file = %q, %v; want world", got, err)
 	}
 }
 
