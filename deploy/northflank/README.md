@@ -115,6 +115,18 @@ whetstone doctor
 It prints the driver it resolved, the project and image, and a warning for each
 guarantee you have not asserted.
 
+## Proving it works
+
+```bash
+just test-northflank
+```
+
+This runs the live conformance and egress suite against a real project. It
+needs `SANDBOX_NF_TOKEN` and creates real sandboxes, so it costs money and
+takes minutes rather than seconds. It is the only end-to-end proof this
+driver works: every other test in this package runs against a fake HTTP
+server and a fake CLI. CI does not run it.
+
 ## Costs
 
 Northflank bills a sandbox as a service, not per second, and a paused service

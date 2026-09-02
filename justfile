@@ -127,6 +127,11 @@ test-web:
 test-k8s:
     go test -count=1 -tags=kubernetes ./internal/eval/sandbox/kubernetes/ -v
 
+# Live Northflank sandbox tests. Needs SANDBOX_NF_TOKEN and a project, and
+# creates real sandboxes that cost real money.
+test-northflank:
+    go test -count=1 -tags=northflank ./internal/eval/sandbox/northflank/ -v
+
 # Fast feedback loop (<10s) — skip testcontainers + e2e
 test-fast:
     go test -short ./... -count=1 && cd web && npx vitest run
