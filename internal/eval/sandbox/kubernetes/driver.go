@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -17,9 +18,10 @@ import (
 
 // Driver runs each session as a pod.
 type Driver struct {
-	o  Options
-	cs k8s.Interface
-	ex execer
+	o            Options
+	cs           k8s.Interface
+	ex           execer
+	waitInterval time.Duration
 }
 
 // New validates the configuration and returns the driver.
@@ -30,7 +32,7 @@ func New(o Options, cs k8s.Interface, ex execer) (*Driver, error) {
 	if ex == nil {
 		return nil, errors.New("kubernetes: no execer; the driver stages the workspace and runs argv through the exec subresource")
 	}
-	return &Driver{o: o.withDefaults(), cs: cs, ex: ex}, nil
+	return &Driver{o: o.withDefaults(), cs: cs, ex: ex, waitInterval: defaultWaitInterval}, nil
 }
 
 // NewInCluster builds a driver from real cluster credentials. It is the only
@@ -63,6 +65,8 @@ func restConfig() (*rest.Config, error) {
 		&clientcmd.ConfigOverrides{},
 	).ClientConfig()
 }
+
+var _ sandbox.Driver = (*Driver)(nil)
 
 func (d *Driver) Name() string { return "kubernetes" }
 
