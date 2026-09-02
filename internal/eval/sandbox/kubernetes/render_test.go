@@ -163,6 +163,14 @@ func TestEgressPolicy_AllowsOnlyTheProxyAndDNS(t *testing.T) {
 	if !sawProxy {
 		t.Error("no egress rule targets the proxy pod")
 	}
+	// A DNS rule with no To peer allows port 53 to any destination, in the
+	// cluster and out — an exfiltration channel. Assert every rule carries a
+	// non-empty peer, so this cannot regress silently.
+	for i, r := range pol.Spec.Egress {
+		if len(r.To) == 0 {
+			t.Errorf("egress rule %d has no To peer: it allows its ports to any destination", i)
+		}
+	}
 }
 
 // NetNone must render no egress rule at all, not an empty allowlist that

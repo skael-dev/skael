@@ -217,6 +217,19 @@ func EgressPolicy(o Options, n names) *networkingv1.NetworkPolicy {
 					Ports: []networkingv1.NetworkPolicyPort{{Port: &proxy}},
 				},
 				{
+					// A DNS rule with no To peer would allow port 53 to any
+					// destination, in the cluster and out. That is an
+					// exfiltration channel over DNS, which internal/gate treats
+					// as unappealable. Scope it to CoreDNS by the labels every
+					// distribution ships it under.
+					To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"},
+						},
+						PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"k8s-app": "kube-dns"},
+						},
+					}},
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: &dnsUDP, Port: &dnsPort},
 						{Protocol: &dnsTCP, Port: &dnsPort},
