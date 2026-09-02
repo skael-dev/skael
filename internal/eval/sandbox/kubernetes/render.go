@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -26,6 +27,15 @@ const (
 	// before argv starts. The sleep is bounded by ActiveDeadlineSeconds.
 	idleSeconds = "86400"
 )
+
+// podStagingMargin is added to the run's own timeout when setting
+// ActiveDeadlineSeconds. Kubelet starts charging that deadline at pod
+// creation, before scheduling, image pull and workspace staging even begin —
+// none of which count against runCtx, whose clock starts only once the
+// session is running. Without a margin, a slow image pull ate into the
+// run's own budget from the outside, so the pod could be killed before
+// runCtx expired: an exec error rather than the run's own TimedOut result.
+const podStagingMargin = 5 * time.Minute
 
 // names is one session's resource name set. Every resource shares the random
 // suffix so a sweep can group them.
@@ -98,7 +108,7 @@ func SessionPod(rs sandbox.RunSpec, o Options, n names) (*corev1.Pod, error) {
 		ObjectMeta: metav1.ObjectMeta{Name: n.Session, Namespace: o.Namespace, Labels: n.labels("session")},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
-			ActiveDeadlineSeconds:        i64Ptr(int64(rs.Timeout.Seconds())),
+			ActiveDeadlineSeconds:        i64Ptr(int64((rs.Timeout + podStagingMargin).Seconds())),
 			AutomountServiceAccountToken: boolPtr(false),
 			Containers: []corev1.Container{{
 				Name:         "session",

@@ -212,3 +212,15 @@ func TestRun_RefusesAHostMountWithAMessageNamingTheAlternative(t *testing.T) {
 		t.Fatalf("Run = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
 	}
 }
+
+// A short run timeout must not leave too little time to copy back even a
+// small workspace; a long one must scale rather than staying pinned at the
+// floor.
+func TestCollectOutTimeout_ScalesWithTheRunTimeoutAndFloors(t *testing.T) {
+	if got := collectOutTimeout(2 * time.Minute); got != minCollectOutTimeout {
+		t.Errorf("collectOutTimeout(2m) = %v, want the %v floor", got, minCollectOutTimeout)
+	}
+	if got := collectOutTimeout(40 * time.Minute); got != 10*time.Minute {
+		t.Errorf("collectOutTimeout(40m) = %v, want 10m", got)
+	}
+}

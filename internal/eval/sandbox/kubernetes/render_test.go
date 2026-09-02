@@ -51,8 +51,11 @@ func TestSessionPod_NeverRestartsAndAlwaysCarriesADeadline(t *testing.T) {
 	if p.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("RestartPolicy = %q, want Never", p.Spec.RestartPolicy)
 	}
-	if p.Spec.ActiveDeadlineSeconds == nil || *p.Spec.ActiveDeadlineSeconds != 600 {
-		t.Errorf("ActiveDeadlineSeconds = %v, want 600", p.Spec.ActiveDeadlineSeconds)
+	// The deadline carries a staging margin on top of the run's own 600s
+	// timeout, so image pull and scheduling time is not deducted from it.
+	want := int64((10*time.Minute + podStagingMargin).Seconds())
+	if p.Spec.ActiveDeadlineSeconds == nil || *p.Spec.ActiveDeadlineSeconds != want {
+		t.Errorf("ActiveDeadlineSeconds = %v, want %d", p.Spec.ActiveDeadlineSeconds, want)
 	}
 }
 

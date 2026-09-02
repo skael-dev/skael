@@ -15,6 +15,24 @@ import (
 // defaultWaitInterval paces the readiness poll. run_test.go shortens it.
 const defaultWaitInterval = 500 * time.Millisecond
 
+// minCollectOutTimeout floors the workspace-collection budget so a very short
+// run timeout never leaves too little time to copy even a small workspace
+// back.
+const minCollectOutTimeout = time.Minute
+
+// collectOutTimeout scales the workspace-collection budget with the run's own
+// timeout, at a quarter of it, floored at minCollectOutTimeout. There is no
+// direct measurement of workspace size to key off at this point, so the
+// run's timeout is the best available proxy: a session given more time is
+// likely to have produced more to copy back.
+func collectOutTimeout(runTimeout time.Duration) time.Duration {
+	t := runTimeout / 4
+	if t < minCollectOutTimeout {
+		return minCollectOutTimeout
+	}
+	return t
+}
+
 // Run executes one command in a fresh pod. A non-zero exit is a result, not an
 // error, matching the Docker driver.
 func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult, error) {
@@ -72,8 +90,12 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	}
 
 	// The workspace is collected on a context of its own: the run is over, and
-	// its outputs are the only record of what happened.
-	outCtx, outCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	// its outputs are the only record of what happened. A fixed one-minute
+	// budget once turned a large, legitimately successful workspace into an
+	// infrastructure error instead of a gradeable result. Scale the budget
+	// with the run's own timeout instead, on the assumption that a session
+	// given a longer timeout is more likely to have produced more output.
+	outCtx, outCancel := context.WithTimeout(context.WithoutCancel(ctx), collectOutTimeout(rs.Timeout))
 	defer outCancel()
 	if err := d.collectOut(outCtx, n.Session, workdir, rs.Workspace); err != nil {
 		return res, err
