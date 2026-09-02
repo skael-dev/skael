@@ -97,3 +97,36 @@ func writeEvilTar(t *testing.T, w io.Writer) {
 		t.Fatal(err)
 	}
 }
+
+// The total extraction cap must reject a stream that would otherwise be
+// buffered whole in the worker's memory (see maxWorkspaceTotalSize). Shrink
+// both caps for the test rather than writing gigabytes of fixture data.
+func TestUntarInto_RejectsAStreamOverTheTotalSizeCap(t *testing.T) {
+	origFile, origTotal := maxWorkspaceFileSize, maxWorkspaceTotalSize
+	maxWorkspaceFileSize, maxWorkspaceTotalSize = 1200, 1900 // two 1000-byte files trip the total cap, neither trips the per-file cap
+	t.Cleanup(func() { maxWorkspaceFileSize, maxWorkspaceTotalSize = origFile, origTotal })
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	// Two files, each under the per-file cap, so neither trips it alone, but
+	// their sum trips the total cap.
+	var perFile int64 = 1000
+	payload := bytes.Repeat([]byte("x"), int(perFile))
+	for _, name := range []string{"a.bin", "b.bin"} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: perFile}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	err := untarInto(dest, &buf)
+	if err == nil {
+		t.Fatal("untarInto: want an error when the total extraction size exceeds the cap")
+	}
+}
