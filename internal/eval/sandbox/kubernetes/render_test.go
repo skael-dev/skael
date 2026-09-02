@@ -165,6 +165,20 @@ func TestEgressPolicy_AllowsOnlyTheProxyAndDNS(t *testing.T) {
 	}
 }
 
+// NetNone must render no egress rule at all, not an empty allowlist that
+// some CNI could read as permissive. This is the property that makes it
+// deny-all.
+func TestDenyAllEgressPolicy_SelectsTheSessionPodAndCarriesNoEgressRule(t *testing.T) {
+	n := testNames(t)
+	pol := DenyAllEgressPolicy(validOptions().withDefaults(), n)
+	if pol.Spec.PodSelector.MatchLabels[roleLabelKey] != "session" {
+		t.Errorf("policy must select the session pod, got %v", pol.Spec.PodSelector.MatchLabels)
+	}
+	if len(pol.Spec.Egress) != 0 {
+		t.Errorf("egress rules = %d, want 0: NetNone must deny all egress", len(pol.Spec.Egress))
+	}
+}
+
 func TestProxyConfigMap_CarriesBothRenderedHalves(t *testing.T) {
 	cm, err := ProxyConfigMap([]string{"api.anthropic.com"}, validOptions().withDefaults(), testNames(t))
 	if err != nil {
