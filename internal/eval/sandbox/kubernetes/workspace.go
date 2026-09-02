@@ -46,17 +46,24 @@ func (d *Driver) stageIn(ctx context.Context, pod, workdir, local string) error 
 		Stdin:  pr,
 		Stderr: &stderr,
 	})
-	// A tarDir failure is the more useful error: it names what went wrong
-	// packing the workspace, rather than the pipe error it produces on the
-	// exec side.
-	if tarErr := <-tarErrCh; tarErr != nil {
-		return fmt.Errorf("kubernetes: packing the workspace: %w", tarErr)
-	}
+	// Exec can return without having read all of pr, or any of it, when it
+	// fails before consuming stdin. Closing the read side turns the tarDir
+	// goroutine's pending Write into ErrClosedPipe instead of leaving it
+	// blocked forever.
+	pr.Close()
+	tarErr := <-tarErrCh
+
+	// An exec failure is checked first: when exec aborts early, tarErr is
+	// usually just the closed-pipe side effect above, not the reason
+	// staging failed.
 	if err != nil {
 		return fmt.Errorf("kubernetes: staging the workspace into %s: %w\n%s", pod, err, stderr.String())
 	}
 	if code != 0 {
 		return fmt.Errorf("kubernetes: staging the workspace into %s: tar exited %d\n%s", pod, code, stderr.String())
+	}
+	if tarErr != nil {
+		return fmt.Errorf("kubernetes: packing the workspace: %w", tarErr)
 	}
 	return nil
 }
