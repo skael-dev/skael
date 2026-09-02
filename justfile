@@ -122,6 +122,11 @@ test-integration:
 test-web:
     cd web && npx vitest run
 
+# Kubernetes sandbox conformance; needs a cluster in KUBECONFIG whose CNI
+# enforces NetworkPolicy.
+test-k8s:
+    go test -count=1 -tags=kubernetes ./internal/eval/sandbox/kubernetes/ -v
+
 # Fast feedback loop (<10s) — skip testcontainers + e2e
 test-fast:
     go test -short ./... -count=1 && cd web && npx vitest run

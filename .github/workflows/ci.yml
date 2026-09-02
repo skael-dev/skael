@@ -40,6 +40,50 @@ jobs:
           WHETSTONE_BASE_TAG: whetstone-base-ci:1
         run: go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
+  kubernetes-sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The default CNI ignores NetworkPolicy, which would let the egress test
+      # pass while enforcing nothing.
+      - name: Create a kind cluster with no CNI
+        run: |
+          cat > kind.yaml <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          networking:
+            disableDefaultCNI: true
+            podSubnet: "192.168.0.0/16"
+          EOF
+          kind create cluster --config kind.yaml --wait 5m
+
+      - name: Install Calico
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=5m
+          kubectl wait --for=condition=Ready nodes --all --timeout=5m
+
+      - name: Build and load the slim base image
+        run: |
+          go run ./cmd/whetstone --print-base-dockerfile --slim > Dockerfile.base
+          docker build -t whetstone-base-ci:1 -f Dockerfile.base .
+          kind load docker-image whetstone-base-ci:1
+
+      - name: Apply the shipped RBAC manifest
+        run: kubectl apply -f deploy/kubernetes/worker-rbac.yaml
+
+      - name: Run the Kubernetes sandbox conformance suite
+        env:
+          SANDBOX_DRIVER: kubernetes
+          SANDBOX_K8S_NAMESPACE: skael-sandbox
+          SANDBOX_K8S_IMAGE: whetstone-base-ci:1
+          SANDBOX_K8S_NETWORK_POLICY: "true"
+        run: just test-k8s
+
   lint:
     runs-on: ubuntu-latest
     steps:
