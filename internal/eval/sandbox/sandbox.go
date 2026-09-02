@@ -62,7 +62,13 @@ type Mount struct {
 type RunSpec struct {
 	Image     ImageRef
 	Snapshot  SnapshotRef
-	Workspace string // host dir, mounted read-write at WorkDir
+	// Workspace is an absolute local directory. The driver mirrors it into the
+	// run before argv starts and mirrors it back afterwards. A bind-mounting
+	// driver satisfies both directions at once; a remote driver copies. A
+	// driver that fails to mirror back must return an error, never a short
+	// result: a partial mirror is indistinguishable from a skill that produced
+	// nothing.
+	Workspace string
 	WorkDir   string // container path; empty = DefaultWorkDir
 	Argv      []string
 	Env       []string
