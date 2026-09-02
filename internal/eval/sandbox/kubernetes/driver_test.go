@@ -13,7 +13,7 @@ import (
 
 func newTestDriver(t *testing.T, o Options) *Driver {
 	t.Helper()
-	d, err := New(o, fake.NewSimpleClientset())
+	d, err := New(o, fake.NewSimpleClientset(), &tarExecer{remote: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

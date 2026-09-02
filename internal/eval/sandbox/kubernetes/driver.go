@@ -2,10 +2,13 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	k8s "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
@@ -16,14 +19,49 @@ import (
 type Driver struct {
 	o  Options
 	cs k8s.Interface
+	ex execer
 }
 
 // New validates the configuration and returns the driver.
-func New(o Options, cs k8s.Interface) (*Driver, error) {
+func New(o Options, cs k8s.Interface, ex execer) (*Driver, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
-	return &Driver{o: o.withDefaults(), cs: cs}, nil
+	if ex == nil {
+		return nil, errors.New("kubernetes: no execer; the driver stages the workspace and runs argv through the exec subresource")
+	}
+	return &Driver{o: o.withDefaults(), cs: cs, ex: ex}, nil
+}
+
+// NewInCluster builds a driver from real cluster credentials. It is the only
+// constructor client construction lives behind: a later task needs to build
+// this driver from a package that must not import k8s.io/*, and an exported
+// constructor returning an unexported execer would be unusable there anyway.
+func NewInCluster(o Options) (*Driver, error) {
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+	cfg, err := restConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes: building the rest config: %w", err)
+	}
+	cs, err := k8s.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes: building the clientset: %w", err)
+	}
+	return New(o, cs, &apiExecer{cs: cs, cfg: cfg, namespace: o.Namespace})
+}
+
+// restConfig prefers in-cluster credentials, which is where the worker runs
+// in production, and falls back to a kubeconfig for local development.
+func restConfig() (*rest.Config, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, nil
+	}
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(),
+		&clientcmd.ConfigOverrides{},
+	).ClientConfig()
 }
 
 func (d *Driver) Name() string { return "kubernetes" }
