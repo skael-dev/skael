@@ -282,6 +282,10 @@ func run(cfg workerConfig) error {
 	}
 	log.Info().Str("driver", drv.Name()).Bool("hardware_isolated", drv.HardwareIsolated()).Msg("sandbox driver ready")
 
+	// See cli/whetstone/eval.go's identical call: a prior run killed by
+	// something stronger than its own context can leave resources behind.
+	resolve.Sweep(context.Background(), drv)
+
 	gw, err := cfg.Provider.Gateway(judgeGatewayOptions())
 	if err != nil {
 		return fmt.Errorf("skael-worker: LLM gateway: %w", err)

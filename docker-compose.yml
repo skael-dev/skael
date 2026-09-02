@@ -45,6 +45,24 @@ services:
   # from a metered backend — what changes is the endpoint and how the panel
   # agent is billed.
   worker:
+    # ------------------------------------------------------------------------
+    # This compose file runs the docker driver (SANDBOX_DRIVER=docker, the
+    # default) — the socket mount and the WORKER_RUN_ROOT / WORKER_WORK_ROOT
+    # binds below exist only for it.
+    #
+    # SANDBOX_DRIVER=kubernetes needs neither: it schedules a session pod
+    # through the cluster API instead of a Docker socket, so drop the socket
+    # mount and the two binds and set SANDBOX_K8S_NAMESPACE. See
+    # deploy/kubernetes/README.md.
+    #
+    # SANDBOX_DRIVER=northflank needs neither either: it runs each session as
+    # a service in a Northflank project, so it wants only an API token. See
+    # deploy/northflank/README.md.
+    #
+    #   SANDBOX_DRIVER: northflank
+    #   SANDBOX_NF_TOKEN: ${SANDBOX_NF_TOKEN:-}
+    #   SANDBOX_NF_PROJECT: ${SANDBOX_NF_PROJECT:-}
+    # ------------------------------------------------------------------------
     # Built from source here. For a deployment, use the published image
     # instead: ghcr.io/skael-dev/skael-worker:latest
     build:

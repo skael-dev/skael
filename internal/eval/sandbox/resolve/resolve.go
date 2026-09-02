@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/sandbox/kubernetes"
+	"github.com/skael-dev/skael/internal/eval/sandbox/northflank"
 )
 
 // Config is the resolved sandbox configuration. It is data only: nothing
@@ -22,6 +24,7 @@ type Config struct {
 	Driver  string
 	BaseTag string
 	K8s     kubernetes.Options
+	NF      northflank.Options
 }
 
 // FromEnv reads the configuration. look is os.Getenv in production; tests
@@ -45,7 +48,34 @@ func FromEnv(look func(string) string) Config {
 			HardwareIsolated:      look("SANDBOX_K8S_HARDWARE_ISOLATED") == "true",
 			NetworkPolicyEnforced: look("SANDBOX_K8S_NETWORK_POLICY") == "true",
 		},
+		NF: northflank.Options{
+			Token:                 look("SANDBOX_NF_TOKEN"),
+			Project:               look("SANDBOX_NF_PROJECT"),
+			Image:                 look("SANDBOX_NF_IMAGE"),
+			RegistryCredential:    look("SANDBOX_NF_REGISTRY_CREDENTIAL"),
+			Plan:                  look("SANDBOX_NF_PLAN"),
+			CLI:                   look("SANDBOX_NF_CLI"),
+			AllowedDomains:        splitDomains(look("SANDBOX_NF_ALLOWED_DOMAINS")),
+			NetworkPolicyEnforced: look("SANDBOX_NF_NETWORK_POLICY") == "true",
+			HardwareIsolated:      look("SANDBOX_NF_HARDWARE_ISOLATED") == "true",
+		},
 	}
+}
+
+// splitDomains parses a comma-separated operator input, trimming the spaces
+// that a hand-typed list carries and dropping any resulting empty entry.
+func splitDomains(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, d := range strings.Split(v, ",") {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // Warnings describes a configuration that will run but is weaker than it
@@ -54,14 +84,21 @@ func FromEnv(look func(string) string) Config {
 // not a silent one that pretends to provide them.
 func (c Config) Warnings() []string {
 	var w []string
-	if c.Driver != "kubernetes" {
-		return w
-	}
-	if !c.K8s.NetworkPolicyEnforced {
-		w = append(w, "SANDBOX_K8S_NETWORK_POLICY is not set: this cluster's CNI enforcement is not asserted, so a run that restricts the network will be refused")
-	}
-	if !c.K8s.HardwareIsolated {
-		w = append(w, "SANDBOX_K8S_HARDWARE_ISOLATED is not set: untrusted work will be refused, as on the docker driver")
+	switch c.Driver {
+	case "kubernetes":
+		if !c.K8s.NetworkPolicyEnforced {
+			w = append(w, "SANDBOX_K8S_NETWORK_POLICY is not set: this cluster's CNI enforcement is not asserted, so a run that restricts the network will be refused")
+		}
+		if !c.K8s.HardwareIsolated {
+			w = append(w, "SANDBOX_K8S_HARDWARE_ISOLATED is not set: untrusted work will be refused, as on the docker driver")
+		}
+	case "northflank":
+		if !c.NF.NetworkPolicyEnforced {
+			w = append(w, "SANDBOX_NF_NETWORK_POLICY is not set: this project's egress enforcement is not asserted, so a run that restricts the network will be refused")
+		}
+		if !c.NF.HardwareIsolated {
+			w = append(w, "SANDBOX_NF_HARDWARE_ISOLATED is not set: untrusted work will be refused, as on the docker driver")
+		}
 	}
 	return w
 }
@@ -77,8 +114,12 @@ func (c Config) Build(logger func(format string, args ...any)) (sandbox.Driver, 
 		// NewInCluster, not a clientset built here, keeps the Kubernetes
 		// client SDK out of every package but the kubernetes sandbox one.
 		return kubernetes.NewInCluster(o)
+	case "northflank":
+		o := c.NF
+		o.Logger = logger
+		return northflank.New(o)
 	default:
-		return nil, fmt.Errorf("sandbox: unknown SANDBOX_DRIVER %q; supported values are docker and kubernetes", c.Driver)
+		return nil, fmt.Errorf("sandbox: unknown SANDBOX_DRIVER %q; supported values are docker, kubernetes and northflank", c.Driver)
 	}
 }
 

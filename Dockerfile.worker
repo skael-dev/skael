@@ -30,6 +30,14 @@ RUN v="${VERSION:-0.0.0-local}" && \
 FROM alpine:3.21
 RUN apk add --no-cache docker-cli ca-certificates
 
+# The Northflank driver shells out to this CLI to copy a session's workspace.
+# Pinned: an updated CLI can change the argv the driver builds. The Node floor
+# is what @northflank/cli 0.12.2 declares it needs. coreutils replaces
+# busybox's env, which lacks the -S flag the CLI's own shebang requires.
+RUN apk add --no-cache nodejs npm coreutils \
+    && node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22 || (a===22 && b<13)) { console.error("node "+process.versions.node+" is below the 22.13.0 @northflank/cli requires"); process.exit(1) }' \
+    && npm i -g @northflank/cli@0.12.2
+
 COPY --from=build /skael-worker /usr/local/bin/skael-worker
 
 # Both roots must resolve to the same path inside the container and on the
