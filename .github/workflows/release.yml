@@ -93,10 +93,21 @@ jobs:
             dockerfile: Dockerfile
           - image: skael-worker
             dockerfile: Dockerfile.worker
+          - image: whetstone-base
+            dockerfile: Dockerfile.base
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        if: matrix.image == 'whetstone-base'
+        with:
+          go-version-file: go.mod
+
+      - name: Generate the base Dockerfile
+        if: matrix.image == 'whetstone-base'
+        run: go run ./cmd/whetstone --print-base-dockerfile > Dockerfile.base
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -127,6 +138,22 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # The base image is not tagged by release version. DefaultBaseTag is
+      # bumped only when base/Dockerfile's contents change, and a score is
+      # attributed to an environment: tagging this image per release would
+      # publish a new environment on every release and split every score
+      # trend. Overrides the "tags" output computed above for this one entry.
+      - name: Resolve the base image's own tag
+        id: base_version
+        if: matrix.image == 'whetstone-base'
+        # Read straight from the constant rather than restating it here, so
+        # this step cannot drift from imagespec.DefaultBaseTag out of sight.
+        run: |
+          const_line="$(grep -o 'DefaultBaseTag = "whetstone-base:[0-9]*"' internal/eval/sandbox/imagespec/imagespec.go)"
+          full_tag="${const_line##*whetstone-base:}"
+          suffix="${full_tag%\"}"
+          echo "tags=ghcr.io/skael-dev/whetstone-base:${suffix}" >> "$GITHUB_OUTPUT"
+
       # VERSION is not cosmetic for the worker: the server rejects a report
       # whose engine_version is "" or "dev", and a constant defeats
       # report.Comparable, so every build would chart as one trend.
@@ -140,6 +167,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.version.outputs.tag }}
-          tags: ${{ steps.version.outputs.tags }}
+          tags: ${{ steps.base_version.outputs.tags || steps.version.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}

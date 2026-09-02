@@ -191,6 +191,8 @@ Supported, and how `docker compose --profile worker up` runs it (`Dockerfile.wor
 
 Kubernetes needs the same two things — a `hostPath` volume with `mountPath` equal to `path`, and the node's Docker socket. That second requirement is real: a node running containerd rather than Docker has no socket for this driver to talk to, so the worker belongs on a Docker node (or on the host) until a containerd/Kubernetes sandbox driver exists.
 
+- **The Kubernetes driver resolves a published image; it does not build one.** `SANDBOX_K8S_IMAGE` must name an image already in a registry, and the default is `ghcr.io/skael-dev/whetstone-base:<n>`, where `<n>` is the version suffix of `imagespec.DefaultBaseTag`. The release workflow's `images` job publishes it from `imagespec.BaseDockerfile(false)` (`go run ./cmd/whetstone --print-base-dockerfile`), tagged by that suffix, never by the release version — the constant is bumped only when the base image's contents change, and tagging per release would publish a new environment every time and split every score trend. Bumping `DefaultBaseTag` requires a release before a Kubernetes worker can pull the new base; until then it keeps resolving the old tag.
+
 Each of the events/read/write/suites classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
 
 ## Security constraints
