@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
+	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 )
 
 // recordingAPI is a fake Northflank that records the calls it received.
@@ -68,7 +69,9 @@ func runDriver(t *testing.T, o Options, api *recordingAPI) *Driver {
 func runnableSpec(t *testing.T) sandbox.RunSpec {
 	t.Helper()
 	return sandbox.RunSpec{
-		Image:     sandbox.ImageRef{Tag: "img"},
+		// Must match validOptions().withDefaults().Image, since Run now
+		// refuses a mismatch between rs.Image and the driver's own image.
+		Image:     sandbox.ImageRef{Tag: imagespec.PublishedBaseImage},
 		Workspace: t.TempDir(),
 		Argv:      []string{"claude", "-p", "go"},
 		Network:   sandbox.NetFull,
@@ -158,6 +161,30 @@ func TestRun_RefusesAHostMountWithAMessageNamingTheAlternative(t *testing.T) {
 	_, err := d.Run(context.Background(), rs)
 	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
 		t.Fatalf("Run = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
+	}
+}
+
+func TestRun_RefusesAnImageMismatchRatherThanSubstitutingItsOwn(t *testing.T) {
+	fakeCLI(t, 0)
+	d := runDriver(t, validOptions(), &recordingAPI{})
+	rs := runnableSpec(t)
+	rs.Image = sandbox.ImageRef{Tag: "ghcr.io/other/image:9"}
+
+	_, err := d.Run(context.Background(), rs)
+	if err == nil || !strings.Contains(err.Error(), "ghcr.io/other/image:9") {
+		t.Fatalf("Run = %v, want a refusal naming the mismatched image", err)
+	}
+}
+
+func TestRun_RefusesStdinRatherThanDroppingIt(t *testing.T) {
+	fakeCLI(t, 0)
+	d := runDriver(t, validOptions(), &recordingAPI{})
+	rs := runnableSpec(t)
+	rs.Stdin = strings.NewReader("input")
+
+	_, err := d.Run(context.Background(), rs)
+	if err == nil || !strings.Contains(err.Error(), "stdin") {
+		t.Fatalf("Run = %v, want a refusal naming stdin", err)
 	}
 }
 

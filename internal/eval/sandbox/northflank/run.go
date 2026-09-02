@@ -42,6 +42,19 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return sandbox.RunResult{}, fmt.Errorf(
 			"northflank: run declares %d host mounts, and a remote sandbox has no host to mount from. Supply agent credentials as environment variables instead (CLAUDE_CODE_OAUTH_TOKEN)", len(rs.Mounts))
 	}
+	// createSandbox always uses the driver's own configured image; it never
+	// looks at rs.Image. That is correct only because Prepare returns
+	// Tag: d.o.Image, so the two happen to agree. A caller naming a
+	// different image gets silently ignored rather than served the image
+	// it asked for, which is a refusal, not a best-effort substitution.
+	if rs.Image.Tag != "" && rs.Image.Tag != d.o.Image {
+		return sandbox.RunResult{}, fmt.Errorf(
+			"northflank: run requests image %q, but the driver is configured for %q; the two must match", rs.Image.Tag, d.o.Image)
+	}
+	if rs.Stdin != nil {
+		return sandbox.RunResult{}, errors.New(
+			"northflank: run supplies stdin, which this driver does not forward to the sandbox")
+	}
 	if err := d.o.CheckNetwork(rs.Network, rs.Allow); err != nil {
 		return sandbox.RunResult{}, err
 	}
