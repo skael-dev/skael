@@ -160,14 +160,24 @@ func envMap(env []string) map[string]string {
 func (c *client) sandboxRunning(ctx context.Context, id string) (bool, error) {
 	var resp struct {
 		Data struct {
-			Status string `json:"status"`
+			Status struct {
+				Deployment struct {
+					// Documented four-value enum: PENDING, IN_PROGRESS,
+					// COMPLETED, FAILED. Confirmed against a live account,
+					// not only the published reference: decoding an object
+					// into a plain string fails loudly, so a wrong guess
+					// here shows up on the first real run rather than
+					// silently reporting every sandbox as never running.
+					Status string `json:"status"`
+				} `json:"deployment"`
+			} `json:"status"`
 		} `json:"data"`
 	}
 	path := fmt.Sprintf("/projects/%s/services/%s", c.o.Project, id)
 	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return false, err
 	}
-	return resp.Data.Status == "RUNNING", nil
+	return resp.Data.Status.Deployment.Status == "COMPLETED", nil
 }
 
 // execSandbox runs argv inside the running service and returns its exit
@@ -231,9 +241,11 @@ func (c *client) listSandboxes(ctx context.Context) ([]sandboxRef, error) {
 	var resp struct {
 		Data struct {
 			Services []struct {
-				ID     string            `json:"id"`
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				Metadata struct {
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
 			} `json:"services"`
 		} `json:"data"`
 	}
@@ -243,8 +255,9 @@ func (c *client) listSandboxes(ctx context.Context) ([]sandboxRef, error) {
 	}
 
 	var refs []sandboxRef
+	// Nested under metadata.labels, the same shape createSandbox writes.
 	for _, s := range resp.Data.Services {
-		if _, ok := s.Labels[ownerLabelKey]; !ok {
+		if _, ok := s.Metadata.Labels[ownerLabelKey]; !ok {
 			continue
 		}
 		refs = append(refs, sandboxRef{ID: s.ID, Name: s.Name})

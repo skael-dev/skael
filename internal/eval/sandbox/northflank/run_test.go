@@ -46,7 +46,7 @@ func (a *recordingAPI) handler() http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": "svc-1"}})
 		default:
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"data": map[string]any{"id": "svc-1", "status": "RUNNING"},
+				"data": map[string]any{"id": "svc-1", "status": map[string]any{"deployment": map[string]any{"status": "COMPLETED"}}},
 			})
 		}
 	}
@@ -188,7 +188,7 @@ func TestSweep_DeletesOrphansCarryingTheOwnerLabel(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"services": []any{
-			map[string]any{"id": "svc-orphan", "name": "whetstone-run-old", "labels": map[string]any{ownerLabelKey: "skael"}},
+			map[string]any{"id": "svc-orphan", "name": "whetstone-run-old", "metadata": map[string]any{"labels": map[string]any{ownerLabelKey: "skael"}}},
 		}}})
 	}))
 	t.Cleanup(srv.Close)
