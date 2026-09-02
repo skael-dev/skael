@@ -189,7 +189,7 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `SANDBOX_K8S_NETWORK_POLICY` | no | unset | Asserts the cluster's CNI enforces `NetworkPolicy`. Accepted only as the exact lowercase string `true`; any other value, including `TRUE` or `1`, reads as unasserted and the driver refuses a run that restricts the network. Verify the assertion against the real cluster with `whetstone doctor --check-egress` before relying on it |
 | `SANDBOX_NF_TOKEN` | with `northflank` | — | Northflank API token. Never printed by `whetstone doctor`, which reports only whether it is set |
 | `SANDBOX_NF_PROJECT` | with `northflank` | — | Project the driver creates session services in. Give it a project of its own: the driver deletes every service carrying its owner label, including orphans found at startup |
-| `SANDBOX_NF_IMAGE` | no | `ghcr.io/skael-dev/whetstone-base:1` | Base image a session runs |
+| `SANDBOX_NF_IMAGE` | no | `imagespec.PublishedBaseImage` (`ghcr.io/skael-dev/whetstone-base:<n>`) | Base image a session runs |
 | `SANDBOX_NF_REGISTRY_CREDENTIAL` | no | — | Saved Northflank credential name, for a private registry. Not needed for the default image |
 | `SANDBOX_NF_PLAN` | no | `nf-compute-20` | Resource plan for each session service |
 | `SANDBOX_NF_CLI` | no | `northflank` | Path to the CLI the driver shells out to for workspace transfer |
