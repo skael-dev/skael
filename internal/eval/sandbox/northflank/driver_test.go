@@ -1,3 +1,5 @@
+//go:build unix
+
 package northflank
 
 import (
@@ -10,6 +12,7 @@ import (
 )
 
 func TestHardwareIsolated_IsFalseUntilTheOperatorAssertsIt(t *testing.T) {
+	fakeCLI(t, 0)
 	d, err := New(validOptions())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -32,6 +35,7 @@ func TestHardwareIsolated_IsFalseUntilTheOperatorAssertsIt(t *testing.T) {
 // There is no daemon to build with, and running the skill on a base that lacks
 // its dependencies would record the failures as the skill's own fault.
 func TestPrepare_RefusesADeclaredDependencyByName(t *testing.T) {
+	fakeCLI(t, 0)
 	d, _ := New(validOptions())
 	_, err := d.Prepare(context.Background(), sandbox.EnvSpec{
 		Skill: "pdf-extract",
@@ -46,6 +50,7 @@ func TestPrepare_RefusesADeclaredDependencyByName(t *testing.T) {
 }
 
 func TestPrepare_ReturnsTheConfiguredImageAndStillRecordsTheDigest(t *testing.T) {
+	fakeCLI(t, 0)
 	o := validOptions()
 	o.Image = "ghcr.io/skael-dev/whetstone-base:1"
 	d, _ := New(o)

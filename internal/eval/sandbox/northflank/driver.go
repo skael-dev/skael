@@ -28,7 +28,11 @@ func New(o Options) (*Driver, error) {
 		return nil, err
 	}
 	o = o.withDefaults()
-	return &Driver{o: o, c: newClient(o), waitInterval: defaultWaitInterval}, nil
+	d := &Driver{o: o, c: newClient(o), waitInterval: defaultWaitInterval}
+	if err := d.cliLogin(context.Background()); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // Run arrives in a later task (workspace staging and execution); until then
