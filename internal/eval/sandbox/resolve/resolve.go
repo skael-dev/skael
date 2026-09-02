@@ -12,6 +12,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
+	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/sandbox/kubernetes"
 )
 
@@ -38,7 +39,7 @@ func FromEnv(look func(string) string) Config {
 		BaseTag: look("WHETSTONE_BASE_TAG"),
 		K8s: kubernetes.Options{
 			Namespace:             look("SANDBOX_K8S_NAMESPACE"),
-			Image:                 look("SANDBOX_K8S_IMAGE"),
+			Image:                 orDefault(look("SANDBOX_K8S_IMAGE"), imagespec.PublishedBaseImage),
 			PullSecret:            look("SANDBOX_K8S_PULL_SECRET"),
 			RuntimeClass:          look("SANDBOX_K8S_RUNTIME_CLASS"),
 			HardwareIsolated:      look("SANDBOX_K8S_HARDWARE_ISOLATED") == "true",
@@ -104,4 +105,14 @@ func EnsureBase(ctx context.Context, d sandbox.Driver, slim bool) error {
 		return e.EnsureBase(ctx, slim)
 	}
 	return nil
+}
+
+// orDefault keeps the zero value out of Options, so Validate's requirement
+// stays a real guard for a driver constructed directly rather than a check
+// this package must remember to repeat.
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
