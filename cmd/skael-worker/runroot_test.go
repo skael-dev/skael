@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 )
 
 // The guard exists because the failure it prevents is silent: Docker creates a
@@ -42,9 +44,11 @@ func TestRequireHostSharedRoots(t *testing.T) {
 		},
 	}
 
+	dockerCfg := resolve.FromEnv(func(string) string { return "" })
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := requireHostSharedRoots(tc.runRoot, tc.workRoot, tc.containerized)
+			err := requireHostSharedRoots(dockerCfg, tc.runRoot, tc.workRoot, tc.containerized)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("requireHostSharedRoots(%q, %q, %v) error = %v, wantErr %v",
 					tc.runRoot, tc.workRoot, tc.containerized, err, tc.wantErr)
@@ -56,5 +60,30 @@ func TestRequireHostSharedRoots(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A containerized docker worker still needs the shared roots: its sandboxes
+// are bind-mounted and the host daemon resolves those paths. A kubernetes
+// worker mounts nothing, so requiring them would block a valid deployment.
+func TestRequireHostSharedRoots_AppliesToDockerOnly(t *testing.T) {
+	dockerCfg := resolve.FromEnv(func(string) string { return "" })
+	if err := requireHostSharedRoots(dockerCfg, "", "", true); err == nil {
+		t.Error("a containerized docker worker without WORKER_RUN_ROOT must be refused")
+	}
+
+	k8sCfg := resolve.FromEnv(func(k string) string {
+		switch k {
+		case "SANDBOX_DRIVER":
+			return "kubernetes"
+		case "SANDBOX_K8S_NAMESPACE":
+			return "skael-sandbox"
+		case "SANDBOX_K8S_IMAGE":
+			return "img"
+		}
+		return ""
+	})
+	if err := requireHostSharedRoots(k8sCfg, "", "", true); err != nil {
+		t.Errorf("a containerized kubernetes worker needs no shared roots, got %v", err)
 	}
 }

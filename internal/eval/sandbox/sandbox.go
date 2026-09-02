@@ -62,7 +62,19 @@ type Mount struct {
 type RunSpec struct {
 	Image     ImageRef
 	Snapshot  SnapshotRef
-	Workspace string // host dir, mounted read-write at WorkDir
+	// Workspace is an absolute local directory. The driver mirrors it into the
+	// run before argv starts and mirrors it back afterwards. A bind-mounting
+	// driver satisfies both directions at once; a remote driver copies. A
+	// driver that fails to mirror back must return an error, never a short
+	// result: a partial mirror is indistinguishable from a skill that produced
+	// nothing.
+	//
+	// A copying driver's mirror-back is a merge, not a sync: it writes what
+	// the run produced but does not remove a file the run deleted, so a
+	// deleted file can survive locally. A bind-mounting driver has no such
+	// gap, because there is only ever one copy. The Kubernetes driver is the
+	// copying case today; do not assume the two drivers agree on deletions.
+	Workspace string
 	WorkDir   string // container path; empty = DefaultWorkDir
 	Argv      []string
 	Env       []string

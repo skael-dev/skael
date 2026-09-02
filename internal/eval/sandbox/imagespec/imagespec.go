@@ -28,6 +28,13 @@ var baseFS embed.FS
 // an environment, so a silently-changed base makes two scores incomparable.
 const DefaultBaseTag = "whetstone-base:1"
 
+// PublishedBaseImage is where the release publishes DefaultBaseTag. A driver
+// that resolves an image rather than building one defaults to this, so an
+// operator who wants the shipped environment does not have to name it. It is
+// derived from DefaultBaseTag rather than written out, so bumping that
+// constant cannot leave the default pointing at the previous environment.
+const PublishedBaseImage = "ghcr.io/skael-dev/" + DefaultBaseTag
+
 // SlimBaseTag is the base the docker-tagged test job builds.
 const SlimBaseTag = "whetstone-base-ci:1"
 

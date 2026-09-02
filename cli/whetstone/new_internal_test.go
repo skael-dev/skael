@@ -104,12 +104,6 @@ func newTestStore(t *testing.T) *store.Store {
 	return st
 }
 
-func exists(t *testing.T, path string) bool {
-	t.Helper()
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // TestRunNew_ALintFailureStillFailsAndStillKeepsTheEvalSet pins the shape of
 // the parallel draft: the eval set reads the approved spec, not the bundle, so
 // it is drafted beside the bundle and kept. The lint gate still fails the run,

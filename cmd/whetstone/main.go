@@ -1,7 +1,11 @@
 // Command whetstone is the standalone skill authoring and evaluation CLI.
 package main
 
-import "github.com/skael-dev/skael/cli/whetstone"
+import (
+	"os"
+
+	"github.com/skael-dev/skael/cli/whetstone"
+)
 
 var (
 	version = "dev"
@@ -10,6 +14,12 @@ var (
 )
 
 func main() {
+	// Checked ahead of cobra: this flag exists for the release workflow, not
+	// for a user, and must not appear in any command's --help output.
+	if handlePrintBaseDockerfile(os.Args[1:]) {
+		return
+	}
+
 	whetstone.SetVersion(version, commit, date)
 	whetstone.Execute()
 }
