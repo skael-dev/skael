@@ -13,6 +13,23 @@ import (
 // its own so a cancelled run still frees the sandbox it created.
 const sessionDeleteTimeout = 30 * time.Second
 
+// minDownloadTimeout floors the workspace-download budget so a very short
+// run timeout does not starve the transfer that carries its only result.
+const minDownloadTimeout = time.Minute
+
+// downloadTimeout scales the workspace-download budget with the run's own
+// timeout, at a quarter of it, floored at minDownloadTimeout. There is no
+// direct measurement of workspace size at this point, so the run's timeout
+// is the best available proxy: a session given more time is likely to have
+// produced more to copy back. Matches kubernetes/run.go's collectOutTimeout.
+func downloadTimeout(runTimeout time.Duration) time.Duration {
+	t := runTimeout / 4
+	if t < minDownloadTimeout {
+		return minDownloadTimeout
+	}
+	return t
+}
+
 // Run creates one sandbox service, runs argv inside it, and deletes it. The
 // sandbox is deleted on every exit path: Northflank documents no idle
 // auto-stop, and a paused service still bills for storage, so cleanup is a
@@ -74,7 +91,13 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return res, execErr
 	}
 
-	if err := d.downloadWorkspace(ctx, id, workdir, rs.Workspace); err != nil {
+	// The download runs on a context of its own: the run is over, and its
+	// outputs are the only record of what happened. A hung transfer must not
+	// hang the session forever, and a cancellation arriving during collection
+	// must not destroy the only record of the run.
+	dlCtx, dlCancel := context.WithTimeout(context.WithoutCancel(ctx), downloadTimeout(rs.Timeout))
+	defer dlCancel()
+	if err := d.downloadWorkspace(dlCtx, id, workdir, rs.Workspace); err != nil {
 		return res, err
 	}
 	return res, nil
