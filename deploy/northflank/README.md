@@ -17,6 +17,20 @@ an API token with access to it.
 its owner label, including orphans it finds at startup. Point it at a project
 holding anything else and it will delete that too.
 
+**Install the Northflank CLI.** The worker shells out to it to log in and to
+copy each session's workspace in and out. A worker running from the published
+`skael-worker` image already has it. A worker built from anything else must
+install `@northflank/cli` itself.
+
+**The API token is visible in a process listing once, at startup.** Northflank
+documents no token environment variable, so the only non-interactive login is
+`northflank login -t <TOKEN>`, and that necessarily places the token in the
+child process's argument list. The driver logs in once when the worker starts
+and never repeats the call, which is the smallest exposure this CLI allows.
+An operator running the worker on a host shared with other users must treat
+that startup moment as sensitive, the same as any other process that briefly
+carries a secret on its command line.
+
 ## The shortest working configuration
 
 ```bash
