@@ -156,7 +156,7 @@ container it costs money while it waits to be noticed.
 | You have | Use |
 |---|---|
 | A Docker daemon on the host | `docker`, the default |
-| A Kubernetes cluster | `kubernetes` — see `deploy/kubernetes/worker-rbac.yaml` |
+| A Kubernetes cluster | `kubernetes` — see `deploy/kubernetes/README.md` |
 | Neither, only a container runtime | `northflank` |
 
 The Kubernetes driver enforces a per-session egress allowlist itself and needs
