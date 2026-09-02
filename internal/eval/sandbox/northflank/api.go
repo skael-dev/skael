@@ -177,6 +177,14 @@ func (c *client) sandboxRunning(ctx context.Context, id string) (bool, error) {
 // execSandbox runs argv inside the running service and returns its exit
 // code. A non-zero code is not an error here, matching the docker and
 // kubernetes drivers: only a transport or provider failure returns err.
+//
+// The request path is inferred from Northflank's JavaScript SDK method,
+// execServiceCommand, not from a documented REST route: Northflank's public
+// API reference describes the SDK call and its response shape but does not
+// publish the underlying HTTP path. A live account or Northflank's OpenAPI
+// specification would confirm it. The live conformance test added later in
+// this plan is the first thing that exercises this path against the real
+// API.
 func (c *client) execSandbox(ctx context.Context, id string, argv []string, stdout, stderr io.Writer) (int, error) {
 	reqBody := map[string]any{"command": argv}
 
