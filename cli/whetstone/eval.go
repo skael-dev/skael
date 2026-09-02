@@ -26,8 +26,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
+	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 	"github.com/skael-dev/skael/internal/eval/score"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
@@ -88,13 +88,6 @@ type EvalRequest struct {
 	// FreshBaseline runs every baseline session rather than reusing a
 	// matching one from an earlier eval.
 	FreshBaseline bool
-}
-
-// baseEnsurer is satisfied by *docker.Driver but not by every sandbox.Driver
-// (a test fake, in particular). RunEvalWith calls it opportunistically: a
-// driver with no base-image concept has nothing to ensure.
-type baseEnsurer interface {
-	EnsureBase(ctx context.Context, slim bool) error
 }
 
 // RunEvalWith runs one evaluation end to end: load the approved spec and eval
@@ -196,10 +189,8 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 
 	// 5. The image the panel runs against.
 	baseTag := os.Getenv("WHETSTONE_BASE_TAG")
-	if be, ok := d.Driver.(baseEnsurer); ok {
-		if err := be.EnsureBase(ctx, baseTag == imagespec.SlimBaseTag); err != nil {
-			return nil, fmt.Errorf("whetstone eval: preparing base image: %w", err)
-		}
+	if err := resolve.EnsureBase(ctx, d.Driver, baseTag == imagespec.SlimBaseTag); err != nil {
+		return nil, fmt.Errorf("whetstone eval: preparing base image: %w", err)
 	}
 	image, err := d.Driver.Prepare(ctx, sandbox.EnvSpec{Skill: sp.Name, Deps: sp.Deps, BaseTag: baseTag})
 	if err != nil {
@@ -921,9 +912,9 @@ func writeReportFile(path string, write func(w io.Writer) error) error {
 	return nil
 }
 
-// RunEval resolves EvalDeps from the environment — the workspace store, a
-// docker sandbox driver, the LLM gateway `whetstone doctor` would choose, and
-// the linked-in adapter registry — and runs the eval.
+// RunEval resolves EvalDeps from the environment — the workspace store, the
+// configured sandbox driver, the LLM gateway `whetstone doctor` would choose,
+// and the linked-in adapter registry — and runs the eval.
 func RunEval(ctx context.Context, req EvalRequest) error {
 	st, err := openStore()
 	if err != nil {
@@ -931,14 +922,17 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	baseTag := os.Getenv("WHETSTONE_BASE_TAG")
-	drv, err := docker.New(docker.Options{BaseTag: baseTag, Logger: ui.Info})
+	sandboxCfg := resolve.FromEnv(os.Getenv)
+	for _, w := range sandboxCfg.Warnings() {
+		ui.Warn("%s", w)
+	}
+	drv, err := sandboxCfg.Build(ui.Info)
 	if err != nil {
 		return fmt.Errorf("whetstone eval: %w; run `whetstone doctor` to check your setup", err)
 	}
 	// See suitecheck.go's identical call: a prior run killed by something
-	// stronger than its own context can leave containers and networks behind.
-	drv.Sweep(ctx)
+	// stronger than its own context can leave resources behind.
+	resolve.Sweep(ctx, drv)
 
 	var gw llm.Gateway
 	if g, gerr := newGateway(st.Cache()); gerr == nil {

@@ -25,7 +25,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/sandbox/docker"
+	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/worker"
@@ -67,6 +67,10 @@ type workerConfig struct {
 	// os.TempDir(). Only needs setting in a container — see
 	// requireHostSharedRoots.
 	RunRoot string
+	// SandboxCfg selects and configures the sandbox driver (docker or
+	// kubernetes). Resolved once here so requireHostSharedRoots and run see
+	// the same environment read.
+	SandboxCfg resolve.Config
 }
 
 func main() {
@@ -163,7 +167,8 @@ func configFromEnv() (workerConfig, error) {
 
 	runRoot := os.Getenv("WORKER_RUN_ROOT")
 	workRoot := os.Getenv("WORKER_WORK_ROOT")
-	if err := requireHostSharedRoots(runRoot, workRoot, inContainer()); err != nil {
+	sandboxCfg := resolve.FromEnv(os.Getenv)
+	if err := requireHostSharedRoots(sandboxCfg, runRoot, workRoot, inContainer()); err != nil {
 		return workerConfig{}, err
 	}
 
@@ -180,6 +185,7 @@ func configFromEnv() (workerConfig, error) {
 		GradeConcurrency: gradeConcurrency,
 		Provider:         prov,
 		RunRoot:          runRoot,
+		SandboxCfg:       sandboxCfg,
 	}, nil
 }
 
@@ -192,8 +198,10 @@ func configFromEnv() (workerConfig, error) {
 // yields a sandbox with no task and no skill (WORKER_RUN_ROOT) or a verifier
 // script that isn't there (WORKER_WORK_ROOT), neither distinguishable
 // downstream from a genuinely bad skill.
-func requireHostSharedRoots(runRoot, workRoot string, containerized bool) error {
-	if !containerized {
+func requireHostSharedRoots(cfg resolve.Config, runRoot, workRoot string, containerized bool) error {
+	// Only the docker driver bind-mounts host paths into sandboxes. A
+	// kubernetes worker stages its workspaces over the API and needs neither.
+	if !containerized || !resolve.RequiresHostSharedRoots(cfg) {
 		return nil
 	}
 	var missing []string
@@ -263,12 +271,16 @@ func deriverOptions(gw llm.Gateway) derive.Options {
 // registry) and runs the worker loop until a signal cancels it.
 func run(cfg workerConfig) error {
 
-	drv, err := docker.New(docker.Options{Logger: func(format string, args ...any) {
-		log.Info().Msgf(format, args...)
-	}})
-	if err != nil {
-		return fmt.Errorf("skael-worker: docker driver: %w; is Docker installed and running?", err)
+	for _, w := range cfg.SandboxCfg.Warnings() {
+		log.Warn().Msg(w)
 	}
+	drv, err := cfg.SandboxCfg.Build(func(format string, args ...any) {
+		log.Info().Msgf(format, args...)
+	})
+	if err != nil {
+		return fmt.Errorf("skael-worker: sandbox driver %q: %w", cfg.SandboxCfg.Driver, err)
+	}
+	log.Info().Str("driver", drv.Name()).Bool("hardware_isolated", drv.HardwareIsolated()).Msg("sandbox driver ready")
 
 	gw, err := cfg.Provider.Gateway(judgeGatewayOptions())
 	if err != nil {
