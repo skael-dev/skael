@@ -11,12 +11,14 @@ import (
 )
 
 // fakeCLI puts a script named "northflank" on PATH that records its argv and
-// exits with the given code.
+// exits with the given code. A "login" invocation always exits 0: New calls
+// it at construction, and a test exercising a later CLI failure (upload,
+// download, exec) must still be able to construct a Driver.
 func fakeCLI(t *testing.T, exitCode int) (dir, logPath string) {
 	t.Helper()
 	dir = t.TempDir()
 	logPath = filepath.Join(dir, "argv.log")
-	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nexit " + itoa(exitCode) + "\n"
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\nif [ \"$1\" = \"login\" ]; then exit 0; fi\nexit " + itoa(exitCode) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "northflank"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

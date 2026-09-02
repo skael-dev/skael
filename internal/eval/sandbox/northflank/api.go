@@ -160,18 +160,14 @@ func envMap(env []string) map[string]string {
 func (c *client) sandboxRunning(ctx context.Context, id string) (bool, error) {
 	var resp struct {
 		Data struct {
-			Status struct {
-				Deployment struct {
-					Status string `json:"status"`
-				} `json:"deployment"`
-			} `json:"status"`
+			Status string `json:"status"`
 		} `json:"data"`
 	}
 	path := fmt.Sprintf("/projects/%s/services/%s", c.o.Project, id)
 	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return false, err
 	}
-	return resp.Data.Status.Deployment.Status == "COMPLETED", nil
+	return resp.Data.Status == "RUNNING", nil
 }
 
 // execSandbox runs argv inside the running service and returns its exit
@@ -201,11 +197,16 @@ func (c *client) execSandbox(ctx context.Context, id string, argv []string, stdo
 	if err := c.do(ctx, http.MethodPost, path, reqBody, &resp); err != nil {
 		return 0, err
 	}
-	if _, err := io.WriteString(stdout, resp.Data.StdOut); err != nil {
-		return 0, fmt.Errorf("northflank: writing stdout: %w", err)
+	// A caller may pass no writer at all; only write when it did.
+	if stdout != nil {
+		if _, err := io.WriteString(stdout, resp.Data.StdOut); err != nil {
+			return 0, fmt.Errorf("northflank: writing stdout: %w", err)
+		}
 	}
-	if _, err := io.WriteString(stderr, resp.Data.StdErr); err != nil {
-		return 0, fmt.Errorf("northflank: writing stderr: %w", err)
+	if stderr != nil {
+		if _, err := io.WriteString(stderr, resp.Data.StdErr); err != nil {
+			return 0, fmt.Errorf("northflank: writing stderr: %w", err)
+		}
 	}
 	return resp.Data.CommandResult.ExitCode, nil
 }
@@ -230,11 +231,9 @@ func (c *client) listSandboxes(ctx context.Context) ([]sandboxRef, error) {
 	var resp struct {
 		Data struct {
 			Services []struct {
-				ID       string `json:"id"`
-				Name     string `json:"name"`
-				Metadata struct {
-					Labels map[string]string `json:"labels"`
-				} `json:"metadata"`
+				ID     string            `json:"id"`
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
 			} `json:"services"`
 		} `json:"data"`
 	}
@@ -245,7 +244,7 @@ func (c *client) listSandboxes(ctx context.Context) ([]sandboxRef, error) {
 
 	var refs []sandboxRef
 	for _, s := range resp.Data.Services {
-		if _, ok := s.Metadata.Labels[ownerLabelKey]; !ok {
+		if _, ok := s.Labels[ownerLabelKey]; !ok {
 			continue
 		}
 		refs = append(refs, sandboxRef{ID: s.ID, Name: s.Name})

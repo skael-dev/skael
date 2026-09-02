@@ -35,8 +35,7 @@ func New(o Options) (*Driver, error) {
 	return d, nil
 }
 
-// Run arrives in a later task (workspace staging and execution); until then
-// *Driver does not satisfy sandbox.Driver, so no interface assertion here.
+var _ sandbox.Driver = (*Driver)(nil)
 
 func (d *Driver) Name() string { return "northflank" }
 
