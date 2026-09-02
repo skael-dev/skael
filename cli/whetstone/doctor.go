@@ -2,6 +2,7 @@ package whetstone
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
 	"github.com/skael-dev/skael/internal/eval/provider"
+	"github.com/skael-dev/skael/internal/eval/sandbox"
+	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
@@ -70,6 +73,8 @@ func newGateway(cache llm.Cache) (llm.Gateway, error) {
 	return &progressGateway{inner: gw}, nil
 }
 
+var checkEgressFlag bool
+
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check the agent CLI, the LLM gateway, and the sandbox runtime",
@@ -79,12 +84,80 @@ var doctorCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		cfg := resolve.FromEnv(nil)
 		if ui.JSONMode {
-			return ui.PrintJSON(rep)
+			if err := ui.PrintJSON(rep); err != nil {
+				return err
+			}
+		} else {
+			rep.render()
+			fmt.Print(doctorReport(cfg))
 		}
-		rep.render()
+		if checkEgressFlag {
+			if err := checkEgress(cmd.Context(), cfg); err != nil {
+				return err
+			}
+			ui.Success("egress check: the sandbox could not reach the network under a deny-all policy")
+		}
 		return nil
 	},
+}
+
+func init() {
+	doctorCmd.Flags().BoolVar(&checkEgressFlag, "check-egress", false,
+		"run a denied network request against the real Kubernetes cluster to confirm SANDBOX_K8S_NETWORK_POLICY")
+}
+
+// doctorReport describes the resolved sandbox driver. It exists so a setup
+// problem is found here rather than in a score.
+func doctorReport(cfg resolve.Config) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "sandbox driver: %s\n", cfg.Driver)
+	if cfg.Driver == "kubernetes" {
+		fmt.Fprintf(&b, "  namespace: %s\n", cfg.K8s.Namespace)
+		fmt.Fprintf(&b, "  image:     %s\n", cfg.K8s.Image)
+		if cfg.K8s.RuntimeClass != "" {
+			fmt.Fprintf(&b, "  runtime class: %s\n", cfg.K8s.RuntimeClass)
+		}
+	}
+	for _, w := range cfg.Warnings() {
+		fmt.Fprintf(&b, "  warning: %s\n", w)
+	}
+	return b.String()
+}
+
+// checkEgress asks the cluster whether it really enforces the policy the
+// operator asserted. A denied request is the pass; a request that reaches the
+// network means the CNI ignores NetworkPolicy, which is the one guarantee
+// this driver cannot verify on its own.
+func checkEgress(ctx context.Context, cfg resolve.Config) error {
+	drv, err := cfg.Build(nil)
+	if err != nil {
+		return err
+	}
+	img, err := drv.Prepare(ctx, sandbox.EnvSpec{Skill: "doctor"})
+	if err != nil {
+		return err
+	}
+	workDir, err := os.MkdirTemp("", "skael-doctor-egress-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(workDir)
+	res, err := drv.Run(ctx, sandbox.RunSpec{
+		Image:     img,
+		Workspace: workDir,
+		Argv:      []string{"sh", "-c", "curl -sS -m 5 https://example.com >/dev/null"},
+		Network:   sandbox.NetNone,
+		Timeout:   2 * time.Minute,
+	})
+	if err != nil {
+		return err
+	}
+	if res.ExitCode == 0 {
+		return errors.New("the sandbox reached the network under a deny-all policy: this cluster's CNI does not enforce NetworkPolicy, so SANDBOX_K8S_NETWORK_POLICY=true is wrong here and every restricted session is unrestricted")
+	}
+	return nil
 }
 
 // RunDoctor collects the environment report. Errors within it (missing CLI,

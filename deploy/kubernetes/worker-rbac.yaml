@@ -1,0 +1,49 @@
+# The skael worker's entire privilege surface. pods/exec is a real privilege:
+# whoever holds it can execute in any pod in this namespace, so this
+# namespace must hold nothing but session pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skael-sandbox
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: skael-worker
+  namespace: skael-sandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: skael-worker-sandbox
+  namespace: skael-sandbox
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: skael-worker-sandbox
+  namespace: skael-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: skael-worker
+    namespace: skael-sandbox
+roleRef:
+  kind: Role
+  name: skael-worker-sandbox
+  apiGroup: rbac.authorization.k8s.io
