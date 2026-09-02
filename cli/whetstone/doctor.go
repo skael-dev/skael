@@ -122,7 +122,7 @@ func doctorReport(cfg resolve.Config) string {
 	}
 	if cfg.Driver == "northflank" {
 		fmt.Fprintf(&b, "  project: %s\n", cfg.NF.Project)
-		fmt.Fprintf(&b, "  image:   %s\n", cfg.NF.Image)
+		fmt.Fprintf(&b, "  image:   %s\n", cfg.NF.ResolvedImage())
 		fmt.Fprintf(&b, "  token:   %s\n", tokenState(cfg.NF.Token))
 		if len(cfg.NF.AllowedDomains) > 0 {
 			fmt.Fprintf(&b, "  allowed domains: %s\n", strings.Join(cfg.NF.AllowedDomains, ", "))

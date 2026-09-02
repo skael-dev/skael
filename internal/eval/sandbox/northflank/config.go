@@ -91,6 +91,14 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// ResolvedImage reports the image New actually runs, applying the same
+// default as withDefaults. It exists so a caller outside this package —
+// `whetstone doctor` — can show the resolved value rather than the raw,
+// possibly empty, environment setting.
+func (o Options) ResolvedImage() string {
+	return o.withDefaults().Image
+}
+
 func (o Options) withDefaults() Options {
 	if o.Image == "" {
 		o.Image = imagespec.PublishedBaseImage
