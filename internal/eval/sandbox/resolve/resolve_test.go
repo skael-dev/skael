@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 )
 
@@ -60,5 +61,32 @@ func TestWarnings_SaysWhatIsUnenforcedRatherThanFailingSilently(t *testing.T) {
 	got := strings.Join(c.Warnings(), "\n")
 	if !strings.Contains(got, "SANDBOX_K8S_NETWORK_POLICY") {
 		t.Errorf("warnings = %q, want one naming SANDBOX_K8S_NETWORK_POLICY", got)
+	}
+}
+
+// An operator who wants the shipped environment must not have to name it. The
+// expectation is derived from imagespec, so bumping the base tag cannot leave
+// this test asserting the previous environment.
+func TestFromEnv_DefaultsTheKubernetesImageToThePublishedBase(t *testing.T) {
+	c := resolve.FromEnv(env(map[string]string{
+		"SANDBOX_DRIVER":        "kubernetes",
+		"SANDBOX_K8S_NAMESPACE": "skael-sandbox",
+	}))
+	if c.K8s.Image != imagespec.PublishedBaseImage {
+		t.Errorf("Image = %q, want the published base %q", c.K8s.Image, imagespec.PublishedBaseImage)
+	}
+	if err := c.K8s.Validate(); err != nil {
+		t.Errorf("a config with no SANDBOX_K8S_IMAGE must still validate: %v", err)
+	}
+}
+
+func TestFromEnv_AnExplicitKubernetesImageWinsOverTheDefault(t *testing.T) {
+	c := resolve.FromEnv(env(map[string]string{
+		"SANDBOX_DRIVER":        "kubernetes",
+		"SANDBOX_K8S_NAMESPACE": "skael-sandbox",
+		"SANDBOX_K8S_IMAGE":     "registry.internal/my-base:7",
+	}))
+	if c.K8s.Image != "registry.internal/my-base:7" {
+		t.Errorf("Image = %q, want the operator's own", c.K8s.Image)
 	}
 }
