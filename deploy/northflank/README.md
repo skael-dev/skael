@@ -8,9 +8,6 @@ The worker holds a Northflank API token. Northflank runs each evaluation
 session as a sandbox service in your own project, and the worker deletes it
 when the session ends.
 
-> **Status:** this driver is not implemented yet. This guide describes the
-> design in `docs/superpowers/specs/2026-09-02-northflank-sandbox-driver-design.md`.
-
 ## Before you start
 
 You need a Northflank account, a project the worker can create services in, and
@@ -44,6 +41,13 @@ Northflank gives no way to set a different allowlist for each session, so the
 driver cannot enforce one per run. Instead it relies on the egress policy you
 configure on your Northflank project, and it refuses to pretend that policy
 exists when you have not said it does.
+
+**Northflank Cloud cannot make this assertion at all.** Northflank documents
+egress network policies for a BYOC cluster only. They are configured through
+its web UI, with no API, and they apply to a whole project rather than one
+session. On Northflank Cloud no egress restriction is documented, so every
+restricted run is refused there and only fully open runs work. This means a
+release cannot be scored on Northflank Cloud; use a BYOC cluster for that.
 
 Until you make the assertion below, the driver **refuses every restricted run**.
 Only fully open runs work, which is fine for trying it out and wrong for

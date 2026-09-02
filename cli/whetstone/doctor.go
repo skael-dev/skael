@@ -120,10 +120,26 @@ func doctorReport(cfg resolve.Config) string {
 			fmt.Fprintf(&b, "  runtime class: %s\n", cfg.K8s.RuntimeClass)
 		}
 	}
+	if cfg.Driver == "northflank" {
+		fmt.Fprintf(&b, "  project: %s\n", cfg.NF.Project)
+		fmt.Fprintf(&b, "  image:   %s\n", cfg.NF.Image)
+		fmt.Fprintf(&b, "  token:   %s\n", tokenState(cfg.NF.Token))
+		if len(cfg.NF.AllowedDomains) > 0 {
+			fmt.Fprintf(&b, "  allowed domains: %s\n", strings.Join(cfg.NF.AllowedDomains, ", "))
+		}
+	}
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintf(&b, "  warning: %s\n", w)
 	}
 	return b.String()
+}
+
+// tokenState reports whether a credential is set, never its value.
+func tokenState(v string) string {
+	if v == "" {
+		return "not set"
+	}
+	return "set"
 }
 
 // checkEgress asks the cluster whether it really enforces the policy the

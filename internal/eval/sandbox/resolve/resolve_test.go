@@ -44,6 +44,46 @@ func TestFromEnv_ReadsTheKubernetesOptions(t *testing.T) {
 	}
 }
 
+func TestFromEnv_ReadsTheNorthflankOptions(t *testing.T) {
+	c := resolve.FromEnv(env(map[string]string{
+		"SANDBOX_DRIVER":             "northflank",
+		"SANDBOX_NF_TOKEN":           "nf_secret",
+		"SANDBOX_NF_PROJECT":         "skael-sandboxes",
+		"SANDBOX_NF_ALLOWED_DOMAINS": "api.anthropic.com, pypi.org",
+		"SANDBOX_NF_NETWORK_POLICY":  "true",
+	}))
+	if c.Driver != "northflank" || c.NF.Project != "skael-sandboxes" {
+		t.Fatalf("config not read: %+v", c)
+	}
+	// Whitespace around a comma is what an operator actually types.
+	want := []string{"api.anthropic.com", "pypi.org"}
+	if len(c.NF.AllowedDomains) != 2 || c.NF.AllowedDomains[0] != want[0] || c.NF.AllowedDomains[1] != want[1] {
+		t.Errorf("AllowedDomains = %q, want %q with spaces trimmed", c.NF.AllowedDomains, want)
+	}
+	if !c.NF.NetworkPolicyEnforced {
+		t.Error("the enforcement assertion was not read")
+	}
+	// No bind mounts, so the docker-only host path constraint does not apply.
+	if resolve.RequiresHostSharedRoots(c) {
+		t.Error("the northflank driver mounts nothing; WORKER_RUN_ROOT must not be required")
+	}
+}
+
+func TestWarnings_NamesTheUnassertedNorthflankGuarantees(t *testing.T) {
+	c := resolve.FromEnv(env(map[string]string{
+		"SANDBOX_DRIVER":     "northflank",
+		"SANDBOX_NF_TOKEN":   "nf_secret",
+		"SANDBOX_NF_PROJECT": "skael-sandboxes",
+	}))
+	got := strings.Join(c.Warnings(), "\n")
+	if !strings.Contains(got, "SANDBOX_NF_NETWORK_POLICY") {
+		t.Errorf("warnings = %q, want one naming SANDBOX_NF_NETWORK_POLICY", got)
+	}
+	if strings.Contains(got, "nf_secret") {
+		t.Errorf("warnings leak the API token: %q", got)
+	}
+}
+
 func TestBuild_RejectsAnUnknownDriverByName(t *testing.T) {
 	c := resolve.FromEnv(env(map[string]string{"SANDBOX_DRIVER": "podman"}))
 	_, err := c.Build(nil)
