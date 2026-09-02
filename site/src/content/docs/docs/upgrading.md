@@ -44,6 +44,18 @@ Separately, the request log's `ip` field changed format: it used to log the raw 
 
 Both migrations run automatically at startup, inside a single transaction, and take an `ACCESS EXCLUSIVE` lock on `skill_events` for its duration: each adds a column and backfills it with an `UPDATE`, and 007 additionally validates a new `CHECK` constraint and both migrations build a new index. On a small instance this is milliseconds. On an instance with months of activation history, the lock is held roughly in proportion to the table's size — and while it's held, an old server process still serving traffic will block on any query that touches `skill_events` (activation summaries, event ingestion). Plan the upgrade window accordingly on a busy instance; see [Backup & restore](/docs/backup-restore) if you want to rehearse the timing against a copy of production data first.
 
+## Upgrading to v0.13.0
+
+No server migrations. Nothing to reconfigure. `SANDBOX_DRIVER` is unset by default, which keeps the existing Docker behavior exactly as before — an existing worker deployment changes nothing.
+
+**The worker can now run each evaluation session three ways.** The default, `docker`, is unchanged: a Docker daemon runs each session in a sandboxed container. Two new drivers join it, for a worker that has no Docker daemon to talk to.
+
+Set `SANDBOX_DRIVER=kubernetes` when the worker runs on a node with no Docker daemon, or one that must not hold a Docker socket at all. Each session runs as a pod through the cluster API, with a namespaced ServiceAccount instead of a mounted socket, and the driver enforces a per-session egress allowlist itself. See `deploy/kubernetes/README.md`.
+
+Set `SANDBOX_DRIVER=northflank` when the worker runs somewhere with neither a Docker daemon nor a Kubernetes cluster — Azure Container Apps, Cloud Run, or any host that can run a container but cannot start a sibling one. Each session runs as a Northflank sandbox service, and the worker needs only an API token. This driver cannot scope egress to one session; it checks each run's requested domains against a project allowlist you configure instead. On Northflank Cloud no egress restriction is documented at all, so a release must not be scored there — only a BYOC cluster can enforce the policy this depends on. See `deploy/northflank/README.md`.
+
+Both new drivers resolve a published base image rather than building one. A skill that declares `apt`, `pip`, or `npm` dependencies is refused by name on either of them; the `docker` driver still builds and keeps supporting dependencies. `WORKER_RUN_ROOT` applies to the `docker` driver only — neither new driver mounts a host path.
+
 ## Upgrading to v0.12.0
 
 No server migrations. Nothing to reconfigure. Upgrade the server, the CLI, the worker, and whetstone in any order.

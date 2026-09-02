@@ -86,7 +86,21 @@ This starts the platform plus a Postgres container with a persistent volume. The
 
 ## Evaluation worker (optional)
 
-The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a Docker daemon to sandbox each run and a direct Anthropic API key to judge the result.
+The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a sandbox to run each session in and a direct Anthropic API key to judge the result.
+
+### Choosing a sandbox driver
+
+`SANDBOX_DRIVER` selects how the worker sandboxes each session. It defaults to `docker`, which needs a Docker daemon the worker can reach — everything on this page assumes it, unless you set the variable to something else.
+
+| You have | Set `SANDBOX_DRIVER` to |
+|---|---|
+| A Docker daemon on the worker's host | `docker` — the default, described below |
+| A Kubernetes cluster, no Docker daemon on the worker's host | `kubernetes` — see `deploy/kubernetes/README.md` |
+| Neither, only a host that can run a container | `northflank` — see `deploy/northflank/README.md` |
+
+Both alternative drivers resolve a published base image rather than building one, so a skill that declares `apt`, `pip`, or `npm` dependencies is refused by name on them; only the `docker` driver builds. `WORKER_RUN_ROOT`, below, applies to the `docker` driver only.
+
+### With Docker
 
 Run it on the host, alongside Compose rather than inside it:
 

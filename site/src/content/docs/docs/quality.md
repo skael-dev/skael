@@ -18,7 +18,7 @@ All of that rolls up into a single headline score from 0 to 100.
 Two things, run separately:
 
 1. **The server.** It queues evaluation jobs but does not run them — no Docker socket and no LLM key live there.
-2. **A `skael-worker` process, with a Docker daemon available.** The worker claims jobs from the server, runs the evaluation in a sandboxed container, and posts the score back.
+2. **A `skael-worker` process, with a sandbox it can run sessions in.** The worker claims jobs from the server, runs the evaluation in a sandboxed session, and posts the score back. By default that sandbox is a Docker daemon the worker can reach; `SANDBOX_DRIVER` selects a Kubernetes cluster or a Northflank sandbox instead, for a worker with no Docker daemon — see [Self-hosting](/docs/self-hosting#choosing-a-sandbox-driver).
 
 Without a worker running, jobs just sit in the queue — nothing gets scored.
 
@@ -57,7 +57,7 @@ Optional, with defaults:
 | `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
 | `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
 
-The worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed container, one job at a time per worker process. Run more worker replicas for more throughput.
+By default the worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed session, one job at a time per worker process. Run more worker replicas for more throughput.
 
 ### Choosing a model and a gateway
 

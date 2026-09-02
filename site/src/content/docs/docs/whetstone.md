@@ -33,7 +33,7 @@ brew install skael-dev/skael/whetstone
 
 ```bash
 curl -fsSL -o whetstone.tar.gz \
-  https://github.com/skael-dev/skael/releases/download/v0.12.0/whetstone_0.12.0_darwin_arm64.tar.gz
+  https://github.com/skael-dev/skael/releases/download/v0.13.0/whetstone_0.13.0_darwin_arm64.tar.gz
 tar -xzf whetstone.tar.gz whetstone
 sudo mv whetstone /usr/local/bin/
 ```
