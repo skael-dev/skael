@@ -178,7 +178,7 @@ func (c *client) sandboxRunning(ctx context.Context, id string) (bool, error) {
 // execServiceCommand, not from a documented REST route: Northflank's public
 // API reference describes the SDK call and its response shape but does not
 // publish the underlying HTTP path. A live account or Northflank's OpenAPI
-// specification would confirm it. The live conformance test added later in
+// specification can confirm it. The live conformance test added later in
 // this plan is the first thing that exercises this path against the real
 // API.
 func (c *client) execSandbox(ctx context.Context, id string, argv []string, stdout, stderr io.Writer) (int, error) {
@@ -197,7 +197,7 @@ func (c *client) execSandbox(ctx context.Context, id string, argv []string, stdo
 	if err := c.do(ctx, http.MethodPost, path, reqBody, &resp); err != nil {
 		return 0, err
 	}
-	// A caller may pass no writer at all; only write when it did.
+	// A caller can pass no writer at all; only write when it does.
 	if stdout != nil {
 		if _, err := io.WriteString(stdout, resp.Data.StdOut); err != nil {
 			return 0, fmt.Errorf("northflank: writing stdout: %w", err)

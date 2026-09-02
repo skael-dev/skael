@@ -37,7 +37,7 @@ type Options struct {
 	Plan               string
 	CLI                string
 
-	// AllowedDomains is what the operator configured on the project. A run may
+	// AllowedDomains is what the operator configured on the project. A run can
 	// ask for a subset of it and nothing more.
 	AllowedDomains []string
 

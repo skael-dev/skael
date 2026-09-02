@@ -53,7 +53,7 @@ func TestUploadWorkspace_InvokesTheCLIWithTheLocalAndRemotePaths(t *testing.T) {
 }
 
 // A failed copy back is indistinguishable from a skill that produced nothing,
-// and would be graded as one.
+// and is graded as one.
 func TestDownloadWorkspace_ReturnsAnErrorWhenTheCLIFails(t *testing.T) {
 	fakeCLI(t, 1)
 	d := &Driver{o: validOptions().withDefaults()}
@@ -63,8 +63,8 @@ func TestDownloadWorkspace_ReturnsAnErrorWhenTheCLIFails(t *testing.T) {
 	}
 }
 
-// Only cliLogin may carry the token, and it runs once at construction. A
-// transfer that carried it would put the token in a process listing on every
+// Only cliLogin carries the token, and it runs once at construction. A
+// transfer that carries it puts the token in a process listing on every
 // workspace copy.
 func TestUploadWorkspace_NeverPutsTheTokenInArgv(t *testing.T) {
 	_, logPath := fakeCLI(t, 0)

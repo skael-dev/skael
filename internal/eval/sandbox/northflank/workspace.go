@@ -34,7 +34,7 @@ func (d *Driver) downloadWorkspace(ctx context.Context, serviceID, remote, local
 // child process's argument list, visible to any local user via a process
 // listing. One login at worker startup is the smallest exposure this CLI
 // allows, which is why uploadWorkspace and downloadWorkspace never carry the
-// token: doing that instead would put it in a process listing on every
+// token: doing that instead puts it in a process listing on every
 // workspace copy rather than once at startup. Do not "simplify" the token
 // back into a per-transfer call.
 func (d *Driver) cliLogin(ctx context.Context) error {

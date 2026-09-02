@@ -59,7 +59,7 @@ func TestCheckNetwork_RefusesRestrictedRunsWithoutTheEnforcementAssertion(t *tes
 	}
 }
 
-// This driver cannot set a per-session allowlist, so a run may only ask for
+// This driver cannot set a per-session allowlist, so a run can only ask for
 // what the operator has already configured on the project.
 func TestCheckNetwork_RefusesADomainOutsideTheProjectAllowlist(t *testing.T) {
 	o := validOptions()

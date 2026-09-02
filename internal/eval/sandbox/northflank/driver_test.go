@@ -33,7 +33,7 @@ func TestHardwareIsolated_IsFalseUntilTheOperatorAssertsIt(t *testing.T) {
 }
 
 // There is no daemon to build with, and running the skill on a base that lacks
-// its dependencies would record the failures as the skill's own fault.
+// its dependencies records the failures as the skill's own fault.
 func TestPrepare_RefusesADeclaredDependencyByName(t *testing.T) {
 	fakeCLI(t, 0)
 	d, _ := New(validOptions())
@@ -63,7 +63,7 @@ func TestPrepare_ReturnsTheConfiguredImageAndStillRecordsTheDigest(t *testing.T)
 	}
 	// The digest is what attributes a score to an environment.
 	if ref.DepsDigest == "" {
-		t.Error("DepsDigest is empty; a score could not be attributed to an environment")
+		t.Error("DepsDigest is empty; a score cannot be attributed to an environment")
 	}
 }
 
