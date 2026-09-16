@@ -246,3 +246,5 @@ These exist for good reasons — don't weaken them without understanding why:
 - verdict: A contest's outcome, either a named winner or too close to call. Avoid: result, winner, score.
 - too close to call: The verdict when the sign test cannot separate the candidates from noise. Avoid: tie, draw, inconclusive, no difference.
 - chain: The sequence of contests between consecutive released versions of one skill, which is how improvement over time is read. Avoid: trend, series, history.
+- proposal: One diff across a bundle's prose, addressing every recorded loss of one candidate. Avoid: suggestion, patch, fix, improvement.
+- loss: One task a candidate failed, with the expectations it missed and the judge's evidence. Recorded whatever the verdict was. Avoid: failure, miss, regression.
