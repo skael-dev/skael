@@ -129,9 +129,10 @@ func printContest(c *client.Contest) {
 		fmt.Printf("%s\n", ui.Bold(p.A+" vs "+p.B))
 		for _, t := range p.Tasks {
 			mark := "  tie "
-			if t.Winner == p.A {
+			switch t.Winner {
+			case p.A:
 				mark = "  " + ui.Accent("A") + "    "
-			} else if t.Winner == p.B {
+			case p.B:
 				mark = "  " + ui.Accent("B") + "    "
 			}
 			fmt.Printf("%s %-24s %.0f%% / %.0f%%\n", mark, t.TaskID, t.ARate*100, t.BRate*100)

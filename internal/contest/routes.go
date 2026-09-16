@@ -139,9 +139,7 @@ func toOutput(c *Contest) ContestOutput {
 		})
 	}
 	for _, l := range c.Losses {
-		out.Losses = append(out.Losses, contestLossOutput{
-			Label: l.Label, TaskID: l.TaskID, Missed: l.Missed, Evidence: l.Evidence,
-		})
+		out.Losses = append(out.Losses, contestLossOutput(l))
 	}
 	return out
 }

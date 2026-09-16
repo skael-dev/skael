@@ -176,8 +176,12 @@ comments:
 tidy:
     go mod tidy
 
-# Run all checks (vet + fmt + comments + test + integration)
-check: vet fmt-check comments test test-integration
+# Run golangci-lint, the same linters CI runs
+lint:
+    golangci-lint run
+
+# Run all checks (vet + fmt + lint + comments + test + integration)
+check: vet fmt-check lint comments test test-integration
 
 # --- Docker ---
 
