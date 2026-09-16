@@ -16,7 +16,8 @@ import (
 
 // SchemaVersion is the report schema. Load refuses a newer schema.
 // Version 2 is the expectation pass rate; version 1 was a geometric mean.
-const SchemaVersion = 2
+// Version 3 redefines Delta. See Delta.
+const SchemaVersion = 3
 
 // PanelMember identifies one model-panel entry on the report.
 type PanelMember struct {
@@ -94,11 +95,16 @@ type Report struct {
 
 	// Headline is the published 0–100 score: minimum across healthy members.
 	Headline float64 `json:"headline"`
-	// Baseline is the no-skill measurement. DeltaMeasured is false when no
-	// baseline ran — a zero delta and an absent delta are different facts.
-	Baseline      float64 `json:"baseline"`
-	Delta         float64 `json:"delta"`
-	DeltaMeasured bool    `json:"delta_measured"`
+	// Baseline is the no-skill measurement, taken on the primary member.
+	Baseline float64 `json:"baseline"`
+	// Delta is the lift: the primary member's own effectiveness minus that same
+	// member's baseline. Before schema 3 it subtracted that baseline from the
+	// whole-panel Headline minimum, so a deep-tier run could report a negative
+	// lift for a skill that helped. schema_version says which one a stored
+	// report carries.
+	Delta float64 `json:"delta"`
+	// False when no baseline ran, or when the primary member did not score.
+	DeltaMeasured bool `json:"delta_measured"`
 	// BaselineWipeout is true when the baseline passed no expectation at all.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`
 

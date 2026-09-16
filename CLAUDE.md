@@ -233,3 +233,11 @@ These exist for good reasons — don't weaken them without understanding why:
 - `GET /api/users/search` is open to any authenticated user and returns `{id, name, email}` only — no role, no timestamps. Minimum 2 characters and a hard cap of 20 results, so it is a lookup rather than a directory export. Restricting it to admins would make delegated ownership unusable, which is the trade being made
 - `ownership.CanManage` is the entire escalation surface of ownership. It permits narrowing only; a delegate can never widen their scope. The property test in `internal/ownership/manage_test.go` is the guard — three individually-correct clauses can compose into a widening path that no per-clause test can see
 - `DELETE /api/skills/{name}` has no role check and no ownership check — any authenticated member can delete a skill's every version and archive, while being unable to publish a single line to it. This is pre-existing (not introduced by ownership) and a known gap for a follow-up, not an oversight
+
+## Domain words
+
+- lift: The primary member's effectiveness minus that same member's baseline, on one agent, one model and one task set. Avoid: uplift, delta, skill lift, improvement.
+- headline: The published 0-100 score, the minimum effectiveness across healthy panel members, and the only gating number. Avoid: composite, overall score, quality score.
+- baseline: A session run with no skill installed, used as the other side of a lift comparison. Avoid: control, no-skill run.
+- primary member: The first entry in the model panel. It leads the panel and is the only member a lift is computed on. Avoid: lead model, main member.
+- not measured: The state where no baseline ran, stored as NULL and never as zero. Avoid: zero lift, no lift.

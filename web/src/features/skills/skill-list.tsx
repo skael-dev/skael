@@ -135,7 +135,7 @@ function Onboarding() {
           <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-3">
             2 · Connect to your registry
           </div>
-          <div className="grid grid-cols-2 gap-2.5 mb-9">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-9">
             <SetupStep desc="Point the CLI at this server and authenticate.">
               skael setup <code className="px-1.5 py-0.5 bg-bg-tertiary border border-border rounded text-sm font-mono">&lt;url&gt;</code>{" "}<code className="px-1.5 py-0.5 bg-bg-tertiary border border-border rounded text-sm font-mono">&lt;api-key&gt;</code>
             </SetupStep>
@@ -191,7 +191,7 @@ const TAG_COLORS: Record<string, string> = {
 };
 
 // Sort options exposed in the UI; mapped to the server's `sort` param.
-type SortKey = "updated" | "name" | "usage" | "quality";
+type SortKey = "updated" | "name" | "usage" | "quality" | "lift";
 
 // ── Stat tile ─────────────────────────────────────────────────
 function StatTile({
@@ -437,7 +437,7 @@ export function SkillList() {
         <Skeleton className="h-3 w-20 mb-3.5 bg-bg-secondary" />
         <Skeleton className="h-10 w-40 mb-3.5 bg-bg-secondary" />
         <Skeleton className="h-4 w-80 mb-9 bg-bg-secondary" />
-        <div className="grid grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center gap-3.5 p-4 bg-bg-secondary border border-border rounded-lg">
               <Skeleton className="size-9 rounded-[7px] bg-bg-tertiary" />
@@ -449,19 +449,22 @@ export function SkillList() {
           ))}
         </div>
         <div className="space-y-px">
-          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
-            {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div className="skill-row max-[899px]:hidden px-3.5 py-2 border-b border-border">
+            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
               <Skeleton key={i} className="h-2 bg-bg-tertiary" />
             ))}
           </div>
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
-              <Skeleton className="h-4 bg-bg-secondary" />
+            <div key={i} className="skill-row px-3.5 py-3 border-b border-border">
+              <Skeleton className="skill-row-check h-4 bg-bg-secondary" />
               <Skeleton className="h-4 w-2 bg-bg-secondary" />
               <Skeleton className="h-4 w-48 bg-bg-secondary" />
-              <Skeleton className="h-4 bg-bg-secondary" />
-              <Skeleton className="h-4 bg-bg-secondary" />
-              <Skeleton className="h-4 bg-bg-secondary" />
+              <div className="skill-row-meta">
+                <Skeleton className="h-4 bg-bg-secondary" />
+                <Skeleton className="h-4 bg-bg-secondary" />
+                <Skeleton className="h-4 bg-bg-secondary" />
+                <Skeleton className="h-4 bg-bg-secondary" />
+              </div>
             </div>
           ))}
         </div>
@@ -509,7 +512,7 @@ export function SkillList() {
           </p>
 
           {/* Stat tiles */}
-          <div className="grid grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
             <StatTile
               icon={TrendingUp}
               label="Invocations - 30d"
@@ -567,7 +570,7 @@ export function SkillList() {
         ) : (
           <>
             {/* Filter bar */}
-            <div className="flex items-center gap-2.5 mb-4">
+            <div className="flex flex-wrap items-center gap-2.5 mb-4">
               {/* Search input */}
               <div className="flex items-center gap-2 px-3 h-8 flex-[0_1_300px] bg-bg-secondary border border-border rounded-md transition-colors duration-150 focus-within:border-border-active">
                 <Search className="size-[13px] text-text-tertiary shrink-0" />
@@ -635,6 +638,7 @@ export function SkillList() {
                   <option value="name">Name</option>
                   <option value="usage">Usage</option>
                   <option value="quality">Score</option>
+                  <option value="lift">Lift</option>
                 </select>
               </div>
 
@@ -680,15 +684,13 @@ export function SkillList() {
 
             {/* Column headers */}
             <div
-              className="grid gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
-              style={{
-                gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
-              }}
+              className="skill-row max-[899px]:hidden px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
             >
-              <span />
+              <span className="skill-row-check" />
               <span />
               <span>Skill</span>
               <span className="text-right">Invocations</span>
+              <span className="text-right">Lift</span>
               <span className="text-right">Security</span>
               <span className="text-right">Updated</span>
             </div>

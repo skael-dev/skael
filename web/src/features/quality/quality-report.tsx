@@ -446,6 +446,12 @@ export function QualityReport({
               values, but rendering them for old versions and nothing for new
               ones would read as a measurement that had gone missing. */}
         </div>
+        <LiftLine
+          lift={summary.lift}
+          baseline={summary.baseline}
+          upliftSource={summary.uplift_source}
+          tier={summary.tier}
+        />
         <div className="mt-2">
           <EvalStatus
             skillName={skillName}
@@ -541,6 +547,51 @@ export function QualityReport({
       <div className="text-[11px] text-text-tertiary">
         Scored v{summary.version} · suite {summary.suite_ref ?? "—"}
       </div>
+    </div>
+  );
+}
+
+// A null lift reads as "not measured", never as a zero.
+function LiftLine({
+  lift,
+  baseline,
+  upliftSource,
+  tier,
+}: {
+  lift?: number;
+  baseline?: number;
+  upliftSource?: string;
+  tier?: string;
+}) {
+  if (lift === undefined || lift === null) {
+    const reason =
+      baseline === undefined || baseline === null
+        ? `${tier ?? "this"} tier runs no baseline`
+        : "the lead model produced no score";
+    return (
+      <div className="mt-1 text-sm text-text-secondary">
+        Lift not measured — {reason}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 text-sm text-text-secondary">
+      <span className="font-mono text-text-primary">
+        {lift >= 0 ? "+" : "−"}
+        {Math.abs(Math.round(lift))}
+      </span>{" "}
+      vs. no skill
+      {baseline !== undefined && baseline !== null && (
+        <span> · {Math.round(baseline)} without it</span>
+      )}
+      {upliftSource === "reused" && (
+        <span
+          className="ml-2 text-[11px] text-text-tertiary"
+          title="One side of this comparison was copied from an earlier eval rather than run again. whetstone eval --fresh-baseline runs it again."
+        >
+          reused baseline
+        </span>
+      )}
     </div>
   );
 }

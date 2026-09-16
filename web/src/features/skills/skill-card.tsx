@@ -91,20 +91,17 @@ export function SkillCard({
       }}
       tabIndex={0}
       className={cn(
-        "group relative grid items-center gap-4 border-b border-border px-3.5 py-[15px] cursor-pointer transition-colors duration-150",
+        "skill-row group relative items-center border-b border-border px-3.5 py-[15px] cursor-pointer transition-colors duration-150",
         "hover:bg-bg-secondary",
         "before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:w-0.5 before:h-0 before:bg-accent before:rounded-sm before:transition-all before:duration-200",
         "hover:before:h-[60%]",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       )}
-      style={{
-        gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
-      }}
     >
       {/* Checkbox */}
       <div
         className={cn(
-          "flex items-center justify-center transition-opacity duration-150",
+          "skill-row-check flex items-center justify-center transition-opacity duration-150",
           anyChecked ? "opacity-100" : "opacity-0 group-hover:opacity-100"
         )}
         onClick={(e) => e.stopPropagation()}
@@ -179,22 +176,48 @@ export function SkillCard({
         </div>
       </div>
 
+      {/* Columns at full width, one labelled meta line below 900px, where the
+          column headers are hidden. See .skill-row in globals.css. */}
+      <div className="skill-row-meta">
       {/* Invocations */}
-      <span className="text-[13px] text-text-primary text-right" style={{ fontVariantNumeric: "tabular-nums" }}>
+      <span className="text-[13px] text-text-primary text-right max-[899px]:text-left" style={{ fontVariantNumeric: "tabular-nums" }}>
         {skill.activations.toLocaleString()}
+        <span className="hidden max-[899px]:inline text-text-tertiary"> invocations</span>
+      </span>
+
+      {/* A dash, not a zero, when nothing was measured. */}
+      <span
+        className="text-[13px] text-right max-[899px]:text-left whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+        title={
+          skill.quality?.lift === undefined || skill.quality?.lift === null
+            ? "Lift not measured"
+            : "Score with the skill minus the same model's score without it"
+        }
+      >
+        {skill.quality?.lift === undefined || skill.quality?.lift === null ? (
+          <span className="text-text-tertiary">—</span>
+        ) : (
+          <span className={skill.quality.lift >= 0 ? "text-text-primary" : "text-danger"}>
+            {skill.quality.lift >= 0 ? "+" : "\u2212"}
+            {Math.abs(Math.round(skill.quality.lift))}
+          </span>
+        )}
+        <span className="hidden max-[899px]:inline text-text-tertiary"> lift</span>
       </span>
 
       {/* Security + review */}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end max-[899px]:justify-start gap-2">
         <SecurityBadge status={skill.security_status} showLabel />
         <QualityBadge quality={skill.quality} latestVersion={skill.latest_version} />
         <ReviewStatus reviewedAt={skill.reviewed_at} />
       </div>
 
       {/* Version + time */}
-      <span className="text-[11px] text-text-tertiary text-right whitespace-nowrap">
+      <span className="text-[11px] text-text-tertiary text-right max-[899px]:text-left whitespace-nowrap">
         v{skill.latest_version} · {formatRelativeTime(skill.updated_at)}
       </span>
+      </div>
     </div>
   );
 }

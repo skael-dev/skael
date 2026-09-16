@@ -20,6 +20,9 @@ type RecordOutput struct {
 	Headline                 float64         `json:"headline_score"`
 	HeadlineCILow            float64         `json:"headline_ci_low,omitempty"`
 	HeadlineCIHigh           float64         `json:"headline_ci_high,omitempty"`
+	PrimaryScore             *float64        `json:"primary_score,omitempty"`
+	Baseline                 *float64        `json:"baseline,omitempty"`
+	Lift                     *float64        `json:"lift,omitempty"`
 	Pillars                  json.RawMessage `json:"pillar_breakdown"`
 	PanelMatrix              json.RawMessage `json:"panel_matrix"`
 	RobustnessGap            *float64        `json:"robustness_gap,omitempty"`

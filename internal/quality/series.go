@@ -20,6 +20,7 @@ type SeriesPoint struct {
 	Headline       float64   `json:"headline_score"`
 	HeadlineCILow  float64   `json:"headline_ci_low,omitempty"`
 	HeadlineCIHigh float64   `json:"headline_ci_high,omitempty"`
+	Lift           *float64  `json:"lift,omitempty"`
 	Verified       bool      `json:"verified"`
 	ScoredAt       time.Time `json:"scored_at"`
 }
@@ -108,6 +109,7 @@ func toPoint(r Record) SeriesPoint {
 		Headline:       r.Headline,
 		HeadlineCILow:  r.HeadlineCILow,
 		HeadlineCIHigh: r.HeadlineCIHigh,
+		Lift:           r.Lift,
 		Verified:       r.Verified,
 		ScoredAt:       r.ScoredAt,
 	}

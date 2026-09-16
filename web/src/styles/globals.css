@@ -85,3 +85,57 @@ body {
 .animate-pulse-soft {
   animation: pulse-soft 2s ease-in-out infinite;
 }
+
+@layer components {
+  /* The fixed columns are wider than a phone viewport, so below 900px the row
+     is a flex stack and the meta cells take a full-width line under the name.
+     `display: contents` above 900px is what lets one set of markup do both. */
+  .skill-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.5rem;
+    row-gap: 0.5rem;
+  }
+
+  /* The name block. Basis 0, not auto: an auto basis measures the description
+     and wraps the status dot onto its own line. */
+  .skill-row > :nth-child(3) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* Revealed on hover, so it is unreachable on a touch screen. */
+  .skill-row > .skill-row-check {
+    display: none;
+  }
+
+  .skill-row-meta {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+  }
+
+  @media (min-width: 900px) {
+    .skill-row {
+      display: grid;
+      grid-template-columns: 28px 12px 1fr 80px 64px 132px 110px;
+      column-gap: 1rem;
+      row-gap: 0;
+    }
+
+    .skill-row > :nth-child(3) {
+      flex: none;
+    }
+
+    .skill-row > .skill-row-check {
+      display: flex;
+    }
+
+    .skill-row-meta {
+      display: contents;
+    }
+  }
+}
