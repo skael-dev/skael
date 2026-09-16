@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"gopkg.in/yaml.v3"
@@ -76,6 +77,7 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 		}
 		// Use the relative slash-separated path as the archive name.
 		hdr.Name = entry.Path
+		normalizeHeader(hdr, info)
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, "", nil, fmt.Errorf("skill.Pack write header %s: %w", entry.Path, err)
@@ -103,6 +105,30 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 	checksum := hex.EncodeToString(h.Sum(nil))
 
 	return archiveBuf, checksum, entries, nil
+}
+
+// normalizeHeader strips everything that is not the file's content or its
+// path, so the same bytes always pack to the same archive and therefore the
+// same checksum. Without it a header carries the file's mtime and the packing
+// user's ids, and an unchanged republish one second later is a new version
+// with a new checksum — which defeats the unchanged short-circuit, the
+// content-addressed storage path, and any dedupe built on either.
+//
+// Only the executable bit survives, because Unpack masks permissions anyway
+// and a skill that ships a script needs it.
+func normalizeHeader(hdr *tar.Header, info os.FileInfo) {
+	hdr.ModTime = time.Unix(0, 0).UTC()
+	hdr.AccessTime = time.Time{}
+	hdr.ChangeTime = time.Time{}
+	hdr.Uid, hdr.Gid = 0, 0
+	hdr.Uname, hdr.Gname = "", ""
+	hdr.Mode = 0o644
+	if info.Mode().Perm()&0o111 != 0 {
+		hdr.Mode = 0o755
+	}
+	// USTAR so a stray sub-second timestamp or long name cannot switch the
+	// writer into PAX and change the bytes for reasons unrelated to content.
+	hdr.Format = tar.FormatUSTAR
 }
 
 // byteWriter is a minimal io.Writer that accumulates bytes into a slice.
