@@ -38,7 +38,6 @@ func Reduce(label string, r *report.Report) ([]TaskOutcome, []TaskLoss) {
 			losses = append(losses, miss)
 		}
 	}
-	sort.Slice(outcomes, func(i, j int) bool { return outcomes[i].TaskID < outcomes[j].TaskID })
 	return outcomes, losses
 }
 

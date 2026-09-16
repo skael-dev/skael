@@ -153,3 +153,28 @@ func TestDecide_RefusesFewerThanTwoCandidates(t *testing.T) {
 		t.Fatal("Decide accepted a single candidate")
 	}
 }
+
+// The table reads in the suite's order. Sorting by id puts "task-10" before
+// "task-2", which reads as noise to anyone checking a disputed result.
+func TestDecide_KeepsTheSuiteOrder(t *testing.T) {
+	ids := []string{"task-1", "task-2", "task-10", "task-11"}
+	var all []contest.TaskOutcome
+	for _, cand := range []string{"a", "b"} {
+		for _, id := range ids {
+			all = append(all, contest.TaskOutcome{Candidate: cand, TaskID: id, Passes: 3, Runs: 3})
+		}
+	}
+	v, err := contest.Decide(all)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	var got []string
+	for _, task := range v.Pairings[0].Tasks {
+		got = append(got, task.TaskID)
+	}
+	for i := range ids {
+		if got[i] != ids[i] {
+			t.Fatalf("task order = %v, want %v", got, ids)
+		}
+	}
+}

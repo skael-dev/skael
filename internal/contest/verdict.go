@@ -89,6 +89,10 @@ type Verdict struct {
 func Decide(outcomes []TaskOutcome) (Verdict, error) {
 	byCandidate := map[string]map[string]TaskOutcome{}
 	names := []string{}
+	// The suite's own order, so a table reads the way the tasks were written.
+	// Sorting by id puts "task-10" before "task-2".
+	var order []string
+	seenTask := map[string]bool{}
 	for _, o := range outcomes {
 		if o.Candidate == "" || o.TaskID == "" {
 			return Verdict{}, fmt.Errorf("contest.Decide: outcome with empty candidate or task")
@@ -98,6 +102,10 @@ func Decide(outcomes []TaskOutcome) (Verdict, error) {
 			names = append(names, o.Candidate)
 		}
 		byCandidate[o.Candidate][o.TaskID] = o
+		if !seenTask[o.TaskID] {
+			seenTask[o.TaskID] = true
+			order = append(order, o.TaskID)
+		}
 	}
 	if len(names) < 2 {
 		return Verdict{}, fmt.Errorf("contest.Decide: a contest needs at least two candidates, got %d", len(names))
@@ -108,7 +116,7 @@ func Decide(outcomes []TaskOutcome) (Verdict, error) {
 	beats := map[string]map[string]bool{}
 	for i := 0; i < len(names); i++ {
 		for j := i + 1; j < len(names); j++ {
-			p := comparePair(names[i], names[j], byCandidate)
+			p := comparePair(names[i], names[j], byCandidate, order)
 			pairings = append(pairings, p)
 			if p.Winner != "" {
 				loser := p.A
@@ -134,18 +142,16 @@ func Decide(outcomes []TaskOutcome) (Verdict, error) {
 	return v, nil
 }
 
-func comparePair(a, b string, byCandidate map[string]map[string]TaskOutcome) Pairing {
+func comparePair(a, b string, byCandidate map[string]map[string]TaskOutcome, order []string) Pairing {
 	p := Pairing{A: a, B: b, Outcome: OutcomeTooClose}
 
-	taskIDs := []string{}
-	for id := range byCandidate[a] {
-		if _, ok := byCandidate[b][id]; ok {
-			taskIDs = append(taskIDs, id)
+	for _, id := range order {
+		if _, ok := byCandidate[a][id]; !ok {
+			continue
 		}
-	}
-	sort.Strings(taskIDs)
-
-	for _, id := range taskIDs {
+		if _, ok := byCandidate[b][id]; !ok {
+			continue
+		}
 		ao, bo := byCandidate[a][id], byCandidate[b][id]
 		// A task nobody ran carries no evidence. It is not a tie between two
 		// candidates, it is an absence, and counting it as a tie would inflate

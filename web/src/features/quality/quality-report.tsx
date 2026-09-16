@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getEvalSuiteMeta, getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
 import { EvalStatus } from "./eval-status";
 import { QualityTrend } from "./quality-trend";
+import { ContestActions } from "@/features/contest/contest-actions";
+import { ContestChain } from "@/features/contest/contest-chain";
 
 // The engine keeps a measurement that was never defined for a run distinct
 // from a measured zero, using a nullable field, in several places
@@ -464,6 +466,22 @@ export function QualityReport({
       </div>
 
       <QualityTrend skillName={skillName} />
+
+      <div className="mb-6">
+        <h3 className="text-sm font-medium text-text-primary mb-1">Compared with</h3>
+        <p className="text-[11px] text-text-tertiary mb-3">
+          A contest runs candidates side by side, on one panel, on the same day, and says which
+          won each task. It advises: it releases nothing and holds nothing.
+        </p>
+        <ContestActions
+          skillName={skillName}
+          version={summary.version}
+          releasedVersion={latestVersion}
+        />
+        <div className="mt-4">
+          <ContestChain skillName={skillName} />
+        </div>
+      </div>
 
       <PillarBreakdownTable data={summary.pillar_breakdown} />
       <PanelMatrixTable data={summary.panel_matrix} />
