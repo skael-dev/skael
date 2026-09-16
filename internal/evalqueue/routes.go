@@ -43,13 +43,11 @@ type jobOutput struct {
 	// the point of the re-run endpoint's agents/models parameters.
 	Agents []string `json:"agents,omitempty"`
 	Models []string `json:"models,omitempty"`
-	// ContestID and Candidates are set when this job is a contest. A worker
-	// that sees candidates runs every one of them against SuiteRef, on one
-	// panel, in this claim — that is what holds the comparison constant.
+	// A worker that sees candidates runs every one of them in this claim,
+	// which is what holds the comparison constant.
 	ContestID  string      `json:"contest_id,omitempty"`
 	Candidates []Candidate `json:"candidates,omitempty"`
-	// ContestAttempts is the attempts per task per candidate a contest asked
-	// for. Named apart from Attempts, which counts this job's retries.
+	// Per task per candidate. Apart from Attempts, which counts job retries.
 	ContestAttempts int        `json:"contest_attempts,omitempty"`
 	Status          string     `json:"status"`
 	Attempts        int        `json:"attempts"`
@@ -178,8 +176,7 @@ type RouteOptions struct {
 	// platform.Config.QualityFloor, the same value publish decides with.
 	QualityFloor float64
 	// Contests supplies a contest job's candidates at claim time. A local
-	// interface rather than the concrete store, because internal/contest
-	// imports this package's Job type for its own submission path.
+	// interface, because internal/contest imports this package's Job type.
 	Contests ContestLookup
 }
 
@@ -223,9 +220,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		out := toJobOutput(j)
 		if j.ContestID != "" {
 			if opts.Contests == nil {
-				// A contest job with no way to learn its candidates would run
-				// as a plain eval of the first one and report a verdict over a
-				// single entry. Fail the claim instead.
+				// Otherwise this runs as a plain eval of the first candidate.
 				log.Error().Str("job", string(j.ID)).Msg("evalqueue: contest job claimed but no contest lookup is wired")
 				return nil, huma.Error500InternalServerError("claim eval job: contests are not configured")
 			}
