@@ -29,8 +29,8 @@ This brings up the server and database only. Publishing, scanning and syncing wo
 # macOS / Linux (curl installer — fastest)
 curl -fsSL skael.dev/install | sh
 
-# macOS / Linux (Homebrew)
-brew install skael-dev/skael/skael
+# macOS (Homebrew)
+brew install --cask skael-dev/skael/skael
 
 # From source
 git clone https://github.com/skael-dev/skael.git

@@ -21,13 +21,15 @@ Everything lives in a `.whetstone` workspace. Commands walk up from the working 
 
 ## Installing it
 
-whetstone has its own Homebrew formula, separate from `skael`. Installing the CLI does not install whetstone, and neither does the curl installer — that one is `skael`-only by design.
+whetstone has its own Homebrew cask, separate from `skael`. Installing the CLI does not install whetstone, and neither does the curl installer — that one is `skael`-only by design.
 
-**Homebrew.**
+**Homebrew (macOS).**
 
 ```bash
-brew install skael-dev/skael/whetstone
+brew install --cask skael-dev/skael/whetstone
 ```
+
+Homebrew on Linux cannot install a cask. Use the release archive below.
 
 **Release archive.** Every release ships `whetstone` as its own tarball, same os/arch matrix as the other binaries — `linux`, `darwin`, `windows` × `amd64`, `arm64`. `.tar.gz` everywhere except Windows, which is a `.zip`.
 

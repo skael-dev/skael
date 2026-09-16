@@ -153,8 +153,11 @@ release:
     ## Install
 
     ```bash
-    # macOS / Linux (Homebrew)
-    brew install skael-dev/skael/skael
+    # macOS (Homebrew)
+    brew install --cask skael-dev/skael/skael
+
+    # Linux
+    curl -fsSL https://skael.dev/install.sh | sh
 
     # Docker
     docker pull ghcr.io/skael-dev/skael:{{.Version}}
@@ -180,12 +183,25 @@ release:
   footer: |
     **Full changelog**: https://github.com/skael-dev/skael/compare/{{ .PreviousTag }}...{{ .Tag }}
 
-# One formula per binary rather than one archive carrying several: install.sh
-# derives its download name from a single BINARY, and the docs describe each
-# archive as holding one binary, so bundling would ripple through both.
-brews:
+# Casks, not formulas: `brews` is formally deprecated and goes away in
+# GoReleaser v3. One entry per binary, the same split the formulas had, because
+# install.sh derives its download name from a single BINARY and the docs
+# describe each archive as holding one binary.
+#
+# Casks are macOS-only — Homebrew on Linux cannot install one. Linux installs
+# are install.sh or the release archive, and the docs say so rather than
+# offering a `brew install` that fails.
+#
+# The post-install hook removes the quarantine bit, because these binaries are
+# not signed or notarized and Gatekeeper otherwise refuses to run a cask's
+# binary at all. It currently renders as Homebrew's deprecated `postflight`
+# stanza (goreleaser#6870, milestone v2.19.0): a warning on brew commands is
+# the lesser problem against an install that cannot run.
+homebrew_casks:
   - name: skael
     ids:
+      - skael
+    binaries:
       - skael
     repository:
       owner: skael-dev
@@ -193,14 +209,17 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://skael.dev"
     description: "Control plane for AI agent skills"
-    license: "Apache-2.0"
-    install: |
-      bin.install "skael"
-    test: |
-      system "#{bin}/skael", "version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/skael"]
+          end
 
   - name: whetstone
     ids:
+      - whetstone
+    binaries:
       - whetstone
     repository:
       owner: skael-dev
@@ -208,8 +227,9 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://skael.dev"
     description: "Authoring and evaluation toolkit for AI agent skills"
-    license: "Apache-2.0"
-    install: |
-      bin.install "whetstone"
-    test: |
-      system "#{bin}/whetstone", "version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/whetstone"]
+          end
