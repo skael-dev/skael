@@ -109,6 +109,29 @@ Both are cheap, and neither rewrites or backfills an existing table.
 
 **Scores from before the upgrade keep a blank lift, on purpose.** `report_json` holds enough to recompute one, but doing that means re-deriving which sessions each original run counted — void tasks excluded, dropped grades removed from the denominator — which puts a second copy of the scoring rule in a migration and produces numbers a reader takes for measurements. A skill's lift starts at its next evaluation, and the trend chart draws a gap before that point rather than a zero.
 
+### Homebrew moves from a formula to a cask
+
+GoReleaser formally deprecated the formula path for pre-compiled binaries, and removes it in its next major version. `skael` and `whetstone` are published as **casks** from the next release on.
+
+**On macOS**, install and upgrade with `--cask`:
+
+```bash
+brew install --cask skael-dev/skael/skael
+brew install --cask skael-dev/skael/whetstone
+```
+
+Already have the formula? Homebrew migrates you on `brew update` once the first cask release is published — the tap carries a migration entry for it. If you would rather not wait, `brew uninstall skael && brew install --cask skael-dev/skael/skael` does the same thing.
+
+**On Linux, Homebrew is no longer an install path.** Casks are macOS-only: `brew install --cask` on Linux fails with "Installing casks is supported only on macOS". Use the curl installer or the release archive, both of which have always worked:
+
+```bash
+curl -fsSL https://skael.dev/install.sh | sh
+```
+
+Nothing else changes. The binaries, the archives and their names are identical, and `skael-server` and `skael-worker` were never in Homebrew to begin with.
+
+One cosmetic wrinkle you may see: the cask carries a `postflight` block that strips the macOS quarantine bit, because these binaries are not notarized and Gatekeeper otherwise refuses to run them. Homebrew has deprecated that stanza and warns about it; GoReleaser emits the replacement from v2.19.0, and this tap picks it up when it does.
+
 ### Behavior change: a republished archive gets a new checksum, once
 
 `skill.Pack` used to copy the packing machine's clock and user ids into every tar header, so the same content packed twice produced different archives. It now normalises them, which means an archive packed before this release hashes differently from the same content packed after it.
@@ -173,7 +196,7 @@ Ownership never gates reads, and it never re-gates a version that was already re
 
 `skael` (CLI), `skael-server`, `whetstone` (evaluation authoring — see [whetstone](/docs/whetstone)), and `skael-worker`. Each has its own archive on the [releases page](https://github.com/skael-dev/skael/releases/latest), named `<binary>_<version>_<os>_<arch>.tar.gz`.
 
-Homebrew installs `skael` and `whetstone`, each from its own formula. `skael-worker` is a binary download; the server is Docker or a binary download, as before.
+Homebrew installs `skael` and `whetstone`, each from its own cask. `skael-worker` is a binary download; the server is Docker or a binary download, as before.
 
 ## Procedure
 
@@ -211,7 +234,7 @@ sudo mv skael-server /usr/local/bin/skael-server
 ```
 
 :::note[Homebrew ships the two CLIs only]
-`brew install skael-dev/skael/skael` installs the `skael` CLI and nothing else; `whetstone` has its own formula. There is no formula for `skael-server` or `skael-worker` — both are binary downloads from GitHub releases. Use Docker or a binary download to upgrade the server.
+`brew install --cask skael-dev/skael/skael` installs the `skael` CLI and nothing else; `whetstone` has its own cask. There is no cask for `skael-server` or `skael-worker` — both are binary downloads from GitHub releases. Use Docker or a binary download to upgrade the server.
 :::
 
 **From source** — rebuild and replace:
