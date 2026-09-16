@@ -8,9 +8,11 @@
 set -euo pipefail
 
 BASE="${1:-}"
-HEAD_REF="${2:-HEAD}"
+# Empty compares the working tree, which is what an author has in front of them
+# before committing. A ref here compares that ref instead.
+HEAD_REF="${2:-}"
 if [ -z "$BASE" ]; then
-  BASE=$(git merge-base "$HEAD_REF" main 2>/dev/null || echo "")
+  BASE=$(git merge-base "${HEAD_REF:-HEAD}" main 2>/dev/null || echo "")
 fi
 # A shallow clone has no main to diff against. Skipping is right: this is a
 # check for the author, run before the work leaves the machine.
@@ -19,20 +21,30 @@ if [ -z "$BASE" ]; then
   exit 0
 fi
 
+# range is what git diff compares: the working tree by default, a named ref
+# when one was given.
+range() {
+  if [ -n "$HEAD_REF" ]; then
+    echo "$BASE...$HEAD_REF"
+  else
+    echo "$BASE"
+  fi
+}
+
 MAX_PERCENT="${COMMENT_DENSITY_MAX:-25}"
 MIN_ADDED=25
 REPORT=$(mktemp)
 trap 'rm -f "$REPORT"' EXIT
 
-git diff "$BASE"..."$HEAD_REF" --name-only --diff-filter=d \
+git diff $(range) --name-only --diff-filter=d \
   -- '*.go' '*.ts' '*.tsx' '*.css' '*.sql' \
 | while read -r file; do
     [ -n "$file" ] || continue
 
-    added=$(git diff "$BASE"..."$HEAD_REF" -- "$file" | grep -c '^+[^+]' || true)
+    added=$(git diff $(range) -- "$file" | grep -c '^+[^+]' || true)
     [ "$added" -ge "$MIN_ADDED" ] || continue
 
-    comments=$(git diff "$BASE"..."$HEAD_REF" -- "$file" \
+    comments=$(git diff $(range) -- "$file" \
       | grep '^+[^+]' \
       | sed 's/^+[[:space:]]*//' \
       | grep -c -E '^(//|/\*|\*|\{/\*|--( |$))' || true)
