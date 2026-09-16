@@ -410,6 +410,24 @@ curl http://localhost:8080/api/skills/deploy/quality/3 \
 
 `GET /api/skills/{name}/quality/series` groups a skill's score history into comparable runs. Two scores are only comparable if they came from the same evaluation suite and the same model panel — changing either can move the number without the skill changing at all. Scores that aren't comparable to the current run are grouped into their own series rather than mixed in.
 
+## Contests
+
+See [Quality scoring](/docs/quality#comparing-two-skills-contests) for what a verdict means.
+
+`POST /api/eval/contests` queues a contest. Candidates are published versions; omitting `version` uses the released one, and omitting `suite_ref` has the worker derive a suite from every candidate.
+
+```bash
+curl -X POST http://localhost:8080/api/eval/contests \
+  -H "X-API-Key: sk-..." -H "Content-Type: application/json" \
+  -d '{"candidates":[{"skill":"payments:deploy"},{"skill":"platform:deploy"}]}'
+```
+
+`GET /api/eval/contests/{id}` returns the contest and, once it finishes, the verdict: the outcome, the split and its p-value, every task with both candidates' pass rates, and what each losing candidate missed. `suite_note` says who chose the tasks.
+
+`GET /api/skills/{name}/contests` lists the contests a skill entered, newest first. Entries with `chain_link: true` compare two versions of that one skill, which is how improvement over time is read.
+
+Nothing here releases a version, holds one, or clears a hold.
+
 ## Review queue
 
 `GET /api/review/queue` lists every version currently held by the [publish gate](/docs/concepts#publish-gate), across all skills. Open to any authenticated account: a hold only its approver can see is a hold nobody discovers.

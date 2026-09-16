@@ -121,6 +121,24 @@ An instance admin can short-circuit the **scan** reason at publish time with `--
 
 One honest caveat: a skill whose only version is held still shows up in `skael list` and search with `latest_version: 0`, exactly like a skill that was created but never published. What's withheld is everything servable — the archive, the content, the scan result. Nothing servable is served.
 
+## Proving one skill is better than another
+
+A score tells you about one skill. It does not settle an argument between two, because two scores measured weeks apart used a different panel and possibly a different suite, and neither number says how much of the gap is noise.
+
+A **contest** runs candidates against one suite, in one job, on one panel, on the same day.
+
+```bash
+skael contest payments:deploy@3 platform:deploy@7
+```
+
+The verdict is an exact sign test over the tasks: a named winner, **too close to call**, or a statement that too few tasks separated the candidates for any verdict to exist. It always shows the split, so a reader who distrusts one number reads the task table instead.
+
+Expect "too close to call" more often than not — a 7–2 split is p = 0.18, and at twelve tasks you need 8–1. When fewer than six tasks are decided, no split can beat chance, and the contest says so and names the suite rather than the skills. That is the useful answer: the tasks are not discriminating, and writing better ones is the work.
+
+A contest is advisory. It releases nothing, holds nothing and clears no hold. It records the suite, who chose the tasks, every task with both pass rates, and what each losing candidate missed — and `whetstone propose <contest-id>` turns that last part into one change to the skill's prose, as a diff you read before anything is published.
+
+Two versions of one skill make a **chain link**, which is how improvement over time is read: each link compares two bundles that ran together, so changing the panel later does not invalidate the history.
+
 ## Skill ownership
 
 Ownership rules decide who may publish to a skill name. A rule is a pattern — an exact name, a `payments:*` namespace, or the bare `*` — plus the people who own everything it matches. A publish by anyone outside the matched rule is held with the `ownership` reason until one of them approves it.
@@ -171,6 +189,7 @@ whetstone suite check my-skill    # report which evals cannot be scored, and why
 whetstone suite push my-skill     # register the suite with the server
 whetstone pack my-skill           # write a spec-valid archive with the eval sidecar stripped
 whetstone eval my-skill           # run the model panel, score it, write the report
+whetstone propose <contest-id>    # write one change from what a candidate lost in a contest
 whetstone report my-skill --open  # render the HTML report
 whetstone version                 # version, commit, build date
 ```
