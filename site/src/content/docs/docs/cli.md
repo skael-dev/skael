@@ -183,6 +183,29 @@ It prints, in order:
 
 `against` is the served version the diff was computed against; `0` means there is no baseline yet because this is the skill's first version. `hold_reasons` is every reason the version was ever held for; `outstanding` is the subset with no decision recorded yet. The two differ once one reason clears and the version stays held on another.
 
+## skael contest `<skill>[@version] <skill>[@version] …`
+
+Runs two or more candidate versions against one eval suite, in one job, on one panel, at the same time, and prints which won each task.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--suite <ref>` | — | A stored eval suite; omitted, one is derived from every candidate |
+| `--tier <tier>` | `full` | Eval tier |
+| `--attempts <n>` | 3 | Attempts per task per candidate |
+| `--wait` | true | Wait for the verdict |
+
+```bash
+skael contest payments:deploy@3 platform:deploy@7
+```
+
+A version left off means the skill's released version. The candidates need not be the same skill.
+
+The verdict is one of three things: a named winner, **too close to call**, or a statement that too few tasks separated the candidates for any verdict to be possible. Each comes with the split — `6-0 with 6 ties, p = 0.031` — so a reader who distrusts a single number reads the task table instead.
+
+Two things surprise people. A 7–2 split is **not** a winner: an exact sign test puts it at p = 0.18, and at twelve tasks you need 8–1. And below six decided tasks no verdict exists at all, because even a clean sweep of five is inside what a coin does — when that happens the problem is the suite, and the command says so.
+
+A contest is advisory. It releases nothing, holds nothing, and clears no hold. See [Quality scoring](/docs/quality#comparing-two-skills-contests).
+
 ## skael owners
 
 Manages who reviews changes to a skill name. Ownership decides who can clear an ownership hold on a publish — it never gates reads and never re-gates an already-released version. See [ownership](/docs/ownership) for how a name resolves to a rule.

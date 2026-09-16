@@ -126,6 +126,28 @@ Approval is per spec version, and both writers approve what they write. `new` ap
 
 `eval` reuses a baseline session from an earlier run when the suite, the eval, the agent, the model and the agent's version all match, the earlier run succeeded, and it is under 30 days old. A baseline installs no skill, so re-running it measures nothing new — at the full tier the baselines are 10 of 36 sessions. Pass `--fresh-baseline` to run them anyway.
 
+### whetstone propose `<contest-id>`
+
+Reads what a candidate missed in a [contest](/docs/quality#comparing-two-skills-contests) and writes one change to the skill's prose.
+
+```bash
+whetstone propose 9c1f…  --apply
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--candidate <skill@version>` | inferred | Whose losses to work from, when the workspace holds more than one candidate |
+| `--apply` | false | Write the change; without it the diff is printed and nothing is written |
+| `--endpoint` / `--api-key` | from config | The registry to read the contest from |
+
+It addresses every recorded loss in one change, and edits prose the bundle already has — `SKILL.md` and any `.md` or `.txt` beside it. A skill often loses a task because a reference is wrong, so confining this to `SKILL.md` would propose changes to the wrong file.
+
+It never adds a file, deletes one, or writes anything executable. A generator that can write a shell script puts machine-written code into a bundle an agent runs.
+
+**The proposer never sees the tasks.** It is given the expectations that failed and the grader's evidence, and nothing else — so it cannot write a change tailored to a case it has not read. The second safeguard is that the output is a diff you read before anything is published.
+
+It publishes nothing and starts nothing. Keep or discard the diff, publish, then run `skael contest` against the previous version to find out whether it helped. A candidate that recorded no loss gets no proposal, and is told so: inventing an improvement with no evidence is the thing this replaces.
+
 ### Flags
 
 | Command | Flag | Default | Description |

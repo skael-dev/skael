@@ -131,7 +131,54 @@ A score isn't a single flat state. Each of these means something different, and 
 - **Incomplete panel.** One or more models in the panel failed their health check partway through, so the evaluation couldn't be finished properly. This is flagged separately from a low score — a panel that couldn't finish tells you nothing about whether the skill is good.
 - **Stale.** The score is for an older version than the one currently being served. The skill has moved on since it was last measured.
 
-## Comparing versions over time
+## Lift: how much the skill helped
+
+The headline says how good a skill is. **Lift** says how much of that is the skill.
+
+Every evaluation already runs each task twice — once with the skill installed, once without — so lift is the difference: the primary panel member's score with the skill, minus that same member's score without it. Both sides are one agent, one model and one task set, on the same day. A skill detail page reads it as `+27 vs. no skill · 44 without it`.
+
+Two things to know:
+
+- **Not measured is not zero.** A tier that runs no baseline, and a run whose primary panel member produced no score, both leave lift empty. The UI shows a dash and says why. A zero lift means "measured, and it changed nothing" — a different fact entirely.
+- **A reused baseline is marked.** Re-running a baseline that has not changed wastes sandbox time, so an eval may copy one from an earlier run (up to 30 days old, same suite, same task, same agent, same model). When it does, the line says `reused baseline`. `whetstone eval --fresh-baseline` runs it again.
+
+Lift is reported, never gated. `QUALITY_FLOOR` reads the headline alone: a low lift can mean an easy suite rather than a weak skill, and nothing can tell those apart automatically.
+
+## Comparing two skills: contests
+
+A score tells you about one skill. It does not settle "my version is better than yours", because two scores measured weeks apart were measured with a different panel, a different agent CLI version and possibly a different suite — and because neither number carries any sense of how much of the gap is noise.
+
+A **contest** answers that question directly. It runs two or more candidate versions against one suite, in one job, on one panel, on the same day, and reports which won each task.
+
+```bash
+skael contest payments:deploy platform:deploy
+```
+
+A candidate is a published version, written `skill@version`; leaving the version off means the released one. The candidates do not have to be the same skill — two teams rarely agree on a name before they disagree about the content.
+
+### Reading a verdict
+
+The verdict is an exact sign test over the tasks. Each task is a win, a loss or a tie on pass rate; the ties are dropped and the rest is tested against a coin. You get one of three answers, always shown with the split:
+
+- **A winner.** One candidate beat the other by more than chance explains.
+- **Too close to call.** The gap is inside the noise. This is a real answer, not a failure to reach one, and it is the common one.
+- **Too few tasks decided it.** Fewer than six tasks separated the candidates, so no split could have beaten chance. The contest says so and names the suite, not the skills: *"the suite needs tasks these candidates handle differently."*
+
+That last point is worth sitting with, because it is where most people's intuition is wrong. **A 7–2 split is not a result** — an exact sign test puts it at p = 0.18. At twelve tasks you need 8–1 before the number means anything. If a contest keeps returning "too close to call", the tasks are not discriminating between the candidates, and writing better tasks is the work.
+
+### A contest changes nothing
+
+It releases no version, holds none, and clears no hold. It records a result you can link to and argue with: the suite it used, who chose the tasks, every task with both pass rates, and the expectations each losing candidate missed.
+
+**Who chose the tasks is always shown**, because in a company the suite is the contested artifact. A suite derived for a contest is derived from *every* candidate, so no candidate's own claims set the bar. A suite authored by someone who owns a candidate still runs — it is disclosed, not refused, because the people who care enough to write a suite are the people competing.
+
+### Is this skill improving?
+
+The **chain** answers that: a sequence of contests between consecutive released versions, each measured on one day with both bundles present. Start one from the quality tab with "Compare with vN".
+
+This is drift-free in a way a trend line cannot be. A link compares two bundles that ran together, so changing the panel later does not invalidate the history — it just means the next link used a different panel, which is fine, because a link is a comparison and not a level.
+
+## Comparing scores over time
 
 `GET /api/skills/{name}/quality/series` (and the trend chart on the skill detail page) show how a skill's score has changed across versions.
 
@@ -154,5 +201,9 @@ A version can be held for two independent reasons: `scan` (a blocking security f
 **A quality score clears `scan`. It can never clear `ownership`.** No score, however high, releases a version the skill owners have not agreed to. If a score could clear an ownership hold, the whole review path would be decorative — anyone could publish into someone else's namespace and let a passing eval wave it through.
 
 The reverse holds too: a skill owner approving the `ownership` reason does not clear a `scan` finding. Only an instance admin does that. If a namespace owner could, the security gate would only be as strong as the least careful self-managed namespace on the instance.
+
+## Turning a loss into a change
+
+A contest records what each losing candidate missed: the task, the expectations it failed, and the grader's evidence. `whetstone propose` reads that and writes one change to the skill's prose — see [whetstone](/docs/whetstone#whetstone-propose-contest-id).
 
 See [Scanning](/docs/concepts#scanning) for the rest of what the gate does, and [`skael review`](/docs/cli#skael-review-skill-name-version) / the [review queue API](/docs/api#review-queue) for acting on held versions.
