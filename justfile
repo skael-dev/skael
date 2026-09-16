@@ -168,12 +168,16 @@ fmt:
 fmt-check:
     @test -z "$(gofmt -l .)" || (echo "unformatted files:" && gofmt -l . && exit 1)
 
+# Fail when the diff against main adds more comment than a reader can use
+comments:
+    ./checks/comment-density.sh
+
 # Tidy go.mod
 tidy:
     go mod tidy
 
-# Run all checks (vet + fmt + test + integration)
-check: vet fmt-check test test-integration
+# Run all checks (vet + fmt + comments + test + integration)
+check: vet fmt-check comments test test-integration
 
 # --- Docker ---
 

@@ -12,9 +12,9 @@ import (
 // untrusted skill on the host.
 var ErrNoExecutor = errors.New("agent: Invoke needs an executor; a session must run in a sandbox")
 
-// Exec runs one command in a sandbox. Adapters build argv and hand it here;
-// they never exec on the host. Passing the executor in rather than the sandbox
-// keeps flags in the adapter and containers out of it.
+// Exec runs one command in a sandbox. Adapters build argv and hand it here; they
+// never exec on the host. The executor rather than the sandbox, so flags stay in
+// the adapter and containers stay out of it.
 type Exec interface {
 	Exec(ctx context.Context, argv []string, stdout, stderr io.Writer) (exitCode int, err error)
 }
@@ -31,15 +31,13 @@ type Caps struct {
 	// auth. Local-development convenience only — does not work on headless
 	// workers, and carries nothing on macOS where the CLI uses the Keychain.
 	AuthDirs []string
-	// AuthEnv names the environment variables this adapter's CLI reads for
-	// authentication. The runner forwards any that are set into the sandbox.
-	// Preferred over AuthDirs: works on headless hosts with no interactive login.
+	// AuthEnv is preferred over AuthDirs: it works on a headless host with no
+	// interactive login. The runner forwards any of these that are set.
 	AuthEnv                 []string
 	SupportsSkillInvocation bool
 }
 
-// InvokeSpec is one agent session request. Workspace and timeout live on the
-// sandbox (baked into Exec by the runner), not here.
+// InvokeSpec is one session request. Workspace and timeout live on the sandbox.
 type InvokeSpec struct {
 	Prompt string
 	Model  string
@@ -57,9 +55,8 @@ type Meta struct {
 	VisibleSkills     []string
 	PermissionDenials []string
 	RateLimited       bool
-	// RateLimitUtilization is the highest window utilization observed, 0 when
-	// never reported. Carried so an approaching limit is visible before it
-	// starts failing sessions.
+	// RateLimitUtilization is the highest window utilization seen, 0 when never
+	// reported, so an approaching limit is visible before it fails sessions.
 	RateLimitUtilization float64
 	RateLimitWindow      string
 	IsError              bool

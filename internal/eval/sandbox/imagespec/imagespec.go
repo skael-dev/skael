@@ -2,11 +2,9 @@
 // Dockerfile, a per-skill layer over it, the proxy configuration that enforces
 // a network allowlist, and the digest that makes a layer cacheable.
 //
-// It is deliberately separate from any driver. Rendering is where the
-// security-relevant decisions live — which dependency strings may become
-// shell, which Dockerfile instructions a task may use — and keeping it out of
-// the driver means those decisions are asserted without a daemon, in tests
-// that gate CI.
+// Separate from any driver on purpose: rendering is where the security-relevant
+// decisions live, and keeping it out of the driver means they are asserted
+// without a daemon, in tests that gate CI.
 package imagespec
 
 import (
@@ -28,28 +26,20 @@ var baseFS embed.FS
 // an environment, so a silently-changed base makes two scores incomparable.
 const DefaultBaseTag = "whetstone-base:1"
 
-// PublishedBaseImage is where the release publishes DefaultBaseTag. A driver
-// that resolves an image rather than building one defaults to this, so an
-// operator who wants the shipped environment does not have to name it. It is
-// derived from DefaultBaseTag rather than written out, so bumping that
-// constant cannot leave the default pointing at the previous environment.
+// PublishedBaseImage is where the release publishes DefaultBaseTag, and the
+// default for a driver that resolves an image rather than building one. Derived
+// rather than written out, so bumping the tag cannot leave it pointing at the
+// previous environment.
 const PublishedBaseImage = "ghcr.io/skael-dev/" + DefaultBaseTag
 
 // SlimBaseTag is the base the docker-tagged test job builds.
 const SlimBaseTag = "whetstone-base-ci:1"
 
-// ContainerHome is the home directory of the "runner" user every run executes
-// as inside the container — base/Dockerfile creates that user with
-// "useradd -m -u 1000 runner", and Docker derives HOME from /etc/passwd for a
-// USER set by name. A host path an adapter declares under "~" (an AuthDirs
-// entry, for instance) must be rewritten against this, not against the host's
-// own home: the two are different filesystems with different users, and the
-// container never sees the host's home directory at all.
-//
-// This is an image property, not a runner one: changing base/Dockerfile's
-// USER or the UID/home "useradd" assigns requires changing this constant to
-// match, or every auth mount silently starts landing in the wrong place
-// again.
+// ContainerHome is the home of the "runner" user every run executes as. A host
+// path an adapter declares under "~" is rewritten against this, never against
+// the host's own home — the container never sees that filesystem. Changing
+// base/Dockerfile's USER or its useradd home requires changing this to match,
+// or every auth mount silently lands in the wrong place again.
 const ContainerHome = "/home/runner"
 
 // BaseDockerfile returns the base image definition, slim for CI or full for
@@ -61,8 +51,7 @@ func BaseDockerfile(slim bool) string {
 	}
 	b, err := baseFS.ReadFile(name)
 	if err != nil {
-		// Embedded at compile time; unreachable unless the embed directive and
-		// the filename disagree, which is a build-time defect.
+		// Unreachable unless the embed directive and the filename disagree.
 		panic(fmt.Sprintf("imagespec: %v", err))
 	}
 	return string(b)
@@ -102,9 +91,8 @@ func Tag(e sandbox.EnvSpec) (string, error) {
 	return "whetstone-skill:" + d[:16], nil
 }
 
-// Render emits the per-skill Dockerfile. It validates before it emits: a
-// dependency string reaches a RUN instruction, so an unchecked one is
-// arbitrary code during an image build.
+// Render emits the per-skill Dockerfile. It validates first: a dependency string
+// reaches a RUN instruction, so an unchecked one is arbitrary code at build.
 func Render(e sandbox.EnvSpec) (string, error) {
 	if err := ValidateDeps(e.Deps); err != nil {
 		return "", err
@@ -118,9 +106,8 @@ func Render(e sandbox.EnvSpec) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "FROM %s\n", base)
 	if len(e.Deps.Apt) > 0 {
-		// Root for the install, back to runner afterwards: a run must not be
-		// able to write outside its workspace, but installing a package needs
-		// to.
+		// Root to install, runner afterwards: a run must not write outside its
+		// workspace, but a package install must.
 		fmt.Fprintf(&b, "USER root\nRUN apt-get update && apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*\nUSER runner\n",
 			strings.Join(sorted(e.Deps.Apt), " "))
 	}

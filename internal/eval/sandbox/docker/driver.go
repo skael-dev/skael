@@ -4,9 +4,8 @@
 // code — containers share the host kernel — which is why sandbox.CheckPolicy
 // refuses untrusted work here rather than this package deciding case by case.
 //
-// The CLI is shelled out to rather than using the Docker SDK: the SDK adds a
-// large dependency tree and an API-version negotiation problem, and every
-// operation needed here is one command whose flags are worth reading in full.
+// The CLI rather than the SDK: the SDK adds a large dependency tree and an
+// API-version negotiation problem, and every operation here is one command.
 package docker
 
 import (
@@ -21,15 +20,13 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 )
 
-// ErrDockerUnavailable is returned when no usable docker binary was found.
 var ErrDockerUnavailable = errors.New("docker: no usable docker binary")
 
-// execCommand is a substitution seam so build and Run are testable without
-// actually shelling out.
+// execCommand is the substitution seam for tests.
 var execCommand = exec.CommandContext
 
-// Options configures the driver. The resource limits are per run: a 60-session
-// tier at concurrency four must not be able to exhaust the host.
+// Options configures the driver. The limits are per run: a 60-session tier at
+// concurrency four must not exhaust the host.
 type Options struct {
 	Binary    string
 	BaseTag   string
@@ -39,10 +36,8 @@ type Options struct {
 	Logger    func(format string, args ...any)
 }
 
-// Driver is the Docker sandbox driver.
 type Driver struct{ o Options }
 
-// New resolves the docker binary and applies defaults.
 func New(o Options) (*Driver, error) {
 	if o.Binary == "" {
 		bin, err := exec.LookPath("docker")
@@ -69,7 +64,6 @@ func New(o Options) (*Driver, error) {
 	return &Driver{o: o}, nil
 }
 
-// Name identifies the driver in reports and diagnostics.
 func (d *Driver) Name() string { return "docker" }
 
 // HardwareIsolated reports false: runc shares the host kernel.

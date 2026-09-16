@@ -9,41 +9,34 @@ import (
 // execCommand is the substitution seam for tests.
 var execCommand = exec.CommandContext
 
-// uploadWorkspace copies the session's local workspace directory into the
-// running service. There is no pod-style bind mount here, so the transfer
-// goes through the CLI, the way Northflank documents directory copy.
+// uploadWorkspace copies the local workspace into the running service. There is
+// no bind mount here, so the transfer goes through the CLI.
 func (d *Driver) uploadWorkspace(ctx context.Context, serviceID, local, remote string) error {
 	return d.runCLI(ctx, "upload", "service", "file",
 		"--projectId", d.o.Project, "--service", serviceID,
 		"--localPath", local, "--remotePath", remote)
 }
 
-// downloadWorkspace copies the workspace back out of the service once the
-// session has finished, so its output can be graded. A failed copy back is
-// indistinguishable from a skill that produced nothing, so this must return
-// an error rather than silently leave the workspace empty.
+// downloadWorkspace copies the workspace back out for grading. A failed copy is
+// indistinguishable from a skill that produced nothing, so it must error rather
+// than leave the workspace empty.
 func (d *Driver) downloadWorkspace(ctx context.Context, serviceID, remote, local string) error {
 	return d.runCLI(ctx, "download", "service", "file",
 		"--projectId", d.o.Project, "--service", serviceID,
 		"--localPath", local, "--remotePath", remote)
 }
 
-// cliLogin authenticates the CLI once, at construction. Northflank documents
-// no API-token environment variable; the only non-interactive login is
-// `northflank login -t <TOKEN>`, which necessarily places the token in the
-// child process's argument list, visible to any local user via a process
-// listing. One login at worker startup is the smallest exposure this CLI
-// allows, which is why uploadWorkspace and downloadWorkspace never carry the
-// token: doing that instead puts it in a process listing on every
-// workspace copy rather than once at startup. Do not "simplify" the token
-// back into a per-transfer call.
+// cliLogin authenticates once, at construction. Northflank documents no token
+// environment variable, so the only non-interactive login puts the token in an
+// argument list, visible to any local user. Once at startup is the smallest
+// exposure this CLI allows — do not "simplify" the token into a per-transfer
+// call, which puts it in a process listing on every workspace copy.
 func (d *Driver) cliLogin(ctx context.Context) error {
 	return d.runCLI(ctx, "login", "-t", d.o.Token)
 }
 
-// runCLI shells out to the Northflank CLI and returns an error carrying its
-// combined output on a non-zero exit, or naming the CLI binary when it is
-// not on PATH at all.
+// runCLI returns an error carrying the CLI's output, or naming the binary when
+// it is not on PATH.
 func (d *Driver) runCLI(ctx context.Context, args ...string) error {
 	cmd := execCommand(ctx, d.o.CLI, args...)
 	out, err := cmd.CombinedOutput()

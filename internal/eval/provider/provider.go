@@ -10,10 +10,9 @@
 //  3. Subscription CLI       nothing set, and an agent CLI on PATH
 //  4. Split                  mode 2, plus CLAUDE_CODE_OAUTH_TOKEN
 //
-// The judge and the eval panel share ANTHROPIC_BASE_URL. Mode 4 is the one
-// case where they separate: the panel bills to a subscription, the judge keeps
-// the gateway. Turning it on changes model_panel, which splits a skill's score
-// trend at the changeover. See Resolve, PanelModels and PanelExcludeEnv.
+// The judge and the eval panel share ANTHROPIC_BASE_URL. Mode 4 is the one case
+// where they separate, and it takes both PanelModels and PanelExcludeEnv to do
+// it. Turning it on changes model_panel, which splits a skill's score trend.
 package provider
 
 import (
@@ -29,25 +28,21 @@ import (
 	"github.com/skael-dev/skael/internal/eval/runner"
 )
 
-// The environment this package reads. These are the Anthropic SDK's and the
-// Claude Code CLI's own names rather than Skael-specific ones, so a machine
-// already set up for either needs no further configuration — and so the panel,
-// which is a Claude Code CLI running inside a sandbox, reads the same values
-// the worker resolved.
+// The SDK's and the CLI's own names, not Skael-specific ones: a machine set up
+// for either needs no further configuration, and the panel is a Claude Code CLI
+// reading the same values the worker resolved.
 const (
 	APIKeyEnv    = "ANTHROPIC_API_KEY"
 	AuthTokenEnv = "ANTHROPIC_AUTH_TOKEN"
 	BaseURLEnv   = "ANTHROPIC_BASE_URL"
-	// ModelEnv is a comma-separated list, most capable first. The first entry
-	// serves every judge call and the panel's primary member; the rest are the
-	// panel's floor members, which only the deep tier runs. It replaces the
-	// former LLM_STRONG_MODEL/LLM_FAST_MODEL pair, whose two names could be
+	// ModelEnv is comma-separated, most capable first: the first entry serves
+	// every judge call and the panel's primary member, the rest are the panel's
+	// floor members. One list rather than a strong/fast pair, which could be
 	// half-set — a panel with one working member and one that 404s is not an
 	// error but a complete run that scores and can never release anything.
 	ModelEnv = "LLM_MODEL"
-	// OAuthTokenEnv is Claude Code's own subscription credential. It is read
-	// here only to select mode 4 — this package never authenticates a judge
-	// call with it, because a subscription is neither metered nor pinned to a
+	// OAuthTokenEnv selects mode 4 and nothing else. A judge call is never
+	// authenticated with it: a subscription is neither metered nor pinned to a
 	// model, and a released version's score must be both.
 	OAuthTokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
 )
@@ -56,69 +51,49 @@ const (
 type Kind string
 
 const (
-	// KindSubscription is an agent CLI on PATH, billed to a subscription.
 	KindSubscription Kind = "subscription"
-	// KindAPI is a direct HTTP gateway: Anthropic's own, or a compatible one.
-	KindAPI Kind = "api"
-	// KindNone is no usable backend.
-	KindNone Kind = "none"
+	KindAPI          Kind = "api"
+	KindNone         Kind = "none"
 )
 
-// Config is the resolved provider. It is data only: nothing here dials
-// anything until Gateway is called.
+// Config is data only: nothing dials anything until Gateway is called.
 type Config struct {
-	Kind Kind
-	// Detail explains the choice in one clause, including why it is none.
+	Kind   Kind
 	Detail string
-	// Binary is the agent CLI backing a subscription provider.
 	Binary string
-	// BaseURL is ANTHROPIC_BASE_URL, empty for Anthropic's own API. It is the
-	// panel's gateway as much as the judge's.
+	// BaseURL is the panel's gateway as much as the judge's. Empty is
+	// Anthropic's own API.
 	BaseURL string
-	// Key is whichever credential authenticates the API provider.
-	Key string
+	Key     string
 	// AuthStyle is inferred from which credential was set rather than
 	// configured: a bearer token is only ever presented as a bearer token.
 	AuthStyle api.AuthStyle
 	// Models is ModelEnv, split and trimmed. Empty means the shipped defaults.
 	Models []string
-	// PanelSubscription reports mode 4: the judge dials BaseURL, and the eval
-	// panel authenticates with OAuthTokenEnv instead. It changes what the
-	// panel asks for (PanelModels) and what the sandbox is allowed to see
-	// (PanelExcludeEnv); both are required, because either one alone leaves
-	// the panel on the gateway.
+	// PanelSubscription is mode 4: the judge keeps BaseURL, the panel
+	// authenticates with OAuthTokenEnv.
 	PanelSubscription bool
 }
 
-// Getenv is os.Getenv, injectable so resolution is testable without touching
-// the process environment.
+// Getenv is os.Getenv, injectable so resolution is testable.
 type Getenv func(string) string
 
 // Detector reports the agent CLI serving a subscription provider.
 type Detector func() (string, error)
 
-// FromEnv resolves the provider from this process's environment, including a
-// subscription CLI on PATH.
+// FromEnv resolves from this process's environment, subscription CLI included.
 func FromEnv() Config { return Resolve(os.Getenv, agentcli.Detect) }
 
 // APIFromEnv is FromEnv with subscription detection off, for a caller whose
-// backend must be metered and reproducible — `skael-worker`, whose judge
-// output releases versions. A CLI on the worker's host is then not a provider
-// at all rather than a provider it must refuse, so an operator who has both a
-// key and a CLI installed is served by the key.
+// backend must be metered and reproducible — the worker, whose judge output
+// releases versions. An operator with both a key and a CLI is served by the key.
 func APIFromEnv() Config { return Resolve(os.Getenv, nil) }
 
-// Resolve picks a provider.
-//
-// Explicit gateway configuration beats autodetection: setting a base URL or a
-// bearer token is an unambiguous statement that a particular gateway is
-// intended, and silently preferring a subscription CLI that happens to be on
-// PATH would bill the wrong account and evaluate against a different model
-// than the one configured.
-//
-// APIKeyEnv alone stays *below* the CLI. It is present on plenty of developer
-// machines that also have the CLI installed, and treating it as an override
-// would move those machines onto metered billing without anyone asking for it.
+// Resolve picks a provider. Explicit gateway configuration beats autodetection:
+// preferring a CLI that happens to be on PATH would bill the wrong account and
+// score against a different model. APIKeyEnv alone stays *below* the CLI — it
+// sits on plenty of machines that also have the CLI, and treating it as an
+// override moves them onto metered billing without anyone asking.
 func Resolve(env Getenv, detect Detector) Config {
 	baseURL := strings.TrimSpace(env(BaseURLEnv))
 	token := env(AuthTokenEnv)
@@ -186,9 +161,8 @@ func splitModels(v string) []string {
 	return out
 }
 
-// Validate reports a configuration that cannot serve a call. It is the shared
-// half of `whetstone doctor` and the worker's startup probe: both report what
-// this returns, so the same mistake reads the same way in both.
+// Validate reports a configuration that cannot serve a call. `whetstone doctor`
+// and the worker's startup both report what this returns.
 func (c Config) Validate() error {
 	switch c.Kind {
 	case KindAPI:
@@ -203,25 +177,21 @@ func (c Config) Validate() error {
 }
 
 // Warnings reports configurations that work often enough not to refuse, and
-// break confusingly when they do break. One place, so `whetstone doctor` and
-// the worker's startup say the same thing.
+// break confusingly when they do.
 func (c Config) Warnings() []string {
 	if c.BaseURL == "" || len(c.Models) > 0 {
 		return nil
 	}
 	if c.PanelSubscription {
-		// The panel is not on the gateway here, so only the judge is at risk
-		// and there is no health probe to catch it. A judge that 404s fails
-		// the run outright, which at least says so.
+		// Only the judge is at risk here, and no health probe covers it.
 		return []string{fmt.Sprintf(
 			"%s points the judge at %s, but %s is not set, so the judge asks that gateway for "+
 				"Anthropic's own model name. A gateway that namespaces its model identifiers rejects "+
 				"that and every run fails. Set %s to an identifier it serves.",
 			BaseURLEnv, c.BaseURL, ModelEnv, ModelEnv)}
 	}
-	// A passthrough proxy in front of Anthropic resolves "sonnet" happily,
-	// which is why this is not a refusal. The panel health probe is the
-	// authority and names the models it was refused.
+	// A passthrough proxy resolves "sonnet" happily, which is why this warns
+	// rather than refuses. The panel health probe is the authority.
 	return []string{fmt.Sprintf(
 		"%s points the judge and the eval panel at %s, but %s is not set, so both ask that gateway "+
 			"for Anthropic's own alias %q. A gateway that namespaces its model identifiers (OpenRouter "+
@@ -230,17 +200,11 @@ func (c Config) Warnings() []string {
 		BaseURLEnv, c.BaseURL, ModelEnv, runner.DefaultPanel()[0].Model, ModelEnv)}
 }
 
-// PanelModels is the model ids the eval panel should ask for, empty when the
-// shipped default is right.
-//
-// Gated on BaseURL, not on ModelEnv alone: an operator who named a model to
-// pick a cheaper judge against Anthropic's own API must keep the panel they
-// had, since a changed panel is recorded in model_panel and splits the score
-// trend. A custom gateway is the case where the shipped aliases cannot work.
-// A panel on the subscription is the other empty case: a subscription serves
-// Anthropic's own aliases, so handing it the gateway's namespaced ids fails
-// every member's health probe — a complete run that scores nothing and can
-// never release the version it was meant to clear.
+// PanelModels is what the panel asks for, empty when the shipped default is
+// right. Gated on BaseURL, not on ModelEnv alone: naming a model to pick a
+// cheaper judge against Anthropic's own API must not change the panel, because
+// a changed panel splits the score trend. A subscription panel is empty for the
+// opposite reason — it serves Anthropic's aliases, not a gateway's ids.
 func (c Config) PanelModels() []string {
 	if c.BaseURL == "" || c.PanelSubscription {
 		return nil
@@ -248,20 +212,12 @@ func (c Config) PanelModels() []string {
 	return c.Models
 }
 
-// PanelExcludeEnv names the credential variables a sandbox must NOT be given,
-// even though the agent adapter declares them. It is empty in every mode but
-// the split.
-//
-// This is the half that actually moves the panel. The claude-code adapter
-// forwards each name it declares that is set, so a worker whose own
-// environment names a gateway hands that gateway to every panel member.
-// PanelModels alone does not help: the member would ask a subscription for
-// the alias it serves and still be pointed at the gateway to ask.
-//
-// The API key is withheld with the gateway's own two names. It is not the
-// judge's credential in this mode, and forwarding it leaves the sandbox
-// holding two competing credentials, which is the ambiguity this mode exists
-// to remove.
+// PanelExcludeEnv names the credentials a sandbox must NOT be given, though the
+// adapter declares them. This is the half that actually moves the panel: the
+// adapter forwards every name it declares that is set, so without the exclusion
+// a member asks a subscription for its alias while still pointed at the
+// gateway. The API key goes too — forwarding it leaves the sandbox holding two
+// competing credentials, which is the ambiguity this mode exists to remove.
 func (c Config) PanelExcludeEnv() []string {
 	if !c.PanelSubscription {
 		return nil
@@ -269,9 +225,8 @@ func (c Config) PanelExcludeEnv() []string {
 	return []string{BaseURLEnv, AuthTokenEnv, APIKeyEnv}
 }
 
-// Options are the per-caller gateway settings that are not provider choices:
-// whetstone allows a long interactive timeout and shares its workspace
-// completion cache, the worker does neither.
+// Options are per-caller settings that are not provider choices: whetstone
+// allows a long timeout and shares a completion cache, the worker does neither.
 type Options struct {
 	Cache      llm.Cache
 	Timeout    time.Duration
@@ -306,9 +261,8 @@ func (c Config) Gateway(o Options) (llm.Gateway, error) {
 	return nil, fmt.Errorf("no LLM gateway available: %s", c.Detail)
 }
 
-// first and last map one ordered list onto the api gateway's two model slots.
-// gen.outline is the only production caller of llm.ClassFast, so a
-// single-entry list serving both slots resolves to one model.
+// gen.outline is the only production caller of llm.ClassFast, so a single-entry
+// list serving both slots resolves to one model.
 func first(ss []string) string {
 	if len(ss) == 0 {
 		return ""
