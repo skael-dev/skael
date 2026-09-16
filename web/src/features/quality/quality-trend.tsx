@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getSkillQualitySeries } from "@/api/sdk.gen";
 import type { Series } from "@/api/types.gen";
@@ -10,16 +11,43 @@ import type { Series } from "@/api/types.gen";
 // verbatim — never paraphrased here, which would create a second definition
 // of comparability in the UI).
 
-const CHART_WIDTH = 300;
 const CHART_HEIGHT = 150;
 const CHART_PAD = 8;
 
+// The viewBox is the element's own pixel width, so one user unit is one pixel
+// and a point stays a circle. A fixed viewBox stretched to fit drew ellipses.
+function useMeasuredWidth(fallback: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(fallback);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const measure = (w: number) => {
+      if (w > 0) setWidth(w);
+    };
+    measure(el.getBoundingClientRect().width);
+
+    // Absent in jsdom, and in browsers old enough to matter to nobody. The
+    // chart renders at the fallback width rather than not at all.
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      measure(entry?.contentRect.width ?? 0);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, width] as const;
+}
+
 type Point = NonNullable<Series["points"]>[number];
 
-// The headline and the lift are both 0-100 point scales, so they share one
-// axis. The domain is anchored to [0, 100] and widened only far enough to hold
-// a negative lift.
-function scaleFor(points: Point[]) {
+// Both lines are 0-100 point scales, so they share one axis, anchored to
+// [0, 100] and widened only far enough to hold a negative lift.
+function scaleFor(points: Point[], chartWidth: number) {
   const values = points.flatMap((p) =>
     p.lift === undefined || p.lift === null
       ? [p.headline_score]
@@ -28,7 +56,7 @@ function scaleFor(points: Point[]) {
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 100);
   const range = max - min || 1;
-  const innerWidth = CHART_WIDTH - CHART_PAD * 2;
+  const innerWidth = chartWidth - CHART_PAD * 2;
   const innerHeight = CHART_HEIGHT - CHART_PAD * 2;
 
   return {
@@ -40,16 +68,15 @@ function scaleFor(points: Point[]) {
   };
 }
 
-function buildPath(points: Point[]) {
-  const scale = scaleFor(points);
+function buildPath(points: Point[], chartWidth: number) {
+  const scale = scaleFor(points, chartWidth);
   return points.map((p, i) => ({ ...p, x: scale.x(i), y: scale.y(p.headline_score) }));
 }
 
-// A version scored before lift existed, and one whose tier ran no baseline,
-// both carry no lift. The line breaks there rather than dropping to zero, so a
-// gap reads as "not measured" and never as "did not help".
-function liftSegments(points: Point[]) {
-  const scale = scaleFor(points);
+// The line breaks at a version with no lift rather than dropping to zero, so a
+// gap reads as "not measured".
+function liftSegments(points: Point[], chartWidth: number) {
+  const scale = scaleFor(points, chartWidth);
   type Plotted = { x: number; y: number; version: number; lift: number };
   const segments: Plotted[][] = [];
   let run: Plotted[] = [];
@@ -71,6 +98,7 @@ function formatLift(lift: number) {
 }
 
 function CurrentSeriesChart({ points }: { points: Series["points"] }) {
+  const [boxRef, chartWidth] = useMeasuredWidth(600);
   const pts = points ?? [];
 
   if (pts.length === 0) {
@@ -90,16 +118,17 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
     );
   }
 
-  const plotted = buildPath(pts);
+  const plotted = buildPath(pts, chartWidth);
   const linePath = plotted.map((p) => `${p.x},${p.y}`).join(" ");
-  const lifts = liftSegments(pts);
+  const lifts = liftSegments(pts, chartWidth);
 
   return (
-    <div className="bg-bg-secondary border border-border rounded-lg p-3 mb-2">
+    <div ref={boxRef} className="bg-bg-secondary border border-border rounded-lg p-3 mb-2">
       <svg
-        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-        className="w-full h-[150px]"
-        preserveAspectRatio="none"
+        viewBox={`0 0 ${chartWidth} ${CHART_HEIGHT}`}
+        width={chartWidth}
+        height={CHART_HEIGHT}
+        className="block max-w-full"
       >
         <polyline
           points={linePath}

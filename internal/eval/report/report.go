@@ -16,7 +16,7 @@ import (
 
 // SchemaVersion is the report schema. Load refuses a newer schema.
 // Version 2 is the expectation pass rate; version 1 was a geometric mean.
-// Version 3 redefines Delta as a paired comparison. See Delta.
+// Version 3 redefines Delta. See Delta.
 const SchemaVersion = 3
 
 // PanelMember identifies one model-panel entry on the report.
@@ -97,18 +97,13 @@ type Report struct {
 	Headline float64 `json:"headline"`
 	// Baseline is the no-skill measurement, taken on the primary member.
 	Baseline float64 `json:"baseline"`
-	// Delta is the lift: the primary member's own effectiveness minus that
-	// same member's baseline. Both sides are one agent, one model and one task
-	// set, which is what makes the subtraction a comparison. Before schema 3
-	// this field subtracted the primary member's baseline from the whole-panel
-	// Headline minimum, so a deep-tier run could report a negative lift for a
-	// skill that helped. A stored report's schema_version says which
-	// definition produced its value.
+	// Delta is the lift: the primary member's own effectiveness minus that same
+	// member's baseline. Before schema 3 it subtracted that baseline from the
+	// whole-panel Headline minimum, so a deep-tier run could report a negative
+	// lift for a skill that helped. schema_version says which one a stored
+	// report carries.
 	Delta float64 `json:"delta"`
-	// DeltaMeasured is false when no baseline ran, or when the primary member
-	// itself was unhealthy — a zero lift and an absent one are different facts.
-	// The database says the same thing with a NULL; this field stays because a
-	// CI job reads the report without the database.
+	// False when no baseline ran, or when the primary member did not score.
 	DeltaMeasured bool `json:"delta_measured"`
 	// BaselineWipeout is true when the baseline passed no expectation at all.
 	BaselineWipeout bool `json:"baseline_wipeout,omitempty"`

@@ -18,8 +18,7 @@ func liftReport(schema int, reused []string) *report.Report {
 			{Member: floor, Healthy: true, Effectiveness: 38},
 		},
 		Headline: 38, Baseline: 44, DeltaMeasured: true,
-		// A schema 2 report carries headline minus baseline here. FromReport
-		// must not believe it.
+		// Schema 2's unpaired value. FromReport must not believe it.
 		Delta:           float64(38 - 44),
 		ReusedBaselines: reused,
 	}

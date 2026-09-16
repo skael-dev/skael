@@ -145,8 +145,7 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
         </kbd>
       </button>
 
-      {/* Sync indicator. Hidden on a phone: it is ambient status, and at that
-          width it pushes the search trigger off the header. */}
+      {/* Ambient status. On a phone it pushes the search trigger off the header. */}
       <div className="hidden sm:flex items-center">
         <SyncIndicator />
       </div>

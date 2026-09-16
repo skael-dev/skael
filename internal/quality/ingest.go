@@ -18,9 +18,7 @@ type Record struct {
 	HeadlineCILow  float64 // legacy; new rows carry zeroes
 	HeadlineCIHigh float64
 
-	// PrimaryScore, Baseline and Lift are the paired comparison, all three nil
-	// when nothing was measured. Lift is reported only; the release gate reads
-	// Headline.
+	// Nil means not measured. Lift is reported only; the gate reads Headline.
 	PrimaryScore *float64
 	Baseline     *float64
 	Lift         *float64
@@ -111,12 +109,9 @@ func FromReport(r *report.Report) (Record, error) {
 	}, nil
 }
 
-// pairing extracts the lift comparison from a report. Lift is recomputed here
-// rather than read from r.Delta: before report schema 3, Delta subtracted the
-// primary member's baseline from the whole-panel Headline minimum, so an older
-// worker's report carries a number that is not a paired comparison. Baseline
-// has always meant the primary member's baseline, so the subtraction is
-// reconstructable for every schema this binary accepts.
+// pairing recomputes the lift rather than reading r.Delta, which holds an
+// unpaired number before report schema 3. Baseline has always meant the primary
+// member's baseline, so the subtraction is reconstructable for every schema.
 func pairing(r *report.Report) (primary, baseline, lift *float64, source string) {
 	score, ok := primaryEffectiveness(r)
 	if ok {
@@ -138,8 +133,6 @@ func pairing(r *report.Report) (primary, baseline, lift *float64, source string)
 	return primary, baseline, lift, source
 }
 
-// primaryEffectiveness returns the score of the panel's first member, which is
-// the member r.Baseline was measured on.
 func primaryEffectiveness(r *report.Report) (float64, bool) {
 	if len(r.ModelPanel) == 0 {
 		return 0, false

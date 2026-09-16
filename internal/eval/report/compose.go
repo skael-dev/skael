@@ -91,9 +91,8 @@ func Compose(in ComposeInput) (*Report, error) {
 		void[v.TaskID] = true
 	}
 
-	// The primary member leads the panel and is the only member a lift is
-	// computed on: in.Baseline was measured on it, so any other member's score
-	// would make the subtraction a comparison between two models.
+	// in.Baseline was measured on the panel's first member, so only that
+	// member's score can be subtracted from it.
 	var primary PanelMember
 	if len(in.ModelPanel) > 0 {
 		primary = in.ModelPanel[0]

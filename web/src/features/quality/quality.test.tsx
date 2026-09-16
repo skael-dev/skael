@@ -379,8 +379,7 @@ describe("QualityReport", () => {
       drift_grade: "B",
     });
     render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
-    // Scoped to its own section: the lift line says "not measured" too, and
-    // for the same reason.
+    // Scoped: the lift line says "not measured" too.
     const heading = await screen.findByText("Robustness gap");
     const section = heading.closest("div") as HTMLElement;
     expect(within(section).getByText(/not measured/i)).toBeInTheDocument();

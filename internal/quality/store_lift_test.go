@@ -10,9 +10,6 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
-// A lift of zero and a lift that was never measured must survive the round
-// trip as different values. A REAL column defaulting to 0 would collapse them,
-// and the UI would then report "did not help" for "we did not look".
 func TestStore_LiftKeepsNotMeasuredApartFromZero(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.SetupTestDB(t)

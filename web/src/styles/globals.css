@@ -87,16 +87,9 @@ body {
 }
 
 @layer components {
-  /* ── Skill list rows ─────────────────────────────────────────────
-     The row is one grid so every cell aligns with its column header.
-     Below 900px the fixed columns are wider than the viewport, so the
-     numeric and status cells stop being columns and become one wrapped
-     meta line under the name. `display: contents` is what lets the same
-     markup do both: the wrapper vanishes at full width and the cells
-     remain direct grid children. */
-  /* Below 900px the row is a flex stack, not a grid: the name sits beside the
-     status dot, and the meta cells take a full-width line under it. Grid
-     placement with a hidden first cell put the two on the same row. */
+  /* The fixed columns are wider than a phone viewport, so below 900px the row
+     is a flex stack and the meta cells take a full-width line under the name.
+     `display: contents` above 900px is what lets one set of markup do both. */
   .skill-row {
     display: flex;
     flex-wrap: wrap;
@@ -105,16 +98,14 @@ body {
     row-gap: 0.5rem;
   }
 
-  /* The name block. Everything else is intrinsically sized. */
+  /* The name block. Basis 0, not auto: an auto basis measures the description
+     and wraps the status dot onto its own line. */
   .skill-row > :nth-child(3) {
-    /* basis 0, not auto: the description is long, and an auto basis measures
-       it and wraps the status dot onto its own line. */
     flex: 1 1 0;
     min-width: 0;
   }
 
-  /* The select checkbox needs a pointer. Nothing on a touch screen can hover
-     to reveal it, and bulk selection is not a phone task. */
+  /* Revealed on hover, so it is unreachable on a touch screen. */
   .skill-row > .skill-row-check {
     display: none;
   }
@@ -135,7 +126,6 @@ body {
       row-gap: 0;
     }
 
-    /* Undo the narrow stack's flex sizing: in the grid the name is a track. */
     .skill-row > :nth-child(3) {
       flex: none;
     }

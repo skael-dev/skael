@@ -176,10 +176,8 @@ export function SkillCard({
         </div>
       </div>
 
-      {/* The numeric and status cells. Columns at full width, one wrapped
-          meta line under the name below 900px — see .skill-row in globals.css.
-          Each carries its own label there, because the column headers are
-          hidden and a bare number says nothing. */}
+      {/* Columns at full width, one labelled meta line below 900px, where the
+          column headers are hidden. See .skill-row in globals.css. */}
       <div className="skill-row-meta">
       {/* Invocations */}
       <span className="text-[13px] text-text-primary text-right max-[899px]:text-left" style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -187,8 +185,7 @@ export function SkillCard({
         <span className="hidden max-[899px]:inline text-text-tertiary"> invocations</span>
       </span>
 
-      {/* Lift. A skill scored before lift existed, or one whose tier ran no
-          baseline, shows a dash: not measured is not zero. */}
+      {/* A dash, not a zero, when nothing was measured. */}
       <span
         className="text-[13px] text-right max-[899px]:text-left whitespace-nowrap"
         style={{ fontVariantNumeric: "tabular-nums" }}

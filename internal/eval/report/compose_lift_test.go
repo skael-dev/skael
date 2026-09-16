@@ -6,9 +6,8 @@ import (
 	"github.com/skael-dev/skael/internal/eval/report"
 )
 
-// A deep-tier panel scores its floor member lower than its lead. The headline
-// takes the minimum, but the baseline was measured on the lead, so subtracting
-// one from the other reports a negative lift for a skill that helped.
+// Subtracting the baseline from the headline minimum instead reports a negative
+// lift for a skill that helped.
 func TestComposeLiftPairsThePrimaryMemberWithItsOwnBaseline(t *testing.T) {
 	lead := report.PanelMember{Agent: "claude-code", Model: "lead"}
 	floor := report.PanelMember{Agent: "claude-code", Model: "floor"}
@@ -35,8 +34,6 @@ func TestComposeLiftPairsThePrimaryMemberWithItsOwnBaseline(t *testing.T) {
 	}
 }
 
-// The baseline ran on the primary member. If that member produced no score,
-// there is nothing to subtract it from, and an absent lift is not a zero one.
 func TestComposeReportsNoLiftWhenThePrimaryMemberIsUnhealthy(t *testing.T) {
 	lead := report.PanelMember{Agent: "claude-code", Model: "lead"}
 	floor := report.PanelMember{Agent: "claude-code", Model: "floor"}

@@ -551,10 +551,7 @@ export function QualityReport({
   );
 }
 
-// LiftLine states the paired comparison in one line: the skill's own score
-// minus the same model's score without it. A null lift is "not measured", never
-// a zero — a tier that runs no baseline and a skill that did not help are
-// different results.
+// A null lift reads as "not measured", never as a zero.
 function LiftLine({
   lift,
   baseline,

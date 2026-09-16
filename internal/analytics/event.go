@@ -135,8 +135,7 @@ type QualitySummary struct {
 	Verified      bool      `json:"verified"`
 	PanelComplete bool      `json:"panel_complete"`
 	ScoredAt      time.Time `json:"scored_at"`
-	// Lift is nil when the score measured no baseline.
-	Lift *float64 `json:"lift,omitempty"`
+	Lift          *float64  `json:"lift,omitempty"`
 }
 
 // GetOverview returns aggregate KPI data covering the last `days` days.
@@ -259,8 +258,7 @@ var skillsSortClauses = map[string]string{
 	// is not a zero-scoring one, and letting it sort first under `asc` would
 	// present "never measured" as "worst".
 	"quality": "q.headline_score DESC NULLS LAST, s.name ASC",
-	// A skill whose lift was never measured sorts with the unscored ones, for
-	// the same reason: "not measured" is not "did not help".
+	// NULLS LAST in both directions, for the reason above.
 	"lift": "q.lift DESC NULLS LAST, s.name ASC",
 }
 
