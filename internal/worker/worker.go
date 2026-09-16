@@ -86,6 +86,9 @@ type API interface {
 	Claim(ctx context.Context, workerID string, lease time.Duration) (*evalqueue.Job, string, bool, error)
 	Heartbeat(ctx context.Context, id evalqueue.JobID, token string) error
 	PostReport(ctx context.Context, id evalqueue.JobID, token string, r *report.Report) error
+	// PostContestReport sends every candidate's report, keyed by label. The
+	// server decides the verdict: a worker sends measurements, never a result.
+	PostContestReport(ctx context.Context, contestID string, jobID evalqueue.JobID, token string, reports map[string]*report.Report) error
 	FailJob(ctx context.Context, id evalqueue.JobID, token, cause string) error
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
@@ -121,6 +124,9 @@ type DeriveResult struct {
 // Deriver builds a suite for a skill that has none.
 type Deriver interface {
 	Derive(ctx context.Context, in DeriveInput) (*DeriveResult, error)
+	// Contest derives one suite covering every candidate, so no candidate's
+	// own claims set the bar.
+	Contest(ctx context.Context, ins []DeriveInput) (*DeriveResult, error)
 }
 
 // Worker runs the claim/materialise/evaluate/report loop.
@@ -169,6 +175,10 @@ func (w *Worker) RunOnce(ctx context.Context) (worked bool, err error) {
 
 // runJob materialises a workspace, runs the eval, and posts the report.
 func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) error {
+	if job.ContestID != "" {
+		return w.runContest(ctx, job, token)
+	}
+
 	workDir, err := os.MkdirTemp(w.cfg.WorkRoot, "skael-eval-*")
 	if err != nil {
 		return fmt.Errorf("worker: create workspace: %w", err)

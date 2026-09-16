@@ -49,16 +49,30 @@ type evalsResult struct {
 // statements, so the whole set fits in one response, and drafting them
 // together is what stops n evals from being n rewordings of the same one.
 func Generate(ctx context.Context, gw llm.Gateway, sp *spec.SkillSpec, n int) (*EvalSet, []TriggerQuery, error) {
+	return GenerateFrom(ctx, gw, []*spec.SkillSpec{sp}, n)
+}
+
+// GenerateFrom drafts one eval set covering every spec it is given.
+//
+// A contest derives from all its candidates: a suite derived from one of them
+// grades the others against that candidate's claims, which is the bias the
+// contest exists to remove. A task only one candidate claims stays in — losing
+// it is a real result.
+func GenerateFrom(ctx context.Context, gw llm.Gateway, specs []*spec.SkillSpec, n int) (*EvalSet, []TriggerQuery, error) {
 	if gw == nil {
 		return nil, nil, fmt.Errorf("suite: Generate requires a gateway")
+	}
+	if len(specs) == 0 || specs[0] == nil {
+		return nil, nil, fmt.Errorf("suite: Generate needs at least one spec")
 	}
 	if n < 1 {
 		return nil, nil, fmt.Errorf("suite: Generate needs at least one eval, got %d", n)
 	}
+	sp := specs[0]
 
 	res, _, err := llm.CompleteJSON[evalsResult](ctx, gw, llm.Req{
 		Role:       "suite.evals",
-		Prompt:     evalsPrompt(sp, n),
+		Prompt:     evalsPrompt(specs, n),
 		Schema:     []byte(evalsSchema),
 		ModelClass: llm.ClassStrong,
 	})
@@ -87,29 +101,50 @@ func Generate(ctx context.Context, gw llm.Gateway, sp *spec.SkillSpec, n int) (*
 	return set, TriggersFromSpec(sp), nil
 }
 
-func evalsPrompt(sp *spec.SkillSpec, n int) string {
+func evalsPrompt(specs []*spec.SkillSpec, n int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `Write %d evaluation tasks for a Claude skill, so its quality can be measured.
+	if len(specs) == 1 {
+		fmt.Fprintf(&b, `Write %d evaluation tasks for a Claude skill, so its quality can be measured.
 
 The skill is "%s": %s
 
-`, n, sp.Name, sp.Purpose)
+`, n, specs[0].Name, specs[0].Purpose)
+	} else {
+		fmt.Fprintf(&b, `Write %d evaluation tasks so that several competing Claude skills can be
+measured against the same work. The tasks must not favour any one of them:
+write what a user wants done, never how a particular skill does it.
 
-	if len(sp.Steps) > 0 {
-		b.WriteString("It is supposed to work like this:\n")
-		for _, s := range sp.Steps {
-			fmt.Fprintf(&b, "- %s (afterwards: %s)\n", s.Action, s.Postcondition)
-		}
-		b.WriteString("\n")
+These are the skills, and what each claims to do:
+
+`, n)
 	}
-	if len(sp.Constraints) > 0 {
-		// A MUST-NOT is exactly what an expectation expresses, so the
-		// constraints become expectations rather than a separate contract.
-		b.WriteString("It must respect these rules, and an eval should check the ones it can:\n")
-		for _, c := range sp.Constraints {
-			fmt.Fprintf(&b, "- %s: %s\n", c.Kind, c.Text)
+
+	for _, sp := range specs {
+		if len(specs) > 1 {
+			fmt.Fprintf(&b, "\n\"%s\": %s\n", sp.Name, sp.Purpose)
 		}
-		b.WriteString("\n")
+		if len(sp.Steps) > 0 {
+			b.WriteString("It is supposed to work like this:\n")
+			for _, s := range sp.Steps {
+				fmt.Fprintf(&b, "- %s (afterwards: %s)\n", s.Action, s.Postcondition)
+			}
+			b.WriteString("\n")
+		}
+		if len(sp.Constraints) > 0 {
+			// A MUST-NOT is exactly what an expectation expresses, so the
+			// constraints become expectations rather than a separate contract.
+			b.WriteString("It must respect these rules, and an eval should check the ones it can:\n")
+			for _, c := range sp.Constraints {
+				fmt.Fprintf(&b, "- %s: %s\n", c.Kind, c.Text)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(specs) > 1 {
+		b.WriteString(`Cover what any of them claims, including a claim only one of them makes:
+losing a task nobody else attempts is a real result.
+
+`)
 	}
 
 	b.WriteString(`Each task is one thing a real user would ask for. Write the prompt the way that

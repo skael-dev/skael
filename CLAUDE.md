@@ -241,3 +241,8 @@ These exist for good reasons — don't weaken them without understanding why:
 - baseline: A session run with no skill installed, used as the other side of a lift comparison. Avoid: control, no-skill run.
 - primary member: The first entry in the model panel. It leads the panel and is the only member a lift is computed on. Avoid: lead model, main member.
 - not measured: The state where no baseline ran, stored as NULL and never as zero. Avoid: zero lift, no lift.
+- contest: One job running two or more candidates against one suite, on one panel, on the same day, producing a verdict. Avoid: comparison, bake-off, A/B, benchmark.
+- candidate: One skill name and version entered into a contest. Avoid: entrant, variant, contender.
+- verdict: A contest's outcome, either a named winner or too close to call. Avoid: result, winner, score.
+- too close to call: The verdict when the sign test cannot separate the candidates from noise. Avoid: tie, draw, inconclusive, no difference.
+- chain: The sequence of contests between consecutive released versions of one skill, which is how improvement over time is read. Avoid: trend, series, history.

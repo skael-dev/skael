@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "@/app/auth-provider";
 import { server } from "@/test/handlers";
 import { QualityBadge } from "./quality-badge";
@@ -62,9 +63,13 @@ describe("QualityBadge", () => {
 
 function withQuery(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // A Router, because the quality tab now links to and navigates between
+  // contests.
   return (
     <QueryClientProvider client={qc}>
-      <AuthProvider>{ui}</AuthProvider>
+      <AuthProvider>
+        <MemoryRouter>{ui}</MemoryRouter>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

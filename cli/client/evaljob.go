@@ -153,3 +153,16 @@ func (c *Client) FetchEvalSuiteMeta(ref string) (*EvalSuiteMeta, error) {
 	}
 	return &out, nil
 }
+
+// PostContestReport calls POST /api/eval/contests/{id}/report with every
+// candidate's report. The claim token authenticates the claim, the same way an
+// eval report is ingested.
+func (c *Client) PostContestReport(contestID, token string, body []byte) error {
+	resp, err := c.doHeaders(http.MethodPost, "/api/eval/contests/"+url.PathEscape(contestID)+"/report",
+		bytes.NewReader(body), "application/json", map[string]string{"X-Claim-Token": token})
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}

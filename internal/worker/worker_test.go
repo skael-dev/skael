@@ -106,12 +106,14 @@ func reportFixture(skill, suiteRef string, headline float64) *report.Report {
 type fakeAPI struct {
 	t *testing.T
 
-	mu           sync.Mutex
-	queue        []evalqueue.Job
-	reported     *report.Report
-	failCause    string
-	heartbeats   int
-	heartbeatErr error
+	mu              sync.Mutex
+	queue           []evalqueue.Job
+	reported        *report.Report
+	contestReports  map[string]*report.Report
+	contestReported string
+	failCause       string
+	heartbeats      int
+	heartbeatErr    error
 
 	bundle []byte
 	// suiteArchive is what FetchSuite returns for any ref not named in
@@ -276,8 +278,20 @@ type fakeDeriver struct {
 	result *worker.DeriveResult
 	err    error
 
-	mu    sync.Mutex
-	calls int
+	mu                sync.Mutex
+	calls             int
+	contestCandidates int
+}
+
+func (f *fakeDeriver) Contest(_ context.Context, ins []worker.DeriveInput) (*worker.DeriveResult, error) {
+	f.mu.Lock()
+	f.calls++
+	f.contestCandidates = len(ins)
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
 }
 
 func (f *fakeDeriver) Derive(_ context.Context, _ worker.DeriveInput) (*worker.DeriveResult, error) {
@@ -675,4 +689,12 @@ func TestRunOnce_ReportMustMatchTheDerivedRef(t *testing.T) {
 	if _, err := w.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce accepted a report naming a different suite")
 	}
+}
+
+func (f *fakeAPI) PostContestReport(_ context.Context, contestID string, _ evalqueue.JobID, _ string, reports map[string]*report.Report) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.contestReported = contestID
+	f.contestReports = reports
+	return nil
 }

@@ -128,3 +128,23 @@ func asLeaseLost(err error) error {
 	}
 	return err
 }
+
+// PostContestReport sends every candidate's report keyed by label. The worker
+// sends measurements; the server decides the verdict.
+func (h *HTTPAPI) PostContestReport(_ context.Context, contestID string, _ evalqueue.JobID, token string, reports map[string]*report.Report) error {
+	encoded := make(map[string]json.RawMessage, len(reports))
+	for label, r := range reports {
+		var buf bytes.Buffer
+		if err := r.Save(&buf); err != nil {
+			return fmt.Errorf("worker: encode report for %s: %w", label, err)
+		}
+		encoded[label] = buf.Bytes()
+	}
+	body, err := json.Marshal(struct {
+		Reports map[string]json.RawMessage `json:"reports"`
+	}{Reports: encoded})
+	if err != nil {
+		return fmt.Errorf("worker: encode contest report: %w", err)
+	}
+	return asLeaseLost(h.c.PostContestReport(contestID, token, body))
+}

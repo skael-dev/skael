@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from "react-router-dom";
+import { ContestPage } from "@/features/contest/contest-page";
 import { ErrorBoundary } from "react-error-boundary";
 import { AuthProvider, useAuth } from "@/app/auth-provider";
 import { Shell } from "@/app/shell";
@@ -54,6 +55,7 @@ export function App() {
           >
             <Route path="/" element={<SkillList />} />
             <Route path="/skills/:name" element={<SkillDetail />} />
+            <Route path="/contests/:id" element={<ContestPage />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/review" element={<ReviewQueue />} />
             <Route path="/quadrant" element={<Quadrant />} />

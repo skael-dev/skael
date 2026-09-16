@@ -65,6 +65,32 @@ func New(o Options) (*Deriver, error) {
 // Derive recovers a spec from the bundle, drafts an eval set, and validates
 // it statically.
 func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
+	sp, err := d.recover(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return d.build(ctx, []*spec.SkillSpec{sp}, in.Tier, in.Panel)
+}
+
+// Contest derives one suite covering every candidate. A suite derived from one
+// candidate grades the others against that candidate's claims, which is the
+// bias a contest exists to remove.
+func (d *Deriver) Contest(ctx context.Context, ins []Input) (*Result, error) {
+	if len(ins) < 2 {
+		return nil, fmt.Errorf("derive: a contest suite needs at least two candidates, got %d", len(ins))
+	}
+	specs := make([]*spec.SkillSpec, 0, len(ins))
+	for _, in := range ins {
+		sp, err := d.recover(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, sp)
+	}
+	return d.build(ctx, specs, ins[0].Tier, ins[0].Panel)
+}
+
+func (d *Deriver) recover(ctx context.Context, in Input) (*spec.SkillSpec, error) {
 	bundleDir, err := os.MkdirTemp("", "derive-bundle-*")
 	if err != nil {
 		return nil, fmt.Errorf("derive: temp dir: %w", err)
@@ -73,13 +99,16 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	if err := skillpkg.Unpack(bytes.NewReader(in.Bundle), bundleDir); err != nil {
 		return nil, fmt.Errorf("derive: unpack bundle: %w", err)
 	}
-
 	sp, err := spec.Recover(ctx, d.o.Gateway, in.Skill, bundleDir)
 	if err != nil {
 		return nil, fmt.Errorf("derive: recover spec: %w", err)
 	}
+	return sp, nil
+}
 
-	set, triggers, err := suite.Generate(ctx, d.o.Gateway, sp, evalCount)
+func (d *Deriver) build(ctx context.Context, specs []*spec.SkillSpec, tier string, panel runner.Panel) (*Result, error) {
+	sp := specs[0]
+	set, triggers, err := suite.GenerateFrom(ctx, d.o.Gateway, specs, evalCount)
 	if err != nil {
 		return nil, fmt.Errorf("derive: generate eval set: %w", err)
 	}
@@ -109,7 +138,7 @@ func (d *Deriver) Derive(ctx context.Context, in Input) (*Result, error) {
 	}
 
 	// Dry-run the real planner to reject thin suites before they are pushed.
-	if _, err := runner.BuildPlan(runner.Tier(in.Tier), in.Panel, set, void, triggers); err != nil {
+	if _, err := runner.BuildPlan(runner.Tier(tier), panel, set, void, triggers); err != nil {
 		d.o.Logger("derive: too thin, %d of %d evals void: %s", len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "))
 		return nil, fmt.Errorf("derive: the derived eval set is too thin to evaluate (%d of %d evals void: %s): %w",
 			len(voidSummaries), len(checks), strings.Join(voidSummaries, "; "), err)

@@ -456,6 +456,25 @@ func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worke
 	return &worker.DeriveResult{Archive: res.Archive, Tasks: res.Tasks, Spec: res.Spec}, nil
 }
 
+func (r *realDeriver) Contest(ctx context.Context, ins []worker.DeriveInput) (*worker.DeriveResult, error) {
+	if len(ins) == 0 {
+		return nil, fmt.Errorf("skael-worker: contest derive: no candidates")
+	}
+	panel, err := runner.ParsePanel(ins[0].Panel.Agents, ins[0].Panel.Models)
+	if err != nil {
+		return nil, fmt.Errorf("skael-worker: contest derive: %w", err)
+	}
+	in := make([]derive.Input, 0, len(ins))
+	for _, c := range ins {
+		in = append(in, derive.Input{Skill: c.Skill, Bundle: c.Bundle, Tier: c.Tier, Panel: panel})
+	}
+	res, err := r.d.Contest(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return &worker.DeriveResult{Archive: res.Archive, Tasks: res.Tasks, Spec: res.Spec}, nil
+}
+
 // evalRequestFrom maps a worker.RunInput — what the queue handed the worker
 // — onto the whetstone.EvalRequest RunEvalWith actually consumes. This hop
 // is the exact seam a prior task's fix round found broken (Panel silently

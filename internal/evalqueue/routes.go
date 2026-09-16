@@ -41,16 +41,22 @@ type jobOutput struct {
 	// a worker claiming this job over HTTP has no way to learn which panel
 	// was asked for and silently falls back to its own default — defeating
 	// the point of the re-run endpoint's agents/models parameters.
-	Agents      []string   `json:"agents,omitempty"`
-	Models      []string   `json:"models,omitempty"`
-	Status      string     `json:"status"`
-	Attempts    int        `json:"attempts"`
-	MaxAttempts int        `json:"max_attempts"`
-	WorkerID    string     `json:"worker_id,omitempty"`
-	LastError   string     `json:"last_error,omitempty"`
-	RequestedBy string     `json:"requested_by,omitempty"`
-	EnqueuedAt  time.Time  `json:"enqueued_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
+	Agents []string `json:"agents,omitempty"`
+	Models []string `json:"models,omitempty"`
+	// A worker that sees candidates runs every one of them in this claim,
+	// which is what holds the comparison constant.
+	ContestID  string      `json:"contest_id,omitempty"`
+	Candidates []Candidate `json:"candidates,omitempty"`
+	// Per task per candidate. Apart from Attempts, which counts job retries.
+	ContestAttempts int        `json:"contest_attempts,omitempty"`
+	Status          string     `json:"status"`
+	Attempts        int        `json:"attempts"`
+	MaxAttempts     int        `json:"max_attempts"`
+	WorkerID        string     `json:"worker_id,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	RequestedBy     string     `json:"requested_by,omitempty"`
+	EnqueuedAt      time.Time  `json:"enqueued_at"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
 	// QueuePosition is how many queued jobs are ahead of this one, and 0
 	// whenever the job is not queued. It is a hint: retries and concurrency
 	// move it, so the UI shows a position and never an ETA.
@@ -65,6 +71,8 @@ func toJobOutput(j *Job) jobOutput {
 		Version:     j.Version,
 		SuiteRef:    j.SuiteRef,
 		Tier:        j.Tier,
+		ContestID:   j.ContestID,
+		Candidates:  j.Candidates,
 		Agents:      j.Panel.Agents,
 		Models:      j.Panel.Models,
 		Status:      string(j.Status),
@@ -167,6 +175,14 @@ type RouteOptions struct {
 	// reach to clear a held version. It comes from
 	// platform.Config.QualityFloor, the same value publish decides with.
 	QualityFloor float64
+	// Contests supplies a contest job's candidates at claim time. A local
+	// interface, because internal/contest imports this package's Job type.
+	Contests ContestLookup
+}
+
+// ContestLookup returns the candidates a contest job must run, in order.
+type ContestLookup interface {
+	CandidatesForJob(ctx context.Context, jobID string) ([]Candidate, int, error)
 }
 
 // RegisterRoutes wires up the eval job queue HTTP endpoints: claim,
@@ -201,10 +217,25 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			return &claimOutput{Status: http.StatusNoContent}, nil
 		}
 
+		out := toJobOutput(j)
+		if j.ContestID != "" {
+			if opts.Contests == nil {
+				// Otherwise this runs as a plain eval of the first candidate.
+				log.Error().Str("job", string(j.ID)).Msg("evalqueue: contest job claimed but no contest lookup is wired")
+				return nil, huma.Error500InternalServerError("claim eval job: contests are not configured")
+			}
+			candidates, attempts, err := opts.Contests.CandidatesForJob(ctx, string(j.ID))
+			if err != nil {
+				log.Error().Err(err).Str("job", string(j.ID)).Msg("evalqueue: contest candidate lookup failed")
+				return nil, huma.Error500InternalServerError("claim eval job: internal error")
+			}
+			out.Candidates, out.ContestAttempts = candidates, attempts
+		}
+
 		return &claimOutput{
 			Status: http.StatusOK,
 			Body: claimOutputBody{
-				Job:        toJobOutput(j),
+				Job:        out,
 				ClaimToken: token,
 			},
 		}, nil
