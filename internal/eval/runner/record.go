@@ -16,25 +16,17 @@ import (
 	"github.com/skael-dev/skael/internal/eval/store"
 )
 
-// ErrEventsNotWritten wraps a failure to write events.jsonl specifically, so
-// a caller can tell that failure apart from a transcript, grading, or
-// outputs failure with errors.Is rather than by parsing a message. Events
-// are the one artifact scoring and resume actually read back — losing the
-// transcript or a verifier's output files is a loss of secondary evidence,
-// but losing events.jsonl means the run cannot be scored or resumed at all.
+// ErrEventsNotWritten is separable with errors.Is because events are the one
+// artifact scoring and resume read back: losing the transcript costs secondary
+// evidence, losing events.jsonl means the run cannot be scored at all.
 var ErrEventsNotWritten = errors.New("runner: events.jsonl was not written")
 
-// eventScanBuffer is the maximum size of a single events.jsonl line LoadEvents
-// will accept. A digested event is small, but a Paths slice from a wide glob
-// is not, and bufio.Scanner's default 64KiB buffer silently stops (returning
-// no error) at the first line that exceeds it, dropping the rest of the
-// trajectory rather than failing.
+// A digested event is small, but a Paths slice from a wide glob is not, and
+// bufio.Scanner's default 64KiB buffer stops at the first longer line and
+// returns no error, dropping the rest of the trajectory.
 const eventScanBuffer = 1 << 20 // 1 MiB
 
-// gradingFileName is grading.json's name relative to a run's artifact
-// directory, shared between WriteArtifacts (which writes it) and
-// loadArtifactMeta (which reloads Meta from it on resume) so the two cannot
-// drift apart.
+// Shared by WriteArtifacts and loadArtifactMeta so the two cannot drift.
 const gradingFileName = "grading.json"
 
 // Artifacts locates the files WriteArtifacts produced for one run.
@@ -46,9 +38,8 @@ type Artifacts struct {
 	OutputsDir     string
 }
 
-// Grading is the human- and machine-readable record of one run: the key that
-// identifies it, the adapter's session metadata, and its terminal status. It
-// is what a report drills into and what makes a surprising score checkable.
+// Grading is the record of one run: what identifies it, the session metadata,
+// and its terminal status. It is what makes a surprising score checkable.
 type Grading struct {
 	Key        store.RunKey
 	Meta       agent.Meta
@@ -58,27 +49,15 @@ type Grading struct {
 	FinishedAt time.Time
 }
 
-// WriteArtifacts records the evidence trail for one run into dir:
-// transcript.raw (the agent's native stream, byte for byte), events.jsonl
-// (the normalized trajectory, one compact JSON object per line, in order),
-// grading.json (the Grading record, indented for a human), and outputs/ (a
-// copy of the workspace's regular files, skipping any entry under a directory
-// listed in skipDirs).
+// WriteArtifacts records one run's evidence trail into dir: transcript.raw,
+// events.jsonl, grading.json and outputs/.
 //
-// skipDirs exists so the installed skill bundle — and, for a trigger probe,
-// the distractor pack alongside it — is never copied into outputs/: it is
-// already stored once as the published bundle, and sixty copies of it under
-// runs/ would be most of the disk an evaluation uses for zero evidentiary
-// value. A baseline session installs no skill, so its caller passes no
-// skipDirs and its real outputs are copied in full.
+// skipDirs keeps the installed bundle out of outputs/ — it is already stored
+// once as the published bundle, and sixty copies of it would be most of the
+// disk an evaluation uses. A baseline installs no skill and passes none.
 //
-// WriteArtifacts is best-effort across the four artifacts: it attempts every
-// one rather than stopping at the first failure, so a caller that only cares
-// about (say) the events failure is not also denied the transcript that did
-// write successfully. Every failure is accumulated and returned via
-// errors.Join; a failure to write events.jsonl specifically is wrapped in
-// ErrEventsNotWritten so a caller can single it out with errors.Is without
-// parsing the message.
+// Best-effort across all four: every failure is attempted and joined, so a
+// caller denied its events still gets the transcript that did write.
 func WriteArtifacts(dir string, raw []byte, events []agent.Event, g Grading, workspace string, skipDirs []string) (Artifacts, error) {
 	a := Artifacts{
 		Dir:            dir,
@@ -94,8 +73,7 @@ func WriteArtifacts(dir string, raw []byte, events []agent.Event, g Grading, wor
 
 	var errs []error
 
-	// The transcript is the record of what the CLI actually said. Written
-	// verbatim: no normalization, no re-encoding, no truncation.
+	// Verbatim: no normalization, no re-encoding, no truncation.
 	if err := os.WriteFile(a.TranscriptPath, raw, 0o644); err != nil {
 		errs = append(errs, fmt.Errorf("runner: writing transcript: %w", err))
 	}
@@ -115,8 +93,7 @@ func WriteArtifacts(dir string, raw []byte, events []agent.Event, g Grading, wor
 	return a, errors.Join(errs...)
 }
 
-// writeEvents writes one compact JSON object per line, in slice order — the
-// format loadProbeEvents and LoadEvents both expect.
+// One compact JSON object per line, in slice order, as LoadEvents expects.
 func writeEvents(path string, events []agent.Event) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -133,8 +110,7 @@ func writeEvents(path string, events []agent.Event) error {
 	return nil
 }
 
-// writeGrading writes g as indented JSON, for a human reading a surprising
-// result.
+// Indented, for a human reading a surprising result.
 func writeGrading(path string, g Grading) error {
 	data, err := json.MarshalIndent(g, "", "  ")
 	if err != nil {
@@ -146,11 +122,8 @@ func writeGrading(path string, g Grading) error {
 	return nil
 }
 
-// copyOutputs copies every regular file under workspace into outDir,
-// preserving relative paths, skipping any entry under a directory listed in
-// skipDirs and any non-regular file (a symlink, device, or similar — a
-// verifier's inputs are ordinary files, and copying a symlink verbatim could
-// follow it outside the workspace).
+// copyOutputs preserves relative paths and skips non-regular files: a verifier's
+// inputs are ordinary files, and a symlink could lead outside the workspace.
 func copyOutputs(workspace, outDir string, skipDirs []string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("runner: creating outputs dir: %w", err)
@@ -189,8 +162,8 @@ func copyOutputs(workspace, outDir string, skipDirs []string) error {
 	})
 }
 
-// skipsEntry reports whether rel — a workspace-relative path — falls under
-// one of skipDirs, either as an exact match or as a descendant.
+// skipsEntry matches a workspace-relative path against skipDirs, exactly or as a
+// descendant.
 func skipsEntry(rel string, skipDirs []string) bool {
 	for _, s := range skipDirs {
 		if s == "" {
@@ -203,8 +176,7 @@ func skipsEntry(rel string, skipDirs []string) bool {
 	return false
 }
 
-// LoadEvents reads a newline-delimited JSON trajectory written by
-// WriteArtifacts.
+// LoadEvents reads a trajectory written by WriteArtifacts.
 func LoadEvents(path string) ([]agent.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -233,12 +205,9 @@ func LoadEvents(path string) ([]agent.Event, error) {
 	return events, nil
 }
 
-// loadArtifactMeta reloads the full agent.Meta a run recorded, from
-// <artifactDir>/grading.json — the only place all ten Meta fields survive.
-// The five columns the store persists directly (tokens, duration, agent
-// version, rate-limited) are not enough to rebuild it: Model, NumTurns,
-// VisibleSkills, PermissionDenials, and IsError have nowhere else to come
-// from on resume.
+// grading.json is the only place all ten Meta fields survive. The columns the
+// store persists cannot rebuild Model, NumTurns, VisibleSkills,
+// PermissionDenials or IsError on resume.
 func loadArtifactMeta(artifactDir string) (agent.Meta, error) {
 	if artifactDir == "" {
 		return agent.Meta{}, errors.New("no artifact directory recorded")

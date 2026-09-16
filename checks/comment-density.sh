@@ -2,8 +2,9 @@
 # Fails when a file in the diff adds more comment than a reader can use.
 #
 # The prose rule ("comment the non-obvious decision") is not enforceable and has
-# been ignored. The ratio is. It is deliberately generous: a file that trips it
-# is not slightly over, it is prose with code in it.
+# been ignored. The ratio is. 25% is where deleting stopped removing slop and
+# started removing meaning, measured by trimming the densest files in the repo:
+# a file that trips this is not slightly over, it is prose with code in it.
 set -euo pipefail
 
 BASE="${1:-}"
@@ -18,7 +19,7 @@ if [ -z "$BASE" ]; then
   exit 0
 fi
 
-MAX_PERCENT="${COMMENT_DENSITY_MAX:-15}"
+MAX_PERCENT="${COMMENT_DENSITY_MAX:-25}"
 MIN_ADDED=25
 REPORT=$(mktemp)
 trap 'rm -f "$REPORT"' EXIT

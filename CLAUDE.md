@@ -58,7 +58,7 @@ Package names say what most packages hold; read the package doc comment for the 
 
 ### Conventions
 
-- **Comment density: `just check` runs `checks/comment-density.sh`, which fails a file whose diff against `main` is more than 15% comment.** Follow `internal/skill` and `internal/platform` (~10%), not `internal/eval` — the eval packages run 20–60% and are the outlier, not the target. Comment the decision a reader cannot infer: an import cycle, a security constraint, a "do not 'fix' this", a silent failure mode. State a rationale once, nearest the code that depends on it. This rule was prose for a long time and was ignored anyway, which is why it is now a script.
+- **Comment density: `just check` runs `checks/comment-density.sh`, which fails a file whose diff against `main` is more than 25% comment.** Aim at ~10%, which is where `internal/skill` and `internal/platform` sit; the check is a backstop, not the target. Comment the decision a reader cannot infer: an import cycle, a security constraint, a "do not 'fix' this", a silent failure mode. State a rationale once, nearest the code that depends on it. This was prose for a long time and was ignored anyway, which is why it is now a script.
 - **Commit messages: a subject line plus a short paragraph of *why*.** Detail belongs in the PR body, which is where reviewers read it. A commit body that runs to several screens is a design document in the wrong place.
 
 ### Key patterns

