@@ -60,7 +60,7 @@ func (p *PoolExecutor) WithExecutor(e DBExecutor) *PoolExecutor {
 // order. Claim's UPDATE ... RETURNING (a later task) returns the same list.
 const jobColumns = `id, skill_id, skill_name, version, suite_ref, tier, panel,
 	status, attempts, max_attempts, worker_id, lease_expires_at, lease_seconds,
-	last_error, requested_by, created_at, started_at`
+	last_error, requested_by, created_at, started_at, COALESCE(contest_id::text, '')`
 
 // row is the subset of pgx.Row/pgx.Rows that Scan needs.
 type row interface {
@@ -75,7 +75,7 @@ func scanJob(r row) (*Job, error) {
 	err := r.Scan(
 		&id, &skillID, &j.SkillName, &j.Version, &j.SuiteRef, &j.Tier, &panelJSON,
 		&j.Status, &j.Attempts, &j.MaxAttempts, &j.WorkerID, &j.LeaseExpiresAt, &j.LeaseSeconds,
-		&j.LastError, &j.RequestedBy, &j.CreatedAt, &j.StartedAt,
+		&j.LastError, &j.RequestedBy, &j.CreatedAt, &j.StartedAt, &j.ContestID,
 	)
 	if err != nil {
 		return nil, err
@@ -105,11 +105,15 @@ func (p *PoolExecutor) Submit(ctx context.Context, j Job) (JobID, error) {
 	if requestedBy == "" {
 		requestedBy = "system"
 	}
+	var contestID *string
+	if j.ContestID != "" {
+		contestID = &j.ContestID
+	}
 	var id string
 	err = p.db.QueryRow(ctx, `
-		INSERT INTO eval_jobs (skill_id, skill_name, version, suite_ref, tier, panel, requested_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-		j.SkillID, j.SkillName, j.Version, j.SuiteRef, tier, panelJSON, requestedBy).Scan(&id)
+		INSERT INTO eval_jobs (skill_id, skill_name, version, suite_ref, tier, panel, requested_by, contest_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		j.SkillID, j.SkillName, j.Version, j.SuiteRef, tier, panelJSON, requestedBy, contestID).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("evalqueue: submit: %w", err)
 	}

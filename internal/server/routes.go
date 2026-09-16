@@ -15,6 +15,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/contest"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
@@ -202,10 +203,16 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Eval job queue. The server enqueues and ingests; it never holds a
 	// Docker socket or an LLM key — those live on the worker.
+	contestStore := contest.NewStore(d.Pool)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: cfg.QualityFloor,
+		Contests:     contestStore,
 	})
+
+	// Contests advise and never gate: nothing registered here releases a
+	// version, holds one, or clears a hold.
+	contest.RegisterRoutes(api, contestStore, skillStore, suiteRegistry, evalPool, evalPool)
 
 	// Read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)

@@ -45,10 +45,25 @@ type Job struct {
 	LeaseSeconds   int
 	LastError      string
 	RequestedBy    string
-	CreatedAt      time.Time
+	// ContestID is set when this job runs a contest. The job's SkillID,
+	// SkillName and Version then hold the first candidate, so every existing
+	// query on eval_jobs stays correct, and Candidates carries all of them.
+	// One job, because two jobs can reach two workers with different agent CLI
+	// versions on different days — the drift a contest exists to remove.
+	ContestID  string
+	Candidates []Candidate
+	CreatedAt  time.Time
 	// StartedAt is set once on the first claim and never moved, so elapsed
 	// time is measured from the start of work, not the latest retry.
 	StartedAt *time.Time
+}
+
+// Candidate is one entry in a contest job.
+type Candidate struct {
+	SkillID   string `json:"skill_id"`
+	SkillName string `json:"skill_name"`
+	Version   int    `json:"version"`
+	Label     string `json:"label"`
 }
 
 // Executor submits and cancels eval jobs.
