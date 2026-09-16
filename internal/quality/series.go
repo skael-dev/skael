@@ -16,12 +16,15 @@ const unknownJudge = "\x00unknown-judge"
 
 // SeriesPoint is one scored version on a trend line.
 type SeriesPoint struct {
-	Version        int       `json:"version"`
-	Headline       float64   `json:"headline_score"`
-	HeadlineCILow  float64   `json:"headline_ci_low,omitempty"`
-	HeadlineCIHigh float64   `json:"headline_ci_high,omitempty"`
-	Verified       bool      `json:"verified"`
-	ScoredAt       time.Time `json:"scored_at"`
+	Version        int     `json:"version"`
+	Headline       float64 `json:"headline_score"`
+	HeadlineCILow  float64 `json:"headline_ci_low,omitempty"`
+	HeadlineCIHigh float64 `json:"headline_ci_high,omitempty"`
+	// Lift is nil for a point that measured no baseline. The chart draws a gap
+	// rather than a zero.
+	Lift     *float64  `json:"lift,omitempty"`
+	Verified bool      `json:"verified"`
+	ScoredAt time.Time `json:"scored_at"`
 }
 
 // Series is a run of scores that may be charted together.
@@ -108,6 +111,7 @@ func toPoint(r Record) SeriesPoint {
 		Headline:       r.Headline,
 		HeadlineCILow:  r.HeadlineCILow,
 		HeadlineCIHigh: r.HeadlineCIHigh,
+		Lift:           r.Lift,
 		Verified:       r.Verified,
 		ScoredAt:       r.ScoredAt,
 	}

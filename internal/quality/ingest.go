@@ -18,6 +18,13 @@ type Record struct {
 	HeadlineCILow  float64 // legacy; new rows carry zeroes
 	HeadlineCIHigh float64
 
+	// PrimaryScore, Baseline and Lift are the paired comparison, all three nil
+	// when nothing was measured. Lift is reported only; the release gate reads
+	// Headline.
+	PrimaryScore *float64
+	Baseline     *float64
+	Lift         *float64
+
 	Pillars     json.RawMessage
 	PanelMatrix json.RawMessage
 
@@ -83,8 +90,14 @@ func FromReport(r *report.Report) (Record, error) {
 	// so no migration is needed.
 	empty := json.RawMessage("{}")
 
+	primary, baseline, lift, upliftSource := pairing(r)
+
 	return Record{
 		Headline:       r.Headline,
+		PrimaryScore:   primary,
+		Baseline:       baseline,
+		Lift:           lift,
+		UpliftSource:   upliftSource,
 		Pillars:        empty,
 		DriftBreakdown: empty,
 		PanelMatrix:    panelMatrix,
@@ -96,6 +109,48 @@ func FromReport(r *report.Report) (Record, error) {
 		JudgeModel:     graderModel,
 		ScoredAt:       r.FinishedAt,
 	}, nil
+}
+
+// pairing extracts the lift comparison from a report. Lift is recomputed here
+// rather than read from r.Delta: before report schema 3, Delta subtracted the
+// primary member's baseline from the whole-panel Headline minimum, so an older
+// worker's report carries a number that is not a paired comparison. Baseline
+// has always meant the primary member's baseline, so the subtraction is
+// reconstructable for every schema this binary accepts.
+func pairing(r *report.Report) (primary, baseline, lift *float64, source string) {
+	score, ok := primaryEffectiveness(r)
+	if ok {
+		primary = &score
+	}
+	if !r.DeltaMeasured {
+		return primary, nil, nil, ""
+	}
+	b := r.Baseline
+	baseline = &b
+	source = "fresh"
+	if len(r.ReusedBaselines) > 0 {
+		source = "reused"
+	}
+	if ok {
+		d := score - b
+		lift = &d
+	}
+	return primary, baseline, lift, source
+}
+
+// primaryEffectiveness returns the score of the panel's first member, which is
+// the member r.Baseline was measured on.
+func primaryEffectiveness(r *report.Report) (float64, bool) {
+	if len(r.ModelPanel) == 0 {
+		return 0, false
+	}
+	p := r.ModelPanel[0]
+	for _, m := range r.Members {
+		if m.Member.Agent == p.Agent && m.Member.Model == p.Model && m.Healthy {
+			return m.Effectiveness, true
+		}
+	}
+	return 0, false
 }
 
 // FromReportRaw is FromReport plus the raw bytes. The caller passes what it

@@ -191,7 +191,7 @@ const TAG_COLORS: Record<string, string> = {
 };
 
 // Sort options exposed in the UI; mapped to the server's `sort` param.
-type SortKey = "updated" | "name" | "usage" | "quality";
+type SortKey = "updated" | "name" | "usage" | "quality" | "lift";
 
 // ── Stat tile ─────────────────────────────────────────────────
 function StatTile({
@@ -449,16 +449,17 @@ export function SkillList() {
           ))}
         </div>
         <div className="space-y-px">
-          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
-            {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div className="grid gap-4 px-3.5 py-2 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 64px 132px 110px" }}>
+            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
               <Skeleton key={i} className="h-2 bg-bg-tertiary" />
             ))}
           </div>
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 132px 110px" }}>
+            <div key={i} className="grid gap-4 px-3.5 py-3 border-b border-border" style={{ gridTemplateColumns: "28px 12px 1fr 80px 64px 132px 110px" }}>
               <Skeleton className="h-4 bg-bg-secondary" />
               <Skeleton className="h-4 w-2 bg-bg-secondary" />
               <Skeleton className="h-4 w-48 bg-bg-secondary" />
+              <Skeleton className="h-4 bg-bg-secondary" />
               <Skeleton className="h-4 bg-bg-secondary" />
               <Skeleton className="h-4 bg-bg-secondary" />
               <Skeleton className="h-4 bg-bg-secondary" />
@@ -635,6 +636,7 @@ export function SkillList() {
                   <option value="name">Name</option>
                   <option value="usage">Usage</option>
                   <option value="quality">Score</option>
+                  <option value="lift">Lift</option>
                 </select>
               </div>
 
@@ -682,13 +684,14 @@ export function SkillList() {
             <div
               className="grid gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
               style={{
-                gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
+                gridTemplateColumns: "28px 12px 1fr 80px 64px 132px 110px",
               }}
             >
               <span />
               <span />
               <span>Skill</span>
               <span className="text-right">Invocations</span>
+              <span className="text-right">Lift</span>
               <span className="text-right">Security</span>
               <span className="text-right">Updated</span>
             </div>

@@ -36,6 +36,7 @@ func (s *Store) WithExecutor(e Executor) *Store {
 // computed live from the suite record (fail-closed: a missing row reads as
 // derived). The stored column is the audit trail of what the gate saw.
 const recordColumns = `skill_id, version, headline_score, headline_ci_low, headline_ci_high,
+	primary_score, baseline, lift,
 	pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 	verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
 	critical_forbid_violations, judge_model,
@@ -60,6 +61,7 @@ func scanRecordShape(r row, withReport bool) (*Record, error) {
 	var jobID *string
 	dest := []any{
 		&rec.SkillID, &rec.Version, &rec.Headline, &rec.HeadlineCILow, &rec.HeadlineCIHigh,
+		&rec.PrimaryScore, &rec.Baseline, &rec.Lift,
 		&rec.Pillars, &rec.PanelMatrix, &rec.RobustnessGap, &rec.DriftGrade, &rec.DriftBreakdown,
 		&rec.Verified, &rec.PanelComplete, &rec.SuiteRef, &rec.EngineVersion, &rec.ModelPanel,
 		&rec.Tier, &rec.UpliftSource, &jobID, &rec.ScoredAt,
@@ -86,11 +88,13 @@ func (s *Store) Upsert(ctx context.Context, rec Record) error {
 	}
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO skill_quality (skill_id, version, headline_score, headline_ci_low, headline_ci_high,
+			primary_score, baseline, lift,
 			pillar_breakdown, panel_matrix, robustness_gap, drift_grade, drift_breakdown,
 			verified, panel_complete, suite_ref, engine_version, model_panel, tier, uplift_source, job_id, scored_at,
 			critical_forbid_violations, report_json, judge_model, suite_derived)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
 		rec.SkillID, rec.Version, rec.Headline, rec.HeadlineCILow, rec.HeadlineCIHigh,
+		rec.PrimaryScore, rec.Baseline, rec.Lift,
 		rec.Pillars, rec.PanelMatrix, rec.RobustnessGap, rec.DriftGrade, rec.DriftBreakdown,
 		rec.Verified, rec.PanelComplete, rec.SuiteRef, rec.EngineVersion, rec.ModelPanel,
 		rec.Tier, rec.UpliftSource, jobID, rec.ScoredAt,

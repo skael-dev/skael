@@ -91,6 +91,15 @@ func Compose(in ComposeInput) (*Report, error) {
 		void[v.TaskID] = true
 	}
 
+	// The primary member leads the panel and is the only member a lift is
+	// computed on: in.Baseline was measured on it, so any other member's score
+	// would make the subtraction a comparison between two models.
+	var primary PanelMember
+	if len(in.ModelPanel) > 0 {
+		primary = in.ModelPanel[0]
+	}
+	primaryScore, primaryScored := 0.0, false
+
 	members := make([]MemberReport, 0, len(in.Members))
 	headline, found := math.Inf(1), false
 	var unhealthy []string
@@ -109,6 +118,9 @@ func Compose(in ComposeInput) (*Report, error) {
 		if mi.Healthy {
 			mr.Effectiveness = mi.Score
 			found = true
+			if mi.Member.Agent == primary.Agent && mi.Member.Model == primary.Model {
+				primaryScore, primaryScored = mi.Score, true
+			}
 			// Minimum rather than mean: the claim a published score makes is
 			// "this works", and it only works if it works on the weakest model
 			// someone will run it on. An unhealthy member is excluded rather
@@ -161,8 +173,10 @@ func Compose(in ComposeInput) (*Report, error) {
 	}
 	if in.BaselineMeasured {
 		rep.Baseline = in.Baseline
-		rep.Delta = headline - in.Baseline
-		rep.DeltaMeasured = true
+		if primaryScored {
+			rep.Delta = primaryScore - in.Baseline
+			rep.DeltaMeasured = true
+		}
 	}
 	return rep, nil
 }

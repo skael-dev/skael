@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
@@ -379,7 +379,11 @@ describe("QualityReport", () => {
       drift_grade: "B",
     });
     render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
-    expect(await screen.findByText(/not measured/i)).toBeInTheDocument();
+    // Scoped to its own section: the lift line says "not measured" too, and
+    // for the same reason.
+    const heading = await screen.findByText("Robustness gap");
+    const section = heading.closest("div") as HTMLElement;
+    expect(within(section).getByText(/not measured/i)).toBeInTheDocument();
     // The bug this exists to prevent: "the floor model kept up" shown for
     // "we could not tell".
     expect(screen.queryByText(/^0$/)).not.toBeInTheDocument();
@@ -782,5 +786,53 @@ describe("QualityTrend", () => {
     const { container } = render(withQuery(<QualityTrend skillName="s" />));
     expect(await screen.findByText(/no scores yet/i)).toBeInTheDocument();
     expect(container.querySelectorAll("[data-point]")).toHaveLength(0);
+  });
+});
+
+describe("lift", () => {
+  it("reads the paired comparison in one line", async () => {
+    mockQuality({
+      version: 3,
+      headline_score: 38,
+      lift: 27,
+      baseline: 44,
+      uplift_source: "fresh",
+      verified: true,
+      panel_complete: true,
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText(/\+27/)).toBeInTheDocument();
+    expect(screen.getByText(/44 without it/)).toBeInTheDocument();
+    expect(screen.queryByText(/reused baseline/i)).not.toBeInTheDocument();
+  });
+
+  it("names a reused baseline, because one side was not run again", async () => {
+    mockQuality({
+      version: 3,
+      headline_score: 38,
+      lift: 27,
+      baseline: 44,
+      uplift_source: "reused",
+      verified: true,
+      panel_complete: true,
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(await screen.findByText(/reused baseline/i)).toBeInTheDocument();
+  });
+
+  it("says a missing lift was not measured, never zero", async () => {
+    mockQuality({
+      version: 3,
+      headline_score: 38,
+      lift: undefined,
+      baseline: undefined,
+      tier: "smoke",
+      verified: true,
+      panel_complete: true,
+    });
+    render(withQuery(<QualityReport skillName="s" latestVersion={3} />));
+    expect(
+      await screen.findByText(/lift not measured — smoke tier runs no baseline/i),
+    ).toBeInTheDocument();
   });
 });

@@ -20,6 +20,9 @@ type RecordOutput struct {
 	Headline                 float64         `json:"headline_score"`
 	HeadlineCILow            float64         `json:"headline_ci_low,omitempty"`
 	HeadlineCIHigh           float64         `json:"headline_ci_high,omitempty"`
+	PrimaryScore             *float64        `json:"primary_score,omitempty"`
+	Baseline                 *float64        `json:"baseline,omitempty"`
+	Lift                     *float64        `json:"lift,omitempty"`
 	Pillars                  json.RawMessage `json:"pillar_breakdown"`
 	PanelMatrix              json.RawMessage `json:"panel_matrix"`
 	RobustnessGap            *float64        `json:"robustness_gap,omitempty"`
@@ -32,7 +35,7 @@ type RecordOutput struct {
 	EngineVersion            string          `json:"engine_version"`
 	ModelPanel               json.RawMessage `json:"model_panel"`
 	Tier                     string          `json:"tier"`
-	UpliftSource             string          `json:"uplift_source,omitempty"`
+	UpliftSource             string          `json:"uplift_source,omitempty"` // "fresh" or "reused"
 	JudgeModel               *string         `json:"judge_model,omitempty"`
 	JobID                    string          `json:"job_id,omitempty"`
 	ScoredAt                 time.Time       `json:"scored_at"`

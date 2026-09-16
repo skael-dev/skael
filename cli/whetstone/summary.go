@@ -38,13 +38,13 @@ func RenderEvalSummary(rep *report.Report, evalID int64, skill string) string {
 
 	fmt.Fprintf(&b, "\n  Fires when it should    %s\n", yesNo(rep.TriggerF1))
 	if rep.DeltaMeasured {
-		fmt.Fprintf(&b, "  Better than no skill    %+.0f points (%.0f without it)\n", rep.Delta, rep.Baseline)
+		fmt.Fprintf(&b, "  Lift vs no skill        %+.0f points (%.0f without it)\n", rep.Delta, rep.Baseline)
 		if n := len(rep.ReusedBaselines); n > 0 {
 			fmt.Fprintf(&b, "                          %s reused from an earlier eval; --fresh-baseline runs them again\n",
 				plural(n, "baseline session"))
 		}
 	} else {
-		fmt.Fprintf(&b, "  Better than no skill    not measured — %s tier runs no baseline\n", rep.Tier)
+		fmt.Fprintf(&b, "  Lift vs no skill        not measured — %s tier runs no baseline\n", rep.Tier)
 	}
 
 	if n := len(rep.DroppedGrades); n > 0 {

@@ -98,7 +98,7 @@ export function SkillCard({
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       )}
       style={{
-        gridTemplateColumns: "28px 12px 1fr 80px 132px 110px",
+        gridTemplateColumns: "28px 12px 1fr 80px 64px 132px 110px",
       }}
     >
       {/* Checkbox */}
@@ -182,6 +182,27 @@ export function SkillCard({
       {/* Invocations */}
       <span className="text-[13px] text-text-primary text-right" style={{ fontVariantNumeric: "tabular-nums" }}>
         {skill.activations.toLocaleString()}
+      </span>
+
+      {/* Lift. A skill scored before lift existed, or one whose tier ran no
+          baseline, shows a dash: not measured is not zero. */}
+      <span
+        className="text-[13px] text-right whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+        title={
+          skill.quality?.lift === undefined || skill.quality?.lift === null
+            ? "Lift not measured"
+            : "Score with the skill minus the same model's score without it"
+        }
+      >
+        {skill.quality?.lift === undefined || skill.quality?.lift === null ? (
+          <span className="text-text-tertiary">—</span>
+        ) : (
+          <span className={skill.quality.lift >= 0 ? "text-text-primary" : "text-danger"}>
+            {skill.quality.lift >= 0 ? "+" : "\u2212"}
+            {Math.abs(Math.round(skill.quality.lift))}
+          </span>
+        )}
       </span>
 
       {/* Security + review */}

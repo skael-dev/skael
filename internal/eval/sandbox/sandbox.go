@@ -60,8 +60,8 @@ type Mount struct {
 
 // RunSpec is one command in one environment.
 type RunSpec struct {
-	Image     ImageRef
-	Snapshot  SnapshotRef
+	Image    ImageRef
+	Snapshot SnapshotRef
 	// Workspace is an absolute local directory. The driver mirrors it into the
 	// run before argv starts and mirrors it back afterwards. A bind-mounting
 	// driver satisfies both directions at once; a remote driver copies. A
