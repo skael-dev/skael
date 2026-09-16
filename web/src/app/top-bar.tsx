@@ -133,7 +133,7 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
         className="flex items-center gap-2 h-[30px] px-2.5
           bg-bg-secondary border border-border hover:border-border-active
           rounded-md text-[12px] text-text-tertiary cursor-pointer
-          transition-colors duration-100 flex-[0_1_240px] min-w-[140px] font-sans"
+          transition-colors duration-100 flex-[0_1_240px] min-w-[104px] font-sans"
       >
         <Search size={13} />
         <span className="flex-1 text-left">Search...</span>
@@ -145,8 +145,11 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
         </kbd>
       </button>
 
-      {/* Sync indicator */}
-      <SyncIndicator />
+      {/* Sync indicator. Hidden on a phone: it is ambient status, and at that
+          width it pushes the search trigger off the header. */}
+      <div className="hidden sm:flex items-center">
+        <SyncIndicator />
+      </div>
     </header>
   );
 }

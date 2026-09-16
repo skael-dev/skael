@@ -163,7 +163,13 @@ func TestLocalStorage_Conformance(t *testing.T) {
 	runStorageConformance(t, s)
 }
 
-const minioImage = "minio/minio:RELEASE.2024-01-16T16-07-38Z"
+// quay.io, not Docker Hub. MinIO archived the community edition and deleted
+// the minio/minio repository from Docker Hub, which fails this test with "pull
+// access denied ... or may require 'docker login'" — Docker Hub returns that
+// for a deleted repository too, so it reads like an auth problem and is not
+// one. MinIO still publishes the same tags at the same digests to
+// quay.io/minio/minio, anonymously. Do not "fix" this back to docker.io.
+const minioImage = "quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z"
 
 func startMinio(t *testing.T) (endpoint, user, pass string) {
 	t.Helper()
