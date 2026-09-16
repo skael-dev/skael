@@ -98,6 +98,23 @@ They run automatically at startup, like every other migration. Each file runs in
 
 On a small registry all nine finish in well under a second. On one with a lot of versions or a lot of skill prose, budget for 013 and 014 and take the server down for the upgrade rather than doing this under live traffic — anything still querying `skill_versions` blocks while those locks are held. [Backup & restore](/docs/backup-restore) has what you need to rehearse the timing against a copy of production first.
 
+### Two new migrations (021 → 022)
+
+Both are cheap, and neither rewrites or backfills an existing table.
+
+| Migration | What it does | Cost |
+|---|---|---|
+| `021_skill_quality_lift` | Adds nullable `primary_score`, `baseline` and `lift` to `skill_quality`, and comments `uplift_source` | Instant — three nullable columns, no default, no backfill |
+| `022_contests` | Creates `contests`, `contest_candidates`, `contest_task_losses`; adds nullable `eval_jobs.contest_id` | Instant — three new empty tables and one nullable column |
+
+**Scores from before the upgrade keep a blank lift, on purpose.** `report_json` holds enough to recompute one, but doing that means re-deriving which sessions each original run counted — void tasks excluded, dropped grades removed from the denominator — which puts a second copy of the scoring rule in a migration and produces numbers a reader takes for measurements. A skill's lift starts at its next evaluation, and the trend chart draws a gap before that point rather than a zero.
+
+### Behavior change: a republished archive gets a new checksum, once
+
+`skill.Pack` used to copy the packing machine's clock and user ids into every tar header, so the same content packed twice produced different archives. It now normalises them, which means an archive packed before this release hashes differently from the same content packed after it.
+
+The visible consequence is one-off: the first republish of an existing skill's unchanged bytes creates one new version instead of hitting the unchanged-content short-circuit. Stored archives and their recorded checksums are untouched, and every republish after that behaves normally.
+
 ### Behavior change: a blocked publish now holds the version instead of refusing it
 
 This is the loudest change in the release.
