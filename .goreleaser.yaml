@@ -192,11 +192,16 @@ release:
 # are install.sh or the release archive, and the docs say so rather than
 # offering a `brew install` that fails.
 #
-# The post-install hook removes the quarantine bit, because these binaries are
-# not signed or notarized and Gatekeeper otherwise refuses to run a cask's
-# binary at all. It currently renders as Homebrew's deprecated `postflight`
-# stanza (goreleaser#6870, milestone v2.19.0): a warning on brew commands is
-# the lesser problem against an install that cannot run.
+# The quarantine bit has to be stripped, because these binaries are not signed
+# or notarized and Gatekeeper otherwise refuses to run a cask's binary at all.
+# It is written as a custom_block rather than with `hooks:`, which renders
+# Homebrew's deprecated `postflight` stanza (goreleaser#6870, milestone
+# v2.19.0) and makes every brew command touching this tap print a warning
+# telling the user to file an issue against it. Switch back to `hooks:` once
+# GoReleaser emits postflight_steps itself.
+#
+# {{"{{"}}staged_path{{"}}"}} is Homebrew's own template token, escaped here so
+# GoReleaser's templating leaves it alone.
 homebrew_casks:
   - name: skael
     ids:
@@ -209,12 +214,12 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://skael.dev"
     description: "Control plane for AI agent skills"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/skael"]
-          end
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{"{{"}}staged_path{{"}}"}}/skael"]
+        end
+      end
 
   - name: whetstone
     ids:
@@ -227,9 +232,9 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://skael.dev"
     description: "Authoring and evaluation toolkit for AI agent skills"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/whetstone"]
-          end
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{"{{"}}staged_path{{"}}"}}/whetstone"]
+        end
+      end

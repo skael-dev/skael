@@ -120,7 +120,12 @@ brew install --cask skael-dev/skael/skael
 brew install --cask skael-dev/skael/whetstone
 ```
 
-Already have the formula? Homebrew migrates you on `brew update` once the first cask release is published — the tap carries a migration entry for it. If you would rather not wait, `brew uninstall skael && brew install --cask skael-dev/skael/skael` does the same thing.
+Already have the formula? The tap carries a `tap_migrations.json` entry pointing the old names at the casks, so `brew update` may move you across on its own. Do not count on it: formula-to-cask migration inside one tap is recent, and on some Homebrew versions it does nothing at all. The reliable path takes two commands:
+
+```bash
+brew uninstall skael
+brew install --cask skael-dev/skael/skael
+```
 
 **On Linux, Homebrew is no longer an install path.** Casks are macOS-only: `brew install --cask` on Linux fails with "Installing casks is supported only on macOS". Use the curl installer or the release archive, both of which have always worked:
 
@@ -130,7 +135,7 @@ curl -fsSL https://skael.dev/install.sh | sh
 
 Nothing else changes. The binaries, the archives and their names are identical, and `skael-server` and `skael-worker` were never in Homebrew to begin with.
 
-One cosmetic wrinkle you may see: the cask carries a `postflight` block that strips the macOS quarantine bit, because these binaries are not notarized and Gatekeeper otherwise refuses to run them. Homebrew has deprecated that stanza and warns about it; GoReleaser emits the replacement from v2.19.0, and this tap picks it up when it does.
+The cask strips the macOS quarantine bit after installing, because these binaries are not notarized and Gatekeeper otherwise refuses to run them. v0.15.0's cask wrote that as Homebrew's deprecated `postflight` stanza, which makes `brew` print a warning — and ask you to report it to the tap — on every command that touches it. Releases after v0.15.0 use `postflight_steps` and are quiet.
 
 ### Behavior change: a republished archive gets a new checksum, once
 
