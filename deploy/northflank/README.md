@@ -114,7 +114,7 @@ Set this only if you have satisfied yourself that the claim holds for your plan.
 | `SANDBOX_NF_CLI` | no | `northflank` | Path to the CLI used to copy the workspace |
 
 The worker's own settings — `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, the LLM
-credentials — are unchanged. See the worker table in `CLAUDE.md`.
+credentials — are unchanged. See the worker table in `site/src/content/docs/docs/configuration.md`.
 
 `WORKER_RUN_ROOT` does not apply. It exists because the Docker driver
 bind-mounts host paths that the host daemon must resolve; this driver mounts

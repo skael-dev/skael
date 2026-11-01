@@ -5,3 +5,5 @@ docs/
 tests/
 *.md
 justfile
+.build
+docs

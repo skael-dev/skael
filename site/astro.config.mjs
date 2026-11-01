@@ -37,6 +37,8 @@ export default defineConfig({
           { label: 'whetstone', slug: 'docs/whetstone' },
           { label: 'HTTP API', slug: 'docs/api' },
           { label: 'Self-hosting', slug: 'docs/self-hosting' },
+          { label: 'Configuration', slug: 'docs/configuration' },
+          { label: 'Security constraints', slug: 'docs/security' },
         ] },
         { label: 'Operate', items: [
           { label: 'Production deployment', slug: 'docs/production' },

@@ -221,7 +221,7 @@ export ANTHROPIC_API_KEY=<your-anthropic-key>   # direct API gateway — never a
 skael-worker
 ```
 
-`SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and a credential for the LLM provider are the only strictly required variables — the worker exits at startup naming whichever is missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [CLAUDE.md](CLAUDE.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
+`SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and a credential for the LLM provider are the only strictly required variables — the worker exits at startup naming whichever is missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [Configuration](site/src/content/docs/docs/configuration.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
 
 To run the worker in a container instead (Kubernetes, Coolify, or just keeping everything in Compose):
 
@@ -236,7 +236,7 @@ It starts sandbox containers as *siblings* through the host's Docker socket rath
 - `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume. Session workspaces and the suite's verifier are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
 - Auth must arrive as environment variables rather than a mounted `~/.claude`. All four setups work in a container — Anthropic API key, a Claude subscription for the panel via `CLAUDE_CODE_OAUTH_TOKEN`, OpenRouter for both judge and panel, or OpenRouter for the judge with the subscription for the panel. `docker-compose.yml` carries them all, with the inactive ones commented out.
 
-See [Running the worker in a container](CLAUDE.md#running-the-worker-in-a-container).
+See [Running the worker in a container](site/src/content/docs/docs/configuration.md#running-the-worker-in-a-container).
 
 ### The LLM provider
 

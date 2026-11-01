@@ -180,8 +180,16 @@ tidy:
 lint:
     golangci-lint run
 
-# Run all checks (vet + fmt + lint + comments + test + integration)
-check: vet fmt-check lint comments test test-integration
+# Fail when AGENTS.md is over budget or quotes a path or command that does not exist
+agents-md:
+    ./checks/agents-md.sh
+
+# Fail when the public repository holds a private path or a private word
+private:
+    ./checks/private-words.sh
+
+# Run all checks (vet + fmt + lint + comments + agents-md + private + test + integration)
+check: vet fmt-check lint comments agents-md private test test-integration
 
 # --- Docker ---
 

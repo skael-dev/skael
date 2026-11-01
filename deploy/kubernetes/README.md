@@ -50,7 +50,7 @@ driver has no build step to install it into.
 | `SANDBOX_K8S_NETWORK_POLICY` | no | unset | Asserts the cluster's CNI enforces `NetworkPolicy`. Accepted only as the exact lowercase string `true`; any other value reads as unasserted, and the driver refuses a run that restricts the network |
 
 The worker's own settings — `SKAEL_ENDPOINT`, `SKAEL_API_KEY`, the LLM
-credentials — are unchanged. See the worker table in `CLAUDE.md`.
+credentials — are unchanged. See the worker table in `site/src/content/docs/docs/configuration.md`.
 
 ## Egress: the part that needs your attention
 

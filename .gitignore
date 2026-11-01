@@ -10,8 +10,11 @@ bin/
 .env
 data/
 *.tar.gz
-# Private product docs (specs, plans, PRD) — root only; do NOT match site/src/content/docs/
-/docs/
+# Private build repository, and its docs symlink. No trailing slash: a worktree
+# holds these as symlinks, and "/docs/" does not match a symlink. Root only; do
+# NOT match site/src/content/docs/
+/.build
+/docs
 # Agent scratch workspaces: task briefs, reports and ledgers that quote the
 # private docs above. Never publishable.
 /.superpowers/

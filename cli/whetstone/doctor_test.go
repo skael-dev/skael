@@ -118,7 +118,7 @@ func TestRunDoctor_HonoursTheTimeoutOverride(t *testing.T) {
 }
 
 // TestRunDoctor_RejectsAMalformedTimeout matches the worker's own
-// env-duration convention (CLAUDE.md: fail loudly, name the offending value)
+// env-duration convention (fail loudly, name the offending value)
 // rather than the server's silent-fallback style — an interactive CLI is
 // better served by catching a typo immediately than by silently reverting to
 // the default.
