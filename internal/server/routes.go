@@ -19,6 +19,7 @@ import (
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
+	"github.com/skael-dev/skael/internal/mcp"
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
@@ -154,6 +155,8 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		QualityFloor: cfg.QualityFloor,
 		Ownership:    ownerResolver,
 	})
+
+	mcp.RegisterRoutes(router, skillStore, setStore, cfg, caps.Response().Version)
 
 	// Ownership rules. Registered inside RegisterAPIRoutes, not in Build, so
 	// the generated OpenAPI spec cannot drift from what is served.

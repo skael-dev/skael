@@ -36,6 +36,7 @@ export default defineConfig({
           { label: 'CLI', slug: 'docs/cli' },
           { label: 'whetstone', slug: 'docs/whetstone' },
           { label: 'HTTP API', slug: 'docs/api' },
+          { label: 'MCP server', slug: 'docs/mcp' },
           { label: 'Self-hosting', slug: 'docs/self-hosting' },
           { label: 'Configuration', slug: 'docs/configuration' },
           { label: 'Security constraints', slug: 'docs/security' },
