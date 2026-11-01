@@ -76,7 +76,7 @@ func TestGetOverview_WithData(t *testing.T) {
 	// The handler uses its own pool from setupAnalyticsAPI; we need to use the
 	// same pool. Re-query via the store directly since the handler has its own DB.
 	// Instead, verify using a store backed by the same pool as the inserts.
-	result, err := analyticsStore.GetOverview(ctx, 30)
+	result, err := analyticsStore.GetOverview(ctx, 30, analytics.EventFilter{})
 	require.NoError(t, err)
 
 	require.Equal(t, 3, result.TotalSkills, "expected 3 total skills")
@@ -99,7 +99,7 @@ func TestGetOverview_EmptyDB(t *testing.T) {
 	ctx := context.Background()
 	store := analytics.NewStore(pool)
 
-	result, err := store.GetOverview(ctx, 30)
+	result, err := store.GetOverview(ctx, 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 0, result.TotalSkills)

@@ -126,6 +126,10 @@ export const handlers = [
     return HttpResponse.json(mockOverview);
   }),
 
+  http.get("/api/analytics/consumers", () => {
+    return HttpResponse.json({ consumers: [], roles: [] });
+  }),
+
   http.get("/api/analytics/skills", ({ request }) => {
     const url = new URL(request.url);
     const q = (url.searchParams.get("q") ?? "").toLowerCase();
@@ -165,6 +169,10 @@ export const handlers = [
       return HttpResponse.json({ detail: "skill not found" }, { status: 404 });
     }
     return HttpResponse.json(skill);
+  }),
+
+  http.get("/api/skills/:name/outcomes", () => {
+    return HttpResponse.json({ min_comparable_runs: 20, consumers: [] });
   }),
 
   http.get("/api/skills/:name/activations", () => {

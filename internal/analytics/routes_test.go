@@ -258,7 +258,7 @@ func TestIngestEvent_CursorWithNoSourceDefaultsToTranscriptScan(t *testing.T) {
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
 
-	summary, err := store.GetActivations(ctx, "cursor-default-demo", 30)
+	summary, err := store.GetActivations(ctx, "cursor-default-demo", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.BySource["transcript_scan"])
 	require.Equal(t, 0, summary.BySource["tool_invocation"])
@@ -283,7 +283,7 @@ func TestIngestEvent_NonCursorWithNoSourceDefaultsToToolInvocation(t *testing.T)
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
 
-	summary, err := store.GetActivations(ctx, "non-cursor-default-demo", 30)
+	summary, err := store.GetActivations(ctx, "non-cursor-default-demo", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.BySource["tool_invocation"])
 	require.Equal(t, 0, summary.BySource["transcript_scan"])
@@ -310,7 +310,7 @@ func TestIngestEvent_ExplicitEventSourceOverridesAgentDefault(t *testing.T) {
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
 
-	summary, err := store.GetActivations(ctx, "cursor-explicit-demo", 30)
+	summary, err := store.GetActivations(ctx, "cursor-explicit-demo", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.BySource["tool_invocation"])
 	require.Equal(t, 0, summary.BySource["transcript_scan"])

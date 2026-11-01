@@ -129,8 +129,8 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `DELETE` | `/api/skills/{name}/review` | Unmark skill as reviewed |
 | `PUT` | `/api/skills/review` | Bulk mark skills as reviewed |
 | `GET` | `/api/skills/tags` | Distinct tags across all skills |
-| `GET` | `/api/skills/{name}/activations` | Activation summary for a skill |
-| `GET` | `/api/skills/{name}/timeseries` | Per-agent daily activation counts |
+| `GET` | `/api/skills/{name}/activations` | Activation summary for a skill, with `hook_activations`, `automated_activations` and `by_consumer`. Takes `consumer` and `role`, described below the table |
+| `GET` | `/api/skills/{name}/timeseries` | Per-agent daily activation counts. Takes `consumer` and `role`, described below the table |
 | `GET` | `/api/skills/{name}/aliases` | List aliases pointing to this skill |
 | `POST` | `/api/skills/{name}/aliases` | Create an alias |
 | `DELETE` | `/api/skills/{name}/aliases/{alias}` | Delete an alias |
@@ -141,9 +141,10 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `DELETE` | `/api/ownership/rules/{id}` | Delete a rule. Returns `{"deleted": true}` |
 | `GET` | `/api/skills/{name}/owners` | Who owns this name, and which rule pattern produced them |
 | `POST` | `/api/events` | Ingest a skill activation event |
-| `GET` | `/api/analytics/overview` | KPI totals |
-| `GET` | `/api/analytics/skills` | Per-skill analytics (paginated) |
-| `GET` | `/api/analytics/timeseries` | Daily activation counts for chart |
+| `GET` | `/api/analytics/overview` | KPI totals. Takes `consumer` and `role`, described below the table. They change the activation counts, not the skill, review or security counts |
+| `GET` | `/api/analytics/skills` | Per-skill analytics (paginated). Takes `consumer` and `role`, described below the table. With a filter, the list holds only skills with a matching activation |
+| `GET` | `/api/analytics/timeseries` | Daily activation counts for chart. Takes `consumer` and `role`, described below the table |
+| `GET` | `/api/analytics/consumers` | Distinct consumers and roles in stored events, as `{"consumers": [], "roles": []}` |
 | `GET` | `/api/analytics/unregistered` | Skills seen in events but not in registry |
 | `POST` | `/api/analytics/dismiss` | Dismiss an unregistered skill |
 | `GET` | `/api/search` | Full-text + fuzzy skill search (`?q=...&limit=N`) |
@@ -178,6 +179,8 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/service-accounts/{id}/keys` | List an account's keys. Owner or admin only |
 | `POST` | `/api/service-accounts/{id}/keys` | Create a scoped key. Owner or admin only. The response has the secret once |
 | `DELETE` | `/api/service-accounts/{id}/keys/{keyId}` | Revoke a key. Owner or admin only |
+
+The `consumer` and `role` query parameters narrow activation counts to the events one [service account](#service-accounts) reported, and to one role. Each is optional, and an omitted parameter applies no filter. A filter excludes hook events, because hook events have no consumer and no role.
 
 ### Worker-facing endpoints
 
