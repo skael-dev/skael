@@ -95,10 +95,7 @@ func ValidateEvents(in []RunEventBody) ([]Event, error) {
 		case e.Time.IsZero():
 			return nil, invalidEvent(i, "time is required")
 		}
-		events[i] = Event{
-			Skill: e.Skill, Version: e.Version, Agent: e.Agent, Role: e.Role,
-			ExternalRunID: e.ExternalRunID, Time: e.Time, Set: e.Set, ResolutionID: e.ResolutionID,
-		}
+		events[i] = Event(e)
 	}
 	return events, nil
 }
@@ -138,10 +135,7 @@ func (s *Store) Report(ctx context.Context, body RunOutcomeBody) (*RunRecord, er
 	if !ValidHTTPURL(body.EvidenceURL) {
 		return nil, huma.Error422UnprocessableEntity("evidence_url must be an http or https URL")
 	}
-	return s.PutOutcome(ctx, c, Outcome{
-		ExternalRunID: body.ExternalRunID, Outcome: body.Outcome, Repairs: body.Repairs,
-		ReviewVerdict: body.ReviewVerdict, EvidenceURL: body.EvidenceURL, Set: body.Set, ResolutionID: body.ResolutionID,
-	})
+	return s.PutOutcome(ctx, c, Outcome(body))
 }
 
 // RegisterRoutes wires the run endpoints.
