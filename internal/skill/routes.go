@@ -1,10 +1,7 @@
 package skill
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -161,8 +157,6 @@ type RouteOptions struct {
 // Huma API and Chi router. The router is needed for the two raw-response
 // routes (download + scan) that stream bytes rather than returning JSON.
 func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platform.Storage, opts RouteOptions) {
-	external := opts.External
-
 	// -----------------------------------------------------------------
 	// POST /api/skills — create a skill
 	// -----------------------------------------------------------------
@@ -346,23 +340,14 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	// -----------------------------------------------------------------
 	// POST /api/skills/{name}/versions — publish a new version
 	// -----------------------------------------------------------------
+	publisher := NewPublisher(store, storage, opts)
 	type publishInput struct {
 		Name     string `path:"name"`
 		Override bool   `query:"override" doc:"Publish despite blocking scan findings. Owner or admin only; recorded server-side."`
 		RawBody  []byte `contentType:"application/gzip,application/octet-stream"`
 	}
-	type qualityState struct {
-		State string `json:"state,omitempty"`
-		JobID string `json:"job_id,omitempty"`
-	}
-	type publishBody struct {
-		Version
-		Created  bool          `json:"created"`
-		Quality  qualityState  `json:"quality"`
-		Decision gate.Decision `json:"decision"`
-	}
 	type publishOutput struct {
-		Body *publishBody
+		Body *PublishBody
 	}
 	huma.Register(api, huma.Operation{
 		OperationID:   "publish-skill-version",
@@ -371,275 +356,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		Summary:       "Publish a new skill version",
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *publishInput) (*publishOutput, error) {
-		// 1. Look up the skill.
-		sk, err := store.GetByName(ctx, input.Name)
+		res, err := publisher.Publish(ctx, input.Name, input.RawBody, input.Override)
 		if err != nil {
-			return nil, fmt.Errorf("publish: lookup skill: %w", err)
+			return nil, err
 		}
-		if sk == nil {
-			return nil, huma.Error404NotFound(
-				fmt.Sprintf("skill %q not found", input.Name))
-		}
-
-		// 2. Unpack archive to a temp dir.
-		tmpDir, err := os.MkdirTemp("", "skael-publish-*")
-		if err != nil {
-			return nil, fmt.Errorf("publish: create temp dir: %w", err)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		if err := Unpack(bytes.NewReader(input.RawBody), tmpDir); err != nil {
-			return nil, huma.Error400BadRequest(
-				fmt.Sprintf("invalid archive: %s", err))
-		}
-
-		// 3. Security scan (native), then merge the optional external scanner.
-		report, err := scan.ScanDir(tmpDir)
-		if err != nil {
-			return nil, fmt.Errorf("publish: scan: %w", err)
-		}
-		scan.MergeExternal(ctx, external, tmpDir, report)
-		// tmpDir is a throwaway unpack directory. Its absolute path means
-		// nothing to the publisher and leaks the server's filesystem layout,
-		// so rewrite before the report is persisted, decided on, or returned.
-		scan.Relativize(report, tmpDir)
-
-		// Resolve ownership before deciding. A nil resolver leaves the zero
-		// OwnerState, which contributes nothing — that is what keeps every
-		// test harness and the CLI's local pre-scan on the pre-ownership
-		// behaviour.
-		var owner gate.OwnerState
-		if opts.Ownership != nil {
-			owner, err = opts.Ownership.ResolveForPublish(ctx, input.Name, auth.UserFromContext(ctx))
-			if err != nil {
-				return nil, fmt.Errorf("publish: resolve ownership: %w", err)
-			}
-		}
-
-		decision := DecidePublish(report, owner, opts.QualityFloor, publishOverrideAllowed(ctx, input.Override))
-
-		if decision.Outcome == gate.Block {
-			payload, _ := json.Marshal(struct {
-				Scan     *scan.Report  `json:"scan"`
-				Decision gate.Decision `json:"decision"`
-			}{report, decision})
-			return nil, huma.NewError(
-				http.StatusUnprocessableEntity,
-				"archive rejected: it contains credential-theft or data-exfiltration findings, which are unappealable — no evaluation and no override clears them",
-				fmt.Errorf("%s", payload),
-			)
-		}
-
-		if decision.Outcome == gate.Allow && len(decision.Reasons) > 0 {
-			// Reached only via an admin override, since a clean report has
-			// no reasons and a quality state cannot exist at publish time.
-			user := auth.UserFromContext(ctx)
-			log.Warn().
-				Str("skill", input.Name).
-				Str("user", user.Email).
-				Str("role", user.Role).
-				Str("scan_status", report.Status).
-				Int("critical", report.Summary.Critical).
-				Int("high", report.Summary.High).
-				Msg("publish override: privileged user published a skill with findings that would otherwise hold it for review")
-		}
-
-		if decision.Outcome == gate.NeedsReview {
-			log.Info().
-				Str("skill", input.Name).
-				Int("reasons", len(decision.Reasons)).
-				Msg("publish held for review: version created but not served until an evaluation or an admin clears it")
-		}
-
-		// 4. Compute checksum and compare against latest version.
-		h := sha256.Sum256(input.RawBody)
-		checksum := hex.EncodeToString(h[:])
-
-		if sk.LatestVersion > 0 {
-			latest, err := store.GetVersion(ctx, input.Name, sk.LatestVersion)
-			if err == nil && latest != nil && latest.Checksum == checksum {
-				// Unchanged content: report the version's persisted gate
-				// state, not a fresh recompute. `decision` above was
-				// computed with nil quality evidence and no admin override
-				// in play for *this* request — it is a hypothetical ("what
-				// would this bundle decide right now"), not the version's
-				// actual status. latest may have been approved or rejected
-				// since it was first decided, and that stored outcome —
-				// gate_decision, snapshotted at the time it was made — is
-				// the only truth for a bundle nobody is re-deciding.
-				// Nothing new was scored, so quality state is "none"; created
-				// is false, so a client knows nothing new was gated either.
-				persisted := decision
-				if len(latest.GateDecision) > 0 {
-					var stored gate.Decision
-					if err := json.Unmarshal(latest.GateDecision, &stored); err != nil {
-						return nil, fmt.Errorf("publish: unmarshal persisted gate decision: %w", err)
-					}
-					persisted = stored
-				}
-				return &publishOutput{Body: &publishBody{
-					Version: *latest, Created: false,
-					Quality: qualityState{State: "none"}, Decision: persisted,
-				}}, nil
-			}
-		}
-
-		// archiveName is content-addressable: different content → different filename,
-		// so concurrent publishes with distinct payloads cannot overwrite each other.
-		// storage.Write stores it relative to BasePath, and storage.Read reads it
-		// the same way.
-		archiveName := fmt.Sprintf("%s/%s.tar.gz", input.Name, checksum[:16])
-
-		// 5. Read SKILL.md and extract frontmatter.
-		skillMDPath := filepath.Join(tmpDir, "SKILL.md")
-		skillMDBytes, err := os.ReadFile(skillMDPath)
-		if err != nil {
-			return nil, huma.Error400BadRequest("archive must contain SKILL.md")
-		}
-		fm, body, err := ParseFrontmatter(string(skillMDBytes))
-		if err != nil {
-			return nil, fmt.Errorf("publish: parse frontmatter: %w", err)
-		}
-
-		var fmJSON json.RawMessage
-		if fm != nil {
-			fmJSON, err = json.Marshal(fm)
-			if err != nil {
-				return nil, fmt.Errorf("publish: marshal frontmatter: %w", err)
-			}
-		} else {
-			fmJSON = json.RawMessage(`{}`)
-		}
-
-		// Extract description from frontmatter.
-		description := sk.Description
-		if fm != nil {
-			if d, ok := fm["description"].(string); ok && d != "" {
-				description = d
-			}
-		}
-
-		// Extract changelog from frontmatter.
-		changelog := ""
-		if fm != nil {
-			if c, ok := fm["changelog"].(string); ok {
-				changelog = c
-			}
-		}
-
-		// Build manifest from the unpacked directory.
-		var manifest []FileEntry
-		if err := filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return err
-			}
-			rel, err := filepath.Rel(tmpDir, path)
-			if err != nil {
-				return err
-			}
-			manifest = append(manifest, FileEntry{
-				Path: filepath.ToSlash(rel),
-				Size: info.Size(),
-			})
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("publish: build manifest: %w", err)
-		}
-
-		// 6. Marshal scan result.
-		scanJSON, err := json.Marshal(report)
-		if err != nil {
-			return nil, fmt.Errorf("publish: marshal scan result: %w", err)
-		}
-
-		// 7. Determine publisher identity from auth context.
-		publishedBy := "system"
-		if u := auth.UserFromContext(ctx); u != nil {
-			publishedBy = u.Email
-		}
-
-		// 8. Write archive to storage. All validation has passed; write last so
-		// that no orphaned blobs are left behind when earlier steps fail.
-		if _, err := storage.Write(ctx, archiveName, bytes.NewReader(input.RawBody)); err != nil {
-			return nil, fmt.Errorf("publish: store archive: %w", err)
-		}
-
-		// 9. Create version record. Store the relative archiveName so that
-		// storage.Read can locate the file without needing the absolute basePath.
-		ver, err := store.CreateVersion(ctx,
-			sk.ID,
-			archiveName,
-			checksum,
-			changelog,
-			description,
-			body,
-			fmJSON,
-			manifest,
-			scanJSON,
-			publishedBy,
-			decision,
-		)
-		if err != nil {
-			_ = storage.Delete(ctx, archiveName)
-			return nil, huma.Error500InternalServerError("creating version", err)
-		}
-
-		// 9. Extract and persist spec-compliance metadata — but only for a
-		// version that is actually being served. A held version must not
-		// publish its own metadata onto the skill row while the gate is
-		// withholding its archive; the held version's frontmatter lives on
-		// its own skill_versions row, which is what a review UI renders.
-		if !decision.Held() {
-			spec := ValidateSpec(fm, sk.Name)
-			_ = store.UpdateSpecFields(ctx, sk.Name, spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
-		}
-
-		// 10. Enqueue an evaluation when a suite exists for this skill. A queue
-		// outage must not fail a publish: the version is already durable, and
-		// an unscored version is a state the product already models.
-		quality := qualityState{State: "none"}
-		if opts.Queue != nil && opts.Suites != nil {
-			rec, err := opts.Suites.LatestForSkill(ctx, input.Name)
-			if err != nil {
-				// SuiteLookup's contract is (nil, nil) for "no suite
-				// registered" — any non-nil error here is an infrastructure
-				// failure (lookup, not absence), and reporting "none" without
-				// a trace would leave a skill that genuinely has a suite
-				// permanently unscored with no operator signal.
-				log.Warn().Err(err).Str("skill", input.Name).Msg("publish: suite lookup failed, skipping enqueue")
-			} else if rec != nil {
-				id, err := opts.Queue.Submit(ctx, EvalJobRequest{
-					SkillID: sk.ID, SkillName: input.Name, Version: ver.Version,
-					SuiteRef: rec.Ref, Tier: "full", RequestedBy: publishedBy,
-				})
-				if err != nil {
-					log.Warn().Err(err).Str("skill", input.Name).Msg("publish: could not enqueue evaluation")
-				} else {
-					quality = qualityState{State: "pending", JobID: id}
-				}
-			}
-		}
-
-		// O6. A new name claims its publisher — unless a rule already covers it,
-		// in which case the rule wins and this version is held like any other
-		// proposal. Without the exception, publishing payments:anything is a way
-		// to become an owner inside someone else's namespace. This must only
-		// fire on the skill's first version: gating on owner.Unowned alone would
-		// mean the first person to publish an UPDATE to any pre-existing unowned
-		// skill (e.g. on an upgraded instance with no ownership rules yet)
-		// silently becomes its sole owner, breaking the "upgrade is a no-op"
-		// promise. ver.Version == 1 mirrors import's newSkill check.
-		if opts.Ownership != nil && owner.Unowned && ver.Version == 1 {
-			if err := opts.Ownership.ClaimOnFirstPublish(ctx, input.Name, auth.UserFromContext(ctx)); err != nil {
-				// The version is already durable and served. Failing the publish
-				// here would be a worse outcome than an unowned skill, which is
-				// a state the product already models.
-				log.Warn().Err(err).Str("skill", input.Name).
-					Msg("publish: could not claim first-publish ownership")
-			}
-		}
-
-		return &publishOutput{Body: &publishBody{Version: *ver, Created: true, Quality: quality, Decision: decision}}, nil
+		return &publishOutput{Body: res}, nil
 	})
 
 	// -----------------------------------------------------------------
