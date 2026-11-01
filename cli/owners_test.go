@@ -52,14 +52,9 @@ func TestOwnersAddUnknownEmailErrorsWithSuggestions(t *testing.T) {
 	defer srv.Close()
 	setupOwnersEnv(t, srv)
 
-	stderr := captureStderr(t, func() {
-		captureStdout(t, func() {
-			err := runOwnersAdd(ownersAddCmd, []string{"payments:*", "carl@acme.com"})
-			require.NoError(t, err)
-		})
-	})
-
-	assert.Contains(t, stderr, "carol@acme.com")
+	err := runOwnersAdd(ownersAddCmd, []string{"payments:*", "carl@acme.com"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "carol@acme.com")
 
 	for _, c := range calls {
 		if c.Path == "/api/ownership/rules" {

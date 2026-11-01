@@ -5,6 +5,30 @@ description: Every skael command.
 
 All commands accept `--json` for scriptable output and `--no-color` to disable styled output (the `NO_COLOR` env var works too).
 
+## Exit codes
+
+Every `skael` command uses these codes. They are stable, so a script can branch on the code and ignore the text.
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | API or network error, or a local write that failed |
+| `2` | Usage or config error: an unknown command or flag, a bad argument, or a missing or invalid config |
+| `10` | Incomplete set: `skael pull` wrote nothing |
+| `11` | Digest mismatch: `skael pull` or `skael add` wrote nothing |
+
+With `--json`, a failure prints this envelope to stdout, and the exit code is not zero. `suggestion` is present only when the CLI has one. Some failures add fields, such as `excluded` on code 10 and `decision` on a blocked publish.
+
+```json
+{"error": "not configured", "code": "not_configured", "suggestion": "skael setup <url> <api-key>"}
+```
+
+A held publish is not a failure. The version exists, so `skael publish` exits 0.
+
+`skael sync` and `skael import` exit 1 if any one skill fails. With `--json`, the counts are under `result` in the envelope.
+
+`skael scan` also uses `1` for findings, and `2` when the scan cannot run. `skael doctor` exits `2` when the config check fails and `1` when another check fails. These two print their full report first.
+
 ## skael setup `<url> <api-key>`
 
 One-command onboarding: validates the key, writes `~/.skael/config.json`, detects installed agents, and installs activation-tracking and auto-sync hooks.
@@ -39,13 +63,80 @@ Updates installed skills to the latest versions from the platform. Only skills l
 | `--dry-run` | false | Show what would happen without making changes |
 | `--quiet` | false | Suppress non-error output |
 
-## skael init `<name>`
+## skael init `[name]`
 
-Scaffolds a spec-compliant skill directory. Creates `<name>/` in the current directory and writes a `SKILL.md` with `name`, an empty `description`, and a `metadata` block (`author`, `tags`, `version`) ready to fill in.
+With no argument, `init` writes the skael skill to `.agents/skills/skael/SKILL.md` in the current directory. The binary carries this skill, which tells an agent how to use the CLI.
+
+- A second run changes nothing and exits 0.
+- If the file differs from the skill in the binary, `init` refuses and exits 2. Pass `--force` to overwrite it.
+- With `--json`, `init` prints the `path` and a `status` of `created`, `unchanged` or `overwritten`.
+
+With a name, `init` scaffolds a spec-compliant skill directory. Creates `<name>/` in the current directory and writes a `SKILL.md` with `name`, an empty `description`, and a `metadata` block (`author`, `tags`, `version`) ready to fill in.
 
 The name must match `^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$` — lowercase letters, digits, colons, dots and hyphens, starting and ending on a letter or digit. Colons namespace a skill (`payments:invoices`). Anything else is rejected and nothing is created.
 
 The directory is named after the skill. If it already exists, `init` fails and writes nothing — it never merges into or overwrites an existing directory.
+
+## skael pull `--set <name>`
+
+Resolves a set to exact versions, downloads its bundle, and writes the skills under `<dir>/.agents/skills/`. It works on a clean machine with only `SKAEL_URL` and `SKAEL_KEY` set.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--set <name>` | required | The set to pull |
+| `--dir <path>` | current directory | The directory that receives `.agents/skills/` |
+| `--no-hooks` | false | Write files only. Change no agent config and write nothing to `~/.skael` |
+
+Pull runs these steps in order:
+
+1. It resolves the set. If an entry is excluded, it prints the excluded entries and exits 10.
+2. It downloads the bundle for that exact resolution.
+3. It checks the SHA-256 of each skill archive and the manifest against the resolve result. A mismatch or a missing archive exits 11.
+4. It unpacks each verified archive, not the bundle's unpacked tree, into a temporary directory beside the target. It refuses path traversal, links and special files, and it removes setuid bits.
+5. It renames the temporary directory into place. A failure before this step leaves the target unchanged.
+6. Without `--no-hooks`, it installs the activation hook for each detected agent. It does not install the auto-sync hook, because `skael sync` manages a different list of skills.
+
+The target directory holds `manifest.json` and one directory per skill. Other entries in the target stay, such as the skill from `skael init`. A skill that the previous manifest named and this set does not name is removed.
+
+`manifest.json` has the set name, the resolution id, and the name, version and SHA-256 of each skill. Its `archive` field names a path inside the bundle. Pull does not write the archives to disk.
+
+## skael sets
+
+Reads and manages named sets of skills. `--json` prints the API response unchanged. `delete` has no API body, so it prints `{"deleted": true, "name": "..."}`.
+
+| Command | Who | Description |
+|---|---|---|
+| `skael sets list` | any key with `sets:read` | List sets. A set-limited key sees its own set |
+| `skael sets get <name>` | any key with `sets:read` | Show the entries and the last callers |
+| `skael sets resolve <name>` | any key with `sets:read` | Show exact versions, digests and excluded entries |
+| `skael sets create <name> [entry...]` | owner or admin | Create a set. `--description` sets its description |
+| `skael sets update <name> [entry...]` | owner or admin | Replace all entries, or change `--description`. What you omit stays |
+| `skael sets delete <name>` | owner or admin | Delete a set |
+
+Write an entry as `name` or `name@latest` to follow the latest version, or as `name@3` to pin one version.
+
+`skael sets resolve` exits 0 on an incomplete set, because that is a valid answer. Read `complete` in the output. Use `skael pull` to get exit code 10.
+
+## skael service-accounts
+
+Manages machine identities and their scoped keys. Every command needs an owner or admin. `<account>` is a name or an id. `--json` prints the API response unchanged. `delete` and `revoke` have no API body, so they print a small object that says what changed.
+
+| Command | Description |
+|---|---|
+| `skael service-accounts list` | List service accounts |
+| `skael service-accounts create <name>` | Create a service account |
+| `skael service-accounts delete <account>` | Delete an account and revoke its keys |
+| `skael service-accounts keys list <account>` | List an account's keys |
+| `skael service-accounts keys create <account>` | Create a key and show it once |
+| `skael service-accounts keys revoke <account> <key-id>` | Revoke a key |
+
+`keys create` takes these flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--scope <scope>` | required | A scope the key holds. Repeat it for more. The scopes are `skills:read`, `sets:read` and `eval:work` |
+| `--set <name>` | none | Limit the key to one set. The key needs `sets:read` |
+| `--name <label>` | `default` | A label for the key |
 
 ## skael publish `<dir>`
 
@@ -102,7 +193,7 @@ Details for one skill: name and latest version, author, license, spec compliance
 
 ## skael doctor
 
-Diagnostic health check: config, connectivity, agent detection, hook status.
+Diagnostic health check: config, connectivity, agent detection, hook status. It exits 2 when the config check fails, and 1 when another check fails. A warning does not change the exit code.
 
 ## skael hook `install` | `uninstall` | `status`
 

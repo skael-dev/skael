@@ -31,25 +31,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Check SKILL.md exists
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); os.IsNotExist(err) {
-		if ui.JSONMode {
-			ui.PrintJSONError("SKILL.md not found in "+dir, "missing_skill_md", "")
-		} else {
-			ui.Error(ui.ErrorDetail{
-				Message:    "SKILL.md not found in " + dir,
-				Suggestion: "create a SKILL.md with name and description frontmatter",
-			})
-		}
-		os.Exit(2)
+		return usageError("missing_skill_md", "SKILL.md not found in "+dir, "create a SKILL.md with name and description frontmatter")
 	}
 
 	report, err := scan.ScanDir(dir)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "scan_error", "")
-		} else {
-			ui.Errorf("%s", err)
-		}
-		os.Exit(2)
+		return usageError("scan_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -74,7 +61,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if report.Status == "critical" || report.Status == "warn" {
-		os.Exit(1)
+		return renderedExit(exitAPI)
 	}
 	return nil
 }

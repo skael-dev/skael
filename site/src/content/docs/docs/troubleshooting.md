@@ -105,7 +105,7 @@ Note what this message does *not* say: there is no `--override` suggestion, beca
 **Why:** The scanner found a secret (AWS key, token, private key, etc.) in the skill files. Secrets and data-exfiltration findings are **unappealable**: the server returns 422, no version row is created, and nothing clears them — not an evaluation, not `--override`, not an instance admin. Every other `critical`/`high` finding behaves differently now; it creates the version and holds it (next section).
 
 **Fix:**
-1. Run `skael scan <dir>` locally to see every finding with file and line numbers. Exit codes: `0` = clean, `1` = warn/high, `2` = critical.
+1. Run `skael scan <dir>` locally to see every finding with file and line numbers. Exit codes: `0` = clean, `1` = findings, `2` = the scan could not run.
 2. Remove or replace the secret. Use environment variables or `~/.skael/config.json` patterns instead of hard-coded values.
 3. Re-publish. There is no override for this class, even for an instance admin — a deliberate example of an AWS key in documentation still has to come out of the bundle. `--override` and `--skip-local-scan` do not help: `--override` applies to appealable findings only, and `--skip-local-scan` skips the client-side pre-check while the server scans again and refuses on its own.
 

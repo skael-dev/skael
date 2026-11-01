@@ -48,15 +48,7 @@ func init() {
 func runContest(cmd *cobra.Command, args []string) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
@@ -64,16 +56,14 @@ func runContest(cmd *cobra.Command, args []string) error {
 	for _, arg := range args {
 		name, version, err := contest.ParseCandidate(arg)
 		if err != nil {
-			ui.Errorf("%s", err)
-			os.Exit(1)
+			return usageError("invalid_candidate", err.Error(), "")
 		}
 		candidates = append(candidates, client.ContestCandidate{Skill: name, Version: version})
 	}
 
 	result, err := c.CreateContest(candidates, contestSuite, contestTier, contestAttempts)
 	if err != nil {
-		ui.Errorf("%s", err)
-		os.Exit(1)
+		return apiFailure(err)
 	}
 
 	if !contestWait {
@@ -86,8 +76,7 @@ func runContest(cmd *cobra.Command, args []string) error {
 
 	final, err := waitForContest(c, result.ID)
 	if err != nil {
-		ui.Errorf("%s", err)
-		os.Exit(1)
+		return apiFailure(err)
 	}
 	if ui.JSONMode {
 		return json.NewEncoder(os.Stdout).Encode(final)

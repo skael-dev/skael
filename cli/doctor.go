@@ -182,10 +182,13 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		for i, r := range results {
 			checks[i] = r.check
 		}
-		return ui.PrintJSON(struct {
+		if err := ui.PrintJSON(struct {
 			Checks  []doctorCheck `json:"checks"`
 			Healthy bool          `json:"healthy"`
-		}{Checks: checks, Healthy: healthy})
+		}{Checks: checks, Healthy: healthy}); err != nil {
+			return err
+		}
+		return doctorExit(cfgErr, healthy)
 	}
 
 	// ── Styled output (visually identical to original) ────────────────────────
@@ -213,5 +216,15 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		fmt.Sprintf("%d not applicable", notApplicable),
 	)
 
+	return doctorExit(cfgErr, healthy)
+}
+
+func doctorExit(cfgErr error, healthy bool) error {
+	switch {
+	case cfgErr != nil:
+		return renderedExit(exitUsage)
+	case !healthy:
+		return renderedExit(exitAPI)
+	}
 	return nil
 }

@@ -1,66 +1,63 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 
 	"github.com/skael-dev/skael/internal/ui"
+	"github.com/skael-dev/skael/skills"
 	"github.com/spf13/cobra"
 )
 
 var skillNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
 var initCmd = &cobra.Command{
-	Use:   "init <name>",
-	Short: "Scaffold a new skill directory",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runInit,
+	Use:   "init [name]",
+	Short: "Install the skael skill into this repo, or scaffold a new skill directory",
+	Long: `With no argument, write the skael skill to .agents/skills/skael/SKILL.md. A
+second run changes nothing. A changed file is refused unless --force is given.
+
+With a name, scaffold a new skill directory.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runInit,
 }
 
+var initForce bool
+
 func init() {
+	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite a changed skael skill")
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return initSkaelSkill()
+	}
+	if initForce {
+		return usageError("invalid_flags", "--force applies only with no skill name", "skael init --force")
+	}
 	name := args[0]
 
 	if !skillNameRe.MatchString(name) {
-		if ui.JSONMode {
-			ui.PrintJSONError(
-				fmt.Sprintf("invalid skill name %q: must match ^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$", name),
-				"invalid_name",
-				"use lowercase letters, digits, colons, dots, or hyphens",
-			)
-			return nil
+		return &exitError{
+			exit: exitUsage, code: "invalid_name",
+			msg:        fmt.Sprintf("invalid skill name %q: must match ^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$", name),
+			suggestion: "use lowercase letters, digits, colons, dots, or hyphens",
 		}
-		ui.Error(ui.ErrorDetail{
-			Message:    fmt.Sprintf("invalid skill name %q", name),
-			Context:    "must match ^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$",
-			Suggestion: "use lowercase letters, digits, colons, dots, or hyphens",
-		})
-		return fmt.Errorf("invalid skill name")
 	}
 
 	dir := name
 	if _, err := os.Stat(dir); err == nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(fmt.Sprintf("directory %q already exists", dir), "dir_exists", "")
-			return nil
-		}
-		ui.Errorf("directory %q already exists", dir)
-		return fmt.Errorf("directory already exists")
+		return usageError("dir_exists", fmt.Sprintf("directory %q already exists", dir), "")
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "mkdir_error", "")
-			return nil
-		}
-		ui.Errorf("create directory: %s", err)
-		return fmt.Errorf("create directory: %w", err)
+		return failure("mkdir_error", fmt.Sprintf("create directory: %s", err), "")
 	}
 
 	content := fmt.Sprintf(`---
@@ -79,12 +76,7 @@ Describe what this skill does and when an agent should use it.
 
 	skillMdPath := filepath.Join(dir, "SKILL.md")
 	if err := os.WriteFile(skillMdPath, []byte(content), 0o644); err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "write_error", "")
-			return nil
-		}
-		ui.Errorf("write SKILL.md: %s", err)
-		return fmt.Errorf("write SKILL.md: %w", err)
+		return failure("write_error", fmt.Sprintf("write SKILL.md: %s", err), "")
 	}
 
 	if ui.JSONMode {
@@ -102,4 +94,59 @@ Describe what this skill does and when an agent should use it.
 
 	ui.Success("Created %s/SKILL.md — edit the description, then run: skael publish %s", name, name)
 	return nil
+}
+
+func initSkaelSkill() error {
+	path := filepath.Join(".agents", "skills", "skael", "SKILL.md")
+
+	status := "created"
+	current, err := os.ReadFile(path)
+	switch {
+	case err == nil && bytes.Equal(current, skills.Skael):
+		status = "unchanged"
+	case err == nil && !initForce:
+		return usageError("file_changed", path+" differs from the skill this binary carries", "skael init --force")
+	case err == nil:
+		status = "overwritten"
+	case !errors.Is(err, os.ErrNotExist):
+		return failure("read_error", fmt.Sprintf("read %s: %s", path, err), "")
+	}
+
+	if status != "unchanged" {
+		if err := writeFileAtomically(path, skills.Skael); err != nil {
+			return failure("write_error", fmt.Sprintf("write %s: %s", path, err), "")
+		}
+	}
+
+	if ui.JSONMode {
+		return ui.PrintJSON(map[string]string{"path": path, "status": status})
+	}
+	if status == "unchanged" {
+		ui.Info("%s is up to date", path)
+		return nil
+	}
+	ui.Success("Wrote %s", path)
+	return nil
+}
+
+func writeFileAtomically(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".SKILL-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

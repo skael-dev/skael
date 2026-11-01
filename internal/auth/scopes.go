@@ -90,6 +90,8 @@ var routeRules = []RouteRule{
 
 	// MCP. Each tool checks its own scope.
 	{Method: http.MethodPost, Pattern: "/mcp", Scopes: []string{ScopeSkillsRead, ScopeSetsRead}, SetLimited: true},
+	// GET only answers 405. It has no scope, so a restricted key gets 403 first.
+	read("/mcp"),
 
 	// No scope: people only. Public routes are listed too, because the auth
 	// middleware passes them before this table applies.

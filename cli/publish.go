@@ -49,25 +49,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	skillMdPath := filepath.Join(dir, "SKILL.md")
 	data, err := os.ReadFile(skillMdPath)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("SKILL.md not found in "+dir, "missing_skill_md", "")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "SKILL.md not found in " + dir,
-			Suggestion: "create a SKILL.md with name and description frontmatter",
-		})
-		return nil
+		return usageError("missing_skill_md", "SKILL.md not found in "+dir, "create a SKILL.md with name and description frontmatter")
 	}
 
 	fm, _, err := skill.ParseFrontmatter(string(data))
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("failed to parse SKILL.md frontmatter: "+err.Error(), "parse_error", "")
-			return nil
-		}
-		ui.Errorf("failed to parse SKILL.md frontmatter: %s", err)
-		return nil
+		return usageError("parse_error", "failed to parse SKILL.md frontmatter: "+err.Error(), "")
 	}
 
 	// Resolve name: frontmatter first, then directory basename
@@ -93,12 +80,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	report, err := scan.ScanDir(dir)
 	if err != nil {
 		sp.Stop()
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "scan_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return failure("scan_error", err.Error(), "")
 	}
 	sp.Stop()
 
@@ -130,14 +112,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	localDecision := gate.Decide(*report, nil, gate.OwnerState{}, gate.Policy{})
 
 	if localDecision.Outcome == gate.Block && !skipLocalScan && !publishOverride {
-		if ui.JSONMode {
-			return encodeDecision(localDecision)
-		}
-		printUnappealable(localDecision)
-		ui.Error(ui.ErrorDetail{
-			Message: "publish blocked: bundle contains unappealable findings",
-		})
-		return nil
+		return publishBlocked(localDecision, "publish blocked: bundle contains unappealable findings")
 	}
 
 	if localDecision.Held() && !skipLocalScan && !publishOverride && !ui.JSONMode {
@@ -152,12 +127,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	archive, _, entries, err := skill.Pack(dir)
 	if err != nil {
 		sp.Stop()
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "pack_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return failure("pack_error", err.Error(), "")
 	}
 	sp.Stop()
 
@@ -169,15 +139,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	// Load config and create API client
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
@@ -186,23 +148,13 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	existing, err := c.GetSkill(name)
 	if err != nil {
 		sp.Stop()
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 	if existing == nil {
 		_, err = c.CreateSkill(name, description)
 		if err != nil {
 			sp.Stop()
-			if ui.JSONMode {
-				ui.PrintJSONError(err.Error(), "api_error", "")
-				return nil
-			}
-			ui.Errorf("%s", err)
-			return nil
+			return apiFailure(err)
 		}
 	}
 
@@ -215,19 +167,11 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			// override, clears it. Suggesting --override here would send the
 			// operator after a permission that cannot help.
 			if decision != nil && decision.Outcome == gate.Block {
-				if ui.JSONMode {
-					return encodeDecision(*decision)
-				}
-				printUnappealable(*decision)
-				ui.Error(ui.ErrorDetail{
-					Message: "publish blocked: archive contains unappealable findings",
-				})
-				return nil
+				return publishBlocked(*decision, "publish blocked: archive contains unappealable findings")
 			}
 
 			if ui.JSONMode {
-				ui.PrintJSONError("publish blocked by server-side security scan", "scan_blocked", blockedSuggestion)
-				return nil
+				return failure("scan_blocked", "publish blocked by server-side security scan", blockedSuggestion)
 			}
 			// Show what the server actually objected to. Repeating the local
 			// scan's verdict here would be guesswork — the server may run an
@@ -241,18 +185,9 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			} else {
 				fmt.Fprintf(os.Stdout, "\n  %s\n", apiErr.Message)
 			}
-			ui.Error(ui.ErrorDetail{
-				Message:    "publish blocked by server-side security scan",
-				Suggestion: blockedSuggestion,
-			})
-			return nil
+			return failure("scan_blocked", "publish blocked by server-side security scan", blockedSuggestion)
 		}
-		if ui.JSONMode {
-			ui.PrintJSONError(pubErr.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", pubErr)
-		return nil
+		return apiFailure(pubErr)
 	}
 
 	if ui.JSONMode {
@@ -366,14 +301,12 @@ func containsReason(reasons []string, want string) bool {
 	return false
 }
 
-// encodeDecision writes a decision as the sole key of a JSON object, matching
-// the shape the server returns on a 422 so a CI job can read
-// .decision.outcome without caring which side decided.
-func encodeDecision(d gate.Decision) error {
-	out := struct {
-		Decision gate.Decision `json:"decision"`
-	}{Decision: d}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+// publishBlocked keeps the decision at the envelope's top level, matching the
+// shape the server returns on a 422, so a CI job can read .decision.outcome
+// without caring which side decided.
+func publishBlocked(d gate.Decision, msg string) *exitError {
+	if !ui.JSONMode {
+		printUnappealable(d)
+	}
+	return &exitError{exit: exitAPI, code: "publish_blocked", msg: msg, extra: map[string]any{"decision": d}}
 }
