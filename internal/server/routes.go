@@ -23,6 +23,7 @@ import (
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/scan"
+	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
 )
@@ -126,6 +127,11 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Auth.
 	auth.RegisterRoutes(api, d.SessionManager, d.UserStore, d.KeyStore, cfg.DisableSignup)
+	auth.RegisterServiceAccountRoutes(api, d.Pool, d.KeyStore)
+
+	// Sets.
+	setStore := sets.NewStore(d.Pool)
+	sets.RegisterRoutes(api, router, setStore, d.Storage)
 
 	// Skills. The eval queue and suite registry are constructed here (ahead
 	// of their own route registration below) because publish needs them to

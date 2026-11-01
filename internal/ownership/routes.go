@@ -31,7 +31,7 @@ func validateMembers(ctx context.Context, users UserLookup, memberIDs []string) 
 		if err != nil {
 			return fmt.Errorf("ownership: look up member %q: %w", id, err)
 		}
-		if row == nil {
+		if row == nil || row.Kind == auth.KindService {
 			return huma.Error422UnprocessableEntity(fmt.Sprintf("unknown user id %q", id))
 		}
 	}

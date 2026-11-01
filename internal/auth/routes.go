@@ -111,7 +111,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		if err != nil {
 			return nil, fmt.Errorf("login: lookup user: %w", err)
 		}
-		if row == nil || !CheckPassword(row.PasswordHash, input.Body.Password) {
+		if row == nil || row.Kind == KindService || !CheckPassword(row.PasswordHash, input.Body.Password) {
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 
@@ -179,7 +179,9 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 	// POST /api/auth/keys — create API key
 	// -----------------------------------------------------------------
 	type createKeyBody struct {
-		Name string `json:"name" minLength:"1" maxLength:"64"`
+		Name   string   `json:"name" minLength:"1" maxLength:"64"`
+		Scopes []string `json:"scopes,omitempty"`
+		SetID  string   `json:"set_id,omitempty"`
 	}
 	type createKeyInput struct {
 		Body createKeyBody
@@ -190,6 +192,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		Key       string    `json:"key"`
 		Prefix    string    `json:"prefix"`
 		CreatedAt time.Time `json:"created_at"`
+		Scopes    []string  `json:"scopes"`
 	}
 	type createKeyOutput struct {
 		Body createKeyResponse
@@ -216,7 +219,11 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 			return nil, fmt.Errorf("create key: hash: %w", err)
 		}
 
-		row, err := keyStore.Create(ctx, userID, input.Body.Name, prefix, keyHash)
+		setID, err := validateKeyLimits(ctx, keyStore, input.Body.Scopes, input.Body.SetID)
+		if err != nil {
+			return nil, err
+		}
+		row, err := keyStore.CreateLimited(ctx, userID, input.Body.Name, prefix, keyHash, input.Body.Scopes, setID)
 		if err != nil {
 			return nil, fmt.Errorf("create key: store: %w", err)
 		}
@@ -227,6 +234,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 			Key:       fullKey,
 			Prefix:    prefix,
 			CreatedAt: row.CreatedAt,
+			Scopes:    row.Scopes,
 		}}, nil
 	})
 
@@ -359,7 +367,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		if err != nil {
 			return nil, fmt.Errorf("admin reset: lookup: %w", err)
 		}
-		if target == nil {
+		if target == nil || target.Kind == KindService {
 			return nil, huma.Error404NotFound("user not found")
 		}
 
@@ -489,7 +497,7 @@ func RegisterRoutes(api huma.API, sessionManager *scs.SessionManager, userStore 
 		if err != nil {
 			return nil, fmt.Errorf("set role: lookup: %w", err)
 		}
-		if target == nil {
+		if target == nil || target.Kind == KindService {
 			return nil, huma.Error404NotFound("user not found")
 		}
 		// Defence in depth: the id check above already covers the caller, but

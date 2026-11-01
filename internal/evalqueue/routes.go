@@ -199,7 +199,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 		},
 	}, func(ctx context.Context, input *claimInput) (*claimOutput, error) {
 		u := auth.UserFromContext(ctx)
-		if !u.IsPrivileged() {
+		if !u.IsPrivileged() && !auth.HasScope(ctx, auth.ScopeEvalWork) {
 			return nil, huma.Error403Forbidden("claim eval job: privileged callers only")
 		}
 

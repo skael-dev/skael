@@ -167,6 +167,12 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 			return suiteUploadResult(rec, err, input.Body.Skill, "evalsuite: store derived suite failed")
 		}
 
+		// eval:work exists to run a claimed job. Without this, a worker key could
+		// store an authored suite, and a score against that suite clears a hold.
+		if auth.KeyFromContext(ctx).Restricted() {
+			return nil, huma.Error403Forbidden("upload eval suite: a scoped key must present a job claim")
+		}
+
 		if input.Body.Unreviewed {
 			rec, err = reg.PutUnreviewed(ctx, input.Body.Skill, archive, checks,
 				input.Body.SpecVersion, uploadedBy, input.Body.Spec)

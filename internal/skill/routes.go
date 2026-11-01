@@ -950,6 +950,15 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	registerReviewRoutes(api, store, opts.Ownership)
 }
 
+// CanReadVersion is the read rule for a version's content. Any person may read
+// any version, and the worker must reach a held version to score it. Another
+// scoped key is a machine that would run what it fetches, so it gets only a
+// released version.
+func CanReadVersion(ctx context.Context, ver *Version) bool {
+	key := auth.KeyFromContext(ctx)
+	return !key.Restricted() || ver.GateState == "released" || auth.HasScope(ctx, auth.ScopeEvalWork)
+}
+
 // makeDownloadHandler returns a handler that streams the archive for a specific
 // version of a skill.
 func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFunc {
@@ -968,6 +977,11 @@ func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFun
 			return
 		}
 		if ver == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if !CanReadVersion(r.Context(), ver) {
 			http.NotFound(w, r)
 			return
 		}
