@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ShieldOff, Users } from "lucide-react";
@@ -31,7 +32,7 @@ export function OwnersCard({ skillName }: { skillName: string }) {
 
       <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden px-3.5 py-3">
         {query.isLoading ? (
-          <div className="text-[13px] text-text-tertiary">Loading…</div>
+          <Skeleton className="h-4 w-40" />
         ) : query.isError ? (
           <div className="text-[13px] text-danger">Couldn't load owners</div>
         ) : unowned ? (

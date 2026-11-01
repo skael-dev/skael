@@ -1,3 +1,4 @@
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { getEvalSuiteMeta, getSkillQuality, getSkillQualityVersion } from "@/api/sdk.gen";
 import { EvalStatus } from "./eval-status";
@@ -413,7 +414,7 @@ export function QualityReport({
   }
 
   if (summaryQuery.isLoading) {
-    return <div className="text-sm text-text-secondary">Loading quality report…</div>;
+    return <RowsSkeleton rows={4} />;
   }
 
   if (summaryQuery.isError || !summary) {

@@ -12,6 +12,9 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
 
 type UnregisteredSkill = {
   name: string;
@@ -77,6 +80,14 @@ export function UnregisteredTab({ days }: { days: number }) {
   });
 
   const skills = data ?? [];
+  const listRow = useListNavigation<string>((name) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    }),
+  );
   const anyChecked = selected.size > 0;
   const allChecked = skills.length > 0 && selected.size === skills.length;
 
@@ -163,22 +174,16 @@ export function UnregisteredTab({ days }: { days: number }) {
 
   if (isLoading) {
     return (
-      <div className="space-y-px">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-12 bg-bg-secondary animate-pulse-soft rounded mb-1" />
-        ))}
-      </div>
+      <RowsSkeleton rows={4} />
     );
   }
 
   if (skills.length === 0) {
     return (
-      <div className="text-center py-16 text-text-secondary">
-        <div className="text-sm mb-2">No unregistered skills detected</div>
-        <div className="text-xs text-text-tertiary">
-          All skill activations match registered skills
-        </div>
-      </div>
+      <EmptyState
+        className="py-16"
+        message="No unregistered skills detected. Every activation matches a registered skill, so there is nothing to do here."
+      />
     );
   }
 
@@ -214,6 +219,9 @@ export function UnregisteredTab({ days }: { days: number }) {
         </div>
       )}
 
+      {/* Seven fixed columns do not fit a phone, so the list scrolls sideways. */}
+      <div className="overflow-x-auto">
+      <div className="min-w-[640px]">
       {/* Column headers */}
       <div
         className="grid items-center gap-4 px-3.5 py-2 text-[10px] text-text-tertiary uppercase tracking-[0.08em] border-b border-border"
@@ -232,6 +240,7 @@ export function UnregisteredTab({ days }: { days: number }) {
       {skills.map((sk) => (
         <div
           key={sk.name}
+          {...listRow(sk.name)}
           className="group grid items-center gap-4 px-3.5 py-3 border-b border-border hover:bg-bg-secondary transition-colors"
           style={{ gridTemplateColumns: "28px 1fr 80px 60px 100px 100px 36px" }}
         >
@@ -315,6 +324,8 @@ export function UnregisteredTab({ days }: { days: number }) {
           </div>
         </div>
       ))}
+      </div>
+      </div>
     </div>
   );
 }

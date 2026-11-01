@@ -135,8 +135,8 @@ export function ScanFindings({ findings, scanStatus }: ScanFindingsProps) {
         <ShieldCheck size={28} className="text-accent" />
         <div className="text-sm text-text-secondary">
           {scanStatus === "clean"
-            ? "No security findings detected."
-            : "No findings to display."}
+            ? "No security findings detected. No action needed."
+            : "No findings to display. Publish a new version to run a scan."}
         </div>
       </div>
     );

@@ -1,3 +1,7 @@
+import { useNavigate } from "react-router-dom";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
+import { prefersReducedMotion } from "@/lib/motion";
 import { useQuery } from "@tanstack/react-query";
 import { Target } from "lucide-react";
 import {
@@ -106,13 +110,19 @@ const chartConfig: ChartConfig = {
 };
 
 export function Quadrant() {
+  const navigate = useNavigate();
+  const listRow = useListNavigation<string>((name) => navigate(`/skills/${name}`));
   const query = useQuery({
     queryKey: ["analytics", "quadrant"],
     queryFn: fetchAllSkills,
   });
 
   if (query.isLoading) {
-    return <div className="p-6 text-sm text-text-secondary">Loading…</div>;
+    return (
+      <div className="p-6">
+        <RowsSkeleton rows={6} />
+      </div>
+    );
   }
 
   if (query.isError) {
@@ -212,6 +222,7 @@ export function Quadrant() {
                 }}
               />
               <Scatter
+                isAnimationActive={!prefersReducedMotion()}
                 data={scored.map((s) => ({
                   name: s.name,
                   activations: s.activations,
@@ -251,7 +262,7 @@ export function Quadrant() {
             </div>
             {attention.length === 0 ? (
               <div className="text-sm text-text-secondary">
-                No high-activation skills are scoring low right now.
+                No high-activation skills are scoring low right now. Nothing to fix.
               </div>
             ) : (
               <table className="w-full text-sm">
@@ -264,7 +275,7 @@ export function Quadrant() {
                 </thead>
                 <tbody>
                   {attention.map((s) => (
-                    <tr key={s.name} data-testid="attention-row" className="border-t border-border">
+                    <tr key={s.name} {...listRow(s.name)} data-testid="attention-row" className="border-t border-border">
                       <td className="py-2 text-text-primary">{s.name}</td>
                       <td className="py-2 text-text-secondary">{s.activations}</td>
                       <td className="py-2">
@@ -279,13 +290,13 @@ export function Quadrant() {
         </>
       )}
 
-      <div className="grid grid-cols-2 gap-6 pt-4 border-t border-border">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4 border-t border-border">
         <div>
           <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-2">
             {unscored.length} skill{unscored.length === 1 ? "" : "s"} not scored
           </div>
           {unscored.length === 0 ? (
-            <div className="text-xs text-text-tertiary">Every skill has been evaluated.</div>
+            <div className="text-xs text-text-tertiary">Every skill has been evaluated. Nothing to run.</div>
           ) : (
             <ul className="flex flex-col gap-1.5">
               {unscored.map((s) => (
@@ -303,7 +314,7 @@ export function Quadrant() {
             {incomplete.length} incomplete
           </div>
           {incomplete.length === 0 ? (
-            <div className="text-xs text-text-tertiary">No incomplete panels.</div>
+            <div className="text-xs text-text-tertiary">No incomplete panels. Nothing to re-run.</div>
           ) : (
             <ul className="flex flex-col gap-1.5">
               {incomplete.map((s) => (

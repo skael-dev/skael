@@ -86,6 +86,25 @@ body {
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
+/* The list cursor from the keyboard layer. */
+[data-list-row]:focus-visible {
+  background: var(--color-bg-tertiary);
+  outline: 1px solid var(--color-border-active);
+  outline-offset: -1px;
+}
+
+/* Turns off CSS motion everywhere. The charts and scroll calls check
+   prefersReducedMotion, because they animate from script. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @layer components {
   /* The fixed columns are wider than a phone viewport, so below 900px the row
      is a flex stack and the meta cells take a full-width line under the name.

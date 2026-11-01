@@ -1,10 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, Check, Plus, Trash2, AlertTriangle, Key, Lock, Users, RotateCcw, Loader2 } from "lucide-react";
+import { Copy, Check, Plus, Trash2, AlertTriangle, Lock, RotateCcw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { listSkills, listApiKeys, createApiKey, deleteApiKey, getCapabilities } from "@/api/sdk.gen";
 import type { ListBody, ListKeysBody, ApiKeyInfo, CreateKeyResponse } from "@/api/types.gen";
 import { useAuth } from "@/app/auth-provider";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
+import { scrollBehavior } from "@/lib/motion";
+import { relativeTime } from "@/lib/relative-time";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,24 +30,6 @@ const ALL_SECTIONS = [
 ] as const;
 
 type SectionId = (typeof ALL_SECTIONS)[number]["id"];
-
-// ── Relative time helper ─────────────────────────────────────
-function relativeTime(dateStr: string | null): string {
-  if (!dateStr) return "never";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 30) return `${diffDay}d ago`;
-  const diffMon = Math.floor(diffDay / 30);
-  return `${diffMon}mo ago`;
-}
 
 // ── Section header ───────────────────────────────────────────
 function SectionHeader({
@@ -170,6 +157,7 @@ function ApiSection() {
   });
 
   const keys = keysData?.keys ?? [];
+  const keyRow = useListNavigation<ApiKeyInfo>(setDeleteTarget);
 
   const createMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -221,9 +209,7 @@ function ApiSection() {
       <Card>
         {/* Key list */}
         {isLoading ? (
-          <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">
-            Loading keys...
-          </div>
+          <RowsSkeleton rows={2} />
         ) : keysError ? (
           <div className="px-3.5 py-6 text-center">
             <div className="text-[13px] text-text-secondary mb-1">Couldn't load API keys</div>
@@ -235,17 +221,12 @@ function ApiSection() {
             </button>
           </div>
         ) : keys.length === 0 ? (
-          <div className="px-3.5 py-6 text-center">
-            <Key className="size-5 text-text-tertiary mx-auto mb-2" />
-            <div className="text-[13px] text-text-secondary mb-1">No API keys yet</div>
-            <div className="text-[11px] text-text-tertiary">
-              Create a key to authenticate CLI and API access.
-            </div>
-          </div>
+          <EmptyState message="No API keys yet. Create a key to authenticate CLI and API access." />
         ) : (
           keys.map((key, i) => (
             <div
               key={key.id}
+              {...keyRow(key)}
               className="flex items-center gap-3 px-3.5 py-3"
               style={{
                 borderBottom:
@@ -261,12 +242,13 @@ function ApiSection() {
                     {key.prefix}...
                   </code>
                 </div>
-                <div className="flex items-center gap-3 text-[11px] text-text-tertiary">
+                <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-text-tertiary">
                   <span>Last used: {relativeTime(key.last_used_at)}</span>
                   <span>Created: {relativeTime(key.created_at)}</span>
                 </div>
               </div>
               <button
+                aria-label={`Delete ${key.name}`}
                 onClick={() => setDeleteTarget(key)}
                 className="flex items-center justify-center size-7 text-text-tertiary hover:text-destructive border border-transparent hover:border-destructive/30 rounded-[5px] cursor-pointer transition-colors duration-100"
               >
@@ -607,6 +589,7 @@ function TeamSection() {
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pendingRoleUserId, setPendingRoleUserId] = useState<string | null>(null);
+  const userRow = useListNavigation<TeamUser>(setResetTarget);
 
   const { data: users, isLoading, isError, refetch } = useQuery({
     queryKey: ["admin", "users"],
@@ -689,17 +672,14 @@ function TeamSection() {
       <SectionHeader title="Team" desc="Manage team members and credentials" />
       <Card>
         {isLoading ? (
-          <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">Loading team members...</div>
+          <RowsSkeleton rows={3} />
         ) : isError ? (
           <div className="px-3.5 py-6 text-center">
             <div className="text-[13px] text-text-secondary mb-1">Couldn't load team</div>
             <button onClick={() => refetch()} className="text-[11px] text-accent hover:underline">Retry</button>
           </div>
         ) : !users || users.length === 0 ? (
-          <div className="px-3.5 py-6 text-center">
-            <Users className="size-5 text-text-tertiary mx-auto mb-2" />
-            <div className="text-[13px] text-text-secondary">No team members yet</div>
-          </div>
+          <EmptyState message="No team members yet. Share this server's URL so a teammate can sign up." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -716,6 +696,7 @@ function TeamSection() {
                 {users.map((u, i) => (
                   <tr
                     key={u.id}
+                    {...userRow(u)}
                     className="text-[13px]"
                     style={{ borderBottom: i < users.length - 1 ? "1px solid var(--color-border)" : "none" }}
                   >
@@ -901,7 +882,7 @@ export function Settings() {
   const scrollTo = (id: SectionId) => {
     setActiveSection(id);
     sectionRefs.current[id]?.scrollIntoView({
-      behavior: "smooth",
+      behavior: scrollBehavior(),
       block: "start",
     });
   };
@@ -910,7 +891,7 @@ export function Settings() {
     <div className="flex h-full overflow-hidden">
       {/* Sub-nav */}
       <div
-        className="w-[200px] shrink-0 bg-bg-primary px-3 py-6"
+        className="hidden sm:block w-[200px] shrink-0 bg-bg-primary px-3 py-6"
         style={{ borderRight: "1px solid var(--color-border)" }}
       >
         <div className="text-[11px] text-text-tertiary font-mono uppercase tracking-widest px-2.5 pb-3">
@@ -933,7 +914,7 @@ export function Settings() {
       </div>
 
       {/* Scrollable content */}
-      <div ref={scrollRef} className="flex-1 overflow-auto px-10 py-10">
+      <div ref={scrollRef} className="flex-1 min-w-0 overflow-auto px-4 py-6 sm:px-10 sm:py-10">
         <div className="max-w-[640px] mx-auto flex flex-col gap-9">
           <div
             ref={(el) => {

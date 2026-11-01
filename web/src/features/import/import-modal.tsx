@@ -242,7 +242,7 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
 
             {resolved.skills.length === 0 && (
               <p className="text-sm text-text-tertiary text-center py-4">
-                No skills found in this repository.
+                No skills found in this repository. Check the URL, or try another repository.
               </p>
             )}
 
