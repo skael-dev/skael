@@ -51,7 +51,7 @@ func classifyRequest(r *http.Request) rateLimitClass {
 		return classAuth
 	case r.URL.Path == "/api/events":
 		return classEvents
-	case r.Method == http.MethodGet || r.Method == http.MethodHead:
+	case r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/mcp":
 		return classRead
 	case r.URL.Path == "/api/eval/suites" && r.Method == http.MethodPost:
 		return classSuites
