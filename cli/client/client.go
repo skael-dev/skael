@@ -246,16 +246,20 @@ func (c *Client) doHeaders(method, path string, body io.Reader, contentType stri
 		var envelope struct {
 			Title  string `json:"title"`
 			Detail string `json:"detail"`
+			Error  string `json:"error"`
 			Errors []struct {
 				Message string `json:"message"`
 			} `json:"errors"`
 		}
-		msg := string(raw)
+		msg := strings.TrimSpace(string(raw))
 		if json.Unmarshal(raw, &envelope) == nil {
-			if envelope.Detail != "" {
+			switch {
+			case envelope.Detail != "":
 				msg = envelope.Detail
-			} else if envelope.Title != "" {
+			case envelope.Title != "":
 				msg = envelope.Title
+			case envelope.Error != "":
+				msg = envelope.Error
 			}
 		}
 

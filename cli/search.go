@@ -25,27 +25,14 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
 	results, err := c.SearchSkills(query, 20)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	if ui.JSONMode {

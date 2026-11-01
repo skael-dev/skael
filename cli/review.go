@@ -67,12 +67,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	version, err := strconv.Atoi(args[1])
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("version must be an integer", "invalid_version", "")
-			return nil
-		}
-		ui.Errorf("version must be an integer: %s", args[1])
-		return nil
+		return usageError("invalid_version", "version must be an integer: "+args[1], "")
 	}
 
 	// Validate the flag combination locally before any request — a round
@@ -80,21 +75,11 @@ func runReview(cmd *cobra.Command, args []string) error {
 	// missing, is a wasted call and a worse experience than failing fast.
 	if reviewApprove == reviewReject {
 		msg := "exactly one of --approve or --reject is required"
-		if ui.JSONMode {
-			ui.PrintJSONError(msg, "invalid_flags", "")
-			return nil
-		}
-		ui.Errorf("%s", msg)
-		return fmt.Errorf("%s", msg)
+		return usageError("invalid_flags", msg, "")
 	}
 	if reviewReason == "" {
 		msg := "--reason is required"
-		if ui.JSONMode {
-			ui.PrintJSONError(msg, "invalid_flags", "")
-			return nil
-		}
-		ui.Errorf("%s", msg)
-		return fmt.Errorf("%s", msg)
+		return usageError("invalid_flags", msg, "")
 	}
 	// --reason-kind, when given, must name a hold reason that actually
 	// exists. The server would 422 on anything else, but there is no reason
@@ -104,12 +89,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	if reviewReasonKind != "" && reviewReasonKind != gate.ReasonScan && reviewReasonKind != gate.ReasonOwnership {
 		msg := fmt.Sprintf("--reason-kind must be %q or %q, got %q",
 			gate.ReasonScan, gate.ReasonOwnership, reviewReasonKind)
-		if ui.JSONMode {
-			ui.PrintJSONError(msg, "invalid_flags", "")
-			return nil
-		}
-		ui.Errorf("%s", msg)
-		return fmt.Errorf("%s", msg)
+		return usageError("invalid_flags", msg, "")
 	}
 
 	action := "approve"
@@ -119,27 +99,14 @@ func runReview(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
 	ver, err := c.Review(name, version, action, reviewReason, reviewReasonKind)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	if ui.JSONMode {
@@ -183,15 +150,7 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
@@ -203,12 +162,7 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 	// second round trip once the version is known.
 	held, err := c.ReviewQueue()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	var entry *client.HeldVersion
@@ -216,12 +170,7 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 	if len(args) == 2 {
 		version, err = strconv.Atoi(args[1])
 		if err != nil {
-			if ui.JSONMode {
-				ui.PrintJSONError("version must be an integer", "invalid_version", "")
-				return nil
-			}
-			ui.Errorf("version must be an integer: %s", args[1])
-			return nil
+			return usageError("invalid_version", "version must be an integer: "+args[1], "")
 		}
 		for i := range held {
 			if held[i].SkillName == name && held[i].Version == version {
@@ -238,23 +187,13 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 		}
 		if version == 0 {
 			msg := fmt.Sprintf("no version of %s is held for review", name)
-			if ui.JSONMode {
-				ui.PrintJSONError(msg, "not_held", "")
-				return nil
-			}
-			ui.Errorf("%s", msg)
-			return nil
+			return failure("not_held", msg, "")
 		}
 	}
 
 	diff, err := c.DiffVersion(name, version)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	if ui.JSONMode {
