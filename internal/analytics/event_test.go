@@ -32,7 +32,7 @@ func TestStore_InsertAndQuery(t *testing.T) {
 		require.NoError(t, store.Insert(ctx, e))
 	}
 
-	summary, err := store.GetActivations(ctx, "code-review", 30)
+	summary, err := store.GetActivations(ctx, "code-review", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 
@@ -52,7 +52,7 @@ func TestStore_GetActivations_NoEvents(t *testing.T) {
 	store := analytics.NewStore(pool)
 	ctx := context.Background()
 
-	summary, err := store.GetActivations(ctx, "nonexistent", 30)
+	summary, err := store.GetActivations(ctx, "nonexistent", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 	require.Equal(t, 0, summary.TotalCount)
@@ -79,7 +79,7 @@ func TestStore_GetSkillTimeSeries(t *testing.T) {
 		require.NoError(t, store.Insert(ctx, e))
 	}
 
-	series, err := store.GetSkillTimeSeries(ctx, "code-review", 30)
+	series, err := store.GetSkillTimeSeries(ctx, "code-review", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.NotEmpty(t, series)
 
@@ -114,7 +114,7 @@ func TestStore_GetSkillTimeSeries_NoEvents(t *testing.T) {
 	store := analytics.NewStore(pool)
 	ctx := context.Background()
 
-	series, err := store.GetSkillTimeSeries(ctx, "nonexistent", 7)
+	series, err := store.GetSkillTimeSeries(ctx, "nonexistent", 7, analytics.EventFilter{})
 	require.NoError(t, err)
 	require.NotNil(t, series)
 	require.Equal(t, 8, len(series)) // 7 days + today, all with empty agents
@@ -168,7 +168,7 @@ func TestStore_GetOverview_SeparatesUnregisteredActivations(t *testing.T) {
 	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "made-up", Agent: "claude-code"}))
 	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "also-made-up", Agent: "claude-code"}))
 
-	overview, err := store.GetOverview(ctx, 30)
+	overview, err := store.GetOverview(ctx, 30, analytics.EventFilter{})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, overview.TotalActivations, "unknown names must not count as activations")
@@ -197,7 +197,7 @@ func TestStore_GetActivations_BreaksDownBySource(t *testing.T) {
 		SkillName: "demo", Agent: "cursor", EventSource: "transcript_scan",
 	}))
 
-	summary, err := store.GetActivations(ctx, "demo", 30)
+	summary, err := store.GetActivations(ctx, "demo", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, summary.BySource["tool_invocation"])
@@ -218,7 +218,7 @@ func TestStore_Insert_DefaultsEventSourceToToolInvocation(t *testing.T) {
 
 	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "demo", Agent: "claude-code"}))
 
-	summary, err := store.GetActivations(ctx, "demo", 30)
+	summary, err := store.GetActivations(ctx, "demo", 30, analytics.EventFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, summary.BySource["tool_invocation"],
 		"an event from an older hook script must default to tool_invocation")

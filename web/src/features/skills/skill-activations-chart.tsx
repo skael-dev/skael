@@ -61,8 +61,13 @@ export function SkillActivationsChart({
     );
   }
 
-  const series = data ?? [];
-  const agents = extractAgents(series);
+  const agents = extractAgents(data ?? []);
+  // The API omits an agent on a day with no activations. A missing value breaks
+  // the area, so an isolated day would draw nothing.
+  const series = (data ?? []).map((row) => ({
+    ...Object.fromEntries(agents.map((a) => [a, 0])),
+    ...row,
+  }));
   const hasData = series.some((row) =>
     agents.some((a) => (row[a] as number) > 0)
   );

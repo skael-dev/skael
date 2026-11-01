@@ -18,6 +18,7 @@ import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityReport } from "@/features/quality/quality-report";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { OwnersCard } from "@/features/skills/owners-card";
+import { RunOutcomes } from "@/features/skills/run-outcomes";
 import { cn } from "@/lib/utils";
 
 // ── Tag colors (mirrors skill-card) ──────────────────────────────
@@ -103,7 +104,7 @@ function SlidingTabs({
   }, [activeTab]);
 
   return (
-    <div role="tablist" aria-label="Skill sections" className="relative flex">
+    <div role="tablist" aria-label="Skill sections" className="relative flex w-max">
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -112,7 +113,7 @@ function SlidingTabs({
           aria-selected={activeTab === tab.id}
           onClick={() => onChange(tab.id)}
           className={cn(
-            "px-3.5 py-3 text-[13px] font-normal font-sans border-none bg-transparent cursor-pointer transition-colors duration-150 outline-none",
+            "shrink-0 whitespace-nowrap px-3.5 py-3 text-[13px] font-normal font-sans border-none bg-transparent cursor-pointer transition-colors duration-150 outline-none",
             activeTab === tab.id
               ? "text-text-primary font-medium"
               : "text-text-secondary hover:text-text-primary"
@@ -123,7 +124,7 @@ function SlidingTabs({
       ))}
       {/* Sliding accent underline */}
       <div
-        className="absolute bottom-[-1px] h-0.5 bg-accent rounded-sm transition-none"
+        className="absolute bottom-0 h-0.5 bg-accent rounded-sm transition-none"
         style={{
           left: indicator.left,
           width: indicator.width,
@@ -260,7 +261,47 @@ function TabContent({ skill }: { skill: Skill }) {
 const SOURCE_LABELS: Record<string, string> = {
   tool_invocation: "explicit tool invocation",
   transcript_scan: "transcript scan",
+  control_plane_report: "automated report",
 };
+
+// Hook activations come from developer machines and automated ones from a
+// consumer's own report, so each has its own count.
+function ActivationSplit({ data }: { data: ActivationSummary }) {
+  const consumers = Object.entries(data.by_consumer ?? {}).sort(([, a], [, b]) => b - a);
+  return (
+    <div className="mb-6">
+      <div className="grid grid-cols-2 gap-2.5">
+        {[
+          { label: "Hook activations", value: data.hook_activations },
+          { label: "Automated activations", value: data.automated_activations },
+        ].map((tile) => (
+          <div key={tile.label} className="p-3.5 bg-bg-secondary border border-border rounded-lg">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mb-2">
+              {tile.label}
+            </div>
+            <span className="text-[22px] font-medium text-text-primary leading-none tracking-tight tabular-nums">
+              {tile.value.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary mt-4 mb-3">
+        Automated by consumer
+      </div>
+      <div className="border border-border rounded-lg overflow-hidden">
+        {consumers.map(([consumer, count]) => (
+          <div
+            key={consumer}
+            className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border last:border-b-0"
+          >
+            <span className="font-mono text-[13px] text-text-primary min-w-0 break-all">{consumer}</span>
+            <span className="text-xs text-text-primary tabular-nums">{count.toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // ── Usage Tab ────────────────────────────────────────────────────
 function TabUsage({ skill, activations }: { skill: Skill; activations: ActivationSummary | undefined }) {
@@ -297,7 +338,7 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
   return (
     <div className="max-w-[760px]">
       {/* KPI row */}
-      <div className="grid grid-cols-4 gap-2.5 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-8">
         {[
           { label: `Invocations - ${period}d`, value: totalCount.toLocaleString() },
           { label: "Unique devs", value: uniqueDevs },
@@ -347,6 +388,8 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
           ))}
         </div>
       </div>
+
+      {data && data.automated_activations > 0 && <ActivationSplit data={data} />}
 
       {/* Activations chart */}
       <SkillActivationsChart skillName={skill.name} days={period} />
@@ -813,13 +856,13 @@ export function SkillDetail() {
         </div>
 
         {/* Title row */}
-        <div className="flex items-center justify-between gap-4 mb-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-3.5">
           <div className="flex items-center gap-3.5 min-w-0">
             {skillQuery.isLoading ? (
               <SkeletonLine className="h-9 w-64" />
             ) : (
               <>
-                <h1 className="font-mono text-3xl font-medium tracking-tight text-text-primary m-0 whitespace-nowrap">
+                <h1 className="font-mono text-3xl font-medium tracking-tight text-text-primary m-0 min-w-0 [overflow-wrap:anywhere]">
                   {skill?.name}
                 </h1>
                 <SpecBadge compliance={skill?.spec_compliance} />
@@ -957,7 +1000,7 @@ export function SkillDetail() {
       </div>
 
       {/* Sticky tab bar */}
-      <div className="sticky top-0 z-10 flex px-5 md:px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto">
+      <div className="sticky top-0 z-10 flex px-5 md:px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto overflow-x-auto [scrollbar-width:none]">
         <SlidingTabs tabs={TABS} activeTab={activeTab} onChange={changeTab} />
       </div>
 
@@ -989,7 +1032,12 @@ export function SkillDetail() {
           />
         )}
         {activeTab === "quality" && skill && (
-          <QualityReport skillName={skill.name} latestVersion={skill.latest_version} />
+          <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_360px] items-start">
+            <div className="min-w-0">
+              <QualityReport skillName={skill.name} latestVersion={skill.latest_version} />
+            </div>
+            <RunOutcomes skillName={skill.name} />
+          </div>
         )}
       </div>
     </div>

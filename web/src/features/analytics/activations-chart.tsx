@@ -7,6 +7,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import type { AnalyticsFilter } from "./analytics-filters";
 
 type DailyCount = {
   date: string;
@@ -20,18 +21,19 @@ const chartConfig = {
   },
 } satisfies ChartConfig;
 
-async function fetchTimeSeries(days: number): Promise<DailyCount[]> {
-  const res = await fetch(`/api/analytics/timeseries?days=${days}`, {
+async function fetchTimeSeries(days: number, filter: AnalyticsFilter): Promise<DailyCount[]> {
+  const query = new URLSearchParams({ days: String(days), ...filter });
+  const res = await fetch(`/api/analytics/timeseries?${query}`, {
     credentials: "include",
   });
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error("Failed to load the activations chart");
   return res.json();
 }
 
-export function ActivationsChart({ days }: { days: number }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["analytics", "timeseries", days],
-    queryFn: () => fetchTimeSeries(days),
+export function ActivationsChart({ days, filter }: { days: number; filter: AnalyticsFilter }) {
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["analytics", "timeseries", days, filter],
+    queryFn: () => fetchTimeSeries(days, filter),
   });
 
   if (isLoading) {
@@ -40,13 +42,28 @@ export function ActivationsChart({ days }: { days: number }) {
     );
   }
 
+  if (isError) {
+    return (
+      <div className="h-[200px] bg-bg-secondary border border-border rounded-lg flex flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 text-center">
+        <p className="text-sm text-text-tertiary">Couldn't load the chart. Check that the server is reachable, then retry.</p>
+        <button onClick={() => refetch()} className="text-accent text-sm hover:underline">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   const series = data ?? [];
   const hasData = series.some((d) => d.count > 0);
 
   if (!hasData) {
     return (
-      <div className="h-[200px] bg-bg-secondary border border-border rounded-lg flex items-center justify-center">
-        <p className="text-sm text-text-tertiary">No activation data for this period. Select a longer period.</p>
+      <div className="h-[200px] bg-bg-secondary border border-border rounded-lg flex items-center justify-center px-4 text-center">
+        <p className="text-sm text-text-tertiary">
+          {Object.keys(filter).length > 0
+            ? "No activations match this filter in this period. Clear the filter or select a longer period."
+            : "No activation data for this period. Select a longer period."}
+        </p>
       </div>
     );
   }

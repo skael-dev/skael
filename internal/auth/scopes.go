@@ -136,7 +136,7 @@ var routeRules = []RouteRule{
 	post("/api/import/resolve"), post("/api/import"), read("/api/import/sources"), post("/api/import/upload"),
 	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/skills"),
 	read("/api/skills/{name}/activations"), read("/api/skills/{name}/timeseries"),
-	read("/api/analytics/timeseries"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
+	read("/api/analytics/timeseries"), read("/api/analytics/consumers"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
 }
 
 // RouteRules returns the table for the coverage test.
