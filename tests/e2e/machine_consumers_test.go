@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,11 +16,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/server"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
+	"github.com/skael-dev/skael/internal/worker"
 )
 
 type machineAPI struct {
@@ -273,4 +276,39 @@ func TestBundleOfADeletedSkillIsGone(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	require.Contains(t, string(body), "alpha")
+}
+
+// The worker's whole loop on a key that can do nothing else, including a held
+// version it must fetch, plus the refusal that stops the key storing an
+// authored suite, whose score could clear a hold.
+func TestEvalWorkKeyRunsAJobAndNothingElse(t *testing.T) {
+	a := startMachineServer(t)
+	var owner struct {
+		Key string `json:"key"`
+	}
+	a.sessionJSON(http.MethodPost, "/api/auth/keys", map[string]any{"name": "owner"}, http.StatusCreated, &owner)
+	env := &evalEnv{serverURL: a.base, apiKey: owner.Key, c: client.New(a.base, owner.Key)}
+
+	env.createSkill(t, "deploy-helper")
+	ref := env.pushSuite(t, "deploy-helper", fixtureSuiteArchive(t))
+	env.publish(t, "deploy-helper", fixtureBundle(t))
+
+	_, key := a.serviceKey("eval-worker", []string{auth.ScopeEvalWork}, "")
+	status, _ := a.keyGet(key, "/api/skills")
+	require.Equal(t, http.StatusForbidden, status)
+	_, err := client.New(a.base, key).UploadEvalSuite(client.EvalSuiteUploadRequest{
+		Skill: "deploy-helper", Archive: fixtureSuiteArchive(t),
+	})
+	require.Error(t, err)
+
+	w, err := worker.New(worker.Config{WorkerID: "scoped", WorkRoot: t.TempDir()},
+		worker.NewHTTPAPI(a.base, key), stubRunner{headline: 70, suiteRef: ref}, nil)
+	require.NoError(t, err)
+	worked, err := w.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.True(t, worked)
+
+	q := env.getQuality(t, "deploy-helper")
+	require.True(t, q.Verified)
+	require.InDelta(t, 70.0, q.Headline, 0.001)
 }
