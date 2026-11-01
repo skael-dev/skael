@@ -150,6 +150,13 @@ func (s *Service) canDecide(ctx context.Context, name string, u *auth.User) (boo
 
 func (s *Service) reject(ctx context.Context, id, reason string, u *auth.User) (*Submission, error) {
 	return s.store.Decide(ctx, id, func(tx pgx.Tx, sub *Submission) error {
+		sk, err := s.skills.GetByName(ctx, sub.SkillName)
+		if err != nil {
+			return fmt.Errorf("reject: look up skill: %w", err)
+		}
+		if sk != nil {
+			sub.DiffAgainst = sk.LatestVersion
+		}
 		sub.State, sub.DecidedBy, sub.Reason = StateRejected, u.Email, reason
 		return audit.Record(ctx, tx, u.Email, "submission.reject", "submission:"+id, map[string]any{"skill": sub.SkillName, "reason": reason})
 	})
@@ -172,6 +179,9 @@ func (s *Service) approve(ctx context.Context, id, note string, edits []Submissi
 		existing, err := s.skills.GetByName(ctx, sub.SkillName)
 		if err != nil {
 			return fmt.Errorf("approve: look up skill: %w", err)
+		}
+		if existing != nil {
+			sub.DiffAgainst = existing.LatestVersion
 		}
 		if existing == nil {
 			if _, err := s.skills.Create(ctx, sub.SkillName, "", "", "", json.RawMessage(`{}`)); err != nil {

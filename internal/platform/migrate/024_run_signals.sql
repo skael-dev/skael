@@ -67,6 +67,8 @@ CREATE TABLE submissions (
     reason          TEXT NOT NULL DEFAULT '',
     edited          BOOLEAN NOT NULL DEFAULT FALSE,
     version         INT,
+    -- The served version at decision time, so a decided diff keeps its baseline.
+    diff_against    INT NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_submissions_state ON submissions (state, created_at DESC);

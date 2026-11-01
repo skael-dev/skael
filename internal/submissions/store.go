@@ -40,6 +40,7 @@ type Submission struct {
 	Reason        string            `json:"reason"`
 	Edited        bool              `json:"edited"`
 	Version       *int              `json:"version,omitempty"`
+	DiffAgainst   int               `json:"-"`
 	CreatedAt     time.Time         `json:"created_at"`
 }
 
@@ -52,13 +53,13 @@ type Store struct {
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 const columns = `id, skill_name, consumer, submitted_by, rationale, run_link, external_run_id,
-	archive_path, checksum, file_manifest, scan_result, state, decided_by, decided_at, reason, edited, version, created_at`
+	archive_path, checksum, file_manifest, scan_result, state, decided_by, decided_at, reason, edited, version, diff_against, created_at`
 
 func scanRow(row pgx.Row) (*Submission, error) {
 	var sub Submission
 	var manifest, scanResult []byte
 	err := row.Scan(&sub.ID, &sub.SkillName, &sub.Consumer, &sub.SubmittedBy, &sub.Rationale, &sub.RunLink, &sub.ExternalRunID,
-		&sub.ArchivePath, &sub.Checksum, &manifest, &scanResult, &sub.State, &sub.DecidedBy, &sub.DecidedAt, &sub.Reason, &sub.Edited, &sub.Version, &sub.CreatedAt)
+		&sub.ArchivePath, &sub.Checksum, &manifest, &scanResult, &sub.State, &sub.DecidedBy, &sub.DecidedAt, &sub.Reason, &sub.Edited, &sub.Version, &sub.DiffAgainst, &sub.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -139,8 +140,8 @@ func (s *Store) Decide(ctx context.Context, id string, fn func(tx pgx.Tx, sub *S
 		return nil, err
 	}
 	sub, err = scanRow(tx.QueryRow(ctx, `
-		UPDATE submissions SET state = $2, decided_by = $3, decided_at = now(), reason = $4, edited = $5, version = $6
-		WHERE id = $1 RETURNING `+columns, id, sub.State, sub.DecidedBy, sub.Reason, sub.Edited, sub.Version))
+		UPDATE submissions SET state = $2, decided_by = $3, decided_at = now(), reason = $4, edited = $5, version = $6, diff_against = $7
+		WHERE id = $1 RETURNING `+columns, id, sub.State, sub.DecidedBy, sub.Reason, sub.Edited, sub.Version, sub.DiffAgainst))
 	if err != nil {
 		return nil, err
 	}

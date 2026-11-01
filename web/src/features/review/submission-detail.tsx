@@ -225,8 +225,8 @@ function DiffSection({ id, state }: { id: string; state: string }) {
     <Section title={against === 0 ? "Diff · new skill" : `Diff against v${against}`}>
       {state !== "pending" && against !== 0 && (
         <p className="text-xs text-text-tertiary">
-          This compares the archive the agent sent with v{against}, the version served now. It can differ from the
-          diff at the time of the decision, and it does not show a reviewer's edits as additions.
+          This compares the archive the agent sent with v{against}, the version served at the decision. It does not
+          show a reviewer's edits.
         </p>
       )}
       {changed.map((f) => (

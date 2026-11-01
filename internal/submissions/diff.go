@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
 
@@ -87,6 +88,19 @@ func archiveManifest(archive []byte) ([]skill.FileEntry, error) {
 	return manifest, nil
 }
 
+// splitLines keeps each line ending. difflib.SplitLines appends a phantom empty
+// line, which shows in a diff as a stray added line.
+func splitLines(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for i := range lines {
+		lines[i] += "\n"
+	}
+	return lines
+}
+
 func isBinary(data []byte) bool {
 	head := data
 	if len(head) > 8192 {
@@ -108,12 +122,18 @@ func (s *Service) Diff(ctx context.Context, sub *Submission) (*SubmissionDiff, e
 
 	out := &SubmissionDiff{Files: []SubmissionFileDiff{}}
 	from := map[string][]byte{}
-	sk, err := s.skills.GetByName(ctx, sub.SkillName)
-	if err != nil {
-		return nil, fmt.Errorf("submission diff: %w", err)
+	against := sub.DiffAgainst
+	if sub.State == StatePending {
+		sk, err := s.skills.GetByName(ctx, sub.SkillName)
+		if err != nil {
+			return nil, fmt.Errorf("submission diff: %w", err)
+		}
+		if sk != nil {
+			against = sk.LatestVersion
+		}
 	}
-	if sk != nil && sk.LatestVersion > 0 {
-		ver, err := s.skills.GetVersion(ctx, sub.SkillName, sk.LatestVersion)
+	if against > 0 {
+		ver, err := s.skills.GetVersion(ctx, sub.SkillName, against)
 		if err != nil || ver == nil {
 			return nil, fmt.Errorf("submission diff: served version: %w", err)
 		}
@@ -160,7 +180,7 @@ func (s *Service) Diff(ctx context.Context, sub *Submission) (*SubmissionDiff, e
 			}
 			if f.Status != "unchanged" {
 				f.Diff, err = difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-					A: difflib.SplitLines(string(oldData)), B: difflib.SplitLines(string(newData)),
+					A: splitLines(oldData), B: splitLines(newData),
 					FromFile: "served/" + name, ToFile: "submitted/" + name, Context: 3,
 				})
 				if err != nil {
