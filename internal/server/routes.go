@@ -167,7 +167,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		skill.NewPublisher(skillStore, d.Storage, skillOptions), ownerResolver)
 	submissions.RegisterRoutes(api, submissionService)
 
-	mcp.RegisterRoutes(router, skillStore, setStore, cfg, caps.Response().Version)
+	mcp.RegisterRoutes(router, skillStore, setStore, runStore, submissionService, cfg, caps.Response().Version)
 
 	// Ownership rules. Registered inside RegisterAPIRoutes, not in Build, so
 	// the generated OpenAPI spec cannot drift from what is served.

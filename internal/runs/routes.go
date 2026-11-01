@@ -128,6 +128,10 @@ func (s *Store) Report(ctx context.Context, body RunOutcomeBody) (*RunRecord, er
 	if body.ExternalRunID == "" {
 		return nil, huma.Error422UnprocessableEntity("external_run_id is required")
 	}
+	// MCP has no request schema, so the limits of the HTTP schema repeat here.
+	if len(body.ExternalRunID) > 255 || len(body.ReviewVerdict) > 255 || len(body.EvidenceURL) > 2048 || len(body.Set) > 255 || len(body.ResolutionID) > 255 {
+		return nil, huma.Error422UnprocessableEntity("a field is too long")
+	}
 	if body.Repairs < 0 {
 		return nil, huma.Error422UnprocessableEntity("repairs cannot be negative")
 	}

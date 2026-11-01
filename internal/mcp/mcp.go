@@ -1,5 +1,5 @@
-// Package mcp serves the registry's read-only tools over the stateless
-// Streamable HTTP transport of the Model Context Protocol.
+// Package mcp serves the registry's tools over the stateless Streamable HTTP
+// transport of the Model Context Protocol. No tool can publish.
 package mcp
 
 import (
@@ -16,8 +16,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/runs"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
+	"github.com/skael-dev/skael/internal/submissions"
 )
 
 // Only this version is offered, because the older Streamable HTTP version
@@ -65,11 +67,11 @@ type server struct {
 
 // RegisterRoutes wires /mcp and /.well-known/mcp.json. The auth middleware
 // guards /mcp and leaves the well-known document public.
-func RegisterRoutes(router chi.Router, skills *skill.Store, setStore *sets.Store, cfg *platform.Config, version string) {
+func RegisterRoutes(router chi.Router, skills *skill.Store, setStore *sets.Store, runStore *runs.Store, subs *submissions.Service, cfg *platform.Config, version string) {
 	s := &server{
 		version: version,
 		trusted: platform.ParseTrustedProxies(cfg.TrustedProxies),
-		tools:   newTools(skills, setStore),
+		tools:   append(newTools(skills, setStore), reportingTools(runStore, subs)...),
 	}
 	for _, origin := range strings.Split(cfg.CORSOrigins, ",") {
 		if origin = strings.TrimSpace(origin); origin != "" {

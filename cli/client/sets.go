@@ -18,6 +18,10 @@ type Response[T any] struct {
 }
 
 func fetch[T any](c *Client, method, path string, body any) (*Response[T], error) {
+	return fetchHeaders[T](c, method, path, body, nil)
+}
+
+func fetchHeaders[T any](c *Client, method, path string, body any, headers map[string]string) (*Response[T], error) {
 	var reader io.Reader
 	contentType := ""
 	if body != nil {
@@ -28,7 +32,7 @@ func fetch[T any](c *Client, method, path string, body any) (*Response[T], error
 		reader = bytes.NewReader(payload)
 		contentType = "application/json"
 	}
-	resp, err := c.do(method, path, reader, contentType)
+	resp, err := c.doHeaders(method, path, reader, contentType, headers)
 	if err != nil {
 		return nil, err
 	}

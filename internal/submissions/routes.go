@@ -63,6 +63,10 @@ func (s *Service) Submit(ctx context.Context, body SubmissionCreateBody) (*Submi
 	if !skillNameRe.MatchString(body.Name) {
 		return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("invalid skill name %q", body.Name))
 	}
+	// MCP has no request schema, so the limits of the HTTP schema repeat here.
+	if len(body.Name) > 128 || body.Rationale == "" || len(body.Rationale) > 4000 || len(body.RunLink) > 2048 || len(body.ExternalRunID) > 255 {
+		return nil, huma.Error422UnprocessableEntity("rationale is required, and a field is too long")
+	}
 	if !runs.ValidHTTPURL(body.RunLink) {
 		return nil, huma.Error422UnprocessableEntity("run_link must be an http or https URL")
 	}
