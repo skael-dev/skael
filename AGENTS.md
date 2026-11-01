@@ -49,5 +49,12 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - verdict: a contest's outcome, a named winner or too close to call.
 - too close to call: the sign test cannot separate the candidates from noise.
 - chain: the contests between consecutive released versions of one skill.
-- proposal: one diff across a bundle's prose that addresses every recorded loss of one candidate.
+- proposal: one diff across a skill's prose that addresses every recorded loss of one candidate.
 - loss: one task a candidate failed, with the missed expectations and the judge's evidence.
+- set: a named list of skills, each entry latest or one exact version. Avoid: group, collection.
+- resolution: the immutable result of resolving a set, with exact versions and digests, identified by the hash of that list. Avoid: snapshot, lockfile.
+- service account: a machine identity stored as a user with no password, used only through scoped keys. Avoid: bot, machine user, robot.
+- bundle: the single archive of one resolution. Avoid: package, export.
+- run: one automated agent session a consumer reports, unique on consumer and external run id. Avoid: execution, job.
+- consumer: the system a service account acts for, taken from the account and never from a request. Avoid: client, source, integration.
+- submission: a skill archive an agent sends for human review, which has no version until a person approves it. Avoid: suggestion, skill proposal, draft.
