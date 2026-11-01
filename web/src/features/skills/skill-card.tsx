@@ -6,6 +6,7 @@ import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityBadge } from "@/features/quality/quality-badge";
 import type { SkillAnalytics } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
+import type { ListRowProps } from "@/features/keyboard/use-list-navigation";
 
 const TAG_COLORS: Record<string, string> = {
   review: "bg-purple-400",
@@ -24,6 +25,7 @@ type SkillCardProps = {
   checked: boolean;
   onCheck: (checked: boolean) => void;
   anyChecked: boolean;
+  rowProps?: ListRowProps;
 };
 
 function formatRelativeTime(dateString: string): string {
@@ -75,6 +77,7 @@ export function SkillCard({
   checked,
   onCheck,
   anyChecked,
+  rowProps,
 }: SkillCardProps) {
   const navigate = useNavigate();
   const tag = getFirstTag(skill as SkillAnalytics);
@@ -82,6 +85,7 @@ export function SkillCard({
 
   return (
     <div
+      {...rowProps}
       onClick={() => navigate(`/skills/${skill.name}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

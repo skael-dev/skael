@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { prefersReducedMotion } from "@/lib/motion";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   type ChartConfig,
@@ -45,7 +46,7 @@ export function ActivationsChart({ days }: { days: number }) {
   if (!hasData) {
     return (
       <div className="h-[200px] bg-bg-secondary border border-border rounded-lg flex items-center justify-center">
-        <p className="text-sm text-text-tertiary">No activation data for this period</p>
+        <p className="text-sm text-text-tertiary">No activation data for this period. Select a longer period.</p>
       </div>
     );
   }
@@ -103,6 +104,7 @@ export function ActivationsChart({ days }: { days: number }) {
             }
           />
           <Area
+            isAnimationActive={!prefersReducedMotion()}
             dataKey="count"
             type="monotone"
             fill="url(#fillActivations)"

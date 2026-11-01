@@ -92,7 +92,7 @@ export function UserPicker({
           ) : isFetching ? (
             <div className="px-3 py-2 text-[11px] text-text-tertiary">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="px-3 py-2 text-[11px] text-text-tertiary">No matches</div>
+            <div className="px-3 py-2 text-[11px] text-text-tertiary">No matches. Check the spelling, or ask them to sign up.</div>
           ) : (
             results.map((u) => (
               <button

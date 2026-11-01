@@ -1,3 +1,4 @@
+import { scrollBehavior } from "@/lib/motion";
 import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -183,7 +184,7 @@ function TableOfContents({
             onClick={(e) => {
               e.preventDefault();
               onSelect(item.id);
-              document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth" });
+              document.getElementById(item.id)?.scrollIntoView({ behavior: scrollBehavior() });
             }}
             className={cn(
               "block py-1.5 pl-3 text-[12px] no-underline transition-colors duration-150",
@@ -233,7 +234,7 @@ function TabContent({ skill }: { skill: Skill }) {
   if (!content) {
     return (
       <div className="text-text-tertiary text-sm py-12 text-center">
-        No content available for this skill.
+        No content available for this skill. Publish a version with a SKILL.md.
       </div>
     );
   }
@@ -554,9 +555,9 @@ function TabSecurity({
                 </div>
               </>
             ) : scanLoading ? (
-              <div className="text-xs text-text-tertiary">Loading scan results...</div>
+              <SkeletonLine className="h-4 w-40" />
             ) : (
-              <div className="text-xs text-text-tertiary">No scan data available</div>
+              <div className="text-xs text-text-tertiary">No scan data available. Publish a new version to run a scan.</div>
             )}
           </div>
 
@@ -686,9 +687,10 @@ function TabMetadata({ skill }: { skill: Skill }) {
 }
 
 // ── Loading skeleton ──────────────────────────────────────────────
-function SkeletonLine({ className }: { className?: string }) {
+function SkeletonLine({ className, style }: { className?: string; style?: React.CSSProperties }) {
   return (
     <div
+      style={style}
       className={cn(
         "rounded bg-bg-secondary animate-pulse",
         className
@@ -902,8 +904,8 @@ export function SkillDetail() {
         {/* Description */}
         {skillQuery.isLoading ? (
           <div className="mb-4 flex flex-col gap-1.5">
-            <SkeletonLine className="h-4 w-[520px]" />
-            <SkeletonLine className="h-4 w-[380px]" />
+            <SkeletonLine className="h-4 w-[520px] max-w-full" />
+            <SkeletonLine className="h-4 w-[380px] max-w-full" />
           </div>
         ) : (
           <p className="text-sm text-text-secondary m-0 max-w-[720px] leading-relaxed mb-4">
@@ -913,9 +915,9 @@ export function SkillDetail() {
 
         {/* Meta strip */}
         {skillQuery.isLoading ? (
-          <div className="flex gap-6 mb-7">
+          <div className="flex flex-wrap gap-6 mb-7">
             {[100, 80, 90, 70, 110].map((w, i) => (
-              <SkeletonLine key={i} className={`h-9 w-[${w}px]`} />
+              <SkeletonLine key={i} className="h-9" style={{ width: w }} />
             ))}
           </div>
         ) : (

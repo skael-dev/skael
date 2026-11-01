@@ -12,7 +12,18 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
-        <Toaster theme="dark" position="bottom-right" richColors />
+        <Toaster
+          theme="dark"
+          position="bottom-right"
+          richColors
+          style={
+            {
+              "--success-bg": "var(--color-bg-tertiary)",
+              "--success-border": "var(--color-border-active)",
+              "--success-text": "var(--color-text-primary)",
+            } as React.CSSProperties
+          }
+        />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>

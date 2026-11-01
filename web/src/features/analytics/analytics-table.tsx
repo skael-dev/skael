@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import {
   Table,
@@ -14,6 +14,7 @@ import { ReviewStatus } from "@/features/security/review-status";
 import { QualityBadge } from "@/features/quality/quality-badge";
 import type { SkillAnalytics } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
 
 // ── Relative time ──────────────────────────────────────────────
 function formatRelativeTime(dateStr: string | null): string {
@@ -126,6 +127,8 @@ type AnalyticsTableProps = {
 export function AnalyticsTable({ skills }: AnalyticsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("activations");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const navigate = useNavigate();
+  const listRow = useListNavigation<SkillAnalytics>((s) => navigate(`/skills/${s.name}`));
 
   function handleSort(col: SortKey) {
     if (col === sortKey) {
@@ -163,6 +166,7 @@ export function AnalyticsTable({ skills }: AnalyticsTableProps) {
           return (
             <TableRow
               key={skill.name}
+              {...listRow(skill)}
               className={cn(
                 "border-border hover:bg-bg-secondary transition-colors",
                 isDead && "opacity-50"
@@ -219,7 +223,7 @@ export function AnalyticsTable({ skills }: AnalyticsTableProps) {
         {sorted.length === 0 && (
           <TableRow className="hover:bg-transparent">
             <TableCell colSpan={6} className="text-center py-16 text-text-tertiary text-sm">
-              No skills data available for this period
+              No skills data available for this period. Select a longer period.
             </TableCell>
           </TableRow>
         )}

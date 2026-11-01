@@ -21,6 +21,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { useListNavigation, type ListRowProps } from "@/features/keyboard/use-list-navigation";
 import { UserPicker } from "./user-picker";
 
 // ── CanManage, mirrored from internal/ownership/manage.go ───────────────
@@ -89,7 +93,7 @@ const SKILLS_PAGE_SIZE = 100;
 // maximum page size, accumulating names until the reported total is
 // reached. Stops on an empty page too, so a `total` that doesn't match the
 // actual row count can't turn this into an infinite loop.
-async function fetchAllSkillNames(): Promise<string[]> {
+export async function fetchAllSkillNames(): Promise<string[]> {
   const names: string[] = [];
   let offset = 0;
   for (;;) {
@@ -140,14 +144,16 @@ function RuleRow({
   rule,
   canManageThis,
   onManage,
+  rowProps,
 }: {
   rule: RuleBody;
   canManageThis: boolean;
   onManage: () => void;
+  rowProps: ListRowProps;
 }) {
   const members = rule.members ?? [];
   return (
-    <div className="flex items-center gap-3 px-3.5 py-3 border-b border-border last:border-b-0">
+    <div {...rowProps} className="flex flex-wrap items-center gap-3 px-3.5 py-3 border-b border-border last:border-b-0">
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-mono text-text-primary">{rule.pattern}</div>
         <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -436,6 +442,9 @@ export function Ownership() {
   });
 
   const rules = rulesQuery.data ?? [];
+  const listRow = useListNavigation<RuleBody>((r) => {
+    if (canManage(actor, r.pattern, rules)) setManagingRule(r);
+  });
 
   return (
     <div className="p-6 max-w-4xl mx-auto flex flex-col gap-6">
@@ -448,7 +457,7 @@ export function Ownership() {
       </div>
 
       {/* Unowned backlog */}
-      <div className="flex items-center justify-between gap-3 bg-bg-secondary border border-border rounded-lg px-4 py-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-bg-secondary border border-border rounded-lg px-4 py-3.5">
         <div className="flex items-center gap-3">
           <ShieldOff className="size-4 text-text-tertiary shrink-0" />
           <div>
@@ -457,7 +466,7 @@ export function Ownership() {
               <div className="text-xs text-danger">Couldn't load — try refreshing</div>
             ) : (
               <div className="text-xl font-semibold text-text-primary">
-                {unownedLoading ? "…" : unownedCount}
+                {unownedLoading ? <Skeleton className="h-7 w-8" /> : unownedCount}
               </div>
             )}
           </div>
@@ -488,17 +497,24 @@ export function Ownership() {
         </div>
         <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">
           {rulesQuery.isLoading ? (
-            <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">
-              Loading rules…
-            </div>
+            <RowsSkeleton rows={3} />
           ) : rules.length === 0 ? (
-            <div className="px-3.5 py-6 text-center text-xs text-text-tertiary">
-              No ownership rules yet — every skill is unowned.
-            </div>
+            <EmptyState
+              message="No ownership rules yet — every skill is unowned."
+              action={
+                <button
+                  onClick={() => setCreateOpen(true)}
+                  className="text-[13px] text-accent hover:underline cursor-pointer"
+                >
+                  Add the first rule
+                </button>
+              }
+            />
           ) : (
             rules.map((r) => (
               <RuleRow
                 key={r.id}
+                rowProps={listRow(r)}
                 rule={r}
                 canManageThis={canManage(actor, r.pattern, rules)}
                 onManage={() => setManagingRule(r)}

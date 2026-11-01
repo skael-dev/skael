@@ -29,7 +29,7 @@ export function VersionList({ versions }: VersionListProps) {
   if (versions.length === 0) {
     return (
       <div className="text-text-tertiary text-sm py-12 text-center">
-        No versions published yet.
+        No versions published yet. Run skael publish to add the first.
       </div>
     );
   }

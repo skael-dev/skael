@@ -72,6 +72,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+export function isPrivileged(user: User | null): boolean {
+  return user?.role === "owner" || user?.role === "admin";
+}
+
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");

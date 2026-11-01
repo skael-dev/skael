@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { prefersReducedMotion } from "@/lib/motion";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   type ChartConfig,
@@ -70,7 +71,7 @@ export function SkillActivationsChart({
     return (
       <div className="h-[200px] bg-bg-secondary border border-border rounded-lg flex items-center justify-center mb-6">
         <p className="text-sm text-text-tertiary">
-          No activation data for this period
+          No activation data for this period. Select a longer period.
         </p>
       </div>
     );
@@ -175,6 +176,7 @@ export function SkillActivationsChart({
           />
           {agents.map((agent) => (
             <Area
+              isAnimationActive={!prefersReducedMotion()}
               key={agent}
               dataKey={agent}
               type="monotone"

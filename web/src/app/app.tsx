@@ -14,6 +14,10 @@ import { Ownership } from "@/features/settings/ownership";
 import { ReviewQueue } from "@/features/review/review-queue";
 import { Quadrant } from "@/features/analytics/quadrant";
 import { NotFound } from "@/features/not-found";
+import { SetList } from "@/features/sets/set-list";
+import { SetDetailPage } from "@/features/sets/set-detail";
+import { ServiceAccounts } from "@/features/service-accounts/service-accounts";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 
 function ErrorFallback() {
   return (
@@ -33,7 +37,13 @@ function ErrorFallback() {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <div className="h-screen bg-bg-primary p-6">
+        <RowsSkeleton rows={6} />
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -61,6 +71,9 @@ export function App() {
             <Route path="/quadrant" element={<Quadrant />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/ownership" element={<Ownership />} />
+            <Route path="/sets" element={<SetList />} />
+            <Route path="/sets/:name" element={<SetDetailPage />} />
+            <Route path="/service-accounts" element={<ServiceAccounts />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

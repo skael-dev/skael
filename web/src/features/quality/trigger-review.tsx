@@ -1,3 +1,4 @@
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getEvalSuiteTriggers, reviewEvalSuite } from "@/api/sdk.gen";
@@ -121,7 +122,7 @@ export function TriggerReview({
       </p>
 
       {query.isLoading ? (
-        <div className="text-[13px] text-text-tertiary">Loading…</div>
+        <RowsSkeleton rows={3} />
       ) : query.isError ? (
         <div className="text-[13px] text-danger">Could not load the queries</div>
       ) : (
