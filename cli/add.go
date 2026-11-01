@@ -31,19 +31,14 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
 	if addScope != "" && !validScope(addScope) {
-		ui.Errorf("invalid --scope %q: must be \"project\" or \"user\"", addScope)
-		return fmt.Errorf("invalid scope")
+		return usageError("invalid_scope", fmt.Sprintf("invalid --scope %q: must be \"project\" or \"user\"", addScope), "")
 	}
 
 	// 1. Load config with migration support.
 	dir := config.DefaultDir()
 	cfg, _, err := config.EnsureSkillsKey(dir)
 	if err != nil {
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	// 2. Resolve the effective scope for this skill.
@@ -70,8 +65,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	manifest, err := c.GetManifest()
 	if err != nil {
 		sp.Stop()
-		ui.Errorf("fetch manifest: %s", err)
-		return nil
+		return apiFailure(fmt.Errorf("fetch manifest: %w", err))
 	}
 
 	var found *client.ManifestEntry
@@ -83,23 +77,14 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 	if found == nil {
 		sp.Stop()
-		if ui.JSONMode {
-			ui.PrintJSONError(fmt.Sprintf("skill %q not found on registry", name), "not_found", "skael search <term>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    fmt.Sprintf("Skill %q not found on the registry", name),
-			Suggestion: "skael search <term>",
-		})
-		return nil
+		return failure("not_found", fmt.Sprintf("skill %q not found on registry", name), "skael search <term>")
 	}
 
 	// 5. Add to config.
 	cfg.AddSkill(name, string(effectiveScope))
 	if err := config.WriteConfig(dir, cfg); err != nil {
 		sp.Stop()
-		ui.Errorf("write config: %s", err)
-		return fmt.Errorf("write config: %w", err)
+		return failure("config_error", fmt.Sprintf("write config: %s", err), "")
 	}
 
 	// 6. Download and extract.
@@ -107,23 +92,23 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	archive, err := c.DownloadVersion(name, found.Version)
 	if err != nil {
 		sp.Stop()
-		ui.Errorf("download %s: %s", name, err)
-		return nil
+		return apiFailure(fmt.Errorf("download %s: %w", name, err))
 	}
 
 	actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
 	if found.Checksum != "" && actualChecksum != found.Checksum {
 		sp.Stop()
-		ui.Errorf("checksum mismatch for %s (expected %s, got %s)", name, found.Checksum[:16], actualChecksum[:16])
-		return nil
+		return &exitError{
+			exit: exitDigestMismatch, code: "digest_mismatch",
+			msg: fmt.Sprintf("checksum mismatch for %s (expected %s, got %s)", name, found.Checksum, actualChecksum),
+		}
 	}
 
 	// 7. Detect agents and extract.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		sp.Stop()
-		ui.Errorf("cannot determine home directory: %s", err)
-		return nil
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 
 	var projectRoot string
@@ -131,18 +116,19 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
 			sp.Stop()
-			ui.Errorf("cannot determine working directory: %s", wdErr)
-			return nil
+			return failure("cwd_error", fmt.Sprintf("cannot determine working directory: %s", wdErr), "")
 		}
 		projectRoot = gitRoot(wd)
 	}
 
 	detectedAgents := agents.DetectIn(home)
 	var placements []config.Placement
+	extractFailed := 0
 	for _, agent := range detectedAgents {
 		destDir := filepath.Join(agentSkillsBase(agent, effectiveScope, home, projectRoot), name)
 		if err := extractSkillAtomically(archive, destDir); err != nil {
 			ui.Errorf("extract %s to %s: %s", name, agent.Name(), err)
+			extractFailed++
 		} else {
 			placements = append(placements, config.Placement{
 				Agent: agent.Name(),
@@ -169,11 +155,13 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	state.Skills = updatedSkills
 	if err := config.WriteState(dir, state); err != nil {
 		sp.Stop()
-		ui.Errorf("write state: %s", err)
-		return fmt.Errorf("write state: %w", err)
+		return failure("state_error", fmt.Sprintf("write state: %s", err), "")
 	}
 
 	sp.Stop()
+	if extractFailed > 0 {
+		return failure("extract_error", fmt.Sprintf("%s: extraction failed for %d agent(s)", name, extractFailed), "")
+	}
 	if ui.JSONMode {
 		return ui.PrintJSON(map[string]interface{}{
 			"status":  "added",

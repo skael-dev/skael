@@ -31,61 +31,30 @@ func runShow(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
 	sk, err := c.GetSkill(name)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 	if sk == nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("skill not found: "+name, "not_found", "skael list")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "skill not found: " + name,
-			Suggestion: "skael list",
-		})
-		return nil
+		return failure("not_found", "skill not found: "+name, "skael list")
 	}
 
 	var versions []client.Version
 	if showVersions || ui.JSONMode {
 		versions, err = c.ListVersions(name)
 		if err != nil {
-			if ui.JSONMode {
-				ui.PrintJSONError(err.Error(), "api_error", "")
-				return nil
-			}
-			ui.Errorf("%s", err)
-			return nil
+			return apiFailure(err)
 		}
 	}
 
 	activations, err := c.GetActivations(name)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	if ui.JSONMode {

@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/skael-dev/skael/cli/agents"
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
-	"github.com/skael-dev/skael/cli/hooks"
 	"github.com/skael-dev/skael/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -58,8 +56,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			raw, err := term.ReadPassword(int(os.Stdin.Fd()))
 			if err != nil {
-				ui.Errorf("read API key: %s", err)
-				return fmt.Errorf("read API key: %w", err)
+				return usageError("read_key_error", fmt.Sprintf("read API key: %s", err), "")
 			}
 			fmt.Fprintln(os.Stderr)
 			apiKey = strings.TrimSpace(string(raw))
@@ -72,29 +69,22 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	if endpoint == "" || apiKey == "" {
-		ui.Error(ui.ErrorDetail{
-			Message:    "URL and API key are required",
-			Suggestion: "skael setup <url> <api-key>  or set SKAEL_URL and SKAEL_KEY",
-		})
-		return fmt.Errorf("missing credentials")
+		return usageError("missing_credentials", "URL and API key are required", "skael setup <url> <api-key>  or set SKAEL_URL and SKAEL_KEY")
 	}
 
 	// 2. Validate connectivity.
 	c := client.New(endpoint, apiKey)
 	if err := c.Health(); err != nil {
-		ui.Error(ui.ErrorDetail{
-			Message:    "Cannot connect to " + endpoint,
-			Context:    err.Error(),
-			Suggestion: fmt.Sprintf("curl %s/api/health", endpoint),
-		})
-		return fmt.Errorf("health check failed: %w", err)
+		return &exitError{
+			exit: exitAPI, code: "connect_error", msg: "Cannot connect to " + endpoint,
+			context: err.Error(), suggestion: fmt.Sprintf("curl %s/api/health", endpoint),
+		}
 	}
 	ui.Success("Connected to %s", endpoint)
 
 	// 3. Write config.
 	if !validScope(setupScope) {
-		ui.Errorf("invalid --scope %q: must be \"project\" or \"user\"", setupScope)
-		return fmt.Errorf("invalid scope")
+		return usageError("invalid_scope", fmt.Sprintf("invalid --scope %q: must be \"project\" or \"user\"", setupScope), "")
 	}
 	dir := config.DefaultDir()
 	cfg := &config.Config{
@@ -104,16 +94,14 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Skills:   []config.SkillEntry{},
 	}
 	if err := config.WriteConfig(dir, cfg); err != nil {
-		ui.Errorf("write config: %s", err)
-		return fmt.Errorf("write config: %w", err)
+		return failure("config_error", fmt.Sprintf("write config: %s", err), "")
 	}
 	ui.Success("Configuration saved")
 
 	// 4. Detect agents.
 	home, err := os.UserHomeDir()
 	if err != nil {
-		ui.Errorf("cannot determine home directory: %s", err)
-		return fmt.Errorf("home dir: %w", err)
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 	detectedAgents := agents.DetectIn(home)
 
@@ -126,64 +114,20 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 6. Install hooks unless skipped and agents were found.
+	// 6. Install hooks unless skipped and agents were found. A hook failure is a
+	// warning here: the skills are in place and `skael hook install` retries it.
 	if !setupSkipHooks && len(detectedAgents) > 0 {
-		scriptPath, err := hooks.WriteHookScript(dir)
-		if err != nil {
-			ui.Warn("write hook script: %s", err)
-		} else {
-			cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
-			if cursorErr != nil {
-				ui.Warn("write cursor hook script: %s", cursorErr)
-			}
-			for _, agent := range detectedAgents {
-				configPath := agent.ConfigPath(home)
-				// Ensure parent directory exists for agents whose config may not yet exist.
-				if mkErr := os.MkdirAll(filepath.Dir(configPath), 0o755); mkErr != nil {
-					ui.Warn("create config dir for %s: %s", agent.Name(), mkErr)
-					continue
-				}
-				hookScript := scriptPath
-				if agent.Name() == "cursor" {
-					if cursorScriptPath == "" {
-						ui.Warn("skip cursor hook: script not available")
-						continue
-					}
-					hookScript = cursorScriptPath
-				}
-				if instErr := hooks.InstallForAgent(agent.Name(), configPath, endpoint, apiKey, hookScript); instErr != nil {
-					ui.Warn("install hook for %s: %s", agent.Name(), instErr)
-				} else {
-					ui.Success("Hook installed for %s", agent.Name())
-				}
-			}
-		}
-
-		// Install auto-sync hooks unless --no-auto-sync was passed.
+		installActivationHooks(dir, home, endpoint, apiKey, detectedAgents)
 		if !setupNoAutoSync {
-			autoSyncPath, autoSyncErr := hooks.WriteAutoSyncScript(dir)
-			if autoSyncErr != nil {
-				ui.Warn("write auto-sync script: %s", autoSyncErr)
-			} else {
-				for _, agent := range detectedAgents {
-					configPath := agent.ConfigPath(home)
-					if instErr := hooks.InstallAutoSyncForAgent(agent.Name(), configPath, autoSyncPath); instErr != nil {
-						ui.Warn("install auto-sync for %s: %s", agent.Name(), instErr)
-					} else {
-						ui.Success("Auto-sync hook installed for %s", agent.Name())
-					}
-				}
-			}
+			installAutoSyncHooks(dir, home, detectedAgents)
 		}
 	}
 
 	if syncErr != nil {
-		ui.Error(ui.ErrorDetail{
-			Message:    "Setup finished with errors: initial sync failed",
-			Context:    syncErr.Error(),
-			Suggestion: "Fix the issue, then run: skael sync",
-		})
-		return fmt.Errorf("initial sync failed: %w", syncErr)
+		return &exitError{
+			exit: exitAPI, code: "sync_failed", msg: "Setup finished with errors: initial sync failed",
+			context: syncErr.Error(), suggestion: "Fix the issue, then run: skael sync",
+		}
 	}
 
 	ui.Success("Setup complete. Skills are live.")

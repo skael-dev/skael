@@ -38,10 +38,7 @@ var versionCmd = &cobra.Command{
 
 // Execute runs the root command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		ui.Errorf("%s", err)
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:]))
 }
 
 func init() {

@@ -242,7 +242,12 @@ func TestPublishRendersBlockedDistinctlyFromHeld(t *testing.T) {
 	})
 	defer srv.Close()
 
-	out := runPublishAgainst(t, srv, skillDir(t))
+	t.Setenv("SKAEL_URL", srv.URL)
+	t.Setenv("SKAEL_KEY", "test-key")
+	var err error
+	out := captureStdout(t, func() { err = runPublish(publishCmd, []string{skillDir(t)}) })
+	require.Error(t, err, "a blocked publish must exit non-zero")
+	out += err.Error()
 
 	assert.Contains(t, out, "unappealable")
 	assert.NotContains(t, out, "admin approval",
