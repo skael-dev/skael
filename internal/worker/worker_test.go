@@ -423,7 +423,8 @@ func TestWorker_AbandonsTheRunWhenTheLeaseIsLost(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := w.RunOnce(context.Background()); done <- err }()
 	select {
-	case <-done:
+	case err := <-done:
+		t.Logf("RunOnce returned: %v", err)
 	case <-time.After(3 * time.Second):
 		close(release)
 		t.Fatal("the run was not abandoned after the lease was lost")

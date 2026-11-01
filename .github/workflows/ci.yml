@@ -106,7 +106,7 @@ jobs:
       # against a module targeting a newer Go. v9 tracks golangci-lint v2.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.15.0
 
   web-test:
     runs-on: ubuntu-latest
