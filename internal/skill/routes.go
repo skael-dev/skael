@@ -6,10 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -933,6 +937,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		router.Get("/api/skills/{name}/versions/{version}/download",
 			makeDownloadHandler(store, storage))
 
+		// GET /api/skills/{name}/versions/{version}/files/{path}
+		router.Get("/api/skills/{name}/versions/{version}/files/*",
+			makeFileHandler(store, storage))
+
 		// GET /api/skills/{name}/scan — scan results for the latest version
 		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
 
@@ -1002,6 +1010,83 @@ func makeDownloadHandler(store *Store, storage platform.Storage) http.HandlerFun
 			fmt.Sprintf(`attachment; filename="%s-v%d.tar.gz"`, name, version))
 		w.WriteHeader(http.StatusOK)
 		io.Copy(w, rc) //nolint:errcheck
+	}
+}
+
+// makeFileHandler returns a handler that serves one file from a version's
+// archive, under the same read rule as the download route.
+//
+// Archive content is untrusted and the app shares its origin, so the response
+// is always an attachment of an opaque type that a browser never renders.
+func makeFileHandler(store *Store, storage platform.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		version, err := strconv.Atoi(chi.URLParam(r, "version"))
+		if err != nil {
+			http.Error(w, "invalid version number", http.StatusBadRequest)
+			return
+		}
+
+		// Chi matches on RawPath when it is set, and the wildcard is then still
+		// escaped. Without this, %2e%2e reaches the checks as literal text.
+		requested := chi.URLParam(r, "*")
+		if r.URL.RawPath != "" {
+			requested, err = url.PathUnescape(requested)
+			if err != nil {
+				http.Error(w, "invalid file path", http.StatusBadRequest)
+				return
+			}
+		}
+		filePath, ok := cleanArchivePath(requested)
+		if !ok {
+			http.Error(w, "invalid file path", http.StatusBadRequest)
+			return
+		}
+
+		name := chi.URLParam(r, "name")
+		ver, err := store.GetVersion(r.Context(), name, version)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if ver == nil || !CanReadVersion(r.Context(), ver) {
+			http.NotFound(w, r)
+			return
+		}
+
+		rc, err := storage.Read(r.Context(), ver.ArchivePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer rc.Close()
+
+		content, err := readArchiveFile(rc, filePath)
+		if errors.Is(err, errFileNotInArchive) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("skill", name).Int("version", version).Msg("file handler: read archive failed")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		disposition := mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(filePath)})
+		if disposition == "" {
+			disposition = "attachment"
+		}
+		size := strconv.Itoa(len(content))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", disposition)
+		w.Header().Set("Content-Length", size)
+		w.Header().Set("X-Skael-File-Size", size)
+		w.WriteHeader(http.StatusOK)
+		w.Write(content) //nolint:errcheck
 	}
 }
 

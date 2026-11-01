@@ -1,13 +1,13 @@
-import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldCheck, ShieldAlert, Clock, Download } from "lucide-react";
 import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreviewSkill } from "@/api/sdk.gen";
-import type { Skill, ActivationSummary, Version, ListVersionsBody } from "@/api/types.gen";
+import type { Skill, ActivationSummary, ListVersionsBody } from "@/api/types.gen";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
-import { FileTree } from "@/features/skills/file-tree";
-import { FileViewer, FileViewerFallback } from "@/features/skills/file-viewer";
+import { FileBrowser } from "@/features/skills/file-browser";
+import { parseFileLink } from "@/features/skills/file-link";
 import { VersionList } from "@/features/skills/version-list";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
@@ -249,53 +249,6 @@ function TabContent({ skill }: { skill: Skill }) {
           activeId={activeSection}
           onSelect={setActiveSection}
         />
-      )}
-    </div>
-  );
-}
-
-// ── Files Tab ────────────────────────────────────────────────────
-function TabFiles({ skill, versions }: { skill: Skill; versions: Version[] }) {
-  const [activeFile, setActiveFile] = useState("SKILL.md");
-
-  // Get file manifest from the latest version
-  const latestVersion = versions.length > 0
-    ? [...versions].sort((a, b) => b.version - a.version)[0]
-    : null;
-
-  const fileManifest = latestVersion?.file_manifest ?? [];
-
-  // For SKILL.md we can show the content directly from the skill object
-  const fileContent = useMemo(() => {
-    if (activeFile === "SKILL.md" && skill.content) {
-      return skill.content;
-    }
-    return null;
-  }, [activeFile, skill.content]);
-
-  if (fileManifest.length === 0) {
-    return (
-      <div className="text-text-tertiary text-sm py-12 text-center">
-        No files available. Publish a version to see the file manifest.
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col lg:flex-row gap-6 max-w-[1200px] min-h-[480px]">
-      <FileTree
-        files={fileManifest}
-        activeFile={activeFile}
-        onSelect={setActiveFile}
-      />
-      {fileContent ? (
-        <FileViewer
-          content={fileContent}
-          filename={activeFile}
-          skillName={skill.name}
-        />
-      ) : (
-        <FileViewerFallback filename={activeFile} />
       )}
     </div>
   );
@@ -726,7 +679,21 @@ async function fetchScanReport(name: string): Promise<ScanReport | null> {
 export function SkillDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("content");
+  const location = useLocation();
+  const fileLink = parseFileLink(location.search, location.hash);
+  const fileLinked = fileLink.file != null || fileLink.version != null;
+  const [activeTab, setActiveTab] = useState(fileLinked ? "files" : "content");
+
+  useEffect(() => {
+    if (fileLinked) setActiveTab("files");
+  }, [fileLinked]);
+
+  function changeTab(tab: string) {
+    setActiveTab(tab);
+    // The file address describes the Files tab only, so a reload elsewhere
+    // stays on the tab the reader chose.
+    if (tab !== "files" && fileLinked) navigate(location.pathname, { replace: true });
+  }
 
   const skillQuery = useQuery({
     queryKey: ["skill", name],
@@ -989,7 +956,7 @@ export function SkillDetail() {
 
       {/* Sticky tab bar */}
       <div className="sticky top-0 z-10 flex px-5 md:px-12 border-b border-border bg-bg-primary shrink-0 max-w-[1280px] w-full mx-auto">
-        <SlidingTabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+        <SlidingTabs tabs={TABS} activeTab={activeTab} onChange={changeTab} />
       </div>
 
       {/* Tab content */}
@@ -997,7 +964,14 @@ export function SkillDetail() {
         {activeTab === "content" && skill && <TabContent skill={skill} />}
         {activeTab === "metadata" && skill && <TabMetadata skill={skill} />}
         {activeTab === "files" && skill && (
-          <TabFiles skill={skill} versions={versions} />
+          <FileBrowser
+            skillName={skill.name}
+            latestVersion={skill.latest_version}
+            versions={versions}
+            loading={versionsQuery.isPending}
+            failed={versionsQuery.isError}
+            onRetry={() => versionsQuery.refetch()}
+          />
         )}
         {activeTab === "versions" && (
           <VersionList versions={versions} />

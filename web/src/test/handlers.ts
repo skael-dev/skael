@@ -192,6 +192,12 @@ export const handlers = [
     return HttpResponse.json({ against: 0, skill_md: "", files: [] });
   }),
 
+  http.get("/api/skills/:name/versions/:version/files/*", () => {
+    return new HttpResponse("# A file\n", {
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+  }),
+
   // Default: no quality history. Tests exercising the trend override this
   // per-test with server.use(...).
   http.get("/api/skills/:name/quality/series", () => {

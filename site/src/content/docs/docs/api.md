@@ -122,6 +122,7 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/skills/{name}/versions` | List versions |
 | `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed). `?override=true` publishes despite appealable scan findings — instance admin only, recorded server-side |
 | `GET` | `/api/skills/{name}/versions/{version}/download` | Download version archive |
+| `GET` | `/api/skills/{name}/versions/{version}/files/{path}` | Download one file from the version archive, as `application/octet-stream` with its size in `X-Skael-File-Size`. The read rule is the same as the archive download: a scoped key that is not a worker gets 404 on a held version. A path that climbs out of the archive gets 400 |
 | `GET` | `/api/skills/{name}/versions/{version}/diff` | What this version changes against the version currently served — SKILL.md as a unified diff, plus per-file added/modified/removed |
 | `GET` | `/api/skills/{name}/scan` | Scan results for the latest version |
 | `PUT` | `/api/skills/{name}/review` | Mark skill as reviewed |

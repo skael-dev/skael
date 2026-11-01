@@ -1,4 +1,6 @@
+import { Link } from "react-router-dom";
 import type { Version } from "@/api/types.gen";
+import { buildFileSearch } from "@/features/skills/file-link";
 import { cn } from "@/lib/utils";
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -107,6 +109,12 @@ export function VersionList({ versions }: VersionListProps) {
                     <span className="font-mono text-[11px] text-text-tertiary">
                       {ver.file_manifest.length} file{ver.file_manifest.length !== 1 ? "s" : ""}
                     </span>
+                    <Link
+                      to={{ search: buildFileSearch({ version: ver.version }) }}
+                      className="text-[11px] text-accent no-underline hover:underline"
+                    >
+                      View files
+                    </Link>
                   </div>
                 )}
               </div>

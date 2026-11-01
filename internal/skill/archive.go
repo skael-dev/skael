@@ -5,9 +5,11 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -222,6 +224,53 @@ func Unpack(r io.Reader, destDir string) error {
 		}
 	}
 	return nil
+}
+
+// errFileNotInArchive reports that an archive has no regular file at a path.
+var errFileNotInArchive = errors.New("file not in archive")
+
+// cleanArchivePath normalises a requested archive path. It returns false for a
+// path that is empty, absolute or that climbs out of the archive root.
+func cleanArchivePath(p string) (string, bool) {
+	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\\\x00") {
+		return "", false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return "", false
+		}
+	}
+	cleaned := path.Clean(p)
+	return cleaned, cleaned != "."
+}
+
+// readArchiveFile returns the bytes of the first regular file in a tar.gz
+// whose cleaned name equals want. Publish limits each file to maxFileSize, so
+// the whole file fits in memory.
+func readArchiveFile(r io.Reader, want string) ([]byte, error) {
+	gzr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("skill.readArchiveFile gzip: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil, errFileNotInArchive
+		}
+		if err != nil {
+			return nil, fmt.Errorf("skill.readArchiveFile next: %w", err)
+		}
+		if hdr.Typeflag == tar.TypeReg && path.Clean(hdr.Name) == want {
+			content, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, fmt.Errorf("skill.readArchiveFile read %s: %w", hdr.Name, err)
+			}
+			return content, nil
+		}
+	}
 }
 
 // ParseFrontmatter parses YAML frontmatter from content delimited by "---\n"
