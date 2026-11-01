@@ -145,7 +145,7 @@ async function fetchVersionDiff(name: string, version: number): Promise<VersionD
   }
 }
 
-function diffLineClass(line: string): string {
+export function diffLineClass(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---")) return "text-text-tertiary";
   if (line.startsWith("+")) return "text-accent";
   if (line.startsWith("-")) return "text-danger";
