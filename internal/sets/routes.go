@@ -17,9 +17,9 @@ import (
 
 var setNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
-// checkKeySet applies a set-limited key's limit. A deleted set gives 403, so
+// CheckKeySet applies a set-limited key's limit. A deleted set gives 403, so
 // the key never becomes unrestricted and never learns which sets exist.
-func checkKeySet(ctx context.Context, set *Set) error {
+func CheckKeySet(ctx context.Context, set *Set) error {
 	key := auth.KeyFromContext(ctx)
 	if key == nil || key.SetID == "" {
 		return nil
@@ -81,7 +81,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 			if err != nil {
 				return nil, err
 			}
-			if err := checkKeySet(ctx, set); err != nil {
+			if err := CheckKeySet(ctx, set); err != nil {
 				return nil, err
 			}
 			return &struct{ Body setsListBody }{Body: setsListBody{Sets: []Set{*set}}}, nil
@@ -101,7 +101,7 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		if err != nil {
 			return nil, err
 		}
-		if err := checkKeySet(ctx, set); err != nil {
+		if err := CheckKeySet(ctx, set); err != nil {
 			return nil, err
 		}
 		if set == nil {
@@ -278,7 +278,7 @@ func bundleHandler(store *Store, storage platform.Storage) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if checkKeySet(ctx, set) != nil {
+		if CheckKeySet(ctx, set) != nil {
 			http.Error(w, "this key is limited to another set", http.StatusForbidden)
 			return
 		}

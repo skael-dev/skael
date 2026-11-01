@@ -108,6 +108,23 @@ func ClientIPFromRequest(r *http.Request) string {
 	return socketHost(r.RemoteAddr)
 }
 
+// RequestScheme returns the scheme the client used. X-Forwarded-Proto counts
+// only from a trusted proxy, the same rule as the client address.
+func RequestScheme(r *http.Request, trusted *TrustedProxies) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	peer, err := netip.ParseAddr(socketHost(r.RemoteAddr))
+	if err != nil || !trusted.Contains(peer) {
+		return "http"
+	}
+	first, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	if strings.EqualFold(strings.TrimSpace(first), "https") {
+		return "https"
+	}
+	return "http"
+}
+
 // socketHost strips the port and canonicalizes, so one client gets one bucket.
 func socketHost(remoteAddr string) string {
 	host := remoteAddr
