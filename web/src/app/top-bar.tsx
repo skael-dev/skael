@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Search } from "lucide-react";
+import { CircleHelp, Search } from "lucide-react";
 
 type Segment = {
   label: string;
   path?: string;
   mono?: boolean;
+};
+
+const PAGE_TITLES: Record<string, string> = {
+  analytics: "Analytics",
+  settings: "Settings",
+  review: "Review",
+  quadrant: "Quadrant",
+  sets: "Sets",
+  "service-accounts": "Service accounts",
+  contests: "Contest",
 };
 
 function useBreadcrumbs(): Segment[] {
@@ -24,15 +34,15 @@ function useBreadcrumbs(): Segment[] {
     ];
   }
 
-  if (parts[0] === "analytics") {
-    return [{ label: "Analytics" }];
+  if (parts[0] === "sets" && parts[1]) {
+    return [
+      { label: "Sets", path: "/sets" },
+      { label: decodeURIComponent(parts[1]), mono: true },
+    ];
   }
 
-  if (parts[0] === "settings") {
-    return [{ label: "Settings" }];
-  }
-
-  return [{ label: parts[0] ?? pathname }];
+  const title = parts[0] ? PAGE_TITLES[parts[0]] : undefined;
+  return [{ label: title ?? parts[0] ?? pathname }];
 }
 
 function Slash() {
@@ -73,9 +83,10 @@ function SyncIndicator() {
 
 type TopBarProps = {
   onOpenCommand?: () => void;
+  onOpenShortcuts?: () => void;
 };
 
-export function TopBar({ onOpenCommand }: TopBarProps) {
+export function TopBar({ onOpenCommand, onOpenShortcuts }: TopBarProps) {
   const segments = useBreadcrumbs();
   const navigate = useNavigate();
 
@@ -85,7 +96,7 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
       style={{ gap: 0 }}
     >
       {/* Org badge + workspace name */}
-      <div className="flex items-center gap-2 px-2 py-1.5 rounded-md shrink-0">
+      <div className="hidden sm:flex items-center gap-2 px-2 py-1.5 rounded-md shrink-0">
         <div
           className="w-[22px] h-[22px] rounded-[5px] flex items-center justify-center
             text-[11px] font-semibold font-mono text-bg-primary"
@@ -101,13 +112,15 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
       {/* Breadcrumbs */}
       {segments.length > 0 && (
         <>
-          <Slash />
+          <span className="hidden sm:inline">
+            <Slash />
+          </span>
           {segments.map((seg, i) => (
-            <span key={i} className="flex items-center">
+            <span key={i} className="flex items-center min-w-0">
               <span
                 onClick={seg.path ? () => navigate(seg.path!) : undefined}
                 className={[
-                  "text-[13px] px-2 py-1 rounded-[5px] whitespace-nowrap transition-colors duration-100",
+                  "text-[13px] px-2 py-1 rounded-[5px] whitespace-nowrap truncate transition-colors duration-100",
                   seg.mono ? "font-mono" : "",
                   i === segments.length - 1
                     ? "text-text-primary"
@@ -133,16 +146,25 @@ export function TopBar({ onOpenCommand }: TopBarProps) {
         className="flex items-center gap-2 h-[30px] px-2.5
           bg-bg-secondary border border-border hover:border-border-active
           rounded-md text-[12px] text-text-tertiary cursor-pointer
-          transition-colors duration-100 flex-[0_1_240px] min-w-[104px] font-sans"
+          transition-colors duration-100 flex-none w-[104px] sm:w-auto sm:flex-[0_1_240px] font-sans"
       >
         <Search size={13} />
         <span className="flex-1 text-left">Search...</span>
         <kbd
-          className="font-mono text-[10px] px-[5px] py-px border border-border
+          className="hidden sm:inline font-mono text-[10px] px-[5px] py-px border border-border
             rounded-[3px] bg-bg-tertiary"
         >
           ⌘K
         </kbd>
+      </button>
+
+      <button
+        onClick={onOpenShortcuts}
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts (?)"
+        className="flex items-center justify-center size-[30px] ml-1.5 shrink-0 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-secondary cursor-pointer transition-colors duration-100"
+      >
+        <CircleHelp size={14} />
       </button>
 
       {/* Ambient status. On a phone it pushes the search trigger off the header. */}

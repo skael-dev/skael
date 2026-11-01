@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -8,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/server"
 )
 
@@ -37,5 +40,32 @@ func TestRegisterAPIRoutes_CoversEveryGroup(t *testing.T) {
 		"/api/skills/{name}/quality/history",
 	} {
 		require.Containsf(t, paths, want, "route group missing from RegisterAPIRoutes: %s", want)
+	}
+}
+
+// A route missing from the table is unreachable by a restricted key, which is
+// safe, but a new route must be a decision rather than an accident.
+func TestEveryRouteHasAScopeTableEntry(t *testing.T) {
+	router := chi.NewMux()
+	api := humachi.New(router, huma.DefaultConfig("Skael API", "1.0.0"))
+	server.RegisterAPIRoutes(api, router, server.RegisterAPIDeps{})
+
+	known := map[string]bool{}
+	for _, r := range auth.RouteRules() {
+		known[r.Method+" "+r.Pattern] = true
+	}
+	err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.HasPrefix(route, "/api/") && route != "/mcp" {
+			return nil
+		}
+		if !known[method+" "+route] {
+			t.Errorf("no entry in auth.routeRules for %s %s", method, route)
+		}
+		delete(known, method+" "+route)
+		return nil
+	})
+	require.NoError(t, err)
+	for stale := range known {
+		t.Errorf("auth.routeRules names a route that does not exist: %s", stale)
 	}
 }

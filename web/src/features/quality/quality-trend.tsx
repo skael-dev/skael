@@ -102,7 +102,7 @@ function CurrentSeriesChart({ points }: { points: Series["points"] }) {
   const pts = points ?? [];
 
   if (pts.length === 0) {
-    return <div className="text-[11px] text-text-tertiary">No scores yet.</div>;
+    return <div className="text-[11px] text-text-tertiary">No scores yet. Run an evaluation to get the first one.</div>;
   }
 
   if (pts.length === 1) {
@@ -221,7 +221,7 @@ export function QualityTrend({ skillName }: { skillName: string }) {
 
   if (series.length === 0) {
     return (
-      <div className="text-[11px] text-text-tertiary mb-6">No scores yet.</div>
+      <div className="text-[11px] text-text-tertiary mb-6">No scores yet. Run an evaluation to get the first one.</div>
     );
   }
 
@@ -238,7 +238,7 @@ export function QualityTrend({ skillName }: { skillName: string }) {
 
   if (!current) {
     return (
-      <div className="text-[11px] text-text-tertiary mb-6">No scores yet.</div>
+      <div className="text-[11px] text-text-tertiary mb-6">No scores yet. Run an evaluation to get the first one.</div>
     );
   }
 

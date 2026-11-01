@@ -21,7 +21,7 @@ type Days = typeof PERIOD_OPTIONS[number]["value"];
 // ── Skeleton placeholders ──────────────────────────────────────
 function KpiSkeleton() {
   return (
-    <div className="grid grid-cols-4 gap-2.5">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
       {Array.from({ length: 4 }).map((_, i) => (
         <div
           key={i}
@@ -98,12 +98,12 @@ export function Analytics() {
   return (
     <div className="flex flex-col min-h-full">
       {/* Page header */}
-      <div className="px-12 pt-12 max-w-screen-xl w-full mx-auto">
+      <div className="px-5 md:px-12 pt-8 md:pt-12 max-w-screen-xl w-full mx-auto">
         <div className="text-[11px] text-text-tertiary uppercase tracking-[0.1em] mb-3.5">
           Workspace
         </div>
 
-        <div className="flex items-center justify-between gap-4 mb-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-3.5">
           <div className="flex items-center gap-3.5 min-w-0">
             <h1 className="text-[34px] font-medium tracking-tight text-text-primary m-0">
               Analytics
@@ -152,7 +152,7 @@ export function Analytics() {
       </div>
 
       {/* Table section */}
-      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl w-full mx-auto">
+      <div className="px-5 md:px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl w-full mx-auto">
         <div className="text-[11px] text-text-tertiary uppercase tracking-widest mb-4">
           Skills breakdown
         </div>

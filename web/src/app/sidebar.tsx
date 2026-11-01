@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound } from "lucide-react";
-import { useAuth } from "@/app/auth-provider";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound } from "lucide-react";
+import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { getReviewQueue } from "@/api/sdk.gen";
 
 type NavItem = {
@@ -11,6 +11,7 @@ type NavItem = {
   path: string;
   icon: React.ReactNode;
   disabled?: boolean;
+  privileged?: boolean;
 };
 
 const navItems: NavItem[] = [
@@ -23,6 +24,14 @@ const navItems: NavItem[] = [
   },
   { id: "review", label: "Review", path: "/review", icon: <ShieldCheck size={16} /> },
   { id: "quadrant", label: "Quadrant", path: "/quadrant", icon: <Target size={16} /> },
+  { id: "sets", label: "Sets", path: "/sets", icon: <ListChecks size={16} /> },
+  {
+    id: "service-accounts",
+    label: "Service accounts",
+    path: "/service-accounts",
+    icon: <KeyRound size={16} />,
+    privileged: true,
+  },
   {
     id: "ownership",
     label: "Ownership",
@@ -81,6 +90,7 @@ function SidebarItem({ item, count }: { item: NavItem; count?: number }) {
   return (
     <NavLink
       to={item.path}
+      aria-label={item.label}
       end={item.path === "/"}
       className={({ isActive }) =>
         [
@@ -178,6 +188,8 @@ function UserAvatar() {
 }
 
 export function Sidebar() {
+  const { user } = useAuth();
+  const privileged = isPrivileged(user);
   const reviewQuery = useQuery({
     queryKey: ["review-queue"],
     queryFn: async () => (await getReviewQueue()).data,
@@ -202,7 +214,7 @@ export function Sidebar() {
 
       {/* Main nav */}
       <nav className="py-3 flex flex-col gap-1">
-        {navItems.map((item) => (
+        {navItems.filter((item) => !item.privileged || privileged).map((item) => (
           <SidebarItem
             key={item.id}
             item={item}

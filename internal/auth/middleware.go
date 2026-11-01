@@ -10,7 +10,7 @@ import (
 )
 
 // Middleware returns a chi-compatible middleware that enforces authentication
-// on all /api/ routes except explicitly exempt paths. It checks two auth
+// on /mcp and all /api/ routes except explicitly exempt paths. It checks two auth
 // methods in order:
 //  1. Session cookie (via scs session manager)
 //  2. API key (X-API-Key header with "sk-" prefix, SHA-256 hashed)
@@ -21,7 +21,7 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip auth for non-API paths (SPA static files).
-			if !strings.HasPrefix(r.URL.Path, "/api/") {
+			if !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/mcp" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -71,7 +71,21 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 							Name:  row.Name,
 							Role:  row.Role,
 						}
-						r = r.WithContext(ContextWithUser(r.Context(), user))
+						key := &KeyInfo{ID: keyRow.ID, Scopes: keyRow.Scopes}
+						if keyRow.SetID != nil {
+							key.SetID = *keyRow.SetID
+						}
+						// A service key with no scope reaches nothing, whatever
+						// wrote the row.
+						if row.Kind == KindService && !key.Restricted() {
+							writeAuthStatus(w, http.StatusForbidden, "forbidden")
+							return
+						}
+						if key.Restricted() && !authorizeKey(key, r) {
+							writeAuthStatus(w, http.StatusForbidden, "this key has no scope for this route")
+							return
+						}
+						r = r.WithContext(ContextWithKey(ContextWithUser(r.Context(), user), key))
 
 						// Fire-and-forget last-used update.
 						keyID := keyRow.ID
@@ -91,7 +105,11 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 
 // writeAuthError writes a JSON {"error": msg} response with HTTP 401.
 func writeAuthError(w http.ResponseWriter, msg string) {
+	writeAuthStatus(w, http.StatusUnauthorized, msg)
+}
+
+func writeAuthStatus(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

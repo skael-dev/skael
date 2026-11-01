@@ -1,7 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { ShieldCheck } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { getReviewQueue } from "@/api/sdk.gen";
 import { useAuth } from "@/app/auth-provider";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
 import { HeldVersion } from "./held-version";
 
 // Approve/reject apply to the version as a whole. Any authenticated member
@@ -13,6 +16,8 @@ const DECISION_ROLES = new Set(["owner", "admin"]);
 export function ReviewQueue() {
   const { user } = useAuth();
   const canDecide = user != null && DECISION_ROLES.has(user.role);
+  const navigate = useNavigate();
+  const listRow = useListNavigation<string>((skillName) => navigate(`/skills/${skillName}`));
 
   const query = useQuery({
     queryKey: ["review-queue"],
@@ -34,22 +39,32 @@ export function ReviewQueue() {
         </p>
       </div>
 
-      {query.isLoading && <div className="text-sm text-text-secondary">Loading…</div>}
-
-      {!query.isLoading && sorted.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <ShieldCheck size={28} className="text-accent" />
-          <div className="text-sm text-text-secondary">Nothing awaiting review.</div>
+      {query.isLoading && (
+        <div className="border border-border rounded-lg bg-bg-secondary">
+          <RowsSkeleton rows={3} />
         </div>
       )}
 
-      {sorted.map((h) => (
-        <HeldVersion
-          key={`${h.skill_name}-${h.version}`}
-          held={h}
-          canDecide={canDecide}
-          decideDisabledReason={canDecide ? undefined : "See the reason above — only an owner or an admin can decide"}
+      {!query.isLoading && sorted.length === 0 && (
+        <EmptyState
+          className="py-16"
+          message="Nothing awaiting review."
+          action={
+            <Link to="/" className="text-[13px] text-accent hover:underline">
+              Open skills
+            </Link>
+          }
         />
+      )}
+
+      {sorted.map((h) => (
+        <div key={`${h.skill_name}-${h.version}`} {...listRow(h.skill_name)} className="rounded-lg">
+          <HeldVersion
+            held={h}
+            canDecide={canDecide}
+            decideDisabledReason={canDecide ? undefined : "See the reason above — only an owner or an admin can decide"}
+          />
+        </div>
       ))}
     </div>
   );

@@ -1,4 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useListNavigation, type ListRowProps } from "@/features/keyboard/use-list-navigation";
 import { listSkillContests } from "@/api/sdk.gen";
 import { ContestLink, Split, VerdictLine } from "./contest-verdict";
 
@@ -7,6 +10,8 @@ import { ContestLink, Split, VerdictLine } from "./contest-verdict";
 // panel change does not split it, because a link is a comparison and not a
 // level.
 export function ContestChain({ skillName }: { skillName: string }) {
+  const navigate = useNavigate();
+  const listRow = useListNavigation<string>((id) => navigate(`/contests/${id}`));
   const { data, isLoading } = useQuery({
     queryKey: ["skill-contests", skillName],
     queryFn: async () => {
@@ -15,7 +20,7 @@ export function ContestChain({ skillName }: { skillName: string }) {
     },
   });
 
-  if (isLoading) return null;
+  if (isLoading) return <Skeleton className="h-8 w-full" />;
 
   const contests = data ?? [];
   if (contests.length === 0) {
@@ -37,7 +42,7 @@ export function ContestChain({ skillName }: { skillName: string }) {
             Improvement over time
           </h4>
           {chain.map((c) => (
-            <Row key={c.id} contest={c} />
+            <Row key={c.id} contest={c} rowProps={listRow(c.id)} />
           ))}
         </div>
       )}
@@ -47,7 +52,7 @@ export function ContestChain({ skillName }: { skillName: string }) {
             Against other skills
           </h4>
           {against.map((c) => (
-            <Row key={c.id} contest={c} />
+            <Row key={c.id} contest={c} rowProps={listRow(c.id)} />
           ))}
         </div>
       )}
@@ -55,12 +60,18 @@ export function ContestChain({ skillName }: { skillName: string }) {
   );
 }
 
-function Row({ contest }: { contest: Parameters<typeof ContestLink>[0]["contest"] }) {
+function Row({
+  contest,
+  rowProps,
+}: {
+  contest: Parameters<typeof ContestLink>[0]["contest"];
+  rowProps: ListRowProps;
+}) {
   const labels = (contest.candidates ?? []).map((c) => c.label).join(" vs ");
   const pairing = (contest.pairings ?? [])[0];
   return (
     <ContestLink contest={contest}>
-      <div className="flex items-baseline justify-between gap-3 py-1.5 border-b border-border last:border-0 flex-wrap">
+      <div {...rowProps} className="flex items-baseline justify-between gap-3 py-1.5 border-b border-border last:border-0 flex-wrap">
         <span className="font-mono text-[12px] text-text-secondary">{labels}</span>
         <span className="flex items-baseline gap-3">
           <span className="text-[12px]">

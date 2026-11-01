@@ -85,15 +85,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	dir := config.DefaultDir()
 	cfg, migrated, err := config.EnsureSkillsKey(dir)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	// Print migration message if applicable.
@@ -140,19 +132,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// and resolve the project root if needed. Done early so --dry-run can
 	// report destinations too.
 	if syncScope != "" && !validScope(syncScope) {
-		ui.Errorf("invalid --scope %q: must be \"project\" or \"user\"", syncScope)
-		return fmt.Errorf("invalid scope")
+		return usageError("invalid_scope", fmt.Sprintf("invalid --scope %q: must be \"project\" or \"user\"", syncScope), "")
 	}
 	scope := resolveScope(syncScope, cfg.Scope)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("cannot determine home directory", "home_error", "")
-			return nil
-		}
-		ui.Errorf("cannot determine home directory: %s", err)
-		return nil
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 
 	// Resolve projectRoot if the global scope is project OR any per-skill scope is project.
@@ -169,8 +155,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if needsProjectRoot {
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
-			ui.Errorf("cannot determine working directory: %s", wdErr)
-			return wdErr
+			return failure("cwd_error", fmt.Sprintf("cannot determine working directory: %s", wdErr), "")
 		}
 		projectRoot = gitRoot(wd)
 	}
@@ -184,8 +169,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if len(filtered) == 0 {
-			ui.Errorf("agent %q not detected", syncAgent)
-			return nil
+			return usageError("agent_not_detected", fmt.Sprintf("agent %q not detected", syncAgent), "")
 		}
 		detectedAgents = filtered
 	}
@@ -196,12 +180,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	manifest, err := c.GetManifest()
 	if err != nil {
 		sp.Stop()
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "api_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return apiFailure(err)
 	}
 
 	// 2b. Filter manifest to only skills in config.
@@ -233,12 +212,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// 3. Read local state.
 	state, err := config.ReadState(dir)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "state_error", "")
-			return nil
-		}
-		ui.Errorf("read state: %s", err)
-		return nil
+		return failure("state_error", fmt.Sprintf("read state: %s", err), "")
 	}
 
 	// 4. Build local map: name → SyncedSkill.
@@ -466,12 +440,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		Skills:   newSkills,
 	}
 	if err := config.WriteState(dir, newState); err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(fmt.Sprintf("write state: %s", err), "state_error", "")
-			return fmt.Errorf("write state: %w", err)
-		}
-		ui.Errorf("write state: %s", err)
-		return fmt.Errorf("write state: %w", err)
+		return failure("state_error", fmt.Sprintf("write state: %s", err), "")
 	}
 
 	// 11. Print summary.
@@ -511,6 +480,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 			Dests:  dests,
 			Total:  len(cfg.Skills),
 		}
+		if failed > 0 {
+			return syncFailed(failed, map[string]any{"result": out})
+		}
 		return ui.PrintJSON(out)
 	}
 
@@ -531,5 +503,15 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if failed > 0 {
+		return syncFailed(failed, nil)
+	}
 	return nil
+}
+
+func syncFailed(failed int, extra map[string]any) *exitError {
+	return &exitError{
+		exit: exitAPI, code: "sync_failed", extra: extra,
+		msg: fmt.Sprintf("%d %s failed to sync", failed, plural(failed, "skill", "skills")),
+	}
 }

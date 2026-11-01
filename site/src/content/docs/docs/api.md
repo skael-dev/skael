@@ -122,6 +122,7 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/skills/{name}/versions` | List versions |
 | `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed). `?override=true` publishes despite appealable scan findings — instance admin only, recorded server-side |
 | `GET` | `/api/skills/{name}/versions/{version}/download` | Download version archive |
+| `GET` | `/api/skills/{name}/versions/{version}/files/{path}` | Download one file from the version archive, as `application/octet-stream` with its size in `X-Skael-File-Size`. The read rule is the same as the archive download: a scoped key that is not a worker gets 404 on a held version. A path that climbs out of the archive gets 400 |
 | `GET` | `/api/skills/{name}/versions/{version}/diff` | What this version changes against the version currently served — SKILL.md as a unified diff, plus per-file added/modified/removed |
 | `GET` | `/api/skills/{name}/scan` | Scan results for the latest version |
 | `PUT` | `/api/skills/{name}/review` | Mark skill as reviewed |
@@ -163,6 +164,20 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/eval/suites/{ref}` | Download the suite archive (`application/gzip`) |
 | `GET` | `/api/review/queue` | Every version currently held for review, across all skills |
 | `POST` | `/api/skills/{name}/versions/{version}/review` | Approve or reject one hold reason on a version held for review — see [Review queue](#review-queue) |
+| `GET` | `/api/sets` | List sets. A set-limited key sees its own set. See [Sets](#sets) |
+| `POST` | `/api/sets` | Create a set. Owner or admin only |
+| `GET` | `/api/sets/{name}` | One set, with its entries and last callers |
+| `PUT` | `/api/sets/{name}` | Replace a set's description and entries. Owner or admin only |
+| `DELETE` | `/api/sets/{name}` | Delete a set. Owner or admin only |
+| `GET` | `/api/sets/{name}/resolve` | Resolve a set to exact versions and digests. `?include_excluded=true` lists excluded entries |
+| `GET` | `/api/sets/{name}/resolutions/{id}` | One stored resolution |
+| `GET` | `/api/sets/{name}/bundle` | Download one resolution as a `tar.gz`. `?resolved=<id>` selects it |
+| `GET` | `/api/service-accounts` | List service accounts. Owner or admin only. See [Service accounts](#service-accounts) |
+| `POST` | `/api/service-accounts` | Create a service account. Owner or admin only |
+| `DELETE` | `/api/service-accounts/{id}` | Delete a service account and revoke its keys. Owner or admin only |
+| `GET` | `/api/service-accounts/{id}/keys` | List an account's keys. Owner or admin only |
+| `POST` | `/api/service-accounts/{id}/keys` | Create a scoped key. Owner or admin only. The response has the secret once |
+| `DELETE` | `/api/service-accounts/{id}/keys/{keyId}` | Revoke a key. Owner or admin only |
 
 ### Worker-facing endpoints
 
@@ -176,6 +191,73 @@ These are the claim/lease protocol `skael-worker` speaks. They are an integratio
 | `POST` | `/api/eval/jobs/{id}/fail` | Mark a claimed job failed, with an optional `error` string |
 | `POST` | `/api/eval/jobs/{id}/cancel` | Cancel a job that has not finished — instance admin only, no claim token |
 | `GET` | `/api/eval/jobs/{id}` | Job status, plus `queue_position` while it is still queued |
+
+## Sets
+
+A set is a name, a description and a list of entries. An entry names a skill. It has a `version` to pin one version, and no `version` to follow the latest.
+
+```json
+{"name": "review-tools", "description": "Skills for review", "entries": [{"name": "lint"}, {"name": "audit", "version": 3}]}
+```
+
+### Resolve
+
+`GET /api/sets/{name}/resolve` returns the exact versions:
+
+```json
+{
+  "id": "9f2c...",
+  "set": "review-tools",
+  "complete": false,
+  "entries": [
+    {"name": "lint", "version": 7, "sha256": "ab12...", "scan_verdict": "clean", "approval_state": "released"}
+  ],
+  "excluded": [
+    {"name": "audit", "requested": "3", "reason": "held"}
+  ]
+}
+```
+
+- A set with an excluded entry returns 200 and `complete: false`. `excluded` is present only with `?include_excluded=true`.
+- The reasons are `skill_not_found`, `no_released_version`, `version_not_found`, `held` and `rejected`.
+- The `id` is the SHA-256 of the sorted name, version and digest list. Two resolves with no publish between them return the same `id`.
+- A resolution does not change and does not expire.
+
+### Bundle
+
+`GET /api/sets/{name}/bundle?resolved=<id>` returns exactly the versions of that resolution. With no `resolved`, the server resolves the set now. Both forms return the resolution id in the `X-Skael-Resolution` header, and `true` or `false` in `X-Skael-Complete`.
+
+The archive holds:
+
+| Path | Content |
+|---|---|
+| `.agents/skills/manifest.json` | The set, the resolution id, and the name, version, `sha256` and `archive` of each skill |
+| `.agents/skills/.archives/<name>@<version>.tar.gz` | The skill's archive, whose SHA-256 equals `sha256` |
+| `.agents/skills/<name>/` | The unpacked skill |
+
+Check the digest on the archive. An unpacked tree cannot reproduce it. `skael pull` does this for you.
+
+A resolution that names a deleted skill returns 410 and names the skill.
+
+## Service accounts
+
+A service account is a machine identity. It has no password, it cannot sign in, and it never appears in user search. It acts only through its keys.
+
+`POST /api/service-accounts/{id}/keys` takes a name, at least one scope and an optional set id:
+
+```json
+{"name": "ci", "scopes": ["sets:read"], "set_id": "c7a1..."}
+```
+
+| Scope | What it reaches |
+|---|---|
+| `skills:read` | Read routes for skills, search and the sync manifest |
+| `sets:read` | Read routes for sets, resolutions and bundles |
+| `eval:work` | The worker's claim, heartbeat, report and fail routes, and skill and suite reads a worker needs |
+
+A key with scopes is denied by default: a route with no matching scope returns 403. Admin, user, key, ownership, review and publish routes have no scope, so a service key never reaches them.
+
+A key with a `set_id` reaches only that set, and it needs `sets:read`. It gets 403 on `/api/skills` and on skill downloads. If the set is deleted, the key gets 403. It never becomes unrestricted.
 
 ## Merge
 

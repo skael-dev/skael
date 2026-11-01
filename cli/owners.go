@@ -62,34 +62,12 @@ func init() {
 	rootCmd.AddCommand(ownersCmd)
 }
 
-// ownersLoadClient loads the CLI config and builds a client, reporting the
-// same "not configured" message every other command uses on failure. The
-// returned error is non-nil exactly when the caller should return nil
-// immediately — the message has already been printed.
-func ownersLoadClient() (*client.Client, error) {
+func loadClient() (*client.Client, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil, err
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil, err
+		return nil, notConfigured(err)
 	}
 	return client.New(cfg.Endpoint, cfg.APIKey), nil
-}
-
-// reportOwnersError prints err through the JSON or styled error path,
-// matching every other command's convention.
-func reportOwnersError(err error, code string) {
-	if ui.JSONMode {
-		ui.PrintJSONError(err.Error(), code, "")
-		return
-	}
-	ui.Errorf("%s", err)
 }
 
 // memberLabels renders a rule's hydrated members as "email" (or "id" if the
@@ -150,15 +128,14 @@ func resolveEmails(c *client.Client, emails []string) ([]string, error) {
 }
 
 func runOwnersList(cmd *cobra.Command, args []string) error {
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	rules, err := c.ListOwnershipRules()
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -180,15 +157,14 @@ func runOwnersList(cmd *cobra.Command, args []string) error {
 func runOwnersShow(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	res, err := c.SkillOwners(name)
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -211,21 +187,19 @@ func runOwnersSet(cmd *cobra.Command, args []string) error {
 	pattern := args[0]
 	emails := args[1:]
 
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	ids, err := resolveEmails(c, emails)
 	if err != nil {
-		reportOwnersError(err, "unknown_user")
-		return nil
+		return failure("unknown_user", err.Error(), "")
 	}
 
 	rule, err := c.UpsertOwnershipRule(pattern, ids)
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -239,23 +213,21 @@ func runOwnersAdd(cmd *cobra.Command, args []string) error {
 	pattern := args[0]
 	emails := args[1:]
 
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	// Resolve every email before touching the current rule set at all: a
 	// hard failure here must leave no trace, and never call PUT/POST.
 	ids, err := resolveEmails(c, emails)
 	if err != nil {
-		reportOwnersError(err, "unknown_user")
-		return nil
+		return failure("unknown_user", err.Error(), "")
 	}
 
 	rules, err := c.ListOwnershipRules()
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	members := []string{}
@@ -280,8 +252,7 @@ func runOwnersAdd(cmd *cobra.Command, args []string) error {
 
 	rule, err := c.UpsertOwnershipRule(pattern, members)
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -295,21 +266,19 @@ func runOwnersRm(cmd *cobra.Command, args []string) error {
 	pattern := args[0]
 	emails := args[1:]
 
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	ids, err := resolveEmails(c, emails)
 	if err != nil {
-		reportOwnersError(err, "unknown_user")
-		return nil
+		return failure("unknown_user", err.Error(), "")
 	}
 
 	rules, err := c.ListOwnershipRules()
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	var existing *client.OwnershipRule
@@ -320,8 +289,7 @@ func runOwnersRm(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if existing == nil {
-		reportOwnersError(fmt.Errorf("no ownership rule found for pattern %q", pattern), "not_found")
-		return nil
+		return failure("not_found", fmt.Sprintf("no ownership rule found for pattern %q", pattern), "")
 	}
 
 	remove := make(map[string]bool, len(ids))
@@ -338,8 +306,7 @@ func runOwnersRm(cmd *cobra.Command, args []string) error {
 
 	rule, err := c.UpsertOwnershipRule(pattern, members)
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {
@@ -352,15 +319,14 @@ func runOwnersRm(cmd *cobra.Command, args []string) error {
 func runOwnersDelete(cmd *cobra.Command, args []string) error {
 	pattern := args[0]
 
-	c, err := ownersLoadClient()
+	c, err := loadClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	rules, err := c.ListOwnershipRules()
 	if err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	var id string
@@ -371,13 +337,11 @@ func runOwnersDelete(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if id == "" {
-		reportOwnersError(fmt.Errorf("no ownership rule found for pattern %q", pattern), "not_found")
-		return nil
+		return failure("not_found", fmt.Sprintf("no ownership rule found for pattern %q", pattern), "")
 	}
 
 	if err := c.DeleteOwnershipRule(id); err != nil {
-		reportOwnersError(err, "api_error")
-		return nil
+		return failure("api_error", err.Error(), "")
 	}
 
 	if ui.JSONMode {

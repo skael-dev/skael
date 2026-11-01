@@ -27,28 +27,18 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	dir := config.DefaultDir()
 	cfg, _, err := config.EnsureSkillsKey(dir)
 	if err != nil {
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 
 	// 2. Check skill is installed.
 	if _, idx := cfg.FindSkill(name); idx < 0 {
-		if ui.JSONMode {
-			ui.PrintJSONError(fmt.Sprintf("skill %q is not installed", name), "not_installed", "skael list --installed")
-			return nil
-		}
-		ui.Errorf("Skill %q is not installed.", name)
-		return nil
+		return usageError("not_installed", fmt.Sprintf("skill %q is not installed", name), "skael list --installed")
 	}
 
 	// 3. Remove from config.
 	cfg.RemoveSkill(name)
 	if err := config.WriteConfig(dir, cfg); err != nil {
-		ui.Errorf("write config: %s", err)
-		return fmt.Errorf("write config: %w", err)
+		return failure("config_error", fmt.Sprintf("write config: %s", err), "")
 	}
 
 	// 4. Prune files from disk using state placements.
@@ -67,8 +57,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 	state.Skills = updatedSkills
 	if err := config.WriteState(dir, state); err != nil {
-		ui.Errorf("write state: %s", err)
-		return fmt.Errorf("write state: %w", err)
+		return failure("state_error", fmt.Sprintf("write state: %s", err), "")
 	}
 
 	if ui.JSONMode {

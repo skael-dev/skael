@@ -69,23 +69,15 @@ var (
 )
 
 func runImport(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return usageError("usage_error", "provide a URL or local path", "skael import --help")
+	}
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError("not configured", "not_configured", "skael setup <url> <api-key>")
-			return nil
-		}
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return nil
+		return notConfigured(err)
 	}
 	c := client.New(cfg.Endpoint, cfg.APIKey)
-
-	if len(args) == 0 {
-		return fmt.Errorf("provide a URL or local path")
-	}
 
 	input := args[0]
 
@@ -103,21 +95,11 @@ func runURLImport(c *client.Client, rawURL string) error {
 
 	resolved, err := c.ImportResolve(rawURL)
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(err.Error(), "resolve_error", "")
-			return nil
-		}
-		ui.Errorf("%s", err)
-		return nil
+		return failure("resolve_error", err.Error(), "")
 	}
 
 	if len(resolved.Skills) == 0 {
-		if ui.JSONMode {
-			ui.PrintJSONError("no skills found", "no_skills", "")
-			return nil
-		}
-		ui.Warn("No skills found at %s", rawURL)
-		return nil
+		return failure("no_skills", fmt.Sprintf("no skills found at %s", rawURL), "")
 	}
 
 	return presentAndImport(c, resolved)
@@ -126,8 +108,7 @@ func runURLImport(c *client.Client, rawURL string) error {
 func runLocalImport(c *client.Client, path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		ui.Errorf("invalid path: %s", err)
-		return nil
+		return usageError("invalid_path", fmt.Sprintf("invalid path: %s", err), "")
 	}
 
 	if !ui.JSONMode {
@@ -148,14 +129,12 @@ func runLocalImport(c *client.Client, path string) error {
 			return nil
 		})
 		if walkErr != nil {
-			ui.Errorf("scanning %s: %s", absPath, walkErr)
-			return nil
+			return usageError("invalid_path", fmt.Sprintf("scanning %s: %s", absPath, walkErr), "")
 		}
 	}
 
 	if len(dirs) == 0 {
-		ui.Warn("No skills found in %s", path)
-		return nil
+		return usageError("no_skills", fmt.Sprintf("no skills found in %s", path), "")
 	}
 
 	if importDryRun {
@@ -251,12 +230,25 @@ func runLocalImport(c *client.Client, path string) error {
 		if out.Failed == nil {
 			out.Failed = []client.FailedSkill{}
 		}
+		if len(allFailed) > 0 {
+			return importFailed(len(allFailed), map[string]any{"result": out})
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
 	}
 
+	if len(allFailed) > 0 {
+		return importFailed(len(allFailed), nil)
+	}
 	return nil
+}
+
+func importFailed(failed int, extra map[string]any) *exitError {
+	return &exitError{
+		exit: exitAPI, code: "import_failed", extra: extra,
+		msg: fmt.Sprintf("%d %s failed to import", failed, plural(failed, "skill", "skills")),
+	}
 }
 
 func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error {
@@ -283,8 +275,10 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 		}
 		result, err := c.ImportSkills(src, names, "")
 		if err != nil {
-			ui.PrintJSONError(err.Error(), "import_error", "")
-			return nil
+			return failure("import_error", err.Error(), "")
+		}
+		if len(result.Failed) > 0 {
+			return importFailed(len(result.Failed), map[string]any{"result": result})
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -360,8 +354,7 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 
 	result, err := c.ImportSkills(resolved.Source, names, namespace)
 	if err != nil {
-		ui.Errorf("%s", err)
-		return nil
+		return failure("import_error", err.Error(), "")
 	}
 
 	fmt.Fprintln(os.Stdout)
@@ -387,6 +380,9 @@ func presentAndImport(c *client.Client, resolved *client.ResolveResponse) error 
 	}
 	ui.Summary(parts...)
 
+	if len(result.Failed) > 0 {
+		return importFailed(len(result.Failed), nil)
+	}
 	return nil
 }
 

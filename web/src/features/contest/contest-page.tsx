@@ -1,3 +1,4 @@
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
@@ -110,17 +111,21 @@ export function ContestPage() {
   });
 
   if (query.isLoading) {
-    return <div className="p-8 text-sm text-text-secondary">Loading the contest…</div>;
+    return (
+      <div className="p-8">
+        <RowsSkeleton rows={5} />
+      </div>
+    );
   }
   if (query.isError || !query.data) {
-    return <div className="p-8 text-sm text-danger">Could not load the contest.</div>;
+    return <div className="p-8 text-sm text-danger">Could not load the contest. Reload the page to try again.</div>;
   }
 
   const contest = query.data;
   const candidates = contest.candidates ?? [];
 
   return (
-    <div className="px-8 py-8 max-w-[1000px]">
+    <div className="px-5 py-8 md:px-8 max-w-[1000px]">
       <Link
         to={candidates[0] ? `/skills/${candidates[0].skill}` : "/"}
         className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary hover:text-text-primary mb-6"

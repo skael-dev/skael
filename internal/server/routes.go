@@ -19,10 +19,12 @@ import (
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	skillimport "github.com/skael-dev/skael/internal/import"
+	"github.com/skael-dev/skael/internal/mcp"
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/scan"
+	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
 	gosync "github.com/skael-dev/skael/internal/sync"
 )
@@ -126,6 +128,11 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Auth.
 	auth.RegisterRoutes(api, d.SessionManager, d.UserStore, d.KeyStore, cfg.DisableSignup)
+	auth.RegisterServiceAccountRoutes(api, d.Pool, d.KeyStore)
+
+	// Sets.
+	setStore := sets.NewStore(d.Pool)
+	sets.RegisterRoutes(api, router, setStore, d.Storage)
 
 	// Skills. The eval queue and suite registry are constructed here (ahead
 	// of their own route registration below) because publish needs them to
@@ -148,6 +155,8 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		QualityFloor: cfg.QualityFloor,
 		Ownership:    ownerResolver,
 	})
+
+	mcp.RegisterRoutes(router, skillStore, setStore, cfg, caps.Response().Version)
 
 	// Ownership rules. Registered inside RegisterAPIRoutes, not in Build, so
 	// the generated OpenAPI spec cannot drift from what is served.

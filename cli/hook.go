@@ -44,28 +44,12 @@ func init() {
 func runHookInstall(cmd *cobra.Command, args []string) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		ui.Error(ui.ErrorDetail{
-			Message:    "not configured",
-			Suggestion: "skael setup <url> <api-key>",
-		})
-		return fmt.Errorf("load config: %w", err)
+		return notConfigured(err)
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		ui.Errorf("cannot determine home directory: %s", err)
-		return fmt.Errorf("home dir: %w", err)
-	}
-
-	dir := config.DefaultDir()
-	scriptPath, err := hooks.WriteHookScript(dir)
-	if err != nil {
-		ui.Errorf("write hook script: %s", err)
-		return fmt.Errorf("write hook script: %w", err)
-	}
-	cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
-	if cursorErr != nil {
-		ui.Warn("write cursor hook script: %s", cursorErr)
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 
 	detectedAgents := agents.DetectIn(home)
@@ -74,40 +58,70 @@ func runHookInstall(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	for _, agent := range detectedAgents {
+	failed := installActivationHooks(config.DefaultDir(), home, cfg.Endpoint, cfg.APIKey, detectedAgents)
+	failed += installAutoSyncHooks(config.DefaultDir(), home, detectedAgents)
+	if failed > 0 {
+		return failure("hook_error", fmt.Sprintf("%d hook %s failed to install", failed, plural(failed, "step", "steps")), "")
+	}
+	return nil
+}
+
+// installActivationHooks writes the hook scripts and registers them with each
+// agent. It reports each failure and returns how many occurred, so one agent
+// with a broken config does not stop the others.
+func installActivationHooks(dir, home, endpoint, apiKey string, detected []agents.Agent) int {
+	scriptPath, err := hooks.WriteHookScript(dir)
+	if err != nil {
+		ui.Warn("write hook script: %s", err)
+		return 1
+	}
+	failed := 0
+	cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
+	if cursorErr != nil {
+		ui.Warn("write cursor hook script: %s", cursorErr)
+		failed++
+	}
+	for _, agent := range detected {
 		configPath := agent.ConfigPath(home)
-		// Ensure parent directory exists.
 		if mkErr := os.MkdirAll(filepath.Dir(configPath), 0o755); mkErr != nil {
 			ui.Warn("create config dir for %s: %s", agent.Name(), mkErr)
+			failed++
 			continue
 		}
 		hookScript := scriptPath
 		if agent.Name() == "cursor" {
+			if cursorScriptPath == "" {
+				ui.Warn("skip cursor hook: script not available")
+				continue
+			}
 			hookScript = cursorScriptPath
 		}
-		if instErr := hooks.InstallForAgent(agent.Name(), configPath, cfg.Endpoint, cfg.APIKey, hookScript); instErr != nil {
-			ui.Errorf("install hook for %s: %s", agent.Name(), instErr)
+		if instErr := hooks.InstallForAgent(agent.Name(), configPath, endpoint, apiKey, hookScript); instErr != nil {
+			ui.Warn("install hook for %s: %s", agent.Name(), instErr)
+			failed++
 		} else {
 			ui.Success("Hook installed for %s", agent.Name())
 		}
 	}
+	return failed
+}
 
-	// Install auto-sync hooks.
-	autoSyncPath, autoSyncErr := hooks.WriteAutoSyncScript(dir)
-	if autoSyncErr != nil {
-		ui.Warn("write auto-sync script: %s", autoSyncErr)
-	} else {
-		for _, agent := range detectedAgents {
-			configPath := agent.ConfigPath(home)
-			if instErr := hooks.InstallAutoSyncForAgent(agent.Name(), configPath, autoSyncPath); instErr != nil {
-				ui.Errorf("install auto-sync for %s: %s", agent.Name(), instErr)
-			} else {
-				ui.Success("Auto-sync installed for %s", agent.Name())
-			}
+func installAutoSyncHooks(dir, home string, detected []agents.Agent) int {
+	autoSyncPath, err := hooks.WriteAutoSyncScript(dir)
+	if err != nil {
+		ui.Warn("write auto-sync script: %s", err)
+		return 1
+	}
+	failed := 0
+	for _, agent := range detected {
+		if instErr := hooks.InstallAutoSyncForAgent(agent.Name(), agent.ConfigPath(home), autoSyncPath); instErr != nil {
+			ui.Warn("install auto-sync for %s: %s", agent.Name(), instErr)
+			failed++
+		} else {
+			ui.Success("Auto-sync installed for %s", agent.Name())
 		}
 	}
-
-	return nil
+	return failed
 }
 
 // hookAgentStatus is the machine-readable status for a single agent's hook.
@@ -120,12 +134,7 @@ type hookAgentStatus struct {
 func runHookStatus(cmd *cobra.Command, args []string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		if ui.JSONMode {
-			ui.PrintJSONError(fmt.Sprintf("cannot determine home directory: %s", err), "home_dir_error", "")
-			return nil
-		}
-		ui.Errorf("cannot determine home directory: %s", err)
-		return fmt.Errorf("home dir: %w", err)
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 
 	// Check all known agents, not just detected ones.
@@ -196,8 +205,7 @@ func runHookStatus(cmd *cobra.Command, args []string) error {
 func runHookUninstall(cmd *cobra.Command, args []string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		ui.Errorf("cannot determine home directory: %s", err)
-		return fmt.Errorf("home dir: %w", err)
+		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
 	}
 
 	detectedAgents := agents.DetectIn(home)
@@ -206,18 +214,24 @@ func runHookUninstall(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	failed := 0
 	for _, agent := range detectedAgents {
 		configPath := agent.ConfigPath(home)
 		if err := hooks.UninstallForAgent(agent.Name(), configPath); err != nil {
 			ui.Errorf("uninstall hook for %s: %s", agent.Name(), err)
+			failed++
 		} else {
 			ui.Success("Hook uninstalled for %s", agent.Name())
 		}
 		// Also uninstall auto-sync hooks.
 		if err := hooks.UninstallAutoSyncForAgent(agent.Name(), configPath); err != nil {
 			ui.Errorf("uninstall auto-sync for %s: %s", agent.Name(), err)
+			failed++
 		}
 	}
 
+	if failed > 0 {
+		return failure("hook_error", fmt.Sprintf("%d hook %s failed to uninstall", failed, plural(failed, "step", "steps")), "")
+	}
 	return nil
 }

@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { keepPreviousData, useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
 import { toast } from "sonner";
 import { ImportModal } from "@/features/import/import-modal";
@@ -7,10 +8,14 @@ import { UnregisteredTab } from "@/features/skills/unregistered-tab";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { SkillCard } from "@/features/skills/skill-card";
 import { analyticsOverview, analyticsSkills, skillsTags, bulkReviewSkills } from "@/api/sdk.gen";
 import type { SkillAnalytics, OverviewData } from "@/api/types.gen";
 import { cn } from "@/lib/utils";
+import { shortcutsAllowed } from "@/features/keyboard/keys";
+import { useListNavigation } from "@/features/keyboard/use-list-navigation";
 
 // ── Debounce hook ─────────────────────────────────────────────
 function useDebouncedValue<T>(value: T, ms: number): T {
@@ -64,7 +69,7 @@ function Onboarding() {
         }}
       />
 
-      <div className="relative px-12 pt-16 pb-12 max-w-[880px] w-full mx-auto">
+      <div className="relative px-5 md:px-12 pt-8 md:pt-16 pb-12 max-w-[880px] w-full mx-auto">
         {/* Heading */}
         <div className="animate-fade-up" style={{ animationDelay: "0ms" }}>
           <h1 className="text-4xl font-medium tracking-tight text-text-primary m-0 mb-3.5 leading-none">
@@ -208,7 +213,7 @@ function StatTile({
   subColor?: string;
 }) {
   return (
-    <div className="flex items-center gap-3.5 p-4 bg-bg-secondary border border-border rounded-lg transition-all duration-150 hover:border-border-active hover:-translate-y-px">
+    <div className="flex items-center gap-3.5 p-4 bg-bg-secondary border border-border rounded-lg transition-all duration-150 hover:border-border-active motion-safe:hover:-translate-y-px">
       <div className="size-9 rounded-[7px] bg-bg-tertiary border border-border flex items-center justify-center shrink-0">
         <Icon className="size-[15px] text-text-secondary" />
       </div>
@@ -283,15 +288,13 @@ export function SkillList() {
   const [importOpen, setImportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"registry" | "unregistered">("registry");
   const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const listRow = useListNavigation<SkillAnalytics>((s) => navigate(`/skills/${s.name}`));
 
   // Keyboard shortcut: "/" focuses search
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (
-        e.key === "/" &&
-        document.activeElement !== inputRef.current &&
-        !(e.metaKey || e.ctrlKey)
-      ) {
+      if (e.key === "/" && shortcutsAllowed(e)) {
         e.preventDefault();
         inputRef.current?.focus();
       }
@@ -318,6 +321,7 @@ export function SkillList() {
   const skillsQuery = useInfiniteQuery({
     queryKey: ["analytics", "skills", { sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "", scored }],
     initialPageParam: 0,
+    placeholderData: keepPreviousData,
     queryFn: async ({ pageParam }) => {
       const res = await analyticsSkills({
         query: { days: 30, limit: PAGE, offset: pageParam as number, sort: serverSort, q: debouncedQuery, tag: tagFilter ?? "", scored },
@@ -433,10 +437,10 @@ export function SkillList() {
   // ── Loading skeleton ──────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="flex flex-col min-h-full px-12 pt-12">
+      <div className="flex flex-col min-h-full px-5 md:px-12 pt-8 md:pt-12">
         <Skeleton className="h-3 w-20 mb-3.5 bg-bg-secondary" />
         <Skeleton className="h-10 w-40 mb-3.5 bg-bg-secondary" />
-        <Skeleton className="h-4 w-80 mb-9 bg-bg-secondary" />
+        <Skeleton className="h-4 w-80 max-w-full mb-9 bg-bg-secondary" />
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-9 max-w-[880px]">
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center gap-3.5 p-4 bg-bg-secondary border border-border rounded-lg">
@@ -485,7 +489,10 @@ export function SkillList() {
   }
 
   // ── Empty state — onboarding ──────────────────────────────
-  if (!isLoading && skills.length === 0 && unregisteredCount === 0) {
+  // Only an unfiltered empty list means an empty registry. A filter with no match
+  // must keep the filter bar on screen, so the user can clear it.
+  const filtering = Boolean(query || debouncedQuery || tagFilter || authorFilter || unscoredOnly);
+  if (!filtering && skills.length === 0 && unregisteredCount === 0) {
     return <Onboarding />;
   }
 
@@ -493,7 +500,7 @@ export function SkillList() {
     <div className="flex flex-col min-h-full relative">
       {/* Hero */}
       <div className="relative overflow-hidden">
-        <div className="px-12 pt-12 relative max-w-screen-xl w-full mx-auto">
+        <div className="px-5 md:px-12 pt-8 md:pt-12 relative max-w-screen-xl w-full mx-auto">
           <div className="text-[11px] text-text-tertiary uppercase tracking-[0.1em] mb-3.5">
             Workspace
           </div>
@@ -535,7 +542,7 @@ export function SkillList() {
       </div>
 
       {/* Tab bar */}
-      <div className="px-12 flex border-b border-border max-w-screen-xl w-full mx-auto">
+      <div className="px-5 md:px-12 flex border-b border-border max-w-screen-xl w-full mx-auto">
         <button
           onClick={() => setActiveTab("registry")}
           className={`px-4 py-2.5 text-[13px] font-sans border-b-2 transition-colors cursor-pointer bg-transparent ${activeTab === "registry"
@@ -562,7 +569,7 @@ export function SkillList() {
       </div>
 
       {/* Filter + list */}
-      <div className="px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl w-full mx-auto">
+      <div className="px-5 md:px-12 pb-12 flex-1 flex flex-col min-h-0 max-w-screen-xl w-full mx-auto">
         {activeTab === "unregistered" ? (
           <div className="mt-4">
             <UnregisteredTab days={30} />
@@ -700,6 +707,7 @@ export function SkillList() {
               {filtered.map((skill) => (
                 <SkillCard
                   key={skill.name}
+                  rowProps={listRow(skill)}
                   skill={skill}
                   checked={selected.has(skill.name)}
                   onCheck={(checked) => toggleOne(skill.name, checked)}
@@ -707,19 +715,36 @@ export function SkillList() {
                 />
               ))}
 
-              {skills.length === 0 && (debouncedQuery || tagFilter) && (
-                <div className="text-center py-16 text-text-secondary">
-                  <div className="text-sm mb-2">Nothing matches that filter</div>
-                  <div className="text-xs text-text-tertiary">
-                    Try clearing the search or selecting a different tag
-                  </div>
-                </div>
+              {filtered.length === 0 && filtering && (
+                <EmptyState
+                  className="py-16"
+                  message="Nothing matches that filter."
+                  action={
+                    <button
+                      onClick={() => {
+                        setQuery("");
+                        setTagFilter(null);
+                        setAuthorFilter(null);
+                        setUnscoredOnly(false);
+                      }}
+                      className="text-[13px] text-accent hover:underline cursor-pointer"
+                    >
+                      Clear filters
+                    </button>
+                  }
+                />
+              )}
+              {filtered.length === 0 && !filtering && (
+                <EmptyState
+                  className="py-16"
+                  message="No skills in the registry. Run skael publish ./my-skill, or import a repository."
+                />
               )}
 
               {/* Infinite-scroll sentinel + loading indicator */}
               <div ref={sentinelRef} />
               {skillsQuery.isFetchingNextPage && (
-                <div className="text-center py-4 text-xs text-text-tertiary">Loading more…</div>
+                <RowsSkeleton rows={2} />
               )}
             </div>
           </>

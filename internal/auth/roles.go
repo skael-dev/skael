@@ -4,6 +4,9 @@ const (
 	RoleOwner  = "owner"
 	RoleAdmin  = "admin"
 	RoleMember = "member"
+
+	KindHuman   = "human"
+	KindService = "service"
 )
 
 // IsOwner reports whether the user is the instance owner.
