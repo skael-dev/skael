@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getReviewQueue } from "@/api/sdk.gen";
 import { useAuth } from "@/app/auth-provider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RowsSkeleton } from "@/components/ui/rows-skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useListNavigation } from "@/features/keyboard/use-list-navigation";
 import { HeldVersion } from "./held-version";
+import { LIST_LIMIT, Submissions, useSubmissionList } from "./submissions";
 
 // Approve/reject apply to the version as a whole. Any authenticated member
 // can read the queue; only owner/admin may decide — enforced server-side,
@@ -13,16 +15,23 @@ import { HeldVersion } from "./held-version";
 // than nothing at all.
 const DECISION_ROLES = new Set(["owner", "admin"]);
 
+function TabCount({ value }: { value: string }) {
+  return <span className="font-mono text-[11px] text-text-tertiary tabular-nums">{value}</span>;
+}
+
 export function ReviewQueue() {
   const { user } = useAuth();
   const canDecide = user != null && DECISION_ROLES.has(user.role);
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "submissions" ? "submissions" : "held";
   const listRow = useListNavigation<string>((skillName) => navigate(`/skills/${skillName}`));
 
   const query = useQuery({
     queryKey: ["review-queue"],
     queryFn: async () => (await getReviewQueue()).data,
   });
+  const pendingCount = useSubmissionList("pending").data?.length;
 
   const held = query.data?.held ?? [];
   const sorted = [...held].sort(
@@ -30,42 +39,66 @@ export function ReviewQueue() {
   );
 
   return (
-    <div className="p-6 max-w-4xl mx-auto flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-medium text-text-primary">Review queue</h1>
-        <p className="text-xs text-text-tertiary mt-1">
-          Versions held by the publish gate, awaiting a verified evaluation or an
-          owner/admin decision.
-        </p>
-      </div>
+    <div className="px-5 py-6 md:p-6 max-w-4xl mx-auto flex flex-col gap-4">
+      <h1 className="text-lg font-medium text-text-primary">Review queue</h1>
 
-      {query.isLoading && (
-        <div className="border border-border rounded-lg bg-bg-secondary">
-          <RowsSkeleton rows={3} />
-        </div>
-      )}
+      <Tabs
+        value={tab}
+        onValueChange={(next) => setParams(next === "submissions" ? { tab: next } : {})}
+        className="gap-4"
+      >
+        <TabsList variant="line" className="border-b border-border w-full justify-start rounded-none">
+          <TabsTrigger value="held" className="flex-none text-[13px]">
+            Held versions
+            {query.data && <TabCount value={String(query.data.total)} />}
+          </TabsTrigger>
+          <TabsTrigger value="submissions" className="flex-none text-[13px]">
+            Submissions
+            {pendingCount !== undefined && (
+              <TabCount value={pendingCount >= LIST_LIMIT ? `${LIST_LIMIT}+` : String(pendingCount)} />
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      {!query.isLoading && sorted.length === 0 && (
-        <EmptyState
-          className="py-16"
-          message="Nothing awaiting review."
-          action={
-            <Link to="/" className="text-[13px] text-accent hover:underline">
-              Open skills
-            </Link>
-          }
-        />
-      )}
+        <TabsContent value="held" className="flex flex-col gap-4">
+          <p className="text-xs text-text-tertiary">
+            Versions held by the publish gate, awaiting a verified evaluation or an
+            owner/admin decision.
+          </p>
 
-      {sorted.map((h) => (
-        <div key={`${h.skill_name}-${h.version}`} {...listRow(h.skill_name)} className="rounded-lg">
-          <HeldVersion
-            held={h}
-            canDecide={canDecide}
-            decideDisabledReason={canDecide ? undefined : "See the reason above — only an owner or an admin can decide"}
-          />
-        </div>
-      ))}
+          {query.isLoading && (
+            <div className="border border-border rounded-lg bg-bg-secondary">
+              <RowsSkeleton rows={3} />
+            </div>
+          )}
+
+          {!query.isLoading && sorted.length === 0 && (
+            <EmptyState
+              className="py-16"
+              message="Nothing awaiting review."
+              action={
+                <Link to="/" className="text-[13px] text-accent hover:underline">
+                  Open skills
+                </Link>
+              }
+            />
+          )}
+
+          {sorted.map((h) => (
+            <div key={`${h.skill_name}-${h.version}`} {...listRow(h.skill_name)} className="rounded-lg">
+              <HeldVersion
+                held={h}
+                canDecide={canDecide}
+                decideDisabledReason={canDecide ? undefined : "See the reason above — only an owner or an admin can decide"}
+              />
+            </div>
+          ))}
+        </TabsContent>
+
+        <TabsContent value="submissions" className="min-w-0">
+          <Submissions />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -12,11 +12,18 @@ const (
 	ScopeSkillsRead = "skills:read"
 	ScopeSetsRead   = "sets:read"
 	ScopeEvalWork   = "eval:work"
+
+	ScopeEventsWrite      = "events:write"
+	ScopeOutcomesWrite    = "outcomes:write"
+	ScopeSubmissionsWrite = "submissions:write"
 )
 
 // ValidScope reports whether s is a scope the server knows.
 func ValidScope(s string) bool {
-	return slices.Contains([]string{ScopeSkillsRead, ScopeSetsRead, ScopeEvalWork}, s)
+	return slices.Contains([]string{
+		ScopeSkillsRead, ScopeSetsRead, ScopeEvalWork,
+		ScopeEventsWrite, ScopeOutcomesWrite, ScopeSubmissionsWrite,
+	}, s)
 }
 
 // RouteRule says which scopes reach one route. A rule with no scopes is listed
@@ -88,8 +95,18 @@ var routeRules = []RouteRule{
 	read("/api/eval/suites/{ref}", ScopeEvalWork),
 	read("/api/eval/suites/{ref}/meta", ScopeEvalWork),
 
+	// Run signals. A person decides a submission, so decide and list have no scope.
+	post("/api/events/batch", ScopeEventsWrite),
+	post("/api/outcomes", ScopeOutcomesWrite),
+	read("/api/skills/{name}/outcomes", ScopeSkillsRead),
+	post("/api/submissions", ScopeSubmissionsWrite),
+	read("/api/submissions/{id}", ScopeSubmissionsWrite),
+	read("/api/submissions"),
+	read("/api/submissions/{id}/diff"),
+	post("/api/submissions/{id}/decision"),
+
 	// MCP. Each tool checks its own scope.
-	{Method: http.MethodPost, Pattern: "/mcp", Scopes: []string{ScopeSkillsRead, ScopeSetsRead}, SetLimited: true},
+	{Method: http.MethodPost, Pattern: "/mcp", Scopes: []string{ScopeSkillsRead, ScopeSetsRead, ScopeOutcomesWrite, ScopeSubmissionsWrite}, SetLimited: true},
 	// GET only answers 405. It has no scope, so a restricted key gets 403 first.
 	read("/mcp"),
 
@@ -119,7 +136,7 @@ var routeRules = []RouteRule{
 	post("/api/import/resolve"), post("/api/import"), read("/api/import/sources"), post("/api/import/upload"),
 	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/skills"),
 	read("/api/skills/{name}/activations"), read("/api/skills/{name}/timeseries"),
-	read("/api/analytics/timeseries"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
+	read("/api/analytics/timeseries"), read("/api/analytics/consumers"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
 }
 
 // RouteRules returns the table for the coverage test.

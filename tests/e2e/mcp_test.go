@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -95,9 +96,10 @@ func TestMCPToolsFollowKeyScopes(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 		require.Equal(t, "object", tool.InputSchema.Type)
-		require.True(t, tool.Annotations.ReadOnlyHint)
+		readOnly := !slices.Contains([]string{"report_outcome", "submit_skill", "get_submission"}, tool.Name)
+		require.Equal(t, readOnly, tool.Annotations.ReadOnlyHint, tool.Name)
 	}
-	require.ElementsMatch(t, []string{"search_skills", "get_skill", "list_sets", "resolve_set"}, names)
+	require.ElementsMatch(t, []string{"search_skills", "get_skill", "list_sets", "resolve_set", "report_outcome", "submit_skill", "get_submission"}, names)
 
 	require.Nil(t, a.mcpTool(skillsOnly, "search_skills", map[string]any{"query": "alpha"}).Error)
 	requireForbidden(t, a.mcpTool(skillsOnly, "resolve_set", map[string]any{"name": "one"}), "forbidden: this key lacks sets:read")
@@ -133,4 +135,117 @@ func TestMCPToolsFollowKeyScopes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(a.mcpTool(limited, "list_sets", nil).Result, &sets))
 	require.Len(t, sets.StructuredContent.Sets, 1)
 	require.Equal(t, "one", sets.StructuredContent.Sets[0].Name)
+}
+
+type mcpResult struct {
+	IsError bool `json:"isError"`
+	Content []struct {
+		Text string `json:"text"`
+	} `json:"content"`
+	StructuredContent wireSubmission `json:"structuredContent"`
+}
+
+func (a *machineAPI) mcpResult(key, name string, args map[string]any) mcpResult {
+	a.t.Helper()
+	reply := a.mcpTool(key, name, args)
+	require.Nilf(a.t, reply.Error, "%s", name)
+	var out mcpResult
+	require.NoError(a.t, json.Unmarshal(reply.Result, &out), string(reply.Result))
+	return out
+}
+
+func TestMCPReportingToolsFollowKeyScopes(t *testing.T) {
+	a := startMachineServer(t)
+	a.publish("alpha", "first")
+	var one struct {
+		ID string `json:"id"`
+	}
+	a.sessionJSON(http.MethodPost, "/api/sets", map[string]any{"name": "one", "entries": []map[string]any{{"name": "alpha"}}}, http.StatusCreated, &one)
+
+	_, outcomes := a.serviceKey("factoree", []string{auth.ScopeOutcomesWrite}, "")
+	_, submitter := a.serviceKey("drafter", []string{auth.ScopeSubmissionsWrite}, "")
+	_, other := a.serviceKey("other", []string{auth.ScopeSubmissionsWrite}, "")
+	_, limited := a.serviceKey("limited", []string{auth.ScopeSetsRead, auth.ScopeOutcomesWrite, auth.ScopeSubmissionsWrite}, one.ID)
+	owner := a.ownerKey()
+
+	outcome := map[string]any{"external_run_id": "run-1", "outcome": "succeeded", "repairs": 2}
+	files := []map[string]any{
+		{"path": "SKILL.md", "content": "---\nname: alpha\ndescription: from an agent\n---\n\nsecond, from an agent\n"},
+		{"path": "notes/more.md", "content": "more\n"},
+	}
+	submission := map[string]any{"name": "alpha", "rationale": "because", "run_link": "https://ci.example/1", "files": files}
+
+	// Each tool checks its own scope, and a set-limited key reaches none of them.
+	requireForbidden(t, a.mcpTool(submitter, "report_outcome", outcome), "lacks outcomes:write")
+	requireForbidden(t, a.mcpTool(outcomes, "submit_skill", submission), "lacks submissions:write")
+	requireForbidden(t, a.mcpTool(outcomes, "get_submission", map[string]any{"id": "x"}), "lacks submissions:write")
+	requireForbidden(t, a.mcpTool(limited, "report_outcome", outcome), "limited to one set")
+	requireForbidden(t, a.mcpTool(limited, "submit_skill", submission), "limited to one set")
+	requireForbidden(t, a.mcpTool(limited, "get_submission", map[string]any{"id": "x"}), "limited to one set")
+
+	// A personal key has no consumer.
+	res := a.mcpResult(owner, "report_outcome", outcome)
+	require.True(t, res.IsError)
+	require.Contains(t, res.Content[0].Text, "only a service account")
+
+	require.False(t, a.mcpResult(outcomes, "report_outcome", outcome).IsError)
+	res = a.mcpResult(outcomes, "report_outcome", map[string]any{"external_run_id": "run-1", "outcome": "bogus"})
+	require.True(t, res.IsError)
+	require.Contains(t, res.Content[0].Text, "outcome must be")
+
+	// A file path stays inside the skill, and one of the two forms is required.
+	for _, bad := range []string{"../escape.md", "/etc/x", "a/../b", "a\\b", ""} {
+		reply := a.mcpTool(submitter, "submit_skill", map[string]any{
+			"name": "alpha", "rationale": "because",
+			"files": []map[string]any{{"path": "SKILL.md", "content": "x"}, {"path": bad, "content": "x"}},
+		})
+		require.NotNilf(t, reply.Error, "path %q", bad)
+		require.Equal(t, -32602, reply.Error.Code)
+	}
+	require.NotNil(t, a.mcpTool(submitter, "submit_skill", map[string]any{"name": "alpha", "rationale": "because"}).Error)
+	require.NotNil(t, a.mcpTool(submitter, "submit_skill", map[string]any{
+		"name": "alpha", "rationale": "because", "files": files, "archive_base64": submissionArchive(t, "alpha", "x"),
+	}).Error)
+
+	res = a.mcpResult(submitter, "submit_skill", map[string]any{"name": "alpha", "rationale": "because", "archive_base64": "%%%"})
+	require.True(t, res.IsError)
+
+	// A secret stores nothing, and the model reads why.
+	res = a.mcpResult(submitter, "submit_skill", map[string]any{
+		"name": "alpha", "rationale": "because", "archive_base64": submissionArchive(t, "alpha", "Use the key AKIA"+"IOSFODNN7EXAMPLE for this."),
+	})
+	require.True(t, res.IsError)
+	require.Contains(t, res.Content[0].Text, "archive rejected")
+
+	res = a.mcpResult(submitter, "submit_skill", submission)
+	require.False(t, res.IsError, res.Content)
+	id := res.StructuredContent.ID
+	require.NotEmpty(t, id)
+	require.Equal(t, "pending", res.StructuredContent.State)
+
+	// The packed files reach the reviewer, and nothing is published.
+	var versions struct {
+		Versions []json.RawMessage `json:"versions"`
+	}
+	a.sessionJSON(http.MethodGet, "/api/skills/alpha/versions", nil, http.StatusOK, &versions)
+	require.Len(t, versions.Versions, 1)
+	var diff struct {
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	a.sessionJSON(http.MethodGet, "/api/submissions/"+id+"/diff", nil, http.StatusOK, &diff)
+	require.Len(t, diff.Files, 2)
+
+	a.sessionJSON(http.MethodPost, "/api/submissions/"+id+"/decision", map[string]any{"action": "reject", "reason": "not this"}, http.StatusOK, nil)
+
+	res = a.mcpResult(submitter, "get_submission", map[string]any{"id": id})
+	require.False(t, res.IsError)
+	require.Equal(t, "rejected", res.StructuredContent.State)
+	require.Equal(t, "not this", res.StructuredContent.Reason)
+
+	// Another consumer's key does not learn that it exists.
+	res = a.mcpResult(other, "get_submission", map[string]any{"id": id})
+	require.True(t, res.IsError)
+	require.Contains(t, res.Content[0].Text, "not found")
 }

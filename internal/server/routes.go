@@ -23,9 +23,11 @@ import (
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/quality"
+	"github.com/skael-dev/skael/internal/runs"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
+	"github.com/skael-dev/skael/internal/submissions"
 	gosync "github.com/skael-dev/skael/internal/sync"
 )
 
@@ -147,16 +149,25 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	suiteRegistry := evalsuite.NewRegistry(d.Pool, d.Storage)
 	ownershipStore := ownership.NewStore(d.Pool)
 	ownerResolver := ownership.NewResolver(ownershipStore, d.UserStore)
-	skill.RegisterRoutes(api, router, skillStore, d.Storage, skill.RouteOptions{
+	skillOptions := skill.RouteOptions{
 		External: externalScanner,
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
 
 		QualityFloor: cfg.QualityFloor,
 		Ownership:    ownerResolver,
-	})
+	}
+	skill.RegisterRoutes(api, router, skillStore, d.Storage, skillOptions)
 
-	mcp.RegisterRoutes(router, skillStore, setStore, cfg, caps.Response().Version)
+	// Run signals. Outcomes read and write their own tables and never reach the
+	// headline or a release decision.
+	runStore := runs.NewStore(d.Pool)
+	runs.RegisterRoutes(api, runStore)
+	submissionService := submissions.NewService(submissions.NewStore(d.Pool), skillStore, d.Storage,
+		skill.NewPublisher(skillStore, d.Storage, skillOptions), ownerResolver)
+	submissions.RegisterRoutes(api, submissionService)
+
+	mcp.RegisterRoutes(router, skillStore, setStore, runStore, submissionService, cfg, caps.Response().Version)
 
 	// Ownership rules. Registered inside RegisterAPIRoutes, not in Build, so
 	// the generated OpenAPI spec cannot drift from what is served.

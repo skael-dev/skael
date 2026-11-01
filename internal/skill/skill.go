@@ -62,6 +62,9 @@ type Version struct {
 	// HoldReasons are the reason kinds still standing between this version
 	// and release. Empty on a released or rejected version.
 	HoldReasons []string `json:"hold_reasons"`
+
+	// SubmissionID names the submission this version came from, if any.
+	SubmissionID *string `json:"submission_id,omitempty"`
 }
 
 // FileEntry describes a single file within a skill archive.

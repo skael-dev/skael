@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AnalyticsFilters, readAnalyticsFilter } from "./analytics-filters";
 import { KpiStrip } from "./kpi-strip";
 import { ActivationsChart } from "./activations-chart";
 import { AnalyticsTable } from "./analytics-table";
@@ -62,20 +65,30 @@ function TableSkeleton() {
 // ── Main Analytics page ────────────────────────────────────────
 export function Analytics() {
   const [days, setDays] = useState<Days>(30);
+  const [params, setParams] = useSearchParams();
+  const filter = readAnalyticsFilter(params);
+  const filtered = Object.keys(filter).length > 0;
+
+  function clearFilter() {
+    const next = new URLSearchParams(params);
+    next.delete("consumer");
+    next.delete("role");
+    setParams(next, { replace: true });
+  }
 
   const { data: overview, isLoading: overviewLoading, isError: overviewError } = useQuery({
-    queryKey: ["analytics", "overview", days],
+    queryKey: ["analytics", "overview", days, filter],
     queryFn: async () => {
-      const res = await analyticsOverview({ query: { days } });
+      const res = await analyticsOverview({ query: { days, ...filter } });
       if (res.error) throw res.error;
       return res.data as OverviewData | undefined;
     },
   });
 
   const { data: skills, isLoading: skillsLoading, isError: skillsError } = useQuery({
-    queryKey: ["analytics", "skills", days],
+    queryKey: ["analytics", "skills", days, filter],
     queryFn: async () => {
-      const res = await analyticsSkills({ query: { days, limit: 100 } });
+      const res = await analyticsSkills({ query: { days, limit: 100, ...filter } });
       if (res.error) throw res.error;
       return (res.data?.skills as SkillAnalytics[] | null) ?? [];
     },
@@ -136,6 +149,8 @@ export function Analytics() {
           Skill usage, security posture, and developer adoption across your team.
         </p>
 
+        <AnalyticsFilters filter={filter} params={params} onChange={setParams} onClear={clearFilter} />
+
         {/* KPI strip */}
         <div className="mb-9">
           {isLoading || !overview ? (
@@ -147,7 +162,7 @@ export function Analytics() {
 
         {/* Activations chart */}
         <div className="mb-9">
-          <ActivationsChart days={days} />
+          <ActivationsChart days={days} filter={filter} />
         </div>
       </div>
 
@@ -159,6 +174,15 @@ export function Analytics() {
 
         {isLoading ? (
           <TableSkeleton />
+        ) : filtered && (skills ?? []).length === 0 ? (
+          <EmptyState
+            message="No skill has an activation that matches this filter in this period."
+            action={
+              <button onClick={clearFilter} className="text-accent text-[13px] hover:underline">
+                Clear filter
+              </button>
+            }
+          />
         ) : (
           <AnalyticsTable skills={skills ?? []} />
         )}

@@ -49,7 +49,7 @@ func classifyRequest(r *http.Request) rateLimitClass {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/auth/"):
 		return classAuth
-	case r.URL.Path == "/api/events":
+	case r.URL.Path == "/api/events" || r.URL.Path == "/api/events/batch":
 		return classEvents
 	case r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/mcp":
 		return classRead

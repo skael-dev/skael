@@ -51,8 +51,8 @@ var serviceKeysListCmd = &cobra.Command{
 var serviceKeysCreateCmd = &cobra.Command{
 	Use:   "create <account> --scope <scope> [--scope <scope>] [--set <name>]",
 	Short: "Create a scoped key and show it once",
-	Long: `Create a scoped key and show it once. The scopes are skills:read, sets:read
-and eval:work. --set limits the key to one set, and it needs sets:read.`,
+	Long: `Create a scoped key and show it once. The scopes are skills:read, sets:read,
+eval:work, events:write, outcomes:write and submissions:write. --set limits the key to one set, and it needs sets:read.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runServiceKeysCreate,
 }

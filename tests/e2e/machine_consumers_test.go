@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/cli/client"
@@ -29,6 +30,7 @@ type machineAPI struct {
 	t       *testing.T
 	base    string
 	session *http.Client
+	pool    *pgxpool.Pool
 }
 
 func startMachineServer(t *testing.T) *machineAPI {
@@ -40,7 +42,7 @@ func startMachineServer(t *testing.T) *machineAPI {
 	t.Cleanup(ts.Close)
 
 	jar, _ := cookiejar.New(nil)
-	a := &machineAPI{t: t, base: ts.URL, session: &http.Client{Jar: jar}}
+	a := &machineAPI{t: t, base: ts.URL, session: &http.Client{Jar: jar}, pool: pool}
 	a.sessionJSON(http.MethodPost, "/api/auth/signup", map[string]any{
 		"email": "owner@test.local", "name": "Owner", "password": "password123",
 	}, http.StatusCreated, nil)

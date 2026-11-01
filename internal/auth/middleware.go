@@ -49,6 +49,7 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 							Email: row.Email,
 							Name:  row.Name,
 							Role:  row.Role,
+							Kind:  row.Kind,
 						}
 						r = r.WithContext(ContextWithUser(r.Context(), user))
 						next.ServeHTTP(w, r)
@@ -70,6 +71,7 @@ func Middleware(sessionManager *scs.SessionManager, userStore *UserStore, keySto
 							Email: row.Email,
 							Name:  row.Name,
 							Role:  row.Role,
+							Kind:  row.Kind,
 						}
 						key := &KeyInfo{ID: keyRow.ID, Scopes: keyRow.Scopes}
 						if keyRow.SetID != nil {

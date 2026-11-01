@@ -86,7 +86,7 @@ Everything else — publish, sync, browse, search, reading who owns what — is 
 
 ## Rate limiting
 
-Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying `X-API-Key` are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified).
+Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events` and `POST /api/events/batch`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying `X-API-Key` are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified).
 
 "Source IP" means the address the connection came from, not whatever `X-Forwarded-For` claims — those headers are read only from a peer listed in `TRUSTED_PROXIES`. Behind a reverse proxy, set that variable or every client is budgeted as one; see [Production](/docs/production#telling-skael-about-the-proxy).
 
@@ -129,8 +129,8 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `DELETE` | `/api/skills/{name}/review` | Unmark skill as reviewed |
 | `PUT` | `/api/skills/review` | Bulk mark skills as reviewed |
 | `GET` | `/api/skills/tags` | Distinct tags across all skills |
-| `GET` | `/api/skills/{name}/activations` | Activation summary for a skill |
-| `GET` | `/api/skills/{name}/timeseries` | Per-agent daily activation counts |
+| `GET` | `/api/skills/{name}/activations` | Activation summary for a skill, with `hook_activations`, `automated_activations` and `by_consumer`. Takes `consumer` and `role`, described below the table |
+| `GET` | `/api/skills/{name}/timeseries` | Per-agent daily activation counts. Takes `consumer` and `role`, described below the table |
 | `GET` | `/api/skills/{name}/aliases` | List aliases pointing to this skill |
 | `POST` | `/api/skills/{name}/aliases` | Create an alias |
 | `DELETE` | `/api/skills/{name}/aliases/{alias}` | Delete an alias |
@@ -141,9 +141,10 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `DELETE` | `/api/ownership/rules/{id}` | Delete a rule. Returns `{"deleted": true}` |
 | `GET` | `/api/skills/{name}/owners` | Who owns this name, and which rule pattern produced them |
 | `POST` | `/api/events` | Ingest a skill activation event |
-| `GET` | `/api/analytics/overview` | KPI totals |
-| `GET` | `/api/analytics/skills` | Per-skill analytics (paginated) |
-| `GET` | `/api/analytics/timeseries` | Daily activation counts for chart |
+| `GET` | `/api/analytics/overview` | KPI totals. Takes `consumer` and `role`, described below the table. They change the activation counts, not the skill, review or security counts |
+| `GET` | `/api/analytics/skills` | Per-skill analytics (paginated). Takes `consumer` and `role`, described below the table. With a filter, the list holds only skills with a matching activation |
+| `GET` | `/api/analytics/timeseries` | Daily activation counts for chart. Takes `consumer` and `role`, described below the table |
+| `GET` | `/api/analytics/consumers` | Distinct consumers and roles in stored events, as `{"consumers": [], "roles": []}` |
 | `GET` | `/api/analytics/unregistered` | Skills seen in events but not in registry |
 | `POST` | `/api/analytics/dismiss` | Dismiss an unregistered skill |
 | `GET` | `/api/search` | Full-text + fuzzy skill search (`?q=...&limit=N`) |
@@ -178,6 +179,16 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/service-accounts/{id}/keys` | List an account's keys. Owner or admin only |
 | `POST` | `/api/service-accounts/{id}/keys` | Create a scoped key. Owner or admin only. The response has the secret once |
 | `DELETE` | `/api/service-accounts/{id}/keys/{keyId}` | Revoke a key. Owner or admin only |
+| `POST` | `/api/events/batch` | Report the activations of automated runs. See [Run signals](#run-signals) |
+| `POST` | `/api/outcomes` | Report how an automated run ended |
+| `GET` | `/api/skills/{name}/outcomes` | Outcomes of the runs that loaded each version of a skill |
+| `POST` | `/api/submissions` | Submit a skill archive for human review. See [Submissions](#submissions) |
+| `GET` | `/api/submissions` | List submissions. People only |
+| `GET` | `/api/submissions/{id}` | One submission, its state and its reason |
+| `GET` | `/api/submissions/{id}/diff` | Diff a submission against the served version. People only |
+| `POST` | `/api/submissions/{id}/decision` | Approve or reject a submission. People only |
+
+The `consumer` and `role` query parameters narrow activation counts to the events one [service account](#service-accounts) reported, and to one role. Each is optional, and an omitted parameter applies no filter. A filter excludes hook events, because hook events have no consumer and no role.
 
 ### Worker-facing endpoints
 
@@ -254,10 +265,71 @@ A service account is a machine identity. It has no password, it cannot sign in, 
 | `skills:read` | Read routes for skills, search and the sync manifest |
 | `sets:read` | Read routes for sets, resolutions and bundles |
 | `eval:work` | The worker's claim, heartbeat, report and fail routes, and skill and suite reads a worker needs |
+| `events:write` | `POST /api/events/batch` |
+| `outcomes:write` | `POST /api/outcomes`, and `report_outcome` on `/mcp` |
+| `submissions:write` | `POST /api/submissions` and `GET /api/submissions/{id}`, and `submit_skill` and `get_submission` on `/mcp` |
 
 A key with scopes is denied by default: a route with no matching scope returns 403. Admin, user, key, ownership, review and publish routes have no scope, so a service key never reaches them.
 
 A key with a `set_id` reaches only that set, and it needs `sets:read`. It gets 403 on `/api/skills` and on skill downloads. If the set is deleted, the key gets 403. It never becomes unrestricted.
+
+## Run signals
+
+A consumer reports what each automated run loaded and how the run ended. The consumer comes from the service account, and no request field can name one, so only a service account key can report. A personal key gets 403. The first event or outcome that names an external run id creates the run.
+
+Outcomes never change the headline and never release a version. They come from uncontrolled tasks, and a consumer reports them about itself.
+
+### Report events
+
+`POST /api/events/batch` needs `events:write`. It holds from 1 to 1,000 events:
+
+```json
+{"events": [{"skill": "lint", "version": 3, "agent": "claude-code", "role": "implementer", "external_run_id": "run-81", "time": "2026-11-02T10:00:00Z", "set": "review-tools", "resolution_id": "9f2c..."}]}
+```
+
+`set` and `resolution_id` are optional. The response is `{"stored": 1, "runs": 1}`.
+
+Send an `Idempotency-Key` header to make a retry safe. A repeat of a key returns the first result and stores nothing.
+
+A batch is all or nothing. An invalid event stores nothing and returns 422 with its zero-based index:
+
+```json
+{"status": 422, "title": "Unprocessable Entity", "detail": "event 2: role is required", "index": 2}
+```
+
+A value with the wrong type or an unknown field fails the request schema. That 422 has no `index` field. It names the event in `errors[].location`, such as `body.events[2].time`.
+
+### Report an outcome
+
+`POST /api/outcomes` needs `outcomes:write`:
+
+```json
+{"external_run_id": "run-81", "outcome": "failed", "repairs": 2, "review_verdict": "changes requested", "evidence_url": "https://ci.example/81"}
+```
+
+`outcome` is `succeeded`, `failed` or `cancelled`. `evidence_url` must be an http or https URL. The body also takes `set` and `resolution_id`. A second outcome for one run replaces the first, and the audit log keeps the old value.
+
+### Read outcomes
+
+`GET /api/skills/{name}/outcomes` needs `skills:read`. It returns `min_comparable_runs` and, for each consumer, each version that a run loaded: the counts, `success_rate`, `mean_repairs` and `sample_too_small`. The rates are null below 20 runs that succeeded or failed. `comparison` is present only when the version and the previous released version both have 20 such runs. It states a difference and no cause.
+
+## Submissions
+
+A submission is a whole skill archive that an agent sends for human review. It has no version until a person approves it, so it is in no resolve, sync or download.
+
+`POST /api/submissions` needs `submissions:write`:
+
+```json
+{"name": "lint", "rationale": "Handles the new config", "run_link": "https://ci.example/81", "external_run_id": "run-81", "archive_base64": "H4sI..."}
+```
+
+The scan runs at submission. An exfiltration or secret finding returns 422 and stores nothing. Other findings go to the reviewer.
+
+`GET /api/submissions/{id}` returns the `state`, which is `pending`, `approved` or `rejected`, and the `reason`. A key reads only the submissions of its own consumer. Another submission returns 404.
+
+`GET /api/submissions` takes `?state=` and `?limit=`. `GET /api/submissions/{id}/diff` compares a submission with the served version. No scope reaches these two routes.
+
+`POST /api/submissions/{id}/decision` takes `{"action": "reject", "reason": "..."}` or `{"action": "approve"}`, and `edits` to change text before approval. No scope reaches it. An owner of the matching ownership rule, or an instance owner or admin, decides. A rejection needs a reason. Approval publishes through the normal gate as that person, so a blocking finding still holds the version. A second decision returns 409.
 
 ## Merge
 

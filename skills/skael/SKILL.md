@@ -86,6 +86,31 @@ Write the description in `SKILL.md` before you publish. Run `scan` first: code 0
 
 Never use `--override` or `--skip-local-scan` unless a person asks you to.
 
+## Report a run
+
+These commands need a service account key. The consumer comes from the account.
+
+```sh
+skael events report --file events.jsonl --idempotency-key <key>
+skael outcomes report --run <id> --outcome succeeded --repairs 1 --evidence <url>
+skael outcomes show <skill>
+```
+
+Use one idempotency key for each batch, and reuse it on a retry. A batch is all or nothing. On a rejected event, the command exits 1 and names the failing index. Fix that event and resend the whole batch.
+
+`--outcome` is `succeeded`, `failed` or `cancelled`. A second report for one run replaces the first. An outcome never changes the headline and never releases a version.
+
+## Submit a skill for review
+
+Use this when you have a new skill or a change and no person asked you to publish.
+
+```sh
+skael submissions submit <dir> --name <skill> --rationale "..." --run-link <url> --run-id <id>
+skael submissions get <id>
+```
+
+A submission publishes nothing. A person decides it in the web UI. No command decides a submission, so do not look for one. Read `state` and `reason` with `get`. A rejection states its reason: fix that and submit again. An exfiltration or secret finding stores nothing and exits 1.
+
 ## Manage sets and machine identities
 
 These commands need an owner or admin key.
@@ -100,7 +125,7 @@ skael service-accounts keys create <account> --scope sets:read --set <set>
 skael service-accounts keys revoke <account> <key-id>
 ```
 
-The scopes are `skills:read`, `sets:read` and `eval:work`. The server shows a new key once. Give it to the person who asked for it, and do not store it.
+The scopes are `skills:read`, `sets:read`, `eval:work`, `events:write`, `outcomes:write` and `submissions:write`. The server shows a new key once. Give it to the person who asked for it, and do not store it.
 
 ## Keep this skill current
 

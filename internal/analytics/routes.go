@@ -79,6 +79,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// -----------------------------------------------------------------
 	type overviewInput struct {
 		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+		EventFilter
 	}
 	type overviewOutput struct {
 		Body *OverviewData
@@ -93,7 +94,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		if days == 0 {
 			days = 30
 		}
-		data, err := store.GetOverview(ctx, days)
+		data, err := store.GetOverview(ctx, days, input.EventFilter)
 		if err != nil {
 			return nil, fmt.Errorf("analytics overview: %w", err)
 		}
@@ -112,6 +113,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		Tag    string `query:"tag"`
 		Order  string `query:"order,omitempty"  enum:"asc,desc"`
 		Scored string `query:"scored,omitempty" enum:"yes,no"`
+		EventFilter
 	}
 	type skillsAnalyticsOutput struct {
 		Body struct {
@@ -131,7 +133,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		}
 		skills, total, err := store.GetSkillsAnalytics(ctx, days, SkillsQuery{
 			Limit: input.Limit, Offset: input.Offset, Sort: input.Sort, Query: input.Q, Tag: input.Tag,
-			Order: input.Order, Scored: input.Scored,
+			Order: input.Order, Scored: input.Scored, Filter: input.EventFilter,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("analytics skills: %w", err)
@@ -168,6 +170,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 	type activationsInput struct {
 		Name string `path:"name"`
 		Days int    `query:"days" default:"30" minimum:"1" maximum:"365"`
+		EventFilter
 	}
 	type activationsOutput struct {
 		Body *ActivationSummary
@@ -182,7 +185,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		if days == 0 {
 			days = 30
 		}
-		summary, err := store.GetActivations(ctx, input.Name, days)
+		summary, err := store.GetActivations(ctx, input.Name, days, input.EventFilter)
 		if err != nil {
 			return nil, fmt.Errorf("get activations: %w", err)
 		}
@@ -195,6 +198,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 	type skillTimeseriesInput struct {
 		Name string `path:"name"`
 		Days int    `query:"days" default:"30" minimum:"1" maximum:"365"`
+		EventFilter
 	}
 	type skillTimeseriesOutput struct {
 		Body []AgentDailyCount
@@ -209,7 +213,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 		if days == 0 {
 			days = 30
 		}
-		series, err := store.GetSkillTimeSeries(ctx, input.Name, days)
+		series, err := store.GetSkillTimeSeries(ctx, input.Name, days, input.EventFilter)
 		if err != nil {
 			return nil, fmt.Errorf("get skill timeseries: %w", err)
 		}
@@ -221,6 +225,7 @@ func RegisterRoutes(api huma.API, store *Store) {
 	// -----------------------------------------------------------------
 	type timeseriesInput struct {
 		Days int `query:"days" default:"30" minimum:"1" maximum:"365"`
+		EventFilter
 	}
 	type timeseriesOutput struct {
 		Body []DailyCount
@@ -235,11 +240,24 @@ func RegisterRoutes(api huma.API, store *Store) {
 		if days == 0 {
 			days = 30
 		}
-		series, err := store.GetTimeSeries(ctx, days)
+		series, err := store.GetTimeSeries(ctx, days, input.EventFilter)
 		if err != nil {
 			return nil, fmt.Errorf("analytics timeseries: %w", err)
 		}
 		return &timeseriesOutput{Body: series}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "analytics-consumers",
+		Method:      http.MethodGet,
+		Path:        "/api/analytics/consumers",
+		Summary:     "Distinct consumers and roles for the analytics filters",
+	}, func(ctx context.Context, _ *struct{}) (*struct{ Body *AnalyticsConsumersBody }, error) {
+		body, err := store.GetConsumers(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("analytics consumers: %w", err)
+		}
+		return &struct{ Body *AnalyticsConsumersBody }{Body: body}, nil
 	})
 
 	// -----------------------------------------------------------------

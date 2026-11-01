@@ -134,9 +134,59 @@ Manages machine identities and their scoped keys. Every command needs an owner o
 
 | Flag | Default | Description |
 |---|---|---|
-| `--scope <scope>` | required | A scope the key holds. Repeat it for more. The scopes are `skills:read`, `sets:read` and `eval:work` |
+| `--scope <scope>` | required | A scope the key holds. Repeat it for more. The scopes are `skills:read`, `sets:read`, `eval:work`, `events:write`, `outcomes:write` and `submissions:write` |
 | `--set <name>` | none | Limit the key to one set. The key needs `sets:read` |
 | `--name <label>` | `default` | A label for the key |
+
+## skael events report `--file <path>`
+
+Sends a batch of run events to `POST /api/events/batch`. It needs a service account key with `events:write`. The consumer comes from the account.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--file <path>` | required | JSON Lines with one event on each line, a JSON array of events, or an object with an `events` array |
+| `--idempotency-key <key>` | none | A repeat with this key returns the first result and stores nothing |
+
+Each event has `skill`, `version`, `agent`, `role`, `external_run_id` and `time`, and it can have `set` and `resolution_id`. A batch holds at most 1,000 events.
+
+A batch is all or nothing. If the server rejects an event, the command prints the failing index and exits 1. With `--json`, the envelope has `index` and the code `invalid_event`. A file that cannot be read or parsed exits 2.
+
+## skael outcomes
+
+| Command | Who | Description |
+|---|---|---|
+| `skael outcomes report --run <id> --outcome <outcome>` | service account key with `outcomes:write` | Report how a run ended |
+| `skael outcomes show <skill>` | any key with `skills:read` | Show the outcomes of the runs that loaded each version |
+
+`outcomes report` takes these flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--run <id>` | required | Your id for the run |
+| `--outcome <outcome>` | required | `succeeded`, `failed` or `cancelled` |
+| `--repairs <n>` | 0 | How many repairs the run needed |
+| `--verdict <text>` | none | The verdict of the review of the run |
+| `--evidence <url>` | none | An http or https link to the evidence |
+| `--set <name>` | none | The set the run used |
+| `--resolution <id>` | none | The resolution the run used |
+
+A second report for one run replaces the first, including any field you omit. The audit log keeps the old value.
+
+`outcomes show` gives rates only when a version has at least 20 runs. It states a difference between versions and no cause.
+
+An outcome never changes the headline and never releases a version.
+
+## skael submissions
+
+Sends a skill for human review and reads the decision. No command publishes or decides a submission. A person decides in the web UI. An approved submission then goes through the normal publish gate.
+
+| Command | Who | Description |
+|---|---|---|
+| `skael submissions submit <dir> --name <name> --rationale <text>` | key with `submissions:write` | Pack the directory and send it. `--run-link <url>` and `--run-id <id>` link the run that produced it |
+| `skael submissions list` | a person's key | List submissions. `--state` takes `pending`, `approved` or `rejected` |
+| `skael submissions get <id>` | a person's key, or the consumer that sent it | Show the state and the reason |
+
+A directory with no `SKILL.md` exits 2. An exfiltration or secret finding stores nothing and exits 1. With `--json`, the envelope has the code `submission_blocked` and the `decision`.
 
 ## skael publish `<dir>`
 
