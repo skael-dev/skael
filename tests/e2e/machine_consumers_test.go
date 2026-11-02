@@ -43,7 +43,7 @@ func startMachineServer(t *testing.T) *machineAPI {
 
 	jar, _ := cookiejar.New(nil)
 	a := &machineAPI{t: t, base: ts.URL, session: &http.Client{Jar: jar}, pool: pool}
-	a.sessionJSON(http.MethodPost, "/api/auth/signup", map[string]any{
+	a.sessionJSON(http.MethodPost, "/api/auth/sign-up/email", map[string]any{
 		"email": "owner@test.local", "name": "Owner", "password": "password123",
 	}, http.StatusCreated, nil)
 	return a
@@ -169,8 +169,8 @@ func TestServiceAccountIsNotAPerson(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	anon := &machineAPI{t: t, base: a.base, session: &http.Client{Jar: jar}}
-	anon.sessionJSON(http.MethodPost, "/api/auth/login", map[string]any{
-		"email": "factoree@service-account.invalid", "password": "",
+	anon.sessionJSON(http.MethodPost, "/api/auth/sign-in/email", map[string]any{
+		"email": "factoree@service-account.invalid", "password": "x",
 	}, http.StatusUnauthorized, nil)
 
 	var search struct {

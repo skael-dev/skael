@@ -113,10 +113,9 @@ var routeRules = []RouteRule{
 	// No scope: people only. Public routes are listed too, because the auth
 	// middleware passes them before this table applies.
 	read("/api/health"), read("/api/health/ready"), read("/api/capabilities"),
-	post("/api/auth/signup"), post("/api/auth/login"), post("/api/auth/logout"),
-	read("/api/auth/me"), read("/api/auth/keys"), post("/api/auth/keys"), del("/api/auth/keys/{id}"),
-	post("/api/auth/change-password"),
-	post("/api/admin/reset-password"), read("/api/admin/users"), put("/api/admin/users/{id}/role"),
+	read("/api/auth/account"), read("/api/auth/keys"), post("/api/auth/keys"), del("/api/auth/keys/{id}"),
+	read("/api/admin/users"), put("/api/admin/users/{id}/role"), post("/api/admin/users/{id}/password"),
+	post("/api/admin/users/{id}/disable"), post("/api/admin/users/{id}/enable"),
 	read("/api/admin/audit"), read("/api/users/search"),
 	read("/api/service-accounts"), post("/api/service-accounts"), del("/api/service-accounts/{id}"),
 	read("/api/service-accounts/{id}/keys"), post("/api/service-accounts/{id}/keys"),

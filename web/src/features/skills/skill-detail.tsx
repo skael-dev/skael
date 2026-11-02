@@ -717,7 +717,7 @@ async function fetchScanReport(name: string): Promise<ScanReport | null> {
   try {
     const res = await fetch(`/api/skills/${encodeURIComponent(name)}/scan`, {
       headers: {
-        "X-API-Key": localStorage.getItem("skael-api-key") ?? "",
+        Authorization: `Bearer ${localStorage.getItem("skael-api-key") ?? ""}`,
       },
     });
     if (!res.ok) return null;

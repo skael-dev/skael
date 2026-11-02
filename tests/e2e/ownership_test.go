@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -75,13 +74,13 @@ func startOwnershipServer(t *testing.T) *ownershipEnv {
 	userStore := auth.NewUserStore(pool)
 	keyStore := auth.NewKeyStore(pool)
 
-	sessionManager := scs.New()
+	people, peopleErr := auth.NewPeople(pool, keyStore, auth.PeopleConfig{})
+	require.NoError(t, peopleErr)
 
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.ClientIP(platform.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
-	router.Use(sessionManager.LoadAndSave)
-	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
+	router.Use(auth.Middleware(people, keyStore))
 
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,9 +191,7 @@ func startOwnershipServer(t *testing.T) *ownershipEnv {
 // owner in eval_queue_test.go.
 func (e *ownershipEnv) createUser(t *testing.T, role, email string) actor {
 	t.Helper()
-	pwHash, err := auth.HashPassword("test-password")
-	require.NoError(t, err)
-	row, err := e.userStore.CreateWithRole(context.Background(), email, email, pwHash, role)
+	row, err := e.userStore.CreateWithRole(context.Background(), email, email, role)
 	require.NoError(t, err)
 
 	fullKey, prefix, err := auth.GenerateAPIKey()

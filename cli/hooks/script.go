@@ -121,7 +121,7 @@ fi
   curl -s -o /dev/null \
     -X POST \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer $API_KEY" \
     -d "$EVENT_JSON" \
     "${ENDPOINT}/api/events" \
   &>/dev/null

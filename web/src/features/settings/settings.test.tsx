@@ -233,13 +233,13 @@ describe("Settings", () => {
 
     it("hides the Team section from non-owners", async () => {
       server.use(
-        http.get("/api/auth/me", () => {
-          return HttpResponse.json({
+        http.get("/api/auth/session", () => {
+          return HttpResponse.json({ session: {}, user: {
             id: "user-002",
             email: "dana@test.com",
             name: "Dana Dev",
             role: "member",
-          });
+          } });
         }),
       );
 

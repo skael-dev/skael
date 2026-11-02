@@ -84,7 +84,7 @@ func startWebhookServer(t *testing.T, allowPrivate bool) *machineAPI {
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
 	a := &machineAPI{t: t, base: ts.URL, session: &http.Client{Jar: jar}, pool: pool}
-	a.sessionJSON(http.MethodPost, "/api/auth/signup", map[string]any{
+	a.sessionJSON(http.MethodPost, "/api/auth/sign-up/email", map[string]any{
 		"email": "owner@test.local", "name": "Owner", "password": "password123",
 	}, http.StatusCreated, nil)
 	return a
@@ -314,7 +314,7 @@ func TestRiverUIIsForAdmins(t *testing.T) {
 	status, _ := a.keyGet(key, "/api/admin/river")
 	require.Equal(t, http.StatusForbidden, status)
 
-	member, _ := http.NewRequest(http.MethodPost, a.base+"/api/auth/signup", strings.NewReader(`{"email":"m@test.local","name":"Member","password":"password123"}`))
+	member, _ := http.NewRequest(http.MethodPost, a.base+"/api/auth/sign-up/email", strings.NewReader(`{"email":"m@test.local","name":"Member","password":"password123"}`))
 	member.Header.Set("Content-Type", "application/json")
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar}

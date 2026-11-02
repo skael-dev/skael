@@ -32,22 +32,26 @@ export const handlers = [
   }),
 
   // Auth
-  http.get("/api/auth/me", () => {
-    return HttpResponse.json(mockUser);
+  http.get("/api/auth/session", () => {
+    return HttpResponse.json({ user: mockUser, session: {} });
   }),
 
-  http.post("/api/auth/login", async ({ request }) => {
+  http.get("/api/auth/account", () => {
+    return HttpResponse.json({ must_change_password: false, linked_providers: [] });
+  }),
+
+  http.post("/api/auth/sign-in/email", async ({ request }) => {
     const body = (await request.json()) as { email: string; password: string };
     if (body.email === "admin@test.com" && body.password === "password123") {
-      return HttpResponse.json(mockUser);
+      return HttpResponse.json({ user: mockUser, session: {} });
     }
     return HttpResponse.json(
-      { detail: "Invalid credentials" },
+      { error: { code: "INVALID_CREDENTIALS", message: "Invalid credentials" } },
       { status: 401 },
     );
   }),
 
-  http.post("/api/auth/signup", async ({ request }) => {
+  http.post("/api/auth/sign-up/email", async ({ request }) => {
     const body = (await request.json()) as {
       email: string;
       name: string;
@@ -55,20 +59,17 @@ export const handlers = [
     };
     return HttpResponse.json(
       {
-        id: "user-new",
-        email: body.email,
-        name: body.name,
-        role: "member",
+        user: { id: "user-new", email: body.email, name: body.name, role: "member" },
+        session: {},
       },
       { status: 201 },
     );
   }),
 
-  http.post("/api/auth/logout", () => {
-    return new HttpResponse(null, { status: 204 });
+  http.post("/api/auth/sign-out", () => {
+    return HttpResponse.json({ success: true });
   }),
 
-  // API keys
   http.get("/api/auth/keys", () => {
     return HttpResponse.json({ keys: mockApiKeys });
   }),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/alternayte/auth-all/plugins/admin"
 	"os"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -104,35 +105,25 @@ func resetPassword(args []string) {
 	}
 	defer pool.Close()
 
-	userStore := auth.NewUserStore(pool)
-	row, err := userStore.GetByEmail(ctx, *email)
+	keys := auth.NewKeyStore(pool)
+	people, err := auth.NewPeople(pool, keys, auth.PeopleConfig{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth setup error: %v\n", err)
+		os.Exit(1)
+	}
+	row, err := auth.NewUserStore(pool).GetByEmail(ctx, *email)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lookup error: %v\n", err)
 		os.Exit(1)
 	}
-	if row == nil {
+	if row == nil || row.Kind == auth.KindService {
 		fmt.Fprintf(os.Stderr, "user not found: %s\n", *email)
 		os.Exit(1)
 	}
 
-	tempPass, err := auth.GenerateTemporaryPassword()
+	tempPass, err := people.Admin.ResetPassword(ctx, row.ID, admin.ResetOptions{Temporary: true})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "generate password error: %v\n", err)
-		os.Exit(1)
-	}
-
-	hash, err := auth.HashPassword(tempPass)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "hash password error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := userStore.UpdatePassword(ctx, row.ID, hash); err != nil {
-		fmt.Fprintf(os.Stderr, "update password error: %v\n", err)
-		os.Exit(1)
-	}
-	if err := userStore.SetResetRequired(ctx, row.ID, true); err != nil {
-		fmt.Fprintf(os.Stderr, "set reset flag error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "reset password error: %v\n", err)
 		os.Exit(1)
 	}
 

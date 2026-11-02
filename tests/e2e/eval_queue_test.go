@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -116,9 +115,7 @@ func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 	userStore := auth.NewUserStore(pool)
 	keyStore := auth.NewKeyStore(pool)
 
-	pwHash, err := auth.HashPassword("test-password")
-	require.NoError(t, err)
-	testUser, err := userStore.CreateWithRole(context.Background(), "eval-e2e@test.local", "Eval E2E Test User", pwHash, auth.RoleOwner)
+	testUser, err := userStore.CreateWithRole(context.Background(), "eval-e2e@test.local", "Eval E2E Test User", auth.RoleOwner)
 	require.NoError(t, err)
 
 	fullKey, prefix, err := auth.GenerateAPIKey()
@@ -129,13 +126,13 @@ func startServerWithFloor(t *testing.T, floor float64) *evalEnv {
 	require.NoError(t, err)
 	apiKey := fullKey
 
-	sessionManager := scs.New()
+	people, peopleErr := auth.NewPeople(pool, keyStore, auth.PeopleConfig{})
+	require.NoError(t, peopleErr)
 
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.ClientIP(platform.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
-	router.Use(sessionManager.LoadAndSave)
-	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
+	router.Use(auth.Middleware(people, keyStore))
 
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

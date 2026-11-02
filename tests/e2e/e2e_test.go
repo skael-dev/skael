@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -52,9 +51,7 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 	userStore := auth.NewUserStore(pool)
 	keyStore := auth.NewKeyStore(pool)
 
-	pwHash, err := auth.HashPassword("test-password")
-	require.NoError(t, err)
-	testUser, err := userStore.Create(context.Background(), "e2e@test.local", "E2E Test User", pwHash)
+	testUser, err := userStore.Create(context.Background(), "e2e@test.local", "E2E Test User")
 	require.NoError(t, err)
 
 	fullKey, prefix, err := auth.GenerateAPIKey()
@@ -65,15 +62,14 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 	require.NoError(t, err)
 	apiKey = fullKey
 
-	// 4. Create session manager (in-memory for tests).
-	sessionManager := scs.New()
+	people, peopleErr := auth.NewPeople(pool, keyStore, auth.PeopleConfig{})
+	require.NoError(t, peopleErr)
 
 	// 5. Create chi router with auth middleware (mirrors server.Build exactly).
 	router := chi.NewMux()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.ClientIP(platform.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
-	router.Use(sessionManager.LoadAndSave)
-	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
+	router.Use(auth.Middleware(people, keyStore))
 
 	// Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {

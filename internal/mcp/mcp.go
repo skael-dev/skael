@@ -212,7 +212,7 @@ func (s *server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 			"type": "streamable-http",
 			"url":  platform.RequestScheme(r, s.trusted) + "://" + r.Host + "/mcp",
 		},
-		"authentication": map[string]any{"type": "header", "header": "X-API-Key"},
+		"authentication": map[string]any{"type": "bearer", "header": "Authorization"},
 		"tools":          docs,
 	})
 }

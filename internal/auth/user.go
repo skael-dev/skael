@@ -7,8 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -18,6 +16,9 @@ type User struct {
 	Role  string `json:"role"`
 	Kind  string `json:"-"`
 }
+
+// keyPrefixLen is the stored, indexed start of an sk- key.
+const keyPrefixLen = 12
 
 type contextKey struct{}
 
@@ -30,18 +31,6 @@ func UserFromContext(ctx context.Context) *User {
 	return u
 }
 
-func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", fmt.Errorf("auth.HashPassword: %w", err)
-	}
-	return string(hash), nil
-}
-
-func CheckPassword(hash, password string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-}
-
 func GenerateAPIKey() (fullKey, prefix string, err error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -49,7 +38,7 @@ func GenerateAPIKey() (fullKey, prefix string, err error) {
 	}
 	h := hex.EncodeToString(b)
 	fullKey = "sk-" + h
-	prefix = fullKey[:12]
+	prefix = fullKey[:keyPrefixLen]
 	return fullKey, prefix, nil
 }
 
@@ -65,12 +54,4 @@ func CheckAPIKey(storedHash, key string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare(h[:], expected) == 1
-}
-
-func GenerateTemporaryPassword() (string, error) {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

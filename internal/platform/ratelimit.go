@@ -62,10 +62,14 @@ func classifyRequest(r *http.Request) rateLimitClass {
 
 // rateLimitSubject keys on a hash of the API key when present, IP otherwise.
 // Never used for the auth class — login requests are unauthenticated, so
-// X-API-Key there is unverified and would let an attacker mint a fresh budget
-// on every attempt.
+// a key there is unverified and would let an attacker mint a fresh budget on
+// every attempt. Both headers carrying one key share one budget.
 func rateLimitSubject(r *http.Request) string {
-	if key := r.Header.Get("X-API-Key"); key != "" {
+	key := r.Header.Get("X-API-Key")
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && key == "" {
+		key = strings.TrimSpace(bearer)
+	}
+	if key != "" {
 		sum := sha256.Sum256([]byte(key))
 		return "key:" + hex.EncodeToString(sum[:8])
 	}

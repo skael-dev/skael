@@ -16,12 +16,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
 
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-
-	created, err := store.Create(ctx, "alice@example.com", "Alice", hash)
+	created, err := store.Create(ctx, "alice@example.com", "Alice")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -33,9 +28,6 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	}
 	if created.Name != "Alice" {
 		t.Errorf("name = %q, want %q", created.Name, "Alice")
-	}
-	if created.PasswordHash != hash {
-		t.Error("password hash mismatch")
 	}
 	// Accounts created without an explicit role are unprivileged.
 	if created.Role != auth.RoleMember {
@@ -74,17 +66,12 @@ func TestUserStore_CreateDuplicateEmail(t *testing.T) {
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
 
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-
-	_, err = store.Create(ctx, "dup@example.com", "First", hash)
+	_, err := store.Create(ctx, "dup@example.com", "First")
 	if err != nil {
 		t.Fatalf("create first user: %v", err)
 	}
 
-	_, err = store.Create(ctx, "dup@example.com", "Second", hash)
+	_, err = store.Create(ctx, "dup@example.com", "Second")
 	if err == nil {
 		t.Fatal("expected error for duplicate email, got nil")
 	}
@@ -106,11 +93,7 @@ func TestUserStore_Count(t *testing.T) {
 		t.Errorf("count = %d, want 0", n)
 	}
 
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	_, err = store.Create(ctx, "count@example.com", "Counter", hash)
+	_, err = store.Create(ctx, "count@example.com", "Counter")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -132,12 +115,7 @@ func TestUserStore_GetByID(t *testing.T) {
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
 
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-
-	created, err := store.Create(ctx, "byid@example.com", "ByID", hash)
+	created, err := store.Create(ctx, "byid@example.com", "ByID")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -188,12 +166,7 @@ func TestUserStore_CreateWithRole(t *testing.T) {
 	ctx := context.Background()
 	store := auth.NewUserStore(pool)
 
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-
-	created, err := store.CreateWithRole(ctx, "owner@example.com", "Owner", hash, "owner")
+	created, err := store.CreateWithRole(ctx, "owner@example.com", "Owner", "owner")
 	if err != nil {
 		t.Fatalf("create with role: %v", err)
 	}

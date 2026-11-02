@@ -71,12 +71,12 @@ function oneHeld(
   };
 }
 
-// mockUser overrides the /api/auth/me handler so useAuth resolves the given
+// mockUser overrides the /api/auth/session handler so useAuth resolves the given
 // role. Mirrors the idiom in settings.test.tsx, wrapped as a fixture helper.
 function mockUser(overrides: Partial<{ role: string }>) {
   server.use(
-    http.get("/api/auth/me", () => {
-      return HttpResponse.json({ ...defaultMockUser, ...overrides });
+    http.get("/api/auth/session", () => {
+      return HttpResponse.json({ session: {}, user: { ...defaultMockUser, ...overrides } });
     }),
   );
 }

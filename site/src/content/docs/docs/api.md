@@ -37,14 +37,14 @@ There is no built-in browser UI (Swagger/Redoc) in this build. Import the spec i
 
 Two mechanisms are supported:
 
-- **`X-API-Key` header** — for CLI, scripts, and automation. Create keys in the dashboard or via `POST /api/auth/keys`.
+- **`Authorization: Bearer` header** — for CLI, scripts, and automation. Create keys in the dashboard or via `POST /api/auth/keys`.
 - **Session cookie** — for the dashboard only. The browser acquires it on login; you do not manage it manually.
 
-Every endpoint except `/api/health`, `/api/health/ready`, `/api/capabilities`, `/api/auth/signup`, `/api/auth/login`, and `/api/auth/logout` requires authentication. The three auth endpoints are exempt because you have no credentials yet when you call them. The OpenAPI spec (`/openapi.json`) is not under `/api/` and requires no key.
+Every endpoint except `/api/health`, `/api/health/ready`, `/api/capabilities`, and the account routes served by auth-all under `/api/auth` requires authentication. Those routes authenticate themselves. The OpenAPI spec (`/openapi.json`) is not under `/api/` and requires no key.
 
 ```bash
 curl http://localhost:8080/api/skills \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 ```
 
 Response:
@@ -86,7 +86,7 @@ Everything else — publish, sync, browse, search, reading who owns what — is 
 
 ## Rate limiting
 
-Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events` and `POST /api/events/batch`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying `X-API-Key` are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified).
+Requests are throttled per route class, each with its own per-minute budget: auth (`/api/auth/*`, default 20), event ingestion (`POST /api/events` and `POST /api/events/batch`, default 600), reads (GET/HEAD, default 300), and writes (everything else, default 60). Operators can override each via `RATE_LIMIT_AUTH` / `RATE_LIMIT_EVENTS` / `RATE_LIMIT_READ` / `RATE_LIMIT_WRITE`. Requests carrying a key are budgeted per key; unauthenticated or keyless requests are budgeted per source IP (auth requests are always budgeted by IP, since the key on a login/signup call is unverified).
 
 "Source IP" means the address the connection came from, not whatever `X-Forwarded-For` claims — those headers are read only from a peer listed in `TRUSTED_PROXIES`. Behind a reverse proxy, set that variable or every client is budgeted as one; see [Production](/docs/production#telling-skael-about-the-proxy).
 
@@ -102,18 +102,21 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/health/ready` | Readiness probe — verifies DB and storage connectivity |
 | `GET` | `/api/capabilities` | Feature flags for this server edition |
 | `GET` | `/openapi.json` | OpenAPI 3.1 spec |
-| `POST` | `/api/auth/signup` | Create a user account — body requires `name`, `email`, `password` |
-| `POST` | `/api/auth/login` | Log in (sets session cookie) |
-| `POST` | `/api/auth/logout` | Destroy session |
-| `GET` | `/api/auth/me` | Current user |
+| `POST` | `/api/auth/sign-up/email` | Create a user account — body requires `name`, `email`, `password` |
+| `POST` | `/api/auth/sign-in/email` | Sign in (sets session cookie) |
+| `POST` | `/api/auth/sign-out` | End the session |
+| `GET` | `/api/auth/session` | Current user and session |
+| `GET` | `/api/auth/account` | Password change state, linked providers and TOTP state |
 | `GET` | `/api/auth/keys` | List API keys |
 | `POST` | `/api/auth/keys` | Create an API key |
 | `DELETE` | `/api/auth/keys/{id}` | Delete an API key |
-| `POST` | `/api/auth/change-password` | Change your own password — body requires `current_password` and `new_password` |
+| `POST` | `/api/auth/password/change` | Change your own password — body requires `currentPassword` and `newPassword` |
 | `GET` | `/api/users/search` | Find users by name or email (`?q=...`). Any authenticated account; returns `{id, name, email}` only, minimum 2 characters, at most 20 results |
+| `POST` | `/api/admin/users/{id}/password` | Issue a temporary password (owner) |
+| `POST` | `/api/admin/users/{id}/disable` | Disable a user and end their sessions (owner) |
+| `POST` | `/api/admin/users/{id}/enable` | Enable a user (owner) |
 | `GET` | `/api/admin/users` | List all users (instance owner only) |
 | `PUT` | `/api/admin/users/{id}/role` | Set a user's role to `admin` or `member` (instance owner only) — see [Roles](#roles) |
-| `POST` | `/api/admin/reset-password` | Issue another user a temporary password (instance owner only) |
 | `GET` | `/api/skills` | List skills (paginated) |
 | `POST` | `/api/skills` | Create a skill |
 | `GET` | `/api/skills/{name}` | Get a skill by name |
@@ -391,19 +394,19 @@ Create two skills and merge the old one into the canonical one:
 ```bash
 # Create the source
 curl -X POST http://localhost:8080/api/skills \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"name":"old-deploy","description":"Legacy deployment helper"}'
 
 # Create the target
 curl -X POST http://localhost:8080/api/skills \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"name":"deploy","description":"Deployment helper"}'
 
 # Merge
 curl -X POST http://localhost:8080/api/skills/merge \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"source":"old-deploy","target":"deploy"}'
 ```
@@ -448,7 +451,7 @@ Constraint: creating an alias whose name matches an existing skill is rejected w
 
 ```bash
 curl http://localhost:8080/api/skills/deploy/aliases \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 ```
 
 Response:
@@ -467,7 +470,7 @@ Response:
 
 ```bash
 curl -X POST http://localhost:8080/api/skills/db-migrate/aliases \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"alias":"migrate-db"}'
 ```
@@ -478,7 +481,7 @@ Returns `201 Created` on success. The target skill must exist; if it does not yo
 
 ```bash
 curl -X DELETE http://localhost:8080/api/skills/db-migrate/aliases/migrate-db \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 ```
 
 Returns `204 No Content`. Returns `404` if the alias does not exist for that canonical skill.
@@ -542,10 +545,10 @@ Members go **in** as user IDs and come **back** hydrated as `{id, name, email}`,
 ```bash
 # Find the user ids first
 curl "http://localhost:8080/api/users/search?q=ada" \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 
 curl -X POST http://localhost:8080/api/ownership/rules \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"pattern":"payments:*","members":["4f7c...","91ab..."]}'
 ```
@@ -567,7 +570,7 @@ Response:
 
 ```bash
 curl http://localhost:8080/api/skills/payments:refunds/owners \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 ```
 
 ```json
@@ -595,7 +598,7 @@ See [Quality scoring](/docs/quality) for what these numbers mean and where they 
 
 ```bash
 curl http://localhost:8080/api/skills/deploy/quality/3 \
-  -H "X-API-Key: sk-..."
+  -H "Authorization: Bearer sk-..."
 ```
 
 `GET /api/skills/{name}/quality/series` groups a skill's score history into comparable runs. Two scores are only comparable if they came from the same evaluation suite and the same model panel — changing either can move the number without the skill changing at all. Scores that aren't comparable to the current run are grouped into their own series rather than mixed in.
@@ -608,7 +611,7 @@ See [Quality scoring](/docs/quality#comparing-two-skills-contests) for what a ve
 
 ```bash
 curl -X POST http://localhost:8080/api/eval/contests \
-  -H "X-API-Key: sk-..." -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
   -d '{"candidates":[{"skill":"payments:deploy"},{"skill":"platform:deploy"}]}'
 ```
 
@@ -637,7 +640,7 @@ Each row also carries `rule_pattern`, `owners`, and `unowned`, resolved through 
 
 ```bash
 curl -X POST http://localhost:8080/api/skills/deploy/versions/3/review \
-  -H "X-API-Key: sk-..." \
+  -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"action":"approve","reason":"reviewed the shell script by hand, false positive","hold_reason":"scan"}'
 ```

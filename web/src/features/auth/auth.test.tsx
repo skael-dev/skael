@@ -10,9 +10,9 @@ import { Login } from "./login";
 import { Signup } from "./signup";
 
 function renderAuth(path: string) {
-  // Override /api/auth/me to return 401 so user appears unauthenticated
+  // No session, so the user appears unauthenticated.
   server.use(
-    http.get("/api/auth/me", () => HttpResponse.json({}, { status: 401 })),
+    http.get("/api/auth/session", () => HttpResponse.json({ user: null, session: null })),
   );
 
   const qc = new QueryClient({

@@ -63,7 +63,7 @@ for SKILL in $SKILL_NAMES; do
     '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh,event_source:$es}')
   curl -sf -X POST \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer $API_KEY" \
     -d "$EVENT" \
     "${ENDPOINT}/api/events" &>/dev/null &
 done

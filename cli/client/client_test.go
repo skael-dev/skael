@@ -53,8 +53,8 @@ func TestClient_Health_ServerDown(t *testing.T) {
 func TestClient_ListSkills(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	srv, c := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		if apiKey := r.Header.Get("X-API-Key"); apiKey != "test-key" {
-			t.Errorf("expected X-API-Key 'test-key', got %q", apiKey)
+		if authz := r.Header.Get("Authorization"); authz != "Bearer test-key" {
+			t.Errorf("expected bearer test-key, got %q", authz)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{

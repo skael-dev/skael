@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/skael-dev/skael/internal/auth"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -24,10 +25,11 @@ type LicenseInfo struct {
 }
 
 type CapabilitiesResponse struct {
-	Edition  string       `json:"edition"`
-	Version  string       `json:"version"`
-	Features Features     `json:"features"`
-	License  *LicenseInfo `json:"license"`
+	Edition  string             `json:"edition"`
+	Version  string             `json:"version"`
+	Features Features           `json:"features"`
+	License  *LicenseInfo       `json:"license"`
+	SignIn   auth.SignInMethods `json:"sign_in"`
 }
 
 type Capabilities struct {
@@ -35,6 +37,7 @@ type Capabilities struct {
 	version  string
 	features map[string]bool
 	license  *LicenseInfo
+	signIn   auth.SignInMethods
 }
 
 func NewCapabilities() *Capabilities {
@@ -69,6 +72,9 @@ func (c *Capabilities) SetVersion(v string) {
 	c.version = v
 }
 
+// SetSignIn records the sign-in methods the SPA may show.
+func (c *Capabilities) SetSignIn(m auth.SignInMethods) { c.signIn = m }
+
 func (c *Capabilities) Response() CapabilitiesResponse {
 	return CapabilitiesResponse{
 		Edition: c.edition,
@@ -83,6 +89,7 @@ func (c *Capabilities) Response() CapabilitiesResponse {
 			AdvancedAnalytics: c.features["advanced_analytics"],
 		},
 		License: c.license,
+		SignIn:  c.signIn,
 	}
 }
 

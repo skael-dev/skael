@@ -40,7 +40,7 @@ export default (async () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": config.api_key,
+          "Authorization": "Bearer " + config.api_key,
         },
         body: JSON.stringify({
           skill_name: input.tool.replace(/^skills_/, ''),

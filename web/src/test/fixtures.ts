@@ -1,5 +1,5 @@
+import type { User } from "@/app/auth-provider";
 import type {
-  User,
   Skill,
   SkillAnalytics,
   OverviewData,
