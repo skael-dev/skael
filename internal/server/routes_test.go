@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/server"
+	"github.com/skael-dev/skael/internal/webhooks"
 )
 
 // TestRegisterAPIRoutes_CoversEveryGroup guards against the OpenAPI spec
@@ -58,6 +60,11 @@ func TestEveryRouteHasAScopeTableEntry(t *testing.T) {
 		if !strings.HasPrefix(route, "/api/") && route != "/mcp" {
 			return nil
 		}
+		// River UI serves every method under one prefix. It has no rule, so
+		// matchRule finds nothing and a restricted key gets 403.
+		if strings.HasPrefix(route, server.RiverUIPrefix) {
+			return nil
+		}
 		if !known[method+" "+route] {
 			t.Errorf("no entry in auth.routeRules for %s %s", method, route)
 		}
@@ -67,5 +74,18 @@ func TestEveryRouteHasAScopeTableEntry(t *testing.T) {
 	require.NoError(t, err)
 	for stale := range known {
 		t.Errorf("auth.routeRules names a route that does not exist: %s", stale)
+	}
+}
+
+// River UI shows job arguments to admins, so an argument that grew a payload or
+// a secret would publish it there.
+func TestJobArgsHoldIDsOnly(t *testing.T) {
+	for _, args := range []any{webhooks.DeliveryArgs{}} {
+		typ := reflect.TypeOf(args)
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			require.Truef(t, field.Type.Kind() == reflect.String && strings.HasSuffix(field.Name, "ID"),
+				"%s.%s is not an id", typ.Name(), field.Name)
+		}
 	}
 }

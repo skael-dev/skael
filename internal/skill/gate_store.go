@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,14 @@ func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 // ingestion can compose it with the quality upsert in one transaction.
 // Re-releasing is a no-op, not an error.
 func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, version int, by, note string) error {
+	// A second release of a released version is a no-op, so it must emit nothing.
+	var priorState, checksum string
+	err := e.QueryRow(ctx, `
+		SELECT sv.gate_state, sv.checksum FROM skill_versions sv JOIN skills s ON s.id = sv.skill_id
+		WHERE s.name = $1 AND sv.version = $2 FOR UPDATE OF sv`, name, version).Scan(&priorState, &checksum)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
+	}
 	const q = `
 		UPDATE skill_versions sv
 		SET gate_state = 'released', gated_by = $3, gated_at = now(), gate_note = $4
@@ -88,7 +97,24 @@ func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, ver
 		spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags); err != nil {
 		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
 	}
-	return nil
+	if s.notifier == nil || priorState == "released" {
+		return nil
+	}
+	// Every production caller passes a transaction, which ties the events to
+	// the release. A caller with a bare pool still gets its events.
+	ev := ReleaseEvent{Skill: name, Version: version, Checksum: checksum, Approved: true}
+	if tx, ok := e.(pgx.Tx); ok {
+		return s.notifier.VersionReleased(ctx, tx, ev)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if err := s.notifier.VersionReleased(ctx, tx, ev); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // RejectVersion marks a held version terminal.

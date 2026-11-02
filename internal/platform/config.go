@@ -42,11 +42,14 @@ type Config struct {
 	// means trust none of them — see ParseTrustedProxies.
 	TrustedProxies string
 
-	RateLimitAuth   int
-	RateLimitEvents int
-	RateLimitRead   int
-	RateLimitWrite  int
-	RateLimitSuites int
+	// WebhookAllowPrivate opens private addresses and HTTP to webhook delivery,
+	// for a consumer on the install\'s own network.
+	WebhookAllowPrivate bool
+	RateLimitAuth       int
+	RateLimitEvents     int
+	RateLimitRead       int
+	RateLimitWrite      int
+	RateLimitSuites     int
 
 	// QualityFloor is the minimum headline quality score (0-100) a verified
 	// evaluation must reach to release a version held for review. 0 (the
@@ -87,6 +90,7 @@ func LoadConfig() (*Config, error) {
 		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
 		TrustedProxies:      os.Getenv("TRUSTED_PROXIES"),
 		LogLevel:            envDefault("LOG_LEVEL", "info"),
+		WebhookAllowPrivate: os.Getenv("WEBHOOK_ALLOW_PRIVATE") == "true",
 		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
 		RateLimitEvents:     envInt("RATE_LIMIT_EVENTS", 600),
 		RateLimitRead:       envInt("RATE_LIMIT_READ", 300),

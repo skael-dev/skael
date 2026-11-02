@@ -96,10 +96,19 @@ func ResolutionID(entries []ResolvedEntry) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ChangeNotifier hears of a set edit inside its transaction.
+type ChangeNotifier interface {
+	SetChanged(ctx context.Context, tx pgx.Tx, setID string) error
+}
+
 // Store persists sets.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	notifier ChangeNotifier
 }
+
+// SetNotifier attaches the receiver of set edits.
+func (s *Store) SetNotifier(n ChangeNotifier) { s.notifier = n }
 
 // NewStore constructs a Store.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -217,6 +226,10 @@ func (s *Store) Create(ctx context.Context, name, description string, entries []
 	if err := audit.Record(ctx, tx, actor, "set.create", "set:"+name, map[string]any{"entries": entries}); err != nil {
 		return nil, err
 	}
+	// Records the first id, so the first real change has one to differ from.
+	if _, _, _, err := s.Recheck(ctx, tx, set.ID); err != nil {
+		return nil, err
+	}
 	return set, tx.Commit(ctx)
 }
 
@@ -246,6 +259,13 @@ func (s *Store) Update(ctx context.Context, name, description string, entries []
 	}
 	set.Description, set.Entries = description, entries
 	if err := audit.Record(ctx, tx, actor, "set.update", "set:"+name, map[string]any{"old": old, "new": entries}); err != nil {
+		return nil, err
+	}
+	if s.notifier != nil {
+		if err := s.notifier.SetChanged(ctx, tx, set.ID); err != nil {
+			return nil, err
+		}
+	} else if _, _, _, err := s.Recheck(ctx, tx, set.ID); err != nil {
 		return nil, err
 	}
 	return set, tx.Commit(ctx)
@@ -366,13 +386,47 @@ func scanVerdict(raw []byte) string {
 	return rep.Status
 }
 
+// Recheck recomputes a set's resolution inside tx and reports whether its id
+// differs from the last one recorded. The row lock serialises two changes to
+// one set, so each sees the other's result. A changed id is saved in the same
+// transaction, so a consumer told of it can fetch it at once.
+func (s *Store) Recheck(ctx context.Context, tx pgx.Tx, setID string) (*Set, *Resolution, bool, error) {
+	var previous *string
+	set := &Set{ID: setID}
+	err := tx.QueryRow(ctx, `SELECT name, resolution_id FROM sets WHERE id = $1 FOR UPDATE`, setID).Scan(&set.Name, &previous)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("sets.Recheck: %w", err)
+	}
+	if err := s.loadEntries(ctx, tx, set); err != nil {
+		return nil, nil, false, err
+	}
+	res, err := Resolve(ctx, tx, set)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if previous != nil && *previous == res.ID {
+		return set, res, false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sets SET resolution_id = $2 WHERE id = $1`, setID, res.ID); err != nil {
+		return nil, nil, false, fmt.Errorf("sets.Recheck: %w", err)
+	}
+	if err := saveResolution(ctx, tx, set, res); err != nil {
+		return nil, nil, false, err
+	}
+	return set, res, previous != nil, nil
+}
+
 // SaveResolution stores a resolution. The row for an id never changes.
 func (s *Store) SaveResolution(ctx context.Context, set *Set, res *Resolution) error {
+	return saveResolution(ctx, s.pool, set, res)
+}
+
+func saveResolution(ctx context.Context, q Querier, set *Set, res *Resolution) error {
 	raw, err := json.Marshal(res.Entries)
 	if err != nil {
 		return fmt.Errorf("sets.SaveResolution: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO set_resolutions (id, set_id, set_name, entries, complete)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (set_id, id) DO NOTHING`, res.ID, set.ID, set.Name, raw, res.Complete)

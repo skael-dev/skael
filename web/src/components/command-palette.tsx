@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart2,
+  ExternalLink,
   FileText,
   KeyRound,
   Keyboard,
@@ -15,6 +16,7 @@ import {
   Target,
   Terminal,
   UsersRound,
+  Webhook,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -112,7 +114,12 @@ export function CommandPalette({ open, onClose, onShowShortcuts }: CommandPalett
     go("Go to Analytics", "/analytics", BarChart2),
     go("Go to Quadrant", "/quadrant", Target),
     go("Go to Sets", "/sets", ListChecks),
-    ...(privileged ? [go("Go to Service accounts", "/service-accounts", KeyRound)] : []),
+    ...(privileged
+      ? [
+          go("Go to Service accounts", "/service-accounts", KeyRound),
+          go("Go to Webhooks", "/webhooks", Webhook),
+        ]
+      : []),
     go("Go to Ownership", "/settings/ownership", UsersRound),
     go("Go to Settings", "/settings", Settings),
   ];
@@ -131,6 +138,18 @@ export function CommandPalette({ open, onClose, onShowShortcuts }: CommandPalett
             icon: Plus,
             kind: "action" as const,
             run: () => goTo("/service-accounts?new=1"),
+          },
+          {
+            label: "New webhook endpoint",
+            icon: Plus,
+            kind: "action" as const,
+            run: () => goTo("/webhooks?new=1"),
+          },
+          {
+            label: "Open River UI",
+            icon: ExternalLink,
+            kind: "action" as const,
+            run: () => window.location.assign("/api/admin/river"),
           },
         ]
       : []),

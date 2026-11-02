@@ -126,6 +126,13 @@ describe("sidebar", () => {
     expect(screen.queryByRole("link", { name: "Service accounts" })).not.toBeInTheDocument();
   });
 
+  it("hides Webhooks from a member", async () => {
+    mockRole("member");
+    renderTree(<Sidebar />);
+    await waitFor(() => expect(document.querySelector("aside button")).not.toBeNull());
+    expect(screen.queryByRole("link", { name: "Webhooks" })).not.toBeInTheDocument();
+  });
+
   it("shows Service accounts to an owner", async () => {
     mockRole("owner");
     renderTree(<Sidebar />);

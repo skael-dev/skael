@@ -29,6 +29,7 @@ import (
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/submissions"
 	gosync "github.com/skael-dev/skael/internal/sync"
+	"github.com/skael-dev/skael/internal/webhooks"
 )
 
 // RegisterAPIDeps bundles everything RegisterAPIRoutes needs to wire the API.
@@ -59,6 +60,11 @@ type RegisterAPIDeps struct {
 	// reused for startup event-retention cleanup instead of constructing a
 	// second one.
 	AnalyticsStore *analytics.Store
+	// JobInserter enqueues webhook deliveries inside a change's transaction.
+	// Nil only for spec generation, which never runs a handler.
+	JobInserter webhooks.JobInserter
+	// RiverUI serves the job inspector. Nil only for spec generation.
+	RiverUI http.Handler
 }
 
 // RegisterAPIRoutes registers every /api/* route: health, readiness,
@@ -159,11 +165,26 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	}
 	skill.RegisterRoutes(api, router, skillStore, d.Storage, skillOptions)
 
+	// Webhooks. Each store below tells the notifier of a change inside the
+	// transaction that makes it.
+	var notifier *webhooks.Notifier
+	if d.JobInserter != nil {
+		notifier = webhooks.NewNotifier(d.JobInserter, setStore)
+		skillStore.SetNotifier(notifier)
+		setStore.SetNotifier(notifier)
+	}
+	webhooks.RegisterRoutes(api, d.Pool, webhooks.NewStore(d.Pool), notifier, cfg.WebhookAllowPrivate)
+	router.Mount(RiverUIPrefix, privilegedOnly(d.RiverUI))
+
 	// Run signals. Outcomes read and write their own tables and never reach the
 	// headline or a release decision.
 	runStore := runs.NewStore(d.Pool)
 	runs.RegisterRoutes(api, runStore)
-	submissionService := submissions.NewService(submissions.NewStore(d.Pool), skillStore, d.Storage,
+	submissionStore := submissions.NewStore(d.Pool)
+	if notifier != nil {
+		submissionStore.SetNotifier(notifier)
+	}
+	submissionService := submissions.NewService(submissionStore, skillStore, d.Storage,
 		skill.NewPublisher(skillStore, d.Storage, skillOptions), ownerResolver)
 	submissions.RegisterRoutes(api, submissionService)
 
