@@ -516,7 +516,7 @@ The exception is management rights, not resolution. A member of a strictly conta
 
 Two more things worth knowing:
 
-- Unowned does not hold a publish. Only a *matched* rule does. Protection switches on per namespace when someone writes the first rule covering it, so upgrading an instance with no rules changes nothing.
+- Unowned does not hold a publish. Only a *matched* rule does. Protection switches on per namespace when someone writes the first rule covering it, so an instance with no rules holds nothing for ownership.
 - Publishing a **first** version of a name that resolves to unowned claims it: the publisher becomes its sole skill owner via an exact-pattern rule. If a rule already covers the name, the rule wins and the publish is held for review like any other proposal.
 
 ### Reading and writing rules

@@ -334,7 +334,7 @@ skael webhooks redeliver <delivery-id>
 
 A redelivery has the same event id and the same body, a new timestamp and a new signature. It starts a new series of 24 attempts.
 
-A deleted endpoint receives nothing further, and neither does one disabled with `"enabled": false` on `PUT /api/webhooks/endpoints/{id}`. Their queued retries stop.
+A deleted endpoint receives nothing further, and neither does one disabled with `skael webhooks update <endpoint> --disable`, or with `"enabled": false` on `PUT /api/webhooks/endpoints/{id}`. Their queued retries stop.
 
 ## Address rule
 

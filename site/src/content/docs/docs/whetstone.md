@@ -15,7 +15,7 @@ Two halves, in the order you use them.
 
 **Evaluation.** `suite` → `eval` → `report`. Draft an eval set, run a model panel against the skill, and render an HTML report. A score is the share of expectations the panel's sessions passed, graded by a model against `evals/evals.json`.
 
-`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, approve it, generate, lint, and draft the eval set. The bundle and the eval set are drafted at the same time, and so are the passes inside the bundle, which is most of why the command finishes in about half the calls' worth of wall clock it used to. It never stops to ask. Everything downstream is derived from the spec, so the run prints the spec it stored and names the commands that change it — `whetstone spec edit`, then `whetstone gen`.
+`whetstone new "<intent>"` runs the whole authoring path in one command: interview, store the spec, approve it, generate, lint, and draft the eval set. The bundle and the eval set are drafted at the same time, and so are the passes inside the bundle. It never stops to ask. Everything downstream is derived from the spec, so the run prints the spec it stored and names the commands that change it — `whetstone spec edit`, then `whetstone gen`.
 
 Everything lives in a `.whetstone` workspace. Commands walk up from the working directory to find it, the way git does. `whetstone init` creates one and refuses to create a nested one — a nested workspace shadows the outer one for every later command, and a mistyped path silently becoming a fresh empty workspace looks exactly like a lost skill.
 
@@ -34,8 +34,9 @@ Homebrew on Linux cannot install a cask. Use the release archive below.
 **Release archive.** Every release ships `whetstone` as its own tarball, same os/arch matrix as the other binaries — `linux`, `darwin`, `windows` × `amd64`, `arm64`. `.tar.gz` everywhere except Windows, which is a `.zip`.
 
 ```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/skael-dev/skael/releases/latest | sed -n 's/.*"tag_name": "v\([^"]*\)".*/\1/p')
 curl -fsSL -o whetstone.tar.gz \
-  https://github.com/skael-dev/skael/releases/download/v0.13.0/whetstone_0.13.0_darwin_arm64.tar.gz
+  https://github.com/skael-dev/skael/releases/download/v${VERSION}/whetstone_${VERSION}_darwin_arm64.tar.gz
 tar -xzf whetstone.tar.gz whetstone
 sudo mv whetstone /usr/local/bin/
 ```

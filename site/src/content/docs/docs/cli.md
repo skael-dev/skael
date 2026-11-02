@@ -163,6 +163,14 @@ Manages [webhook](/docs/webhooks) endpoints and their deliveries. Every command 
 | `--event <type>` | An event type. Repeat it for more. On `update`, the list replaces the current list |
 | `--set <name>` | Limit `set.changed` to this set. Repeat it for more. On `update`, the list replaces the current list |
 
+`update` also takes these flags.
+
+| Flag | Description |
+|---|---|
+| `--enable` | Send deliveries to the endpoint again |
+| `--disable` | Stop deliveries. The endpoint and its log stay |
+| `--all-sets` | Remove the set limit, so `set.changed` fires for every set. Cannot be used with `--set` |
+
 `rotate` takes `--window-hours <n>`, from 0 to 168. The old secret stays valid for that window, and the default is 24 hours.
 
 A refused address or an unknown event type is a server 422, so it exits 1. A missing flag exits 2.

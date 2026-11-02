@@ -1,6 +1,6 @@
 ---
 title: Skill ownership
-description: Who may publish to a skill name — and why an upgrade changes nothing until you write a rule.
+description: Who may publish to a skill name, and how a rule turns on protection for a namespace.
 ---
 
 Ownership answers one question: who may publish to a skill name. Someone drops a change into `payments:refunds` and nobody notices until an agent runs it. Ownership rules mean a person has to say yes first.
@@ -9,9 +9,9 @@ It is not an instance role, it does not gate reads, and it is off until you writ
 
 ## The one thing to know first
 
-**An unowned name does not hold a publish.** If no rule matches, the publish goes through exactly as it did before ownership existed.
+**An unowned name does not hold a publish.** If no rule matches, the version publishes with no ownership hold.
 
-That is deliberate. Holding every unowned publish would flood the review queue on upgrade day with changes nobody asked to review. Protection switches on per namespace, when someone writes the first rule that covers it. There is no flag day, and upgrading changes nothing on its own.
+Protection turns on per namespace, when someone writes the first rule that covers it.
 
 ## Rules and patterns
 
@@ -71,7 +71,7 @@ Publishing **version 1** of a name that resolves to unowned records you as its s
 Two limits matter:
 
 - **Unless a rule already covers the name.** Otherwise publishing `payments:anything` would be a way to make yourself an owner inside someone else's namespace.
-- **Version 1 only.** Publishing v2 of a pre-existing unowned skill claims nothing. Without that, the first person to update any old skill on an upgraded instance would silently become its sole owner — and the "upgrade is a no-op" promise would be false.
+- **Version 1 only.** Publishing v2 of an unowned skill claims nothing, so the next person to update a skill does not silently become its sole owner.
 
 A publish with no authenticated user claims nothing. If the claim fails, it is logged and the publish still succeeds: the version is already durable, and unowned is a state the product models.
 
@@ -95,7 +95,7 @@ An instance admin can clear either. `--override` at publish time suppresses only
 
 Rejecting any single reason rejects the whole version. There is no partial-reject state.
 
-When more than one reason is outstanding you have to say which one you're deciding (`--reason-kind`). When exactly one is, it's inferred — which is what keeps existing `skael review --approve --reason "…"` commands working.
+When more than one reason is outstanding, name the one you decide with `--reason-kind`. When exactly one is, the command infers it.
 
 ## What ownership never does
 
@@ -105,7 +105,7 @@ When more than one reason is outstanding you have to say which one you're decidi
 
 A member whose account is deleted is skipped when listing owners. A rule that ends up empty falls back to instance admins rather than failing a publish.
 
-One gap worth knowing: `DELETE /api/skills/{name}` has no ownership check. Any authenticated member can delete every version of a skill while being unable to publish a line to it. That is pre-existing — ownership did not introduce it — and it is a follow-up.
+One gap: `DELETE /api/skills/{name}` has no ownership check. Any authenticated member can delete every version of a skill, even a member who cannot publish to it.
 
 ## Working with rules
 
@@ -143,4 +143,4 @@ skael review show payments:refunds
 skael review payments:refunds 4 --approve --reason "looks right" --reason-kind ownership
 ```
 
-Start with one namespace, confirm a non-member's publish is actually held, then widen. Everything you haven't written a rule for keeps working exactly as before.
+Start with one namespace, confirm a non-member's publish is actually held, then widen. A name that no rule covers publishes with no ownership hold.

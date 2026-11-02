@@ -185,9 +185,11 @@ A **skill owner** or **namespace owner** is a member of an ownership rule and ha
 
 The instance owner cannot change their own role, and no one can be promoted to `owner` — an instance always has exactly one, set at account-creation time, so there is no path to a lockout.
 
-:::caution[Upgrading from a pre-role build]
-Before roles existed, every account but the first signed up with role `admin` by default. The upgrade migration leaves the first account's `owner` role untouched and downgrades every other existing `admin` account to `member` — a live behavior change on any multi-user instance. Log in as the instance owner afterward and re-promote anyone who needs `admin` (publish-override) access via `PUT /api/admin/users/{id}/role` or the dashboard — see [Upgrading](/docs/upgrading).
-:::
+## Background work
+
+The server runs periodic work on [River](https://riverqueue.com), in the same Postgres: the eval lease sweep, the event retention purge and webhook deliveries. River keeps its data in tables whose names start with `river_`, so a database backup includes them. There is no other service to run.
+
+If you run two or more replicas, they elect one leader, and only the leader schedules periodic jobs. Any replica can send a webhook delivery. An owner or admin can inspect the jobs at `/api/admin/river`.
 
 ## Health probes
 
@@ -293,7 +295,7 @@ This gates startup sequencing only. Once the sidecar exits, Docker Compose does 
 
 Every publish and import runs skael's built-in scanner (a pure-Go package, no external dependencies, always on). It covers hardcoded secrets, prompt injection, data exfiltration, dangerous shell commands, and obfuscation, with a shell-AST pass that catches dangerous pipelines structurally.
 
-`critical` and `high` findings still stop a version from being served, but they no longer all do it the same way. There are two tiers:
+`critical` and `high` findings stop a version from being served. There are two tiers:
 
 - **Unappealable — the publish is refused.** Credential-theft and data-exfiltration findings (a hardcoded secret, a `/dev/tcp` reverse shell). The server returns 422 and creates no version row at all. No evaluation clears these, and neither does an instance admin.
 - **Appealable — the version is created and held.** Everything else that blocks: a `curl … | bash` cradle, a prompt-injection pattern. The version gets a number and a stored archive, but `skills.latest_version` does not advance, it is absent from the sync manifest, and no client can download it. It clears when a **verified** quality score reaches `QUALITY_FLOOR`, or when an instance admin approves it with `skael review <name> <version> --approve --reason "..."`.

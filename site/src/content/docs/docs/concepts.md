@@ -36,7 +36,7 @@ Neither can be used to launder the other. A quality score never clears `ownershi
 
 A set of pattern rules deciding who may publish to a skill name — an exact name, a `payments:*` namespace, or the bare `*`. One rule wins: exact beats longest prefix beats unowned, and matches replace rather than stack. A publish by someone outside the matched rule is held until an owner approves it.
 
-A name nobody has claimed doesn't hold anything, so an upgrade changes nothing until you write your first rule. Ownership never gates reads and never re-gates a version that already shipped.
+A name nobody has claimed holds nothing until you write a rule that covers it. Ownership never gates reads and never re-gates a version that already shipped.
 
 These are not the same as instance roles (`owner`, `admin`, `member`) — see [Skill ownership](/docs/ownership) and [Instance roles](/docs/production#instance-roles).
 
