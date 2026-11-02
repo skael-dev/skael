@@ -106,7 +106,7 @@ Run it on the host, alongside Compose rather than inside it:
 
 ```bash
 export SKAEL_ENDPOINT=http://localhost:8080
-export SKAEL_API_KEY=<a personal API key with permission to claim eval jobs>
+export SKAEL_API_KEY=<a service account key with the eval:work scope>
 export ANTHROPIC_API_KEY=<your direct Anthropic API key>
 skael-worker
 ```
@@ -120,7 +120,7 @@ The worker also ships as an image, published with every release:
 ```bash
 docker run -d \
   -e SKAEL_ENDPOINT=http://localhost:8080 \
-  -e SKAEL_API_KEY=<a personal API key> \
+  -e SKAEL_API_KEY=<a service account key with the eval:work scope> \
   -e ANTHROPIC_API_KEY=<your direct Anthropic API key> \
   -e WORKER_RUN_ROOT=/var/lib/skael/run \
   -e WORKER_WORK_ROOT=/var/lib/skael/work \
@@ -145,7 +145,7 @@ Required — the worker exits at startup naming whichever is missing:
 | Variable | Description |
 |---|---|
 | `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
-| `SKAEL_API_KEY` | API key the worker authenticates with |
+| `SKAEL_API_KEY` | API key the worker authenticates with. Use a service account key with the `eval:work` scope. A privileged personal key still works. |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model, and (forwarded into the sandbox) for the claude-code panel agent — never a subscription CLI on PATH |
 
 Optional, with defaults:
