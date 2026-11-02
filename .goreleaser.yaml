@@ -177,11 +177,11 @@ release:
 
     Migrations run automatically on startup. Or use `docker compose up -d` to bundle Postgres.
 
-    The optional evaluation worker is published beside it, as `ghcr.io/skael-dev/skael-worker:{{.Version}}`. It needs a Docker socket and an LLM key, so it runs separately from the server. Then sign up at `http://localhost:8080` to create your first account and personal API key.
+    The optional evaluation worker is published beside it, as `ghcr.io/skael-dev/skael-worker:{{.Version}}`. It needs a Docker socket and an LLM key, so it runs separately from the server. On a new instance, sign up at `http://localhost:8080` to create the owner account and a personal API key. An upgraded instance keeps its accounts. Read "Before you upgrade" below before you start it.
 
     ## What's in this release
   footer: |
-    **Full changelog**: https://github.com/skael-dev/skael/compare/{{ .PreviousTag }}...{{ .Tag }}
+    Every commit in this release: https://github.com/skael-dev/skael/compare/{{ .PreviousTag }}...{{ .Tag }}
 
 # Casks, not formulas: `brews` is formally deprecated and goes away in
 # GoReleaser v3. One entry per binary, the same split the formulas had, because
