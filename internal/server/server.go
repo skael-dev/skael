@@ -143,6 +143,8 @@ type Server struct {
 
 	river   *river.Client[pgx.Tx]
 	riverUI *riverui.Handler
+
+	stopRiverUI context.CancelFunc
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -280,7 +282,11 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.river.Start(ctx); err != nil {
 		return fmt.Errorf("start river: %w", err)
 	}
-	if err := s.riverUI.Start(ctx); err != nil {
+	// River UI's services stop with their context, and the handler has no Stop.
+	uiCtx, cancel := context.WithCancel(ctx)
+	s.stopRiverUI = cancel
+	if err := s.riverUI.Start(uiCtx); err != nil {
+		cancel()
 		return fmt.Errorf("start river ui: %w", err)
 	}
 	return nil
@@ -288,7 +294,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Stop ends background work. ListenAndServe calls it on shutdown.
 func (s *Server) Stop(ctx context.Context) error {
-	s.riverUI.Stop()
+	s.stopRiverUI()
 	return s.river.Stop(ctx)
 }
 
