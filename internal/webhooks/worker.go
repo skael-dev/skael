@@ -68,9 +68,13 @@ func (w *DeliveryWorker) Work(ctx context.Context, job *river.Job[DeliveryArgs])
 	if err != nil {
 		return err
 	}
-	// A deleted or disabled endpoint receives nothing further.
-	if d == nil || !d.endpoint.Enabled {
+	if d == nil {
 		return nil
+	}
+	// A disabled endpoint receives nothing. The delivery ends as failed, so it
+	// does not sit pending forever and can be redelivered after a re-enable.
+	if !d.endpoint.Enabled {
+		return w.store.recordAttempt(ctx, job.Args.DeliveryID, nil, "the endpoint is disabled", false, "failed")
 	}
 	code, sendErr := w.send(ctx, d)
 	if sendErr == nil {
