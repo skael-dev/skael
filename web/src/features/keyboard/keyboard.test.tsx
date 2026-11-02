@@ -13,8 +13,8 @@ import { useListNavigation } from "./use-list-navigation";
 
 function mockRole(role: string) {
   server.use(
-    http.get("/api/auth/me", () =>
-      HttpResponse.json({ id: "u1", email: "u@test.com", name: "U", role }),
+    http.get("/api/auth/session", () =>
+      HttpResponse.json({ session: {}, user: { id: "u1", email: "u@test.com", name: "U", role } }),
     ),
     http.get("/api/review/queue", () => HttpResponse.json({ held: [], total: 0 })),
   );

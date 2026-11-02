@@ -10,11 +10,25 @@ import (
 
 // Config holds all runtime configuration for the skael server.
 type Config struct {
-	DatabaseURL   string
-	StoragePath   string
-	ListenAddr    string
-	DisableSignup bool
-	GitHubToken   string
+	DatabaseURL          string
+	StoragePath          string
+	ListenAddr           string
+	DisableSignup        bool
+	PublicURL            string
+	SignupAllowedDomains string
+	OIDCIssuer           string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	GoogleClientID       string
+	GoogleClientSecret   string
+	GitHubClientID       string
+	GitHubClientSecret   string
+	SMTPHost             string
+	SMTPPort             int
+	SMTPUsername         string
+	SMTPPassword         string
+	SMTPFrom             string
+	GitHubToken          string
 
 	// EventRetentionDays controls how many days of skill_events to keep.
 	// Events older than this are purged on startup. 0 disables cleanup.
@@ -74,29 +88,43 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		DatabaseURL:         dbURL,
-		StoragePath:         envDefault("STORAGE_PATH", "./data/skills"),
-		ListenAddr:          envDefault("LISTEN_ADDR", ":8080"),
-		DisableSignup:       os.Getenv("DISABLE_SIGNUP") == "true",
-		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
-		EventRetentionDays:  envInt("EVENT_RETENTION_DAYS", 90),
-		ExternalScanCmd:     os.Getenv("EXTERNAL_SCAN_CMD"),
-		ExternalScanTimeout: envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
-		DBMaxConns:          envInt("DB_MAX_CONNS", 25),
-		DBMinConns:          envInt("DB_MIN_CONNS", 5),
-		DBMaxConnLifetime:   envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
-		DBMaxConnIdleTime:   envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
-		DBHealthCheckPeriod: envDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
-		CORSOrigins:         os.Getenv("CORS_ORIGINS"),
-		TrustedProxies:      os.Getenv("TRUSTED_PROXIES"),
-		LogLevel:            envDefault("LOG_LEVEL", "info"),
-		WebhookAllowPrivate: os.Getenv("WEBHOOK_ALLOW_PRIVATE") == "true",
-		RateLimitAuth:       envInt("RATE_LIMIT_AUTH", 20),
-		RateLimitEvents:     envInt("RATE_LIMIT_EVENTS", 600),
-		RateLimitRead:       envInt("RATE_LIMIT_READ", 300),
-		RateLimitWrite:      envInt("RATE_LIMIT_WRITE", 60),
-		RateLimitSuites:     envInt("RATE_LIMIT_SUITES", 20),
-		QualityFloor:        qualityFloor,
+		DatabaseURL:          dbURL,
+		StoragePath:          envDefault("STORAGE_PATH", "./data/skills"),
+		ListenAddr:           envDefault("LISTEN_ADDR", ":8080"),
+		DisableSignup:        os.Getenv("DISABLE_SIGNUP") == "true",
+		GitHubToken:          os.Getenv("GITHUB_TOKEN"),
+		PublicURL:            os.Getenv("PUBLIC_URL"),
+		SignupAllowedDomains: os.Getenv("SIGNUP_ALLOWED_DOMAINS"),
+		OIDCIssuer:           os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:         os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:     os.Getenv("OIDC_CLIENT_SECRET"),
+		GoogleClientID:       os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:   os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GitHubClientID:       os.Getenv("GITHUB_CLIENT_ID"),
+		GitHubClientSecret:   os.Getenv("GITHUB_CLIENT_SECRET"),
+		SMTPHost:             os.Getenv("SMTP_HOST"),
+		SMTPPort:             envInt("SMTP_PORT", 587),
+		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:             os.Getenv("SMTP_FROM"),
+		EventRetentionDays:   envInt("EVENT_RETENTION_DAYS", 90),
+		ExternalScanCmd:      os.Getenv("EXTERNAL_SCAN_CMD"),
+		ExternalScanTimeout:  envDuration("EXTERNAL_SCAN_TIMEOUT", 60*time.Second),
+		DBMaxConns:           envInt("DB_MAX_CONNS", 25),
+		DBMinConns:           envInt("DB_MIN_CONNS", 5),
+		DBMaxConnLifetime:    envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
+		DBMaxConnIdleTime:    envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
+		DBHealthCheckPeriod:  envDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
+		CORSOrigins:          os.Getenv("CORS_ORIGINS"),
+		TrustedProxies:       os.Getenv("TRUSTED_PROXIES"),
+		LogLevel:             envDefault("LOG_LEVEL", "info"),
+		WebhookAllowPrivate:  os.Getenv("WEBHOOK_ALLOW_PRIVATE") == "true",
+		RateLimitAuth:        envInt("RATE_LIMIT_AUTH", 20),
+		RateLimitEvents:      envInt("RATE_LIMIT_EVENTS", 600),
+		RateLimitRead:        envInt("RATE_LIMIT_READ", 300),
+		RateLimitWrite:       envInt("RATE_LIMIT_WRITE", 60),
+		RateLimitSuites:      envInt("RATE_LIMIT_SUITES", 20),
+		QualityFloor:         qualityFloor,
 	}, nil
 }
 

@@ -167,13 +167,13 @@ describe("Ownership settings page", () => {
   // people can see the capability exists and go ask.
   it("disables manage with a reason rather than hiding it", async () => {
     server.use(
-      http.get("/api/auth/me", () => {
-        return HttpResponse.json({
+      http.get("/api/auth/session", () => {
+        return HttpResponse.json({ session: {}, user: {
           id: "user-002",
           email: "dana@test.com",
           name: "Dana Dev",
           role: "member",
-        });
+        } });
       }),
     );
     mockRules([

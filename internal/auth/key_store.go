@@ -106,6 +106,25 @@ func (s *KeyStore) GetByPrefix(ctx context.Context, prefix string) (*APIKeyRow, 
 	return &k, nil
 }
 
+// GetByID returns one key with its limits.
+func (s *KeyStore) GetByID(ctx context.Context, id string) (*APIKeyRow, error) {
+	const q = `
+        SELECT id, user_id, name, key_prefix, key_hash, last_used_at, created_at, scopes, set_id
+        FROM user_api_keys WHERE id = $1
+    `
+	var k APIKeyRow
+	err := s.pool.QueryRow(ctx, q, id).Scan(
+		&k.ID, &k.UserID, &k.Name, &k.KeyPrefix, &k.KeyHash, &k.LastUsedAt, &k.CreatedAt, &k.Scopes, &k.SetID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("auth.KeyStore.GetByID: %w", err)
+	}
+	return &k, nil
+}
+
 func (s *KeyStore) Delete(ctx context.Context, id, userID string) error {
 	const q = `DELETE FROM user_api_keys WHERE id = $1 AND user_id = $2`
 	tag, err := s.pool.Exec(ctx, q, id, userID)

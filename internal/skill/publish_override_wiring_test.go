@@ -31,8 +31,8 @@ import (
 func seedUser(t *testing.T, pool *pgxpool.Pool, id, email, role string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email, name, password_hash, role)
-		 VALUES ($1, $2, $2, 'x', $3)
+		`INSERT INTO auth_users (id, email, email_normalized, display_name, role)
+		 VALUES ($1, $2, lower($2), $2, $3)
 		 ON CONFLICT (id) DO NOTHING`,
 		id, email, role)
 	require.NoError(t, err)

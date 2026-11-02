@@ -32,7 +32,7 @@ func TestConsumerAndRoleFilters(t *testing.T) {
 	// One hook event, then automated events from two consumers and two roles.
 	require.NoError(t, store.Insert(ctx, analytics.Event{SkillName: "filtered", Agent: "claude-code", DeveloperHash: "dev1"}))
 	var userID string
-	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO users (email, name, password_hash) VALUES ('m@example.com', 'm', 'x') RETURNING id`).Scan(&userID))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO auth_users (email, email_normalized, display_name) VALUES ('m@example.com', 'm@example.com', 'm') RETURNING id`).Scan(&userID))
 	report := func(consumer, role string, count int) {
 		events := make([]runs.Event, count)
 		for i := range events {

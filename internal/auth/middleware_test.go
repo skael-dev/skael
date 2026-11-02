@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -18,77 +17,37 @@ import (
 	"github.com/skael-dev/skael/internal/testutil"
 )
 
-// setupMiddlewareTest creates a router with session manager, auth middleware,
-// auth routes (for signup/login), and a protected /api/protected endpoint.
-// Returns an httptest.Server and test infrastructure.
-func setupMiddlewareTest(t *testing.T) (*httptest.Server, *scs.SessionManager, *auth.UserStore, *auth.KeyStore) {
+// setupMiddlewareTest serves the real middleware with a health route and an SPA
+// path beside the protected route.
+func setupMiddlewareTest(t *testing.T) (*httptest.Server, *auth.KeyStore) {
 	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
 	userStore := auth.NewUserStore(pool)
 	keyStore := auth.NewKeyStore(pool)
-
-	sessionManager := scs.New()
+	people, err := auth.NewPeople(pool, keyStore, auth.PeopleConfig{})
+	require.NoError(t, err)
 
 	r := chi.NewMux()
-	r.Use(sessionManager.LoadAndSave)
-	r.Use(auth.Middleware(sessionManager, userStore, keyStore))
-
+	r.Use(auth.Middleware(people, keyStore))
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-
-	// Register auth routes so we can sign up and get sessions.
-	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, false)
-
-	// Register a protected test endpoint that returns the user from context.
+	auth.RegisterRoutes(api, people, userStore, keyStore)
+	r.Handle(auth.AuthAllRoutes, people.Auth.Handler())
 	huma.Register(api, huma.Operation{
-		OperationID: "protected",
-		Method:      http.MethodGet,
-		Path:        "/api/protected",
-		Summary:     "Protected test endpoint",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body auth.User
-	}, error) {
-		user := auth.UserFromContext(ctx)
-		if user == nil {
-			return nil, huma.Error401Unauthorized("no user in context")
-		}
-		return &struct {
-			Body auth.User
-		}{Body: *user}, nil
+		OperationID: "protected", Method: http.MethodGet, Path: "/api/protected",
+	}, func(ctx context.Context, _ *struct{}) (*struct{ Body auth.User }, error) {
+		return &struct{ Body auth.User }{Body: *auth.UserFromContext(ctx)}, nil
 	})
-
-	// Register a health endpoint.
 	huma.Register(api, huma.Operation{
-		OperationID: "health",
-		Method:      http.MethodGet,
-		Path:        "/api/health",
-	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct {
-			Status string `json:"status"`
-		}
-	}, error) {
-		out := &struct {
-			Body struct {
-				Status string `json:"status"`
-			}
-		}{}
-		out.Body.Status = "ok"
-		return out, nil
-	})
-
-	// SPA path handler.
-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("spa")) //nolint:errcheck
-	})
+		OperationID: "health", Method: http.MethodGet, Path: "/api/health", DefaultStatus: http.StatusOK,
+	}, func(context.Context, *struct{}) (*struct{}, error) { return nil, nil })
+	r.Get("/*", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("spa")) })
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-
-	return srv, sessionManager, userStore, keyStore
+	return srv, keyStore
 }
 
-// newClientWithJar creates an http.Client with a fresh cookie jar.
 func newClientWithJar(t *testing.T) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
@@ -100,7 +59,7 @@ func newClientWithJar(t *testing.T) *http.Client {
 func signupUser(t *testing.T, srv *httptest.Server, email, name, password string) *http.Client {
 	t.Helper()
 	client := newClientWithJar(t)
-	resp := doPost(t, client, srv.URL+"/api/auth/signup", map[string]string{
+	resp := doPost(t, client, srv.URL+"/api/auth/sign-up/email", map[string]string{
 		"email":    email,
 		"name":     name,
 		"password": password,
@@ -114,7 +73,7 @@ func TestMiddleware_NonAPIPath_PassesThrough(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
 	// Non-API paths should pass through without auth.
 	client := newClientWithJar(t)
@@ -131,7 +90,7 @@ func TestMiddleware_HealthEndpoint_PassesThrough(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)
 	resp, err := client.Get(srv.URL + "/api/health")
@@ -144,12 +103,12 @@ func TestMiddleware_AuthLoginEndpoint_PassesThrough(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
-	// /api/auth/login should be accessible without auth (the login handler itself
+	// /api/auth/sign-in/email should be accessible without auth (the login handler itself
 	// will return 401 for bad creds, but the middleware should let it through).
 	client := newClientWithJar(t)
-	resp := doPost(t, client, srv.URL+"/api/auth/login", map[string]string{
+	resp := doPost(t, client, srv.URL+"/api/auth/sign-in/email", map[string]string{
 		"email":    "nobody@example.com",
 		"password": "anything",
 	})
@@ -162,7 +121,7 @@ func TestMiddleware_ValidSession_PassesWithUser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
 	// Sign up to get a session cookie.
 	client := signupUser(t, srv, "session@example.com", "Session User", "password123")
@@ -182,7 +141,7 @@ func TestMiddleware_ValidAPIKey_PassesWithUser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, keyStore := setupMiddlewareTest(t)
+	srv, keyStore := setupMiddlewareTest(t)
 
 	// Sign up to create a user, then create an API key for them.
 	client := signupUser(t, srv, "apikey@example.com", "API Key User", "password123")
@@ -217,7 +176,7 @@ func TestMiddleware_NoAuth_Returns401(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)
 	resp, err := client.Get(srv.URL + "/api/protected")
@@ -234,7 +193,7 @@ func TestMiddleware_InvalidAPIKey_Returns401(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
 	}
-	srv, _, _, _ := setupMiddlewareTest(t)
+	srv, _ := setupMiddlewareTest(t)
 
 	client := newClientWithJar(t)
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/protected", nil)

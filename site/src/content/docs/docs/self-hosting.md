@@ -19,6 +19,12 @@ Migrations run automatically on startup. Auth is via user accounts and personal 
 | `STORAGE_PATH` | no | `./data/skills` | Archive storage: a local directory, or `s3://bucket/prefix` for S3 |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
 | `DISABLE_SIGNUP` | no | `false` | `true` closes signups once you've created the accounts you need. Only the literal `true` counts. The server logs a startup warning while it is unset |
+| `PUBLIC_URL` | with SSO or SMTP | — | The URL people use to reach the server, for example `https://skael.example.com`. Provider callbacks and email links are built from it |
+| `SIGNUP_ALLOWED_DOMAINS` | no | — | Comma-separated email domains. Set it to refuse a new account on every sign-in path from any other domain |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | no | — | Sign-in through any OpenID Connect provider. The first sign-in creates a `member`, even with `DISABLE_SIGNUP=true`. Register `PUBLIC_URL/api/auth/oauth/oidc/callback` as the redirect URI |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | — | Sign-in through Google. `DISABLE_SIGNUP=true` refuses new accounts on this path |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | no | — | Sign-in through GitHub. `DISABLE_SIGNUP=true` refuses new accounts on this path. `GITHUB_TOKEN` is separate and serves import only |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | no | — / `587` / — / — / — | Turns on self-service password reset. Without `SMTP_HOST`, the sign-in page has no "forgot password" link, and the owner issues temporary passwords |
 | `COOKIE_SECURE` | no | `false` | `true` marks the session cookie `Secure`. Requires TLS in front — a browser refuses a `Secure` cookie over plain HTTP, which breaks login with no error. The server logs a startup warning while it is unset |
 | `TRUSTED_PROXIES` | no | — | Comma-separated addresses or CIDR blocks whose `X-Forwarded-For` / `X-Real-IP` are believed. Unset means neither header is trusted and the socket address wins — correct for a directly exposed server. Set it when running behind a reverse proxy, or every client shares one rate-limit bucket. See [Production](/docs/production#telling-skael-about-the-proxy) |
 | `CORS_ORIGINS` | no | — | Comma-separated allowed origins, e.g. `https://app.example.com,http://localhost:5173`. Unset means no CORS headers are sent |
@@ -53,7 +59,7 @@ Migrations run automatically on startup. Auth is via user accounts and personal 
 | `RATE_LIMIT_WRITE` | no | `60` | Per-minute budget for every other mutating route — publish, import, delete |
 | `RATE_LIMIT_SUITES` | no | `20` | Per-minute budget for `POST /api/eval/suites`, which accepts up to a 10MB archive per call |
 
-`/api/auth/*` is keyed by source IP alone: those requests are unauthenticated, so an `X-API-Key` header on them is unverified and must not mint a fresh budget. Every other class is keyed by API key where one is present and by IP otherwise, and is additionally capped by a shared per-IP ceiling of ten times the class limit, checked first — so one source address cannot get more by rotating keys. Raising a class's limit raises its ceiling with it. Over-limit requests get a 429 with `Retry-After`, which the CLI honours.
+`/api/auth/*` is keyed by source IP alone: those requests are unauthenticated, so a key on them is unverified and must not mint a fresh budget. Every other class is keyed by API key where one is present and by IP otherwise, and is additionally capped by a shared per-IP ceiling of ten times the class limit, checked first — so one source address cannot get more by rotating keys. Raising a class's limit raises its ceiling with it. Over-limit requests get a 429 with `Retry-After`, which the CLI honours.
 
 ### Scanning, logging and retention
 

@@ -19,8 +19,8 @@ func TestStoreUpsertReplacesMembers(t *testing.T) {
 		into  *string
 	}{{"alice@x.com", &alice}, {"bob@x.com", &bob}, {"carol@x.com", &carol}} {
 		if err := pool.QueryRow(ctx,
-			`INSERT INTO users (email, name, password_hash, role)
-			 VALUES ($1, $1, 'x', 'member') RETURNING id`, p.email).Scan(p.into); err != nil {
+			`INSERT INTO auth_users (email, email_normalized, display_name, role)
+			 VALUES ($1, lower($1), $1, 'member') RETURNING id`, p.email).Scan(p.into); err != nil {
 			t.Fatalf("seed %s: %v", p.email, err)
 		}
 	}
@@ -54,8 +54,8 @@ func TestStoreListAndDelete(t *testing.T) {
 
 	var alice string
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO users (email, name, password_hash, role)
-		 VALUES ('a@x.com', 'a', 'x', 'member') RETURNING id`).Scan(&alice); err != nil {
+		`INSERT INTO auth_users (email, email_normalized, display_name, role)
+		 VALUES ('a@x.com', 'a@x.com', 'a', 'member') RETURNING id`).Scan(&alice); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 

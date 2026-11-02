@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/alexedwards/scs/v2"
+	"github.com/alternayte/auth-all/humaauth"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,13 +49,13 @@ import (
 // huma.Register call in Build() after RegisterAPIRoutes returns, or the
 // guard cannot see it and the spec can silently drift again.
 type RegisterAPIDeps struct {
-	Pool           *pgxpool.Pool
-	Config         *platform.Config
-	SessionManager *scs.SessionManager
-	UserStore      *auth.UserStore
-	KeyStore       *auth.KeyStore
-	Storage        platform.Storage
-	Caps           *Capabilities
+	Pool      *pgxpool.Pool
+	Config    *platform.Config
+	People    *auth.People
+	UserStore *auth.UserStore
+	KeyStore  *auth.KeyStore
+	Storage   platform.Storage
+	Caps      *Capabilities
 	// AnalyticsStore is optional; if nil, RegisterAPIRoutes constructs one
 	// from Pool. Build() passes its own instance so the same store can be
 	// reused for startup event-retention cleanup instead of constructing a
@@ -65,6 +66,20 @@ type RegisterAPIDeps struct {
 	JobInserter webhooks.JobInserter
 	// RiverUI serves the job inspector. Nil only for spec generation.
 	RiverUI http.Handler
+}
+
+// mountPeople serves auth-all's routes and merges them into the OpenAPI document,
+// without the admin routes the auth middleware refuses.
+func mountPeople(api huma.API, router chi.Router, people *auth.People) {
+	router.Handle(auth.AuthAllRoutes, people.Auth.Handler())
+	if err := humaauth.Register(api, people.Auth); err != nil {
+		panic(err)
+	}
+	for path := range api.OpenAPI().Paths {
+		if strings.HasPrefix(path, "/api/auth/admin/") {
+			delete(api.OpenAPI().Paths, path)
+		}
+	}
 }
 
 // RegisterAPIRoutes registers every /api/* route: health, readiness,
@@ -135,7 +150,16 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	})
 
 	// Auth.
-	auth.RegisterRoutes(api, d.SessionManager, d.UserStore, d.KeyStore, cfg.DisableSignup)
+	people := d.People
+	if people == nil {
+		var err error
+		if people, err = auth.NewPeople(d.Pool, d.KeyStore, auth.PeopleConfig{Inspecting: true}); err != nil {
+			panic(err)
+		}
+	}
+	caps.SetSignIn(people.SignInMethods())
+	auth.RegisterRoutes(api, people, d.UserStore, d.KeyStore)
+	mountPeople(api, router, people)
 	auth.RegisterServiceAccountRoutes(api, d.Pool, d.KeyStore)
 
 	// Sets.

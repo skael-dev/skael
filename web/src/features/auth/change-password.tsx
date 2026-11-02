@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/app/auth-provider";
+import { authError, postAuth, useAuth } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 
 export function ChangePassword() {
-  const { user } = useAuth();
+  const { user, passwordChanged } = useAuth();
   const navigate = useNavigate();
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -20,18 +20,9 @@ export function ChangePassword() {
     setSuccess(false);
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/auth/change-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Failed to change password" }));
-        throw new Error(err.detail || err.error || "Failed to change password");
-      }
+      const res = await postAuth("/password/change", { currentPassword, newPassword });
+      if (!res.ok) throw await authError(res, "Failed to change password");
+      passwordChanged();
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");

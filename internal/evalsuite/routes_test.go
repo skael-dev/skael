@@ -128,7 +128,7 @@ func newTestServerWithStorage(t *testing.T, storage platform.Storage) *testServe
 }
 
 // newUnauthTestServer wires the eval suite routes behind the real
-// auth.Middleware (no session manager, no key store — every request is
+// auth.Middleware (no people, no key store — every request is
 // unauthenticated), so a test can prove the routes are not accidentally
 // reachable without credentials.
 func newUnauthTestServer(t *testing.T) *testServer {
@@ -144,7 +144,7 @@ func newUnauthTestServer(t *testing.T) *testServer {
 	reg := evalsuite.NewRegistry(pool, storage)
 
 	r := chi.NewMux()
-	r.Use(auth.Middleware(nil, nil, nil))
+	r.Use(auth.Middleware(nil, nil))
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{})
 

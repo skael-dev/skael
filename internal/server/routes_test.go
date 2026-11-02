@@ -65,6 +65,10 @@ func TestEveryRouteHasAScopeTableEntry(t *testing.T) {
 		if strings.HasPrefix(route, server.RiverUIPrefix) {
 			return nil
 		}
+		// auth-all serves a person's account and refuses every key itself.
+		if route == auth.AuthAllRoutes {
+			return nil
+		}
 		if !known[method+" "+route] {
 			t.Errorf("no entry in auth.routeRules for %s %s", method, route)
 		}

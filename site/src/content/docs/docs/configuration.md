@@ -11,6 +11,12 @@ description: Every environment variable the server and the worker read.
 | `STORAGE_PATH` | no | `./data/skills` | Archive storage; local dir, or `s3://bucket/prefix` for S3 |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
 | `DISABLE_SIGNUP` | no | `false` | Set to `true` (the literal string) to lock signups after setup. The server logs a startup warning when unset |
+| `PUBLIC_URL` | with SSO or SMTP | — | The URL people use to reach the server. Provider callbacks and email links are built from it |
+| `SIGNUP_ALLOWED_DOMAINS` | no | — | Comma-separated email domains. Set it to refuse a new account on every sign-in path from any other domain |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | no | — | Sign-in through any OpenID Connect provider. The first sign-in creates a `member`, even with `DISABLE_SIGNUP=true`. Register `PUBLIC_URL/api/auth/oauth/oidc/callback` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | — | Sign-in through Google |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | no | — | Sign-in through GitHub. `GITHUB_TOKEN` is separate and serves import only |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | no | — / `587` / — / — / — | Turns on self-service password reset |
 | `S3_ENDPOINT` / `S3_REGION` | no | `s3.amazonaws.com` / `us-east-1` | Only when `STORAGE_PATH=s3://…`. Only `S3_REGION` falls back to `AWS_REGION`; the endpoint has no `AWS_*` fallback |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Both fall back to `AWS_*`. The pair is all-or-nothing: set only one and it is silently ignored. Omit both for an IAM instance role |
 | `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
@@ -38,7 +44,7 @@ description: Every environment variable the server and the worker read.
 | `GITHUB_TOKEN` | no | — | GitHub personal access token for import; raises API rate limits |
 | `QUALITY_FLOOR` | no | `0` | Minimum headline quality score a verified evaluation must reach to release a version held for review. `0` accepts any verified report with a complete panel and no critical contract violations. |
 
-Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks signups after setup.
+Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks password, Google and GitHub signups after setup. OIDC stays open, because the identity provider is the gate.
 
 ## Worker env vars
 

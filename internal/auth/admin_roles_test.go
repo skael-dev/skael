@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,10 +10,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/auth"
@@ -24,24 +25,35 @@ import (
 // way they do in the server.
 func setupAuthAPIAuthenticated(t *testing.T) *httptest.Server {
 	t.Helper()
+	srv, _ := setupPeople(t, auth.PeopleConfig{})
+	return srv
+}
+
+// setupPeople serves Skael's auth routes and auth-all's routes behind the real
+// middleware, with a protected route that echoes the request's user.
+func setupPeople(t *testing.T, cfg auth.PeopleConfig) (*httptest.Server, *pgxpool.Pool) {
+	t.Helper()
 
 	pool := testutil.SetupTestDB(t)
 	userStore := auth.NewUserStore(pool)
 	keyStore := auth.NewKeyStore(pool)
-
-	sessionManager := scs.New()
+	people, err := auth.NewPeople(pool, keyStore, cfg)
+	require.NoError(t, err)
 
 	r := chi.NewMux()
-	r.Use(sessionManager.LoadAndSave)
-	r.Use(auth.Middleware(sessionManager, userStore, keyStore))
-
+	r.Use(auth.Middleware(people, keyStore))
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	auth.RegisterRoutes(api, sessionManager, userStore, keyStore, false)
+	auth.RegisterRoutes(api, people, userStore, keyStore)
+	r.Handle(auth.AuthAllRoutes, people.Auth.Handler())
+	huma.Register(api, huma.Operation{
+		OperationID: "protected", Method: http.MethodGet, Path: "/api/protected",
+	}, func(ctx context.Context, _ *struct{}) (*struct{ Body auth.User }, error) {
+		return &struct{ Body auth.User }{Body: *auth.UserFromContext(ctx)}, nil
+	})
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-
-	return srv
+	return srv, pool
 }
 
 // signUp creates an account with its own cookie jar and returns the client and
@@ -53,16 +65,18 @@ func signUp(t *testing.T, srv *httptest.Server, email, name string) (*http.Clien
 	require.NoError(t, err)
 	client := &http.Client{Jar: jar}
 
-	resp := doPost(t, client, srv.URL+"/api/auth/signup", map[string]string{
+	resp := doPost(t, client, srv.URL+"/api/auth/sign-up/email", map[string]string{
 		"email":    email,
 		"name":     name,
 		"password": "password123",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var user auth.User
-	decodeJSON(t, resp, &user)
-	return client, user
+	var body struct {
+		User auth.User `json:"user"`
+	}
+	decodeJSON(t, resp, &body)
+	return client, body.User
 }
 
 // doPut sends a JSON PUT request and returns the response.

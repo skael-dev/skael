@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alexedwards/scs/pgxstore"
-	"github.com/alexedwards/scs/v2"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -132,6 +130,38 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 	return func() {}
 }
 
+func peopleConfig(cfg *platform.Config, cookieSecure bool) auth.PeopleConfig {
+	pc := auth.PeopleConfig{
+		PublicURL:          cfg.PublicURL,
+		CookieSecure:       cookieSecure,
+		DisableSignup:      cfg.DisableSignup,
+		AllowedDomains:     splitList(cfg.SignupAllowedDomains),
+		TrustedOrigins:     splitList(cfg.CORSOrigins),
+		TrustedProxies:     splitList(cfg.TrustedProxies),
+		OIDCIssuer:         cfg.OIDCIssuer,
+		OIDCClientID:       cfg.OIDCClientID,
+		OIDCClientSecret:   cfg.OIDCClientSecret,
+		GoogleClientID:     cfg.GoogleClientID,
+		GoogleClientSecret: cfg.GoogleClientSecret,
+		GitHubClientID:     cfg.GitHubClientID,
+		GitHubClientSecret: cfg.GitHubClientSecret,
+	}
+	if cfg.SMTPHost != "" {
+		pc.EmailSender = auth.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom)
+	}
+	return pc
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // Server wraps the assembled HTTP handler and configuration needed to start
 // listening. Build() produces a Server; ListenAndServe() runs it.
 type Server struct {
@@ -143,6 +173,7 @@ type Server struct {
 
 	river   *river.Client[pgx.Tx]
 	riverUI *riverui.Handler
+	people  *auth.People
 
 	stopRiverUI context.CancelFunc
 }
@@ -171,15 +202,6 @@ func (b *Builder) Build() (*Server, error) {
 		log.Warn().Msg("DISABLE_SIGNUP is not set")
 	}
 
-	// 4. Initialize session manager.
-	sessionManager := scs.New()
-	sessionManager.Store = pgxstore.NewWithCleanupInterval(b.pool, 30*time.Minute)
-	sessionManager.Cookie.Name = "skael_session"
-	sessionManager.Cookie.HttpOnly = true
-	sessionManager.Cookie.SameSite = http.SameSiteLaxMode
-	sessionManager.Cookie.Secure = cookieSecure
-	sessionManager.Lifetime = 7 * 24 * time.Hour
-
 	// 5. Create storage (local filesystem or S3, per STORAGE_PATH).
 	storage, err := platform.NewStorageFromConfig(cfg)
 	if err != nil {
@@ -189,13 +211,16 @@ func (b *Builder) Build() (*Server, error) {
 	// 6. Create auth stores.
 	userStore := auth.NewUserStore(b.pool)
 	keyStore := auth.NewKeyStore(b.pool)
+	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, cookieSecure))
+	if err != nil {
+		return nil, fmt.Errorf("server.Build: %w", err)
+	}
 
 	// 7. Create chi router with middleware.
 	router := chi.NewMux()
 	mountMetrics := InstallEdgeMiddleware(router, cfg, cookieSecure)
 
-	router.Use(sessionManager.LoadAndSave)
-	router.Use(auth.Middleware(sessionManager, userStore, keyStore))
+	router.Use(auth.Middleware(people, keyStore))
 
 	// 8. Enforce body size limit before Huma buffers the request body.
 	router.Use(func(next http.Handler) http.Handler {
@@ -229,7 +254,7 @@ func (b *Builder) Build() (*Server, error) {
 	RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
-		SessionManager: sessionManager,
+		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,
 		Storage:        storage,
@@ -273,12 +298,16 @@ func (b *Builder) Build() (*Server, error) {
 		listenAddr: cfg.ListenAddr,
 		river:      riverClient,
 		riverUI:    riverUI,
+		people:     people,
 	}, nil
 }
 
 // Start runs background work: webhook deliveries and the periodic jobs. River
 // elects one leader across replicas, so one replica runs each periodic job.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.people.Auth.CheckSchema(ctx); err != nil {
+		return fmt.Errorf("auth schema: %w", err)
+	}
 	if err := s.river.Start(ctx); err != nil {
 		return fmt.Errorf("start river: %w", err)
 	}

@@ -12,9 +12,9 @@ describe("handleUnauthorized", () => {
     expect(redirect).toHaveBeenCalledWith("/login");
   });
 
-  it("ignores 401 from auth endpoints (login page probes /api/auth/me)", () => {
+  it("ignores 401 from auth endpoints (login page probes /api/auth/session)", () => {
     const redirect = vi.fn();
-    handleUnauthorized(res(401, "http://x/api/auth/me"), redirect);
+    handleUnauthorized(res(401, "http://x/api/auth/session"), redirect);
     expect(redirect).not.toHaveBeenCalled();
   });
 

@@ -171,7 +171,7 @@ Source: `cmd/server/main.go` — `log.Fatal().Err(err).Msg("database connection 
 
 **Why:** `COOKIE_SECURE=true` is set but the server is serving plain HTTP (no TLS proxy in front). The browser refuses to store a `Secure` cookie over HTTP, so the session is never saved. Every request after login appears unauthenticated.
 
-Source: `internal/server/server.go` — `sessionManager.Cookie.Secure = os.Getenv("COOKIE_SECURE") == "true"`.
+Source: `internal/server/server.go` reads `COOKIE_SECURE` and passes it to auth-all.
 
 **Fix:**
 - **In production:** put a TLS-terminating reverse proxy (Caddy, nginx) in front of skael before enabling `COOKIE_SECURE=true`. See the [production deployment guide](/docs/production#reverse-proxy).

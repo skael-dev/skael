@@ -37,7 +37,7 @@ func newOwnershipTestServer(t *testing.T) (http.Handler, *ownership.Store, *auth
 // by ownership_rule_members' foreign key, and returns its row.
 func seedAuthUser(t *testing.T, users *auth.UserStore, email string) *auth.UserRow {
 	t.Helper()
-	row, err := users.Create(context.Background(), email, email, "x")
+	row, err := users.Create(context.Background(), email, email)
 	if err != nil {
 		t.Fatalf("seed user %s: %v", email, err)
 	}

@@ -4,7 +4,8 @@ import { Copy, Check, Plus, Trash2, AlertTriangle, Lock, RotateCcw, Loader2 } fr
 import { toast } from "sonner";
 import { listSkills, listApiKeys, createApiKey, deleteApiKey, getCapabilities } from "@/api/sdk.gen";
 import type { ListBody, ListKeysBody, ApiKeyInfo, CreateKeyResponse } from "@/api/types.gen";
-import { useAuth } from "@/app/auth-provider";
+import { authError, postAuth, useAuth } from "@/app/auth-provider";
+import { SecuritySection } from "./security";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { useListNavigation } from "@/features/keyboard/use-list-navigation";
@@ -24,6 +25,7 @@ import {
 const ALL_SECTIONS = [
   { id: "workspace", label: "Workspace" },
   { id: "password", label: "Change Password" },
+  { id: "security", label: "Security" },
   { id: "api", label: "API & Keys" },
   { id: "team", label: "Team" },
   { id: "sync", label: "Sync Targets" },
@@ -472,18 +474,8 @@ function ChangePasswordSection() {
     setSuccess(false);
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/auth/change-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Failed to change password" }));
-        throw new Error(err.detail || err.error || "Failed to change password");
-      }
+      const res = await postAuth("/password/change", { currentPassword, newPassword });
+      if (!res.ok) throw await authError(res, "Failed to change password");
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");
@@ -581,6 +573,7 @@ type TeamUser = {
   name: string;
   role: string;
   created_at: string;
+  disabled?: boolean;
 };
 
 function TeamSection() {
@@ -602,12 +595,8 @@ function TeamSection() {
   });
 
   const resetMutation = useMutation({
-    mutationFn: async (email: string) => {
-      const res = await fetch("/api/admin/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
+    mutationFn: async (userId: string) => {
+      const res = await fetch(`/api/admin/users/${userId}/password`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed to reset password" }));
         throw new Error(err.detail || err.error || "Failed to reset password");
@@ -647,6 +636,17 @@ function TeamSection() {
     },
     onSettled: () => {
       setPendingRoleUserId(null);
+    },
+  });
+
+  const disableMutation = useMutation({
+    mutationFn: async ({ userId, disable }: { userId: string; disable: boolean }) => {
+      const res = await fetch(`/api/admin/users/${userId}/${disable ? "disable" : "enable"}`, { method: "POST" });
+      if (!res.ok) throw await authError(res, "Failed to update the user");
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "users"] }),
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update the user");
     },
   });
 
@@ -726,6 +726,14 @@ function TeamSection() {
                     </td>
                     <td className="px-3.5 py-3 text-text-tertiary text-[11px]">{relativeTime(u.created_at)}</td>
                     <td className="px-3.5 py-3 text-right">
+                      {u.role !== "owner" && (
+                        <button
+                          onClick={() => disableMutation.mutate({ userId: u.id, disable: !u.disabled })}
+                          className="mr-3 text-[11px] text-text-secondary hover:text-accent transition-colors cursor-pointer bg-transparent border-none font-sans"
+                        >
+                          {u.disabled ? "Enable" : "Disable"}
+                        </button>
+                      )}
                       <button
                         onClick={() => setResetTarget(u)}
                         className="inline-flex items-center gap-1 text-[11px] text-text-secondary hover:text-accent transition-colors cursor-pointer bg-transparent border-none font-sans"
@@ -805,7 +813,7 @@ function TeamSection() {
                   size="sm"
                   className="bg-accent text-bg-primary hover:bg-accent/90"
                   disabled={resetMutation.isPending}
-                  onClick={() => resetTarget && resetMutation.mutate(resetTarget.email)}
+                  onClick={() => resetTarget && resetMutation.mutate(resetTarget.id)}
                 >
                   {resetMutation.isPending ? "Resetting..." : "Reset Password"}
                 </Button>
@@ -930,6 +938,14 @@ export function Settings() {
             }}
           >
             <ChangePasswordSection />
+          </div>
+
+          <div
+            ref={(el) => {
+              sectionRefs.current.security = el;
+            }}
+          >
+            <SecuritySection />
           </div>
 
           <div

@@ -148,10 +148,10 @@ Do this once, after all accounts are created.
 2. Log in to the dashboard. Go to **Settings → API keys** and create keys for each teammate who needs CLI access.
 3. Distribute the API keys. Each person runs `skael setup <url> <key>` to connect their CLI.
 4. Set `DISABLE_SIGNUP=true` in `.env` and restart the server.
-5. Verify the lockdown: a POST to `/api/auth/signup` must return `403`.
+5. Verify the lockdown: a POST to `/api/auth/sign-up/email` must return `403`.
 
 ```bash
-curl -s -X POST https://skael.example.com/api/auth/signup \
+curl -s -X POST https://skael.example.com/api/auth/sign-up/email \
   -H "Content-Type: application/json" \
   -d '{"email":"new@example.com","password":"somepassword","name":"New User"}'
 ```
@@ -159,7 +159,7 @@ curl -s -X POST https://skael.example.com/api/auth/signup \
 Expected response when signups are disabled — HTTP 403:
 
 ```json
-{"title":"Forbidden","status":403,"detail":"signup is disabled"}
+{"error":{"code":"FORBIDDEN","message":"Signup is disabled."}}
 ```
 
 If you see anything other than a 403, `DISABLE_SIGNUP=true` is not active. Check that the restart completed and the env var is set in the process environment, not only in `.env`.
@@ -172,7 +172,7 @@ Every account has one of three roles:
 
 | Role | Granted | Can do |
 |---|---|---|
-| `owner` | Automatically, to the first account created on the instance. Exactly one per instance, and it never changes hands via the API. | Everything, plus role management: `PUT /api/admin/users/{id}/role` (promote to `admin`/`member`), `GET /api/admin/users` (list all users), `POST /api/admin/reset-password` (issue another user a temporary password). |
+| `owner` | Automatically, to the first account created on the instance. Exactly one per instance, and it never changes hands via the API. | Everything, plus role management: `PUT /api/admin/users/{id}/role` (promote to `admin`/`member`), `GET /api/admin/users` (list all users), `POST /api/admin/users/{id}/password` (issue a temporary password), `POST /api/admin/users/{id}/disable` and `/enable`. |
 | `admin` | By the instance owner, via the role-management endpoint above (or the dashboard). | Normal use, plus `skael publish --override` to publish past an appealable scan finding, and `skael review --approve` to clear a version held for review. |
 | `member` | Default for every new signup. | Normal use: publish, sync, browse. Cannot override or clear a held publish. |
 

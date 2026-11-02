@@ -6,6 +6,7 @@ import { Shell } from "@/app/shell";
 import { Login } from "@/features/auth/login";
 import { Signup } from "@/features/auth/signup";
 import { ChangePassword } from "@/features/auth/change-password";
+import { ForgotPassword, ResetPassword } from "@/features/auth/password-reset";
 import { SkillList } from "@/features/skills/skill-list";
 import { SkillDetail } from "@/features/skills/skill-detail";
 import { Analytics } from "@/features/analytics/analytics";
@@ -37,7 +38,7 @@ function ErrorFallback() {
 }
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, mustChangePassword } = useAuth();
   if (isLoading) {
     return (
       <div className="h-screen bg-bg-primary p-6">
@@ -46,6 +47,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  if (mustChangePassword) return <Navigate to="/change-password" replace />;
   return <>{children}</>;
 }
 
@@ -57,6 +59,8 @@ export function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/change-password" element={<ChangePassword />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route
             element={
               <RequireAuth>

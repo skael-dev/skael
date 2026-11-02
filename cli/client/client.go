@@ -17,7 +17,7 @@ import (
 )
 
 // Client communicates with the skael platform API. Every request includes the
-// X-API-Key header for authentication.
+// Authorization header for authentication.
 type Client struct {
 	endpoint   string
 	apiKey     string
@@ -209,7 +209,7 @@ func parseRetryAfter(v string) time.Duration {
 	return 0
 }
 
-// do performs an HTTP request against the API, attaching the X-API-Key header.
+// do performs an HTTP request against the API, attaching the Authorization header.
 // It returns the raw *http.Response so callers can decode the body themselves.
 // On non-2xx responses it reads the body, attempts to extract a JSON "message"
 // field, and returns an *APIError.
@@ -218,14 +218,14 @@ func (c *Client) do(method, path string, body io.Reader, contentType string) (*h
 }
 
 // doHeaders is do plus arbitrary extra request headers, needed for endpoints
-// authenticated by something other than X-API-Key (the eval job endpoints
+// authenticated by something other than the key (the eval job endpoints
 // carry a per-claim X-Claim-Token instead).
 func (c *Client) doHeaders(method, path string, body io.Reader, contentType string, headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequest(method, c.endpoint+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

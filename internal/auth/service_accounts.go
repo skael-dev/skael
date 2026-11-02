@@ -29,8 +29,8 @@ type ServiceAccount struct {
 }
 
 const serviceAccountSelect = `
-	SELECT u.id, u.name, COUNT(k.id)::int, MAX(k.last_used_at), u.created_at
-	FROM users u LEFT JOIN user_api_keys k ON k.user_id = u.id
+	SELECT u.id, u.display_name, COUNT(k.id)::int, MAX(k.last_used_at), u.created_at
+	FROM auth_users u LEFT JOIN user_api_keys k ON k.user_id = u.id
 	WHERE u.kind = 'service'`
 
 func collectServiceAccounts(rows pgx.Rows) ([]ServiceAccount, error) {
@@ -38,7 +38,7 @@ func collectServiceAccounts(rows pgx.Rows) ([]ServiceAccount, error) {
 }
 
 func listServiceAccounts(ctx context.Context, pool *pgxpool.Pool) ([]ServiceAccount, error) {
-	rows, err := pool.Query(ctx, serviceAccountSelect+` GROUP BY u.id ORDER BY u.name`)
+	rows, err := pool.Query(ctx, serviceAccountSelect+` GROUP BY u.id ORDER BY u.display_name`)
 	if err != nil {
 		return nil, fmt.Errorf("auth.listServiceAccounts: %w", err)
 	}
@@ -61,8 +61,8 @@ func createServiceAccount(ctx context.Context, pool *pgxpool.Pool, name, actor s
 
 	a := ServiceAccount{Name: name}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO users (email, name, password_hash, role, kind)
-		VALUES ($1, $2, '', 'member', 'service')
+		INSERT INTO auth_users (id, email, email_normalized, display_name, role, kind, created_at)
+		VALUES (gen_random_uuid(), $1, lower(trim($1)), $2, 'member', 'service', now())
 		RETURNING id, created_at`, name+"@service-account.invalid", name).Scan(&a.ID, &a.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("auth.createServiceAccount: %w", err)
@@ -218,7 +218,7 @@ func RegisterServiceAccountRoutes(api huma.API, pool *pgxpool.Pool, keys *KeySto
 			return nil, fmt.Errorf("delete service account: %w", err)
 		}
 		defer tx.Rollback(ctx) //nolint:errcheck
-		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1 AND kind = 'service'`, a.ID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM auth_users WHERE id = $1 AND kind = 'service'`, a.ID); err != nil {
 			return nil, fmt.Errorf("delete service account: %w", err)
 		}
 		if err := audit.Record(ctx, tx, u.Email, "service_account.delete", "service_account:"+a.Name, nil); err != nil {

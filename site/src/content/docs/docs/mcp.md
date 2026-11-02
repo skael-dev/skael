@@ -12,7 +12,7 @@ No tool can publish a version or decide a submission. A person decides a submiss
 Create an API key. Then add the server to Claude Code:
 
 ```bash
-claude mcp add --transport http skael https://HOST/mcp --header "X-API-Key: sk-..."
+claude mcp add --transport http skael https://HOST/mcp --header "Authorization: Bearer sk-..."
 ```
 
 Replace `HOST` with your Skael host. Run `/mcp` in Claude Code to see the connection and the tools.
@@ -41,7 +41,7 @@ Replace `HOST` with your Skael host. Run `/mcp` in Claude Code to see the connec
 
 ## Keys and scopes
 
-The server checks `X-API-Key` with the same authentication as the HTTP API.
+The server checks the `Authorization` bearer key with the same authentication as the HTTP API.
 
 - A personal key with no scopes reaches all seven tools.
 - A scoped key needs `skills:read`, `sets:read`, `outcomes:write` or `submissions:write` to reach `/mcp`. Each tool then checks its own scope.

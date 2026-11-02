@@ -12,11 +12,7 @@ import (
 // createTestUser is a helper that creates a user and returns its ID.
 func createTestUser(t *testing.T, store *auth.UserStore, email string) string {
 	t.Helper()
-	hash, err := auth.HashPassword("secret")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	u, err := store.Create(context.Background(), email, "Test User", hash)
+	u, err := store.Create(context.Background(), email, "Test User")
 	if err != nil {
 		t.Fatalf("create test user: %v", err)
 	}
