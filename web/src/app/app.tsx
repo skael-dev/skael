@@ -17,6 +17,7 @@ import { NotFound } from "@/features/not-found";
 import { SetList } from "@/features/sets/set-list";
 import { SetDetailPage } from "@/features/sets/set-detail";
 import { ServiceAccounts } from "@/features/service-accounts/service-accounts";
+import { Webhooks } from "@/features/webhooks/webhooks";
 import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 
 function ErrorFallback() {
@@ -74,6 +75,7 @@ export function App() {
             <Route path="/sets" element={<SetList />} />
             <Route path="/sets/:name" element={<SetDetailPage />} />
             <Route path="/service-accounts" element={<ServiceAccounts />} />
+            <Route path="/webhooks" element={<Webhooks />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

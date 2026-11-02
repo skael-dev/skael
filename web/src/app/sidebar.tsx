@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound } from "lucide-react";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound, Webhook } from "lucide-react";
 import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { getReviewQueue } from "@/api/sdk.gen";
 
@@ -30,6 +30,13 @@ const navItems: NavItem[] = [
     label: "Service accounts",
     path: "/service-accounts",
     icon: <KeyRound size={16} />,
+    privileged: true,
+  },
+  {
+    id: "webhooks",
+    label: "Webhooks",
+    path: "/webhooks",
+    icon: <Webhook size={16} />,
     privileged: true,
   },
   {

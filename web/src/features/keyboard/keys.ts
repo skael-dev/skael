@@ -11,6 +11,7 @@ export const NAV_CHORDS: NavChord[] = [
   { key: "a", path: "/analytics", label: "Analytics" },
   { key: "t", path: "/sets", label: "Sets" },
   { key: "c", path: "/service-accounts", label: "Service accounts", privileged: true },
+  { key: "w", path: "/webhooks", label: "Webhooks", privileged: true },
   { key: "o", path: "/settings", label: "Settings" },
 ];
 
