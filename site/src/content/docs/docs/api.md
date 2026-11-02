@@ -71,12 +71,12 @@ Every account has one of three roles:
 Two terms are used throughout this page, because "owner" alone is ambiguous once [ownership rules](#ownership) exist:
 
 - **instance admin** — an account whose role is `owner` or `admin`. This is the check most privileged routes make.
-- **instance owner** — specifically the `owner` account. Only the `/api/admin/*` routes require it.
+- **instance owner** — specifically the `owner` account. Only the `/api/admin/*` routes require it, apart from River UI.
 - A **skill owner** or **namespace owner** is a member of an ownership rule. That has nothing to do with role — a plain `member` is usually the namespace owner for their team. See [Ownership](#ownership).
 
 Role gates these, and nothing else:
 
-- `/api/admin/*` — instance owner only. Listing users, changing a role, resetting another user's password.
+- `/api/admin/*` — instance owner only. Listing users, changing a role, resetting another user's password. River UI at `/api/admin/river` is the one exception: an instance admin also reaches it.
 - Publishing past an appealable security finding with `?override=true` (or `skael publish --override`) — instance admin. Credential-theft and exfiltration findings are unappealable and no role overrides them.
 - Clearing the `scan` hold reason on a version held for review — instance admin. The `ownership` hold reason is different; see [Review queue](#review-queue).
 - The eval queue's privileged operations: `POST /api/eval/jobs/claim`, `POST /api/eval/jobs/{id}/cancel`, and `POST /api/skills/{name}/evals` — instance admin.
@@ -187,6 +187,16 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/submissions/{id}` | One submission, its state and its reason |
 | `GET` | `/api/submissions/{id}/diff` | Diff a submission against the served version. People only |
 | `POST` | `/api/submissions/{id}/decision` | Approve or reject a submission. People only |
+| `GET` | `/api/webhooks/endpoints` | List webhook endpoints. Owner or admin only. See [Webhooks](#webhooks) |
+| `POST` | `/api/webhooks/endpoints` | Register an endpoint. Owner or admin only. The response has the secret once |
+| `GET` | `/api/webhooks/endpoints/{id}` | One endpoint. Owner or admin only |
+| `PUT` | `/api/webhooks/endpoints/{id}` | Replace an endpoint's settings. Owner or admin only |
+| `DELETE` | `/api/webhooks/endpoints/{id}` | Delete an endpoint and its log. Owner or admin only |
+| `POST` | `/api/webhooks/endpoints/{id}/rotate-secret` | Replace the secret. Owner or admin only. The response has the secret once |
+| `POST` | `/api/webhooks/endpoints/{id}/test` | Send a test event. Owner or admin only |
+| `GET` | `/api/webhooks/endpoints/{id}/deliveries` | List the delivery log. Owner or admin only |
+| `POST` | `/api/webhooks/deliveries/{id}/redeliver` | Send a delivery again with the same event id. Owner or admin only |
+| `GET` | `/api/admin/river` | River UI, the background job inspector. Owner or admin only |
 
 The `consumer` and `role` query parameters narrow activation counts to the events one [service account](#service-accounts) reported, and to one role. Each is optional, and an omitted parameter applies no filter. A filter excludes hook events, because hook events have no consumer and no role.
 
@@ -330,6 +340,32 @@ The scan runs at submission. An exfiltration or secret finding returns 422 and s
 `GET /api/submissions` takes `?state=` and `?limit=`. `GET /api/submissions/{id}/diff` compares a submission with the served version. No scope reaches these two routes.
 
 `POST /api/submissions/{id}/decision` takes `{"action": "reject", "reason": "..."}` or `{"action": "approve"}`, and `edits` to change text before approval. No scope reaches it. An owner of the matching ownership rule, or an instance owner or admin, decides. A rejection needs a reason. Approval publishes through the normal gate as that person, so a blocking finding still holds the version. A second decision returns 409.
+
+## Webhooks
+
+An instance admin registers an endpoint, and the server sends it signed events. [Webhooks](/docs/webhooks) gives the event types, the payloads, the signature rule and the address rule.
+
+`POST /api/webhooks/endpoints` takes this body:
+
+```json
+{"name": "ci-cache", "url": "https://ci.example.com/skael", "event_types": ["set.changed"], "set_ids": ["c7a1..."]}
+```
+
+- `event_types` needs at least one of `skill.version.published`, `skill.version.approved`, `set.changed` and `submission.decided`.
+- `set_ids` limits `set.changed` to those sets. Empty means all sets.
+- A refused address, an unknown event type or an unknown set id returns 422.
+
+`PUT /api/webhooks/endpoints/{id}` replaces the same fields. It also takes `enabled`, and `enabled` stays as it is when you omit it.
+
+`POST /api/webhooks/endpoints/{id}/rotate-secret` takes `{"window_hours": 48}`. The old secret stays valid for that window. The range is 0 to 168, and the default is 24.
+
+`GET /api/webhooks/endpoints/{id}/deliveries` takes `limit`, from 1 to 200, and the default is 50. Each delivery has its event id, its state and every attempt. The log holds no response body.
+
+The test and redeliver routes return 202 with no body. A service key never reaches these routes.
+
+## River UI
+
+River UI lives at `/api/admin/river`, for instance owners and admins. It shows the server's background jobs, and a job's arguments hold only ids. A member and a service key get 403.
 
 ## Merge
 
