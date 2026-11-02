@@ -138,6 +138,35 @@ Manages machine identities and their scoped keys. Every command needs an owner o
 | `--set <name>` | none | Limit the key to one set. The key needs `sets:read` |
 | `--name <label>` | `default` | A label for the key |
 
+## skael webhooks
+
+Manages [webhook](/docs/webhooks) endpoints and their deliveries. Every command needs an owner or admin. `<endpoint>` is a name or an id. If two endpoints share a name, use the id, because the name exits 2. `--json` prints the API response unchanged. `delete`, `test` and `redeliver` have no API body, so they print `{"deleted": true, ...}` or `{"queued": true, ...}`.
+
+| Command | Description |
+|---|---|
+| `skael webhooks list` | List endpoints |
+| `skael webhooks get <endpoint>` | Show an endpoint |
+| `skael webhooks create` | Register an endpoint and show its secret once |
+| `skael webhooks update <endpoint>` | Change an endpoint. What you omit stays |
+| `skael webhooks delete <endpoint>` | Delete an endpoint and its delivery log |
+| `skael webhooks rotate <endpoint>` | Replace the secret and show the new one once |
+| `skael webhooks test <endpoint>` | Queue a test event |
+| `skael webhooks deliveries <endpoint>` | List the newest 50 deliveries and their attempts |
+| `skael webhooks redeliver <delivery-id>` | Send a delivery again with the same event id |
+
+`create` and `update` take these flags. `create` needs `--name`, `--url` and `--event`.
+
+| Flag | Description |
+|---|---|
+| `--name <name>` | A label for the endpoint |
+| `--url <url>` | The address that receives deliveries |
+| `--event <type>` | An event type. Repeat it for more. On `update`, the list replaces the current list |
+| `--set <name>` | Limit `set.changed` to this set. Repeat it for more. On `update`, the list replaces the current list |
+
+`rotate` takes `--window-hours <n>`, from 0 to 168. The old secret stays valid for that window, and the default is 24 hours.
+
+A refused address or an unknown event type is a server 422, so it exits 1. A missing flag exits 2.
+
 ## skael events report `--file <path>`
 
 Sends a batch of run events to `POST /api/events/batch`. It needs a service account key with `events:write`. The consumer comes from the account.

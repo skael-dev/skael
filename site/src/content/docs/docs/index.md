@@ -21,5 +21,6 @@ Self-hosted and open source.
 - **[Skill ownership](/docs/ownership)** — who may publish to a name, and why an upgrade changes nothing until you write a rule.
 - **[CLI reference](/docs/cli)** — every `skael` command.
 - **[whetstone](/docs/whetstone)** — the authoring CLI: draft, lint, and score a skill before you publish it.
+- **[Webhooks](/docs/webhooks)** — signed events for releases, set changes and submission decisions.
 - **[Self-hosting](/docs/self-hosting)** — run the platform on your own infrastructure.
 - **[Why not just git?](/docs/why-not-git)** — how skael differs from a shared repo or native agent sharing.

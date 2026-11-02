@@ -40,6 +40,12 @@ If skael runs behind a reverse proxy, `TRUSTED_PROXIES` is effectively required.
 
 Separately, the request log's `ip` field changed format: it used to log the raw `RemoteAddr` (`host:port`); it now logs a bare host with the port stripped (and, behind a trusted proxy, the resolved client address instead of the proxy's). Anything parsing skael's request logs for IPs needs to account for the missing port.
 
+### River adds its own tables
+
+The server runs its background work on [River](https://riverqueue.com), in the same Postgres. River adds tables whose names start with `river_`, and it migrates them at startup beside goose. There is no new service and no separate step. A backup of the database includes these tables.
+
+If you run two server replicas, they elect one leader, and only the leader schedules periodic jobs: the eval lease sweep and the event retention purge. Either replica can send a webhook delivery. The retention purge now also runs daily while the server runs, and not only at startup.
+
 ### Migrations 006 and 007 rewrite `skill_events`
 
 Both migrations run automatically at startup, inside a single transaction, and take an `ACCESS EXCLUSIVE` lock on `skill_events` for its duration: each adds a column and backfills it with an `UPDATE`, and 007 additionally validates a new `CHECK` constraint and both migrations build a new index. On a small instance this is milliseconds. On an instance with months of activation history, the lock is held roughly in proportion to the table's size — and while it's held, an old server process still serving traffic will block on any query that touches `skill_events` (activation summaries, event ingestion). Plan the upgrade window accordingly on a busy instance; see [Backup & restore](/docs/backup-restore) if you want to rehearse the timing against a copy of production data first.

@@ -14,7 +14,8 @@ description: Every environment variable the server and the worker read.
 | `S3_ENDPOINT` / `S3_REGION` | no | `s3.amazonaws.com` / `us-east-1` | Only when `STORAGE_PATH=s3://…`. Only `S3_REGION` falls back to `AWS_REGION`; the endpoint has no `AWS_*` fallback |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Both fall back to `AWS_*`. The pair is all-or-nothing: set only one and it is silently ignored. Omit both for an IAM instance role |
 | `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
-| `EVENT_RETENTION_DAYS` | no | `90` | Days of skill_events to keep; older rows are purged on startup. `0` disables cleanup |
+| `EVENT_RETENTION_DAYS` | no | `90` | Days of skill_events to keep. The server purges older rows at startup and then daily while it runs. `0` disables cleanup |
+| `WEBHOOK_ALLOW_PRIVATE` | no | `false` | Set to `true` (the literal string) to let webhook deliveries reach private addresses, loopback, shared address space and `http` URLs. Link-local addresses stay refused. See [Webhooks](/docs/webhooks#address-rule) |
 | `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run on publish/import; `{dir}` → skill dir, must emit SARIF on stdout (e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`). Findings merge into the native scan. |
 | `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
 | `DB_MAX_CONNS` | no | `25` | Maximum number of connections in the pool |

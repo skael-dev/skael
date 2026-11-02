@@ -61,7 +61,7 @@ Migrations run automatically on startup. Auth is via user accounts and personal 
 |---|---|---|---|
 | `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run over each skill on publish and import. `{dir}` is replaced with the skill directory; the command must emit SARIF on stdout, e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`. Findings merge into the built-in scan |
 | `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
-| `EVENT_RETENTION_DAYS` | no | `90` | Days of activation events to keep. Older rows are purged once, at startup — not on a schedule. `0` disables the purge |
+| `EVENT_RETENTION_DAYS` | no | `90` | Days of activation events to keep. The server purges older rows at startup and then daily while it runs. `0` disables the purge |
 | `LOG_LEVEL` | no | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` |
 | `LOG_FORMAT` | no | — | `pretty` for colorized console output. Anything else, including unset, logs JSON |
 | `LOG_PRETTY` | no | `false` | `true` does the same as `LOG_FORMAT=pretty`; either one is enough |
