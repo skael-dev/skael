@@ -11,17 +11,6 @@ A migration can lock a table while it runs. On a large registry, stop the server
 
 The [release notes](https://github.com/skael-dev/skael/releases) state what each version changes.
 
-## Moving from a version without auth-all
-
-This upgrade ends every session and removes every password. API keys, service accounts, hooks and workers keep working.
-
-1. Run `skael-server reset-password --email <owner email>`. It prints a temporary password for the owner.
-2. Sign in, and set a new password.
-3. Issue a temporary password to each other person from Settings > Team, or set the SMTP variables so that people can reset their own.
-4. To use SSO on an existing account, sign in with a password, then link the provider in Settings > Security.
-
-The migration stops if two users differ only by email case or spacing. Rename or remove one of them, then restart.
-
 ## Procedure
 
 ### 1. Back up first
