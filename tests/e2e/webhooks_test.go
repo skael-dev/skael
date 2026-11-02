@@ -270,6 +270,16 @@ func TestWebhookRefusesPrivateAddresses(t *testing.T) {
 	}))
 	defer redirect.Close()
 	_, err = webhooks.NewClient(true).Get(redirect.URL)
+	require.Error(t, err)
+	post, err := webhooks.NewClient(true).Post(redirect.URL, "application/json", strings.NewReader("{}"))
+	require.NoError(t, err)
+	post.Body.Close()
+	require.Equal(t, http.StatusFound, post.StatusCode, "a redirect that drops the body must not count as delivered")
+	temporary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusTemporaryRedirect)
+	}))
+	defer temporary.Close()
+	_, err = webhooks.NewClient(true).Post(temporary.URL, "application/json", strings.NewReader("{}"))
 	require.ErrorIs(t, err, webhooks.ErrRefusedAddress)
 }
 

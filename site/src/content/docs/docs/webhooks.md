@@ -343,7 +343,7 @@ The server refuses an address that a delivery must not reach:
 - A URL must use `https`.
 - The server refuses private, loopback and link-local addresses, and also shared address space (`100.64.0.0/10`), multicast and unspecified addresses.
 - The server applies the rule when you save an endpoint. It applies the rule again on the resolved IP at connection time and on each redirect, so a DNS change or a redirect cannot reach a refused address.
-- The server follows at most 5 redirects. A 301, 302 or 303 turns the POST into a GET with no body, and a 2xx reply to that GET marks the delivery `delivered`. So register the final address. A 307 or 308 keeps the POST and the body.
+- The server follows at most 5 redirects. It follows a 307 or 308, which keeps the POST and the body. It does not follow a 301, 302 or 303, because they turn the POST into a GET with no body. The attempt fails with that status, so register the final address.
 - A delivery ignores `HTTP_PROXY` and `HTTPS_PROXY`, because a proxy would hide the target from this check.
 
 `WEBHOOK_ALLOW_PRIVATE=true` opens private addresses, loopback, shared address space and `http`, for an install whose receiver is on its own network. Link-local addresses stay refused, because they hold cloud metadata services. Multicast and unspecified addresses also stay refused.

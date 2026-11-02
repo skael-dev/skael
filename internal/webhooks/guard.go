@@ -111,6 +111,12 @@ func NewClient(allowPrivate bool) *http.Client {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
 			}
+			// 301, 302 and 303 turn the POST into a GET with no body. A 2xx
+			// reply to that would mark an event delivered that never arrived,
+			// so the 3xx stands as the result, and the attempt fails.
+			if req.Method != http.MethodPost {
+				return http.ErrUseLastResponse
+			}
 			return checkScheme(req.URL, allowPrivate)
 		},
 	}
