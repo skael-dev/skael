@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { Version } from "@/api/types.gen";
-import { buildFileSearch } from "@/features/skills/file-link";
+import { buildFileSearch, GATE_LABELS } from "@/features/skills/file-link";
 import { cn } from "@/lib/utils";
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -25,9 +25,11 @@ function formatRelativeTime(dateString: string): string {
 
 type VersionListProps = {
   versions: Version[];
+  /** The version that is served, which is not always the newest. */
+  latestVersion?: number;
 };
 
-export function VersionList({ versions }: VersionListProps) {
+export function VersionList({ versions, latestVersion }: VersionListProps) {
   if (versions.length === 0) {
     return (
       <div className="text-text-tertiary text-sm py-12 text-center">
@@ -53,8 +55,9 @@ export function VersionList({ versions }: VersionListProps) {
           aria-hidden
         />
 
-        {sorted.map((ver, i) => {
-          const isLatest = i === 0;
+        {sorted.map((ver) => {
+          const isCurrent = ver.version === latestVersion;
+          const notServed = ver.gate_state === "needs_review" || ver.gate_state === "rejected";
           return (
             <div
               key={ver.id}
@@ -63,15 +66,15 @@ export function VersionList({ versions }: VersionListProps) {
               {/* Timeline dot */}
               <div
                 role="img"
-                aria-label={isLatest ? "Latest version" : "Previous version"}
+                aria-label={isCurrent ? "Current version" : "Other version"}
                 className={cn(
                   "size-[22px] rounded-full shrink-0 z-[1] flex items-center justify-center text-[10px] font-semibold",
-                  isLatest
+                  isCurrent
                     ? "bg-accent border-2 border-accent text-bg-primary shadow-[0_0_12px_var(--color-accent-surface)]"
                     : "bg-bg-secondary border-2 border-border text-text-tertiary"
                 )}
               >
-                {isLatest ? "★" : ""}
+                {isCurrent ? "★" : ""}
               </div>
 
               {/* Content */}
@@ -81,7 +84,17 @@ export function VersionList({ versions }: VersionListProps) {
                   <span className="font-mono text-sm font-medium text-text-primary">
                     v{ver.version}
                   </span>
-                  {isLatest && (
+                  {notServed && (
+                    <span
+                      className={cn(
+                        "text-[9px] px-1.5 py-px rounded uppercase tracking-[0.04em]",
+                        ver.gate_state === "needs_review" ? "text-warning bg-warning/10" : "text-text-tertiary bg-bg-tertiary"
+                      )}
+                    >
+                      {GATE_LABELS[ver.gate_state]}
+                    </span>
+                  )}
+                  {isCurrent && (
                     <span className="text-[9px] text-accent bg-accent/10 px-1.5 py-px rounded uppercase tracking-[0.04em]">
                       current
                     </span>

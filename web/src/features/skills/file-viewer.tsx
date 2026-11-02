@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, Copy, Download, File, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { buildFileSearch, resolveSkillLink } from "@/features/skills/file-link";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
 import {
   FileFetchError,
@@ -308,7 +309,13 @@ export function FileViewer({
   } else if (view === "rendered") {
     body = (
       <div className="p-4 sm:p-6 max-w-[760px] min-w-0">
-        <MarkdownRenderer content={stripFrontmatter(query.data.text)} />
+        <MarkdownRenderer
+          content={stripFrontmatter(query.data.text)}
+          resolveLink={(link) => {
+            const target = resolveSkillLink(path, link);
+            return target && { search: buildFileSearch({ file: target.file, version }), hash: target.hash };
+          }}
+        />
       </div>
     );
   } else {

@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
+import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import { cn } from "@/lib/utils";
@@ -7,6 +8,8 @@ import { cn } from "@/lib/utils";
 type MarkdownRendererProps = {
   content: string;
   className?: string;
+  /** Turns a link inside the skill into an in-app address. Null leaves the link as written. */
+  resolveLink?: (href: string) => { search: string; hash: string } | null;
 };
 
 function CopyButton({ text }: { text: string }) {
@@ -36,7 +39,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, className, resolveLink }: MarkdownRendererProps) {
   return (
     <div className={cn("text-text-primary text-sm leading-7", className)}>
       <ReactMarkdown
@@ -194,16 +197,33 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
           ),
 
           // Links
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent hover:underline"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ children, href }) => {
+            const inSkill = href ? resolveLink?.(href) : null;
+            if (inSkill) {
+              return (
+                <Link to={inSkill} className="text-accent hover:underline">
+                  {children}
+                </Link>
+              );
+            }
+            if (href?.startsWith("#")) {
+              return (
+                <a href={href} className="text-accent hover:underline">
+                  {children}
+                </a>
+              );
+            }
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent hover:underline"
+              >
+                {children}
+              </a>
+            );
+          },
 
           // Horizontal rule
           hr: () => <hr className="border-border my-6" />,

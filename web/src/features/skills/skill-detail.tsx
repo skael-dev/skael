@@ -8,7 +8,7 @@ import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreview
 import type { Skill, ActivationSummary, ListVersionsBody } from "@/api/types.gen";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
 import { FileBrowser } from "@/features/skills/file-browser";
-import { parseFileLink } from "@/features/skills/file-link";
+import { buildFileSearch, parseFileLink, resolveSkillLink } from "@/features/skills/file-link";
 import { VersionList } from "@/features/skills/version-list";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
@@ -243,7 +243,13 @@ function TabContent({ skill }: { skill: Skill }) {
   return (
     <div className="flex gap-12 max-w-[1000px]">
       <article className="flex-1 min-w-0 max-w-[680px]">
-        <MarkdownRenderer content={content} />
+        <MarkdownRenderer
+          content={content}
+          resolveLink={(link) => {
+            const target = resolveSkillLink("SKILL.md", link);
+            return target && { search: buildFileSearch({ file: target.file, version: skill.latest_version }), hash: target.hash };
+          }}
+        />
       </article>
       {tocItems.length > 0 && (
         <TableOfContents
@@ -1019,7 +1025,7 @@ export function SkillDetail() {
           />
         )}
         {activeTab === "versions" && (
-          <VersionList versions={versions} />
+          <VersionList versions={versions} latestVersion={skill?.latest_version} />
         )}
         {activeTab === "usage" && skill && (
           <TabUsage skill={skill} activations={activations} />

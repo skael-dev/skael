@@ -3,13 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import type { Version } from "@/api/types.gen";
 import { FileTree } from "@/features/skills/file-tree";
 import { FileMessage, FileViewer, FileViewerSkeleton } from "@/features/skills/file-viewer";
-import { buildFileSearch, parseFileLink } from "@/features/skills/file-link";
-
-const GATE_LABELS: Record<string, string> = {
-  released: "released",
-  needs_review: "held for review",
-  rejected: "rejected",
-};
+import { buildFileSearch, GATE_LABELS, parseFileLink } from "@/features/skills/file-link";
 
 function defaultFile(version: Version | undefined): string | undefined {
   const manifest = version?.file_manifest ?? [];
