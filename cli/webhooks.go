@@ -40,9 +40,9 @@ submission.decided. --set limits set.changed to the sets you name.`,
 }
 
 var webhooksUpdateCmd = &cobra.Command{
-	Use:   "update <endpoint> [--name <name>] [--url <url>] [--event <type>] [--set <name>]",
+	Use:   "update <endpoint> [--name <name>] [--url <url>] [--event <type>] [--set <name> | --all-sets] [--enable | --disable]",
 	Short: "Change an endpoint. What you omit stays",
-	Long:  "Change an endpoint. Each --event list and --set list replaces the current list. What you omit stays.",
+	Long:  "Change an endpoint. Each --event list and --set list replaces the current list. --all-sets removes the set limit. What you omit stays.",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWebhooksUpdate,
 }
@@ -91,6 +91,9 @@ var (
 	webhookEvents      []string
 	webhookSets        []string
 	webhookWindowHours int
+	webhookAllSets     bool
+	webhookEnable      bool
+	webhookDisable     bool
 )
 
 func init() {
@@ -103,6 +106,11 @@ func init() {
 	for _, flag := range []string{"name", "url", "event"} {
 		_ = webhooksCreateCmd.MarkFlagRequired(flag)
 	}
+	webhooksUpdateCmd.Flags().BoolVar(&webhookAllSets, "all-sets", false, "Remove the set limit, so set.changed fires for every set")
+	webhooksUpdateCmd.Flags().BoolVar(&webhookEnable, "enable", false, "Send deliveries to the endpoint again")
+	webhooksUpdateCmd.Flags().BoolVar(&webhookDisable, "disable", false, "Stop deliveries to the endpoint")
+	webhooksUpdateCmd.MarkFlagsMutuallyExclusive("set", "all-sets")
+	webhooksUpdateCmd.MarkFlagsMutuallyExclusive("enable", "disable")
 	webhooksRotateCmd.Flags().IntVar(&webhookWindowHours, "window-hours", 0, "Hours the old secret stays valid")
 	webhooksCmd.AddCommand(webhooksListCmd, webhooksGetCmd, webhooksCreateCmd, webhooksUpdateCmd, webhooksDeleteCmd,
 		webhooksRotateCmd, webhooksTestCmd, webhooksDeliveriesCmd, webhooksRedeliverCmd)
@@ -229,8 +237,9 @@ func runWebhooksCreate(cmd *cobra.Command, args []string) error {
 
 func runWebhooksUpdate(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
-	if !flags.Changed("name") && !flags.Changed("url") && !flags.Changed("event") && !flags.Changed("set") {
-		return usageError("usage_error", "nothing to update: give --name, --url, --event or --set", "skael webhooks update --help")
+	if !webhookAllSets && !webhookEnable && !webhookDisable &&
+		!flags.Changed("name") && !flags.Changed("url") && !flags.Changed("event") && !flags.Changed("set") {
+		return usageError("usage_error", "nothing to update: give --name, --url, --event, --set, --all-sets, --enable or --disable", "skael webhooks update --help")
 	}
 	c, err := loadClient()
 	if err != nil {
@@ -255,6 +264,13 @@ func runWebhooksUpdate(cmd *cobra.Command, args []string) error {
 		if in.SetIDs, err = resolveWebhookSets(c, webhookSets); err != nil {
 			return err
 		}
+	}
+	if webhookAllSets {
+		in.SetIDs = nil
+	}
+	if webhookEnable || webhookDisable {
+		enabled := webhookEnable
+		in.Enabled = &enabled
 	}
 	res, err := c.UpdateWebhookEndpoint(endpoint.ID, in)
 	if err != nil {

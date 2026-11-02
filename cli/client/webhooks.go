@@ -31,6 +31,7 @@ type WebhookEndpointInput struct {
 	URL        string   `json:"url"`
 	EventTypes []string `json:"event_types"`
 	SetIDs     []string `json:"set_ids,omitempty"`
+	Enabled    *bool    `json:"enabled,omitempty"`
 }
 
 // WebhookAttempt is one try at a delivery.
