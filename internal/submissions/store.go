@@ -46,8 +46,17 @@ type Submission struct {
 
 // Store persists submissions.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	notifier ChangeNotifier
 }
+
+// ChangeNotifier hears of a decision inside its transaction.
+type ChangeNotifier interface {
+	SubmissionDecided(ctx context.Context, tx pgx.Tx, sub *Submission) error
+}
+
+// SetNotifier attaches the receiver of decisions.
+func (s *Store) SetNotifier(n ChangeNotifier) { s.notifier = n }
 
 // NewStore constructs a Store.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -144,6 +153,11 @@ func (s *Store) Decide(ctx context.Context, id string, fn func(tx pgx.Tx, sub *S
 		WHERE id = $1 RETURNING `+columns, id, sub.State, sub.DecidedBy, sub.Reason, sub.Edited, sub.Version, sub.DiffAgainst))
 	if err != nil {
 		return nil, err
+	}
+	if s.notifier != nil {
+		if err := s.notifier.SubmissionDecided(ctx, tx, sub); err != nil {
+			return nil, err
+		}
 	}
 	return sub, tx.Commit(ctx)
 }

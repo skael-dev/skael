@@ -134,6 +134,14 @@ func (s *Store) Merge(ctx context.Context, sourceName, targetName string) (*Skil
 		return nil, fmt.Errorf("skill.Store.Merge delete source: %w", err)
 	}
 
+	if s.notifier != nil {
+		for _, name := range []string{sourceName, targetName} {
+			if err := s.notifier.SkillChanged(ctx, tx, name); err != nil {
+				return nil, fmt.Errorf("skill.Store.Merge notify: %w", err)
+			}
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("skill.Store.Merge commit: %w", err)
 	}

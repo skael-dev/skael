@@ -19,8 +19,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/riverqueue/river"
 	"github.com/rs/zerolog/log"
+	"riverqueue.com/riverui"
 
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
@@ -138,43 +141,8 @@ type Server struct {
 
 	listenAddr string
 
-	// stopReaper, if non-nil, cancels the eval-job lease reaper goroutine
-	// Build started. nil when there was no evalPool to reap (e.g. a nil
-	// pool passed for spec-generation-only use).
-	stopReaper context.CancelFunc
-}
-
-// reapInterval is how often the eval queue is swept for jobs whose lease
-// lapsed with no attempts remaining. A worker's lease is usually minutes
-// long (WORKER_LEASE, default 5m), so sweeping much faster than that buys
-// nothing; this just needs to run more often than leases expire.
-const reapInterval = time.Minute
-
-// runReaper sweeps evalqueue.PoolExecutor.ReapExpired on a ticker until ctx
-// is cancelled. Without this, a worker that claims a job on its final
-// attempt and then dies leaves that job "running" with a lapsed lease
-// forever: Claim requires attempts < max_attempts so it can never be
-// reclaimed, and nothing else moves running -> failed. It must not block
-// startup (it runs in its own goroutine) and must stop cleanly on shutdown
-// (ctx is cancelled from ListenAndServe's shutdown path).
-func runReaper(ctx context.Context, q *evalqueue.PoolExecutor) {
-	ticker := time.NewTicker(reapInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := q.ReapExpired(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("eval queue lease reap failed")
-				continue
-			}
-			if n > 0 {
-				log.Info().Int("reaped", n).Msg("eval queue: reaped jobs with lapsed leases and no attempts remaining")
-			}
-		}
-	}
+	river   *river.Client[pgx.Tx]
+	riverUI *riverui.Handler
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -248,7 +216,15 @@ func (b *Builder) Build() (*Server, error) {
 	// uses, so the generated spec cannot drift from what the real server
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
-	evalPool := RegisterAPIRoutes(api, router, RegisterAPIDeps{
+	riverClient, err := newRiverClient(b.pool, cfg, analyticsStore)
+	if err != nil {
+		return nil, fmt.Errorf("server.Build: river: %w", err)
+	}
+	riverUI, err := newRiverUI(riverClient)
+	if err != nil {
+		return nil, fmt.Errorf("server.Build: river ui: %w", err)
+	}
+	RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
 		SessionManager: sessionManager,
@@ -257,27 +233,9 @@ func (b *Builder) Build() (*Server, error) {
 		Storage:        storage,
 		Caps:           b.caps,
 		AnalyticsStore: analyticsStore,
+		JobInserter:    riverClient,
+		RiverUI:        riverUI,
 	})
-
-	// 10a-2. Start the eval queue's lease reaper. It runs for the life of
-	// the process; stopReaper cancels it during ListenAndServe's graceful
-	// shutdown.
-	var reaperCancel context.CancelFunc
-	if evalPool != nil {
-		var reaperCtx context.Context
-		reaperCtx, reaperCancel = context.WithCancel(context.Background())
-		go runReaper(reaperCtx, evalPool)
-	}
-
-	// 10a. Run event retention cleanup on startup.
-	if cfg.EventRetentionDays > 0 {
-		deleted, err := analyticsStore.CleanupOldEvents(context.Background(), cfg.EventRetentionDays)
-		if err != nil {
-			log.Warn().Err(err).Msg("event retention cleanup failed")
-		} else if deleted > 0 {
-			log.Info().Int64("deleted", deleted).Int("retention_days", cfg.EventRetentionDays).Msg("event retention cleanup complete")
-		}
-	}
 
 	// 11. Register extra routes from enterprise plugins.
 	for _, reg := range b.extraRoutes {
@@ -287,9 +245,6 @@ func (b *Builder) Build() (*Server, error) {
 	// 17. Mount embedded SPA — catch-all after all /api/* routes.
 	spaFS, err := fs.Sub(skweb.Assets, "dist")
 	if err != nil {
-		if reaperCancel != nil {
-			reaperCancel()
-		}
 		return nil, fmt.Errorf("server.Build: embedded SPA: %w", err)
 	}
 	fileServer := http.FileServer(http.FS(spaFS))
@@ -314,8 +269,27 @@ func (b *Builder) Build() (*Server, error) {
 	return &Server{
 		Handler:    router,
 		listenAddr: cfg.ListenAddr,
-		stopReaper: reaperCancel,
+		river:      riverClient,
+		riverUI:    riverUI,
 	}, nil
+}
+
+// Start runs background work: webhook deliveries and the periodic jobs. River
+// elects one leader across replicas, so one replica runs each periodic job.
+func (s *Server) Start(ctx context.Context) error {
+	if err := s.river.Start(ctx); err != nil {
+		return fmt.Errorf("start river: %w", err)
+	}
+	if err := s.riverUI.Start(ctx); err != nil {
+		return fmt.Errorf("start river ui: %w", err)
+	}
+	return nil
+}
+
+// Stop ends background work. ListenAndServe calls it on shutdown.
+func (s *Server) Stop(ctx context.Context) error {
+	s.riverUI.Stop()
+	return s.river.Stop(ctx)
 }
 
 // ListenAndServe starts the HTTP server and blocks until a SIGINT or SIGTERM
@@ -333,6 +307,10 @@ func (s *Server) ListenAndServe() error {
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if err := s.Start(context.Background()); err != nil {
+		return err
+	}
+
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("server error")
@@ -344,12 +322,11 @@ func (s *Server) ListenAndServe() error {
 	<-sigCtx.Done()
 	log.Info().Msg("shutting down...")
 
-	if s.stopReaper != nil {
-		s.stopReaper()
-	}
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := s.Stop(shutdownCtx); err != nil {
+		log.Warn().Err(err).Msg("river stop")
+	}
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}

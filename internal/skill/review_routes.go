@@ -156,8 +156,16 @@ func registerReviewRoutes(api huma.API, store *Store, owners OwnerResolver) {
 				id := user.ID
 				actorID = &id
 			}
-			if _, err := store.ApproveReason(ctx, store.Pool(), input.Name, input.Version,
+			tx, err := store.Pool().Begin(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("review: approve: %w", err)
+			}
+			defer tx.Rollback(ctx) //nolint:errcheck
+			if _, err := store.ApproveReason(ctx, tx, input.Name, input.Version,
 				reasonKind, actorID, user.Email, reason); err != nil {
+				return nil, fmt.Errorf("review: approve: %w", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
 				return nil, fmt.Errorf("review: approve: %w", err)
 			}
 		case "reject":

@@ -14,8 +14,29 @@ import (
 
 // Store handles Postgres persistence for skills and their versions.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	notifier ChangeNotifier
 }
+
+// ReleaseEvent describes a version that became servable.
+type ReleaseEvent struct {
+	Skill    string
+	Version  int
+	Checksum string
+	// Approved is true when a review or a verified score released a held
+	// version, and false when the publish itself released it.
+	Approved bool
+}
+
+// ChangeNotifier hears of a change inside the transaction that makes it.
+// Declared here because internal/webhooks imports this package.
+type ChangeNotifier interface {
+	VersionReleased(ctx context.Context, tx pgx.Tx, ev ReleaseEvent) error
+	SkillChanged(ctx context.Context, tx pgx.Tx, skill string) error
+}
+
+// SetNotifier attaches the receiver of changes.
+func (s *Store) SetNotifier(n ChangeNotifier) { s.notifier = n }
 
 // NewStore constructs a Store backed by the given connection pool.
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -126,11 +147,21 @@ func (s *Store) List(ctx context.Context, opts ListOptions) ([]Skill, int, error
 
 // Delete removes a skill (and its versions via CASCADE) by name.
 func (s *Store) Delete(ctx context.Context, name string) error {
-	const q = `DELETE FROM skills WHERE name = $1`
-	if _, err := s.pool.Exec(ctx, q, name); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return fmt.Errorf("skill.Store.Delete: %w", err)
 	}
-	return nil
+	defer tx.Rollback(ctx) //nolint:errcheck
+	const q = `DELETE FROM skills WHERE name = $1`
+	if _, err := tx.Exec(ctx, q, name); err != nil {
+		return fmt.Errorf("skill.Store.Delete: %w", err)
+	}
+	if s.notifier != nil {
+		if err := s.notifier.SkillChanged(ctx, tx, name); err != nil {
+			return fmt.Errorf("skill.Store.Delete: %w", err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // CreateVersion inserts a new skill_versions row, updates the parent skill's
@@ -247,6 +278,16 @@ func (s *Store) CreateVersion(
 		const advance = `UPDATE skills SET latest_version = GREATEST(latest_version, $2) WHERE id = $1`
 		if _, err := tx.Exec(ctx, advance, skillID, newVersion); err != nil {
 			return nil, fmt.Errorf("skill.Store.CreateVersion advance latest: %w", err)
+		}
+		if s.notifier != nil {
+			var name string
+			if err := tx.QueryRow(ctx, `SELECT name FROM skills WHERE id = $1`, skillID).Scan(&name); err != nil {
+				return nil, fmt.Errorf("skill.Store.CreateVersion: %w", err)
+			}
+			ev := ReleaseEvent{Skill: name, Version: newVersion, Checksum: checksum}
+			if err := s.notifier.VersionReleased(ctx, tx, ev); err != nil {
+				return nil, fmt.Errorf("skill.Store.CreateVersion: notify: %w", err)
+			}
 		}
 	}
 

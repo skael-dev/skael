@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 //go:embed migrate/*.sql
@@ -50,7 +52,17 @@ func NewPool(ctx context.Context, databaseURL string, cfg *PoolConfig) (*pgxpool
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	db := stdlib.OpenDBFromPool(pool)
-	return Migrate(db)
+	if err := Migrate(db); err != nil {
+		return err
+	}
+	m, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		return fmt.Errorf("migrate river: %w", err)
+	}
+	if _, err := m.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		return fmt.Errorf("migrate river: %w", err)
+	}
+	return nil
 }
 
 func Migrate(db *sql.DB) error {
