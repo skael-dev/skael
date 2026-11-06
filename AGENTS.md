@@ -45,7 +45,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - primary member: the first entry in the model panel, and the only member a lift is computed on.
 - not measured: no baseline ran. It is stored as NULL, never zero.
 - contest: one job that runs two or more candidates against one suite, on one panel, on the same day.
-- candidate: one skill name and version in a contest.
+- candidate: one skill name with either a version or a PR head in a contest.
 - verdict: a contest's outcome, a named winner or too close to call.
 - too close to call: the sign test cannot separate the candidates from noise.
 - chain: the contests between consecutive released versions of one skill.
@@ -58,3 +58,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - run: one automated agent session a consumer reports, unique on consumer and external run id. Avoid: execution, job.
 - consumer: the system a service account acts for, taken from the account and never from a request. Avoid: client, source, integration.
 - submission: a skill archive an agent sends for human review, which has no version until a person approves it. Avoid: suggestion, skill proposal, draft.
+- connection: one repo, branch, root path and name prefix whose skill folders Skael syncs, publishing as its own service account. Avoid: integration, binding, repo link.
+- git-bound: a skill whose source of truth is a connection. The opposite is native. Avoid: synced, managed, mirrored.
+- outbound change: the PR Skael opens for a publish to a git-bound skill, which gets a version when it merges. Avoid: change request, draft.
+- PR head: the stored archive of a skill folder at a PR's head SHA, which a contest can evaluate without a version. Avoid: preview version, draft version.
