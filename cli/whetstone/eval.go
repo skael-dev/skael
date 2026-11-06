@@ -652,9 +652,17 @@ func memberScore(plan *runner.Plan, outs []runner.Outcome, graded map[store.RunK
 	byEval := map[string][]score.Grade{}
 	var metaPartial bool
 	var metaReason string
+	var failed int
+	var firstErr error
 	for _, o := range outs {
 		if o.Key.Agent != m.Agent || o.Key.Model != m.Model || o.Key.Condition != cond {
 			continue
+		}
+		if o.Status != store.StatusOK {
+			failed++
+			if firstErr == nil && o.Err != nil {
+				firstErr = o.Err
+			}
 		}
 		if o.MetaPartial && !metaPartial {
 			metaPartial, metaReason = true, o.MetaPartialReason
@@ -667,6 +675,11 @@ func memberScore(plan *runner.Plan, outs []runner.Outcome, graded map[store.RunK
 		tasks.addGrade(o.Key.TaskID, report.GradeNote{
 			Model: m.Model, Condition: cond, Attempt: o.Key.Attempt, Expectations: g.Expectations,
 		})
+	}
+	// A dropped session is not logged where it fails, so when nothing scored
+	// the first session error is the only clue to an infrastructure fault.
+	if len(byEval) == 0 && firstErr != nil {
+		return 0, metaPartial, metaReason, fmt.Errorf("no scored evals: %d sessions failed, the first with: %w", failed, firstErr)
 	}
 
 	ids := make([]string, 0, len(byEval))

@@ -180,6 +180,13 @@ func configFromEnv() (workerConfig, error) {
 	if err := requireHostSharedRoots(sandboxCfg, runRoot, workRoot, inContainer()); err != nil {
 		return workerConfig{}, err
 	}
+	// The runner stats the run root before each session, so a missing one
+	// fails every session instead of the start.
+	if runRoot != "" {
+		if err := os.MkdirAll(runRoot, 0o755); err != nil {
+			return workerConfig{}, fmt.Errorf("skael-worker: WORKER_RUN_ROOT %q: %w", runRoot, err)
+		}
+	}
 
 	return workerConfig{
 		Config: worker.Config{
