@@ -1,12 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/evalqueue"
@@ -21,6 +23,9 @@ import (
 func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token string) error {
 	if len(job.Candidates) < 2 {
 		return fmt.Errorf("worker: contest job %s carries %d candidates", job.ID, len(job.Candidates))
+	}
+	if job.ContestAttempts < 1 {
+		return fmt.Errorf("worker: contest job %s carries no attempts per task", job.ID)
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -61,14 +66,45 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 	if tier == "" {
 		tier = w.cfg.Tier
 	}
+	run := func(idx []int) (map[string]*report.Report, error) {
+		return w.runCandidates(runCtx, job, idx, bundles, suiteArchive, suiteRef, tier, meta.MachineGenerated)
+	}
 
-	reports := make(map[string]*report.Report, len(job.Candidates))
+	var fresh, offered []int
 	for i, cand := range job.Candidates {
-		rep, err := w.runCandidate(runCtx, job, cand, bundles[i], suiteArchive, suiteRef, tier, meta.MachineGenerated)
+		if len(cand.ReusedReport) > 0 {
+			offered = append(offered, i)
+		} else {
+			fresh = append(fresh, i)
+		}
+	}
+	if len(fresh) == 0 {
+		// A reused report needs a fresh one to be checked against.
+		fresh, offered = offered[:1], offered[1:]
+	}
+
+	reports, err := run(fresh)
+	if err != nil {
+		return err
+	}
+	var rerun []int
+	for _, i := range offered {
+		cand := job.Candidates[i]
+		if why := reuseRefusal(cand, reports[job.Candidates[fresh[0]].Label]); why != "" {
+			log.Info().Str("job_id", string(job.ID)).Str("contest", job.ContestID).Str("candidate", cand.Label).
+				Str("reused_from", cand.ReusedFrom).Str("reason", why).
+				Msg("worker: running a candidate whose same-day report ran under other conditions")
+			rerun = append(rerun, i)
+		}
+	}
+	if len(rerun) > 0 {
+		more, err := run(rerun)
 		if err != nil {
 			return err
 		}
-		reports[cand.Label] = rep
+		for label, rep := range more {
+			reports[label] = rep
+		}
 	}
 
 	cancel()
@@ -80,10 +116,54 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 	default:
 	}
 
+	// Only what this claim measured. The server keeps each reused report it
+	// offered for a candidate missing here.
 	if err := w.api.PostContestReport(ctx, job.ContestID, job.ID, token, reports); err != nil {
 		return fmt.Errorf("worker: post contest report: %w", err)
 	}
 	return nil
+}
+
+// reuseRefusal says why an offered report cannot stand in for a run in this
+// claim, or "" when it can.
+func reuseRefusal(cand evalqueue.Candidate, fresh *report.Report) string {
+	reused, err := report.Load(bytes.NewReader(cand.ReusedReport))
+	if err != nil {
+		return "the reused report does not load: " + err.Error()
+	}
+	if ok, why := reused.SameConditions(fresh); !ok {
+		return why
+	}
+	return ""
+}
+
+// runCandidates runs the candidates at idx, at most ContestParallel at once.
+// The first failure cancels the others: a verdict needs every candidate.
+func (w *Worker) runCandidates(ctx context.Context, job *evalqueue.Job, idx []int, bundles [][]byte,
+	suiteArchive []byte, suiteRef, tier string, allowVoid bool) (map[string]*report.Report, error) {
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(w.cfg.ContestParallel)
+
+	var mu sync.Mutex
+	out := make(map[string]*report.Report, len(idx))
+	for _, i := range idx {
+		cand := job.Candidates[i]
+		bundle := bundles[i]
+		g.Go(func() error {
+			rep, err := w.runCandidate(gctx, job, cand, bundle, suiteArchive, suiteRef, tier, allowVoid)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			out[cand.Label] = rep
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // contestSuite returns the suite every candidate runs against, deriving one
@@ -150,7 +230,7 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 		JobID: job.ID,
 		Skill: cand.SkillName, Version: cand.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
-		AllowVoid: allowVoid,
+		AllowVoid: allowVoid, Contest: true, Attempts: job.ContestAttempts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("worker: run %s: %w", cand.Label, err)

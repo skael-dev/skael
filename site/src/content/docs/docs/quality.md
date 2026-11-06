@@ -56,6 +56,7 @@ Optional, with defaults:
 | `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
 | `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
 | `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
+| `WORKER_CONTEST_PARALLEL` | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load |
 
 By default the worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed session, one job at a time per worker process. Run more worker replicas for more throughput.
 
@@ -165,6 +166,12 @@ The verdict is an exact sign test over the tasks. Each task is a win, a loss or 
 - **Too few tasks decided it.** Fewer than six tasks separated the candidates, so no split could have beaten chance. The contest says so and names the suite, not the skills: *"the suite needs tasks these candidates handle differently."*
 
 That last point is worth sitting with, because it is where most people's intuition is wrong. **A 7–2 split is not a result** — an exact sign test puts it at p = 0.18. At twelve tasks you need 8–1 before the number means anything. If a contest keeps returning "too close to call", the tasks are not discriminating between the candidates, and writing better tasks is the work.
+
+### What a contest costs
+
+A candidate runs only the sessions a verdict reads: every task, at the contest's attempts, with the skill installed. It runs no baseline and no trigger probe, so a contest reports lift as not measured. At the full tier with the default 3 attempts, two candidates run 60 sessions. The worker runs up to `WORKER_CONTEST_PARALLEL` candidates at once.
+
+A contest on a named suite reuses a candidate's run from another contest on the same UTC day, when the archive, suite, tier, attempts and requested panel all match. One candidate always runs fresh, and the worker runs a reused candidate again if its report's grader, panel, agent CLI or engine differs from the fresh one. The contest page names each reused run and the contest it came from.
 
 ### A contest changes nothing
 

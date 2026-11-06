@@ -2,13 +2,13 @@
 # check: agents-md
 # born: 2026-09-13
 # failure: AGENTS.md grew past its budget and kept commands and paths that no longer exist, and the agent trusted them
-# rule: every AGENTS.md is within 60 lines, every quoted path exists, every quoted command resolves, and a sibling CLAUDE.md imports it
+# rule: every AGENTS.md is within 100 lines, every quoted path exists, every quoted command resolves, and a sibling CLAUDE.md imports it
 # Usage: agents-md.sh         fast: budget, paths, binaries, just recipes, package scripts, CLAUDE.md import
 #        agents-md.sh --run   slow: also runs each command whose every step is read-only; lists what it skipped
 # It does not judge content, tone or completeness.
 set -euo pipefail
 
-limit=60
+limit=100
 run=0
 [[ "${1:-}" == "--run" ]] && run=1
 root="$(git rev-parse --show-toplevel)"

@@ -45,6 +45,9 @@ type Candidate struct {
 	Version   int             `json:"version"`
 	Label     string          `json:"label"`
 	Report    json.RawMessage `json:"report,omitempty"`
+	// ReusedFrom names the contest whose same-day run supplied Report, or is
+	// empty when this contest measured the candidate itself.
+	ReusedFrom string `json:"reused_from,omitempty"`
 }
 
 // TaskLoss is one task a candidate lost, and why. A person reads this to fix

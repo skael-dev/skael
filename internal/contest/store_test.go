@@ -137,9 +137,9 @@ func TestStore_ServesEveryCandidateToTheClaimingWorker(t *testing.T) {
 		t.Fatalf("AttachJob: %v", err)
 	}
 
-	cands, attempts, err := s.CandidatesForJob(ctx, jobID)
+	cands, attempts, err := s.CandidatesForClaim(ctx, jobID)
 	if err != nil {
-		t.Fatalf("CandidatesForJob: %v", err)
+		t.Fatalf("CandidatesForClaim: %v", err)
 	}
 	if len(cands) != 2 || cands[0].Label != "payments:deploy@3" || cands[1].Label != "platform:deploy@7" {
 		t.Fatalf("candidates = %+v, want both in order", cands)
@@ -160,5 +160,88 @@ func TestStore_RefusesASingleCandidate(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("a one-candidate contest was created")
+	}
+}
+
+// reuseContest creates a contest on a named suite between two stored versions
+// and attaches a job, returning the store, the contest and the job id.
+func reuseContest(t *testing.T, pool *pgxpool.Pool, s *contest.Store, ids map[string]string) (*contest.Contest, string) {
+	t.Helper()
+	ctx := context.Background()
+	c := &contest.Contest{
+		SuiteRef: "suite-reuse", SuiteProvenance: contest.ProvenanceAuthored, Tier: "full", Attempts: 3,
+		Candidates: []contest.Candidate{
+			{SkillID: ids["released"], SkillName: "deploy", Version: 3, Label: "deploy@3"},
+			{SkillID: ids["released"], SkillName: "deploy", Version: 4, Label: "deploy@4"},
+		},
+	}
+	if err := s.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	var jobID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO eval_jobs (skill_id, skill_name, version, suite_ref, contest_id)
+		VALUES ($1, 'deploy', 3, 'suite-reuse', $2) RETURNING id`, ids["released"], c.ID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachJob(ctx, c.ID, jobID); err != nil {
+		t.Fatalf("AttachJob: %v", err)
+	}
+	return c, jobID
+}
+
+// The second contest of the day against the same released archive runs only
+// the other candidate, and names where the reused report came from. A run
+// from another day is never reused, and never every candidate.
+func TestStore_ReusesASameDayReportOfTheSameArchive(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.SetupTestDB(t)
+	s := contest.NewStore(pool)
+	skillID := insertSkill(t, pool, "deploy")
+	for v, sum := range map[int]string{3: "sha-3", 4: "sha-4"} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO skill_versions (skill_id, version, archive_path, checksum) VALUES ($1, $2, 'a', $3)`,
+			skillID, v, sum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := map[string]string{"released": skillID}
+
+	first, _ := reuseContest(t, pool, s, ids)
+	if err := s.Finish(ctx, first.ID, contest.Verdict{Outcome: contest.OutcomeTooClose}, map[string]json.RawMessage{
+		"deploy@3": json.RawMessage(`{"skill":"deploy","tier":"full"}`),
+		"deploy@4": json.RawMessage(`{"skill":"deploy","tier":"full"}`),
+	}, nil); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	second, jobID := reuseContest(t, pool, s, ids)
+	cands, _, err := s.CandidatesForClaim(ctx, jobID)
+	if err != nil {
+		t.Fatalf("CandidatesForClaim: %v", err)
+	}
+	if cands[0].ReusedFrom != first.ID || len(cands[0].ReusedReport) == 0 {
+		t.Errorf("deploy@3 reused from %q, want the first contest", cands[0].ReusedFrom)
+	}
+	if cands[1].ReusedFrom != "" {
+		t.Error("every candidate was reused; one must run to check the others' conditions")
+	}
+	stored, err := s.Get(ctx, second.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Candidates[0].ReusedFrom != first.ID {
+		t.Errorf("the contest record names reuse from %q, want %q", stored.Candidates[0].ReusedFrom, first.ID)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE contests SET finished_at = now() - interval '1 day' WHERE id = $1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	cands, _, err = s.CandidatesForClaim(ctx, jobID)
+	if err != nil {
+		t.Fatalf("CandidatesForClaim: %v", err)
+	}
+	if cands[0].ReusedFrom != "" {
+		t.Error("a report from yesterday was reused")
 	}
 }

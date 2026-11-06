@@ -30,6 +30,21 @@ type EvalJob struct {
 	WorkerID    string   `json:"worker_id,omitempty"`
 	LastError   string   `json:"last_error,omitempty"`
 	RequestedBy string   `json:"requested_by,omitempty"`
+	// A contest job carries every candidate and the attempts per task. A
+	// client that drops them runs the contest as a plain eval of the first.
+	ContestID       string             `json:"contest_id,omitempty"`
+	Candidates      []EvalJobCandidate `json:"candidates,omitempty"`
+	ContestAttempts int                `json:"contest_attempts,omitempty"`
+}
+
+// EvalJobCandidate is one contest entry as the claim returns it.
+type EvalJobCandidate struct {
+	SkillID      string          `json:"skill_id"`
+	SkillName    string          `json:"skill_name"`
+	Version      int             `json:"version"`
+	Label        string          `json:"label"`
+	ReusedReport json.RawMessage `json:"reused_report,omitempty"`
+	ReusedFrom   string          `json:"reused_from,omitempty"`
 }
 
 // ClaimEvalJob calls POST /api/eval/jobs/claim. It returns (nil, "", false,

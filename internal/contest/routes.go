@@ -58,6 +58,9 @@ type contestCandidateOutput struct {
 	Skill   string `json:"skill"`
 	Version int    `json:"version"`
 	Label   string `json:"label"`
+	// ReusedFrom names the contest whose same-day run this candidate's
+	// report came from. Empty means this contest measured it.
+	ReusedFrom string `json:"reused_from,omitempty"`
 }
 
 type contestLossOutput struct {
@@ -135,7 +138,7 @@ func toOutput(c *Contest) ContestOutput {
 	}
 	for _, cand := range c.Candidates {
 		out.Candidates = append(out.Candidates, contestCandidateOutput{
-			Skill: cand.SkillName, Version: cand.Version, Label: cand.Label,
+			Skill: cand.SkillName, Version: cand.Version, Label: cand.Label, ReusedFrom: cand.ReusedFrom,
 		})
 	}
 	for _, l := range c.Losses {
@@ -382,13 +385,17 @@ func registerReport(api huma.API, store *Store, claims ClaimVerifier) {
 }
 
 // decideReports reduces every candidate's report to per-task results and
-// decides. Every candidate must have reported: a verdict over a subset would
-// name a winner that only ran because the others failed to.
+// decides. Every candidate must have a report, measured in this claim or
+// reused at claim time: a verdict over a subset would name a winner that only
+// ran because the others failed to.
 func decideReports(c *Contest, reports map[string]json.RawMessage) (Verdict, []TaskLoss, error) {
 	var outcomes []TaskOutcome
 	var losses []TaskLoss
 	for _, cand := range c.Candidates {
 		raw, ok := reports[cand.Label]
+		if !ok && cand.ReusedFrom != "" && len(cand.Report) > 0 {
+			raw, ok = cand.Report, true
+		}
 		if !ok {
 			return Verdict{}, nil, fmt.Errorf("no runs reported for %s", cand.Label)
 		}
