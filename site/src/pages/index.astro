@@ -20,7 +20,7 @@ const faqLd = {
       "name": "Can't I just commit .claude/skills/ to a repo?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "You can — if everyone's on the same agent, in the same project, and remembers to pull. A git folder doesn't place skills into Cursor, Codex, and OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. skael turns a folder of markdown into managed infrastructure.",
+        "text": "Keep the repo. A git folder doesn't place skills into Cursor, Codex, and OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. Connect the repo to skael and git stays the source of truth: every merge publishes through the scan, a change made in skael opens a pull request, and every PR gets a skael check.",
       },
     },
     {
@@ -354,7 +354,7 @@ const faqLd = {
       <div class="faq-list">
         <div class="faq-item">
           <h3>Can't I just commit <span class="mono-inline">.claude/skills/</span> to a repo?</h3>
-          <p>You can — if everyone's on the same agent, in the same project, and remembers to pull. A git folder gives you a folder. It doesn't place skills into Cursor <em>and</em> Codex <em>and</em> OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. skael is the layer that turns a folder of markdown into managed infrastructure.</p>
+          <p>Keep the repo. A git folder gives you a folder. It doesn't place skills into Cursor <em>and</em> Codex <em>and</em> OpenCode, doesn't sync across machines, doesn't scan for injection, doesn't tell you which version everyone's on, and has no idea which skills your agents actually use. Connect the repo to skael and git stays the source of truth: every merge publishes through the scan, a change made in skael opens a pull request, and every PR gets a skael check. <a href="/docs/git-sync">How git sync works →</a></p>
         </div>
         <div class="faq-item">
           <h3>Doesn't Claude already do org skill sharing?</h3>
@@ -1048,6 +1048,13 @@ const faqLd = {
     color: var(--text);
     font-style: normal;
     font-weight: 500;
+  }
+  .faq-item a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .faq-item a:hover {
+    text-decoration: underline;
   }
 
   /* ---------- final cta ---------- */

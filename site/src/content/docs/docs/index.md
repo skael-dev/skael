@@ -19,6 +19,7 @@ Self-hosted and open source.
 - **[Quickstart](/docs/quickstart)** — get the platform and CLI running in a couple of minutes.
 - **[Core concepts](/docs/concepts)** — skills, versions, selective sync, auto-sync, scanning, ownership, quality, activations.
 - **[Skill ownership](/docs/ownership)** — who may publish to a name, and how a rule turns on protection.
+- **[Git sync](/docs/git-sync)** — keep skills in a GitHub repo and let each merge publish.
 - **[CLI reference](/docs/cli)** — every `skael` command.
 - **[whetstone](/docs/whetstone)** — the authoring CLI: draft, lint, and score a skill before you publish it.
 - **[Webhooks](/docs/webhooks)** — signed events for releases, set changes and submission decisions.
