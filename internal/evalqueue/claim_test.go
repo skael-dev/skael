@@ -147,6 +147,45 @@ func TestFail_RetriesUntilMaxAttemptsThenGivesUp(t *testing.T) {
 	}
 }
 
+// A contest whose job gave up showed running forever, because nothing else
+// moves it once the worker stops reporting.
+func TestFail_ClosesTheContestOnlyWhenItsJobGivesUp(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	var contestID string
+	if err := pool.QueryRow(ctx, `INSERT INTO contests (suite_ref, suite_provenance, status)
+		VALUES ('r', 'authored', 'running') RETURNING id`).Scan(&contestID); err != nil {
+		t.Fatal(err)
+	}
+	id, err := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "r", ContestID: contestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contest := func() (status, lastError string) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT status, last_error FROM contests WHERE id = $1`, contestID).Scan(&status, &lastError); err != nil {
+			t.Fatal(err)
+		}
+		return status, lastError
+	}
+
+	for i := 1; i <= 3; i++ {
+		if _, _, ok, _ := q.Claim(ctx, "worker-a", time.Minute); !ok {
+			t.Fatalf("claim %d failed", i)
+		}
+		if err := q.Fail(ctx, id, "worker-a", "sandbox unavailable"); err != nil {
+			t.Fatal(err)
+		}
+		if status, _ := contest(); i < 3 && status != "running" {
+			t.Fatalf("contest status = %q after a retried failure, want running", status)
+		}
+	}
+	if status, lastError := contest(); status != "failed" || lastError != "sandbox unavailable" {
+		t.Fatalf("contest = %q, %q after its job gave up, want failed with the job's cause", status, lastError)
+	}
+}
+
 func TestVerifyClaim_RejectsAStaleToken(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	q := evalqueue.NewPool(pool)

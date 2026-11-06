@@ -321,20 +321,25 @@ func (p *PoolExecutor) RecordDerivedSuite(ctx context.Context, q evalsuite.Query
 // once they do not. The cause is always recorded: a job that failed three
 // times with no reason recorded is a support ticket.
 func (p *PoolExecutor) Fail(ctx context.Context, id JobID, workerID, cause string) error {
-	tag, err := p.db.Exec(ctx, `
-		UPDATE eval_jobs
-		SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
-		    last_error = $3,
-		    worker_id = '',
-		    claim_token_hash = '',
-		    lease_expires_at = NULL,
-		    updated_at = now()
-		WHERE id = $1 AND worker_id = $2 AND status = 'running'`,
-		string(id), workerID, truncate(cause, 2000))
+	var n int
+	err := p.db.QueryRow(ctx, `
+		WITH j AS (
+			UPDATE eval_jobs
+			SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
+			    last_error = $3,
+			    worker_id = '',
+			    claim_token_hash = '',
+			    lease_expires_at = NULL,
+			    updated_at = now()
+			WHERE id = $1 AND worker_id = $2 AND status = 'running'
+			RETURNING status, contest_id, last_error
+		), c AS (`+failContests+`)
+		SELECT count(*) FROM j`,
+		string(id), workerID, truncate(cause, 2000)).Scan(&n)
 	if err != nil {
 		return fmt.Errorf("evalqueue: fail: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		return ErrLeaseLost
 	}
 	return nil
@@ -379,20 +384,34 @@ func (p *PoolExecutor) VerifyClaim(ctx context.Context, id JobID, token string) 
 // sweep a worker that dies on its final attempt leaves the job running
 // forever, neither retried nor reported. Returns the number reaped.
 func (p *PoolExecutor) ReapExpired(ctx context.Context) (int, error) {
-	tag, err := p.db.Exec(ctx, `
-		UPDATE eval_jobs
-		SET status = 'failed',
-		    last_error = 'lease lapsed with attempts exhausted',
-		    worker_id = '',
-		    claim_token_hash = '',
-		    lease_expires_at = NULL,
-		    updated_at = now()
-		WHERE status = 'running' AND lease_expires_at < now() AND attempts >= max_attempts`)
+	var n int
+	err := p.db.QueryRow(ctx, `
+		WITH j AS (
+			UPDATE eval_jobs
+			SET status = 'failed',
+			    last_error = 'lease lapsed with attempts exhausted',
+			    worker_id = '',
+			    claim_token_hash = '',
+			    lease_expires_at = NULL,
+			    updated_at = now()
+			WHERE status = 'running' AND lease_expires_at < now() AND attempts >= max_attempts
+			RETURNING status, contest_id, last_error
+		), c AS (`+failContests+`)
+		SELECT count(*) FROM j`).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("evalqueue: reap expired: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	return n, nil
 }
+
+// failContests closes the contest of each job in j that failed for good.
+// Nothing else moves a contest out of running once its job gives up, so it
+// runs in the same statement as the job's own update.
+const failContests = `
+	UPDATE contests SET status = 'failed', last_error = j.last_error, finished_at = now()
+	FROM j
+	WHERE contests.id = j.contest_id AND j.status = 'failed' AND contests.status IN ('pending', 'running')
+	RETURNING contests.id`
 
 func newToken() (string, error) {
 	b := make([]byte, 32)
