@@ -59,8 +59,24 @@ func createServiceAccount(ctx context.Context, pool *pgxpool.Pool, name, actor s
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	a, err := CreateServiceAccountTx(ctx, tx, name, actor)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("auth.createServiceAccount: %w", err)
+	}
+	return a, nil
+}
+
+// CreateServiceAccountTx inserts a service account inside tx, so a feature that
+// owns one creates it with the rows that point at it.
+func CreateServiceAccountTx(ctx context.Context, tx pgx.Tx, name, actor string) (*ServiceAccount, error) {
+	if !serviceAccountNameRe.MatchString(name) {
+		return nil, fmt.Errorf("auth: service account name %q is not lowercase letters, digits and hyphens", name)
+	}
 	a := ServiceAccount{Name: name}
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO auth_users (id, email, email_normalized, display_name, role, kind, created_at)
 		VALUES (gen_random_uuid(), $1, lower(trim($1)), $2, 'member', 'service', now())
 		RETURNING id, created_at`, name+"@service-account.invalid", name).Scan(&a.ID, &a.CreatedAt)
@@ -69,9 +85,6 @@ func createServiceAccount(ctx context.Context, pool *pgxpool.Pool, name, actor s
 	}
 	if err := audit.Record(ctx, tx, actor, "service_account.create", "service_account:"+name, nil); err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("auth.createServiceAccount: %w", err)
 	}
 	return &a, nil
 }

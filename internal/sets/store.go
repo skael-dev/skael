@@ -58,6 +58,9 @@ type ResolvedEntry struct {
 	SHA256        string `json:"sha256"`
 	ScanVerdict   string `json:"scan_verdict"`
 	ApprovalState string `json:"approval_state"`
+	// RemovedFromGit warns that the skill's folder left its git repo. The
+	// last version stays served until someone deletes the skill.
+	RemovedFromGit bool `json:"removed_from_git,omitempty"`
 }
 
 // ExcludedEntry is a set entry that a resolve could not serve.
@@ -320,17 +323,20 @@ func requested(e SetEntry) string {
 	return fmt.Sprintf("%d", e.Version)
 }
 
-// resolveEntry applies the serving rule to one entry. A latest entry follows a
-// merged skill's alias. An exact pin does not, because version numbers do not
-// carry across a merge.
+// resolveEntry applies the serving rule to one entry. A latest entry follows
+// any alias. An exact pin follows only a rename, which keeps version numbers; a
+// merge does not carry them across.
 func resolveEntry(ctx context.Context, q Querier, e SetEntry) (*ResolvedEntry, string, error) {
 	name := e.Name
 	var latest int
-	err := q.QueryRow(ctx, `SELECT latest_version FROM skills WHERE name = $1`, name).Scan(&latest)
-	if errors.Is(err, pgx.ErrNoRows) && e.Version == 0 {
+	var removed bool
+	err := q.QueryRow(ctx, `SELECT latest_version, removed_from_git_at IS NOT NULL FROM skills WHERE name = $1`,
+		name).Scan(&latest, &removed)
+	if errors.Is(err, pgx.ErrNoRows) {
 		err = q.QueryRow(ctx, `
-			SELECT s.name, s.latest_version FROM skill_aliases a
-			JOIN skills s ON s.name = a.canonical WHERE a.alias = $1`, e.Name).Scan(&name, &latest)
+			SELECT s.name, s.latest_version, s.removed_from_git_at IS NOT NULL FROM skill_aliases a
+			JOIN skills s ON s.name = a.canonical
+			WHERE a.alias = $1 AND ($2 = 0 OR a.reason = 'rename')`, e.Name, e.Version).Scan(&name, &latest, &removed)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ReasonSkillNotFound, nil
@@ -374,7 +380,7 @@ func resolveEntry(ctx context.Context, q Querier, e SetEntry) (*ResolvedEntry, s
 	}
 	return &ResolvedEntry{
 		Name: name, Version: version, SHA256: checksum,
-		ScanVerdict: scanVerdict(scanResult), ApprovalState: approval,
+		ScanVerdict: scanVerdict(scanResult), ApprovalState: approval, RemovedFromGit: removed,
 	}, "", nil
 }
 
@@ -507,7 +513,10 @@ func (s *Store) SkillVersionExists(ctx context.Context, name string, version int
 		SELECT EXISTS (SELECT 1 FROM skills s
 			LEFT JOIN skill_versions v ON v.skill_id = s.id AND v.version = $2
 			WHERE s.name = $1 AND ($2 = 0 OR v.id IS NOT NULL))
-		OR ($2 = 0 AND EXISTS (SELECT 1 FROM skill_aliases WHERE alias = $1))`, name, version).Scan(&ok)
+		OR EXISTS (SELECT 1 FROM skill_aliases a
+			JOIN skills s ON s.name = a.canonical
+			LEFT JOIN skill_versions v ON v.skill_id = s.id AND v.version = $2
+			WHERE a.alias = $1 AND ($2 = 0 OR (a.reason = 'rename' AND v.id IS NOT NULL)))`, name, version).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("sets.SkillVersionExists: %w", err)
 	}

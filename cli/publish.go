@@ -190,6 +190,20 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return apiFailure(pubErr)
 	}
 
+	if ver.Change != nil {
+		if ui.JSONMode {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(struct {
+				Name   string                 `json:"name"`
+				Change *client.OutboundChange `json:"change"`
+			}{name, ver.Change})
+		}
+		fmt.Fprintf(os.Stdout, "  %s is git-bound. Change opened as PR #%d: %s\n", name, ver.Change.PRNumber, ver.Change.PRURL)
+		fmt.Fprintln(os.Stdout, "  The version publishes when the pull request merges.")
+		return nil
+	}
+
 	if ui.JSONMode {
 		out := struct {
 			Name      string        `json:"name"`

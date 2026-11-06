@@ -73,6 +73,9 @@ type Candidate struct {
 	// the report's conditions differ from a fresh one.
 	ReusedReport json.RawMessage `json:"reused_report,omitempty"`
 	ReusedFrom   string          `json:"reused_from,omitempty"`
+	// PRHeadID names a stored PR head the worker fetches instead of a
+	// version. Version is then 0.
+	PRHeadID string `json:"pr_head_id,omitempty"`
 }
 
 // Executor submits and cancels eval jobs.

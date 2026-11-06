@@ -27,6 +27,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/gitsync"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
 	skweb "github.com/skael-dev/skael/web"
@@ -243,7 +244,8 @@ func (b *Builder) Build() (*Server, error) {
 	// uses, so the generated spec cannot drift from what the real server
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
-	riverClient, err := newRiverClient(b.pool, cfg, analyticsStore)
+	syncer := gitsync.NewSyncer(gitsync.NewStore(b.pool, cfg.MasterKeys), nil)
+	riverClient, err := newRiverClient(b.pool, cfg, analyticsStore, syncer)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}
@@ -261,6 +263,8 @@ func (b *Builder) Build() (*Server, error) {
 		Caps:           b.caps,
 		AnalyticsStore: analyticsStore,
 		JobInserter:    riverClient,
+		Jobs:           riverClient,
+		GitSync:        syncer,
 		RiverUI:        riverUI,
 	})
 

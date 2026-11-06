@@ -69,7 +69,7 @@ func (s *Store) DiffAgainstServed(ctx context.Context, name string, version int)
 		return nil, fmt.Errorf("skill.Store.DiffAgainstServed: served version %d not found for skill %q", sk.LatestVersion, name)
 	}
 
-	skillMD, err := unifiedSkillMDDiff(baseline.Content, target.Content, sk.LatestVersion, version)
+	skillMD, err := unifiedSkillMDDiff(baseline.Content, target.Content, fmt.Sprintf("v%d", sk.LatestVersion), fmt.Sprintf("v%d", version))
 	if err != nil {
 		return nil, fmt.Errorf("skill.Store.DiffAgainstServed: diff SKILL.md: %w", err)
 	}
@@ -85,15 +85,15 @@ func (s *Store) DiffAgainstServed(ctx context.Context, name string, version int)
 // two SKILL.md bodies. Identical content produces an empty string rather
 // than a no-op diff header, so a reviewer's "did the prose change" check is
 // a plain emptiness check.
-func unifiedSkillMDDiff(from, to string, fromVersion, toVersion int) (string, error) {
+func unifiedSkillMDDiff(from, to string, fromLabel, toLabel string) (string, error) {
 	if from == to {
 		return "", nil
 	}
 	diff := difflib.UnifiedDiff{
 		A:        difflib.SplitLines(from),
 		B:        difflib.SplitLines(to),
-		FromFile: fmt.Sprintf("v%d/SKILL.md", fromVersion),
-		ToFile:   fmt.Sprintf("v%d/SKILL.md", toVersion),
+		FromFile: fromLabel + "/SKILL.md",
+		ToFile:   toLabel + "/SKILL.md",
 		Context:  3,
 	}
 	return difflib.GetUnifiedDiffString(diff)
@@ -139,4 +139,15 @@ func diffManifests(from, to []FileEntry) []FileChange {
 		}
 	}
 	return changes
+}
+
+// DiffFolder compares a served version with a folder outside the registry, such
+// as a skill folder in a git repo, labelled toLabel. body is the folder's
+// SKILL.md without its frontmatter, which is what a version's Content holds.
+func DiffFolder(served *Version, body string, files []FileEntry, toLabel string) (*VersionDiff, error) {
+	md, err := unifiedSkillMDDiff(served.Content, body, fmt.Sprintf("v%d", served.Version), toLabel)
+	if err != nil {
+		return nil, err
+	}
+	return &VersionDiff{Against: served.Version, SkillMD: md, Files: diffManifests(served.FileManifest, files)}, nil
 }

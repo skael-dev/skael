@@ -104,6 +104,9 @@ type API interface {
 	FailJob(ctx context.Context, id evalqueue.JobID, token, cause string) error
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
+	// FetchPRHead returns a stored PR head's archive, for a contest candidate
+	// that has no version.
+	FetchPRHead(ctx context.Context, id string) ([]byte, error)
 	SuiteMeta(ctx context.Context, ref string) (SuiteMeta, error)
 	PushSuite(ctx context.Context, in PushSuiteInput) (string, error)
 }

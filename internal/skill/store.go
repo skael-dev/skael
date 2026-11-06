@@ -254,7 +254,7 @@ func (s *Store) CreateVersion(
 		RETURNING id, skill_id, version, archive_path, checksum, changelog, frontmatter,
 		          file_manifest, scan_result, published_by, created_at,
 		          gate_state, gate_decision, gated_by, gated_at, gate_note,
-		          description, content, hold_reasons, submission_id
+		          description, content, hold_reasons, submission_id, contest_id::text
 	`
 	row := tx.QueryRow(ctx, insertVersion,
 		skillID, newVersion, archivePath, checksum, changelog,
@@ -304,7 +304,7 @@ func (s *Store) ListVersions(ctx context.Context, skillName string) ([]Version, 
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
 		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
-		       sv.description, sv.content, sv.hold_reasons, sv.submission_id
+		       sv.description, sv.content, sv.hold_reasons, sv.submission_id, sv.contest_id::text
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1
@@ -337,7 +337,7 @@ func (s *Store) GetVersion(ctx context.Context, skillName string, version int) (
 		       sv.changelog, sv.frontmatter, sv.file_manifest, sv.scan_result,
 		       sv.published_by, sv.created_at,
 		       sv.gate_state, sv.gate_decision, sv.gated_by, sv.gated_at, sv.gate_note,
-		       sv.description, sv.content, sv.hold_reasons, sv.submission_id
+		       sv.description, sv.content, sv.hold_reasons, sv.submission_id, sv.contest_id::text
 		FROM skill_versions sv
 		JOIN skills sk ON sk.id = sv.skill_id
 		WHERE sk.name = $1 AND sv.version = $2
@@ -475,6 +475,7 @@ func scanVersion(row scanner) (*Version, error) {
 		&ver.Content,
 		&ver.HoldReasons,
 		&ver.SubmissionID,
+		&ver.ContestID,
 	)
 	if err != nil {
 		return nil, err

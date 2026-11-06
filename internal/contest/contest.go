@@ -48,6 +48,9 @@ type Candidate struct {
 	// ReusedFrom names the contest whose same-day run supplied Report, or is
 	// empty when this contest measured the candidate itself.
 	ReusedFrom string `json:"reused_from,omitempty"`
+	// PRHeadID names the stored PR head this candidate evaluates. Version is
+	// then 0: a PR head has no version until it merges.
+	PRHeadID string `json:"pr_head_id,omitempty"`
 }
 
 // TaskLoss is one task a candidate lost, and why. A person reads this to fix

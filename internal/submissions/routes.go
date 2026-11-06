@@ -46,11 +46,13 @@ type Service struct {
 	storage   platform.Storage
 	publisher *skill.Publisher
 	owners    skill.OwnerResolver
+	// git opens a pull request instead of a version for a git-bound skill.
+	git skill.GitBoundary
 }
 
 // NewService constructs a Service.
-func NewService(store *Store, skills *skill.Store, storage platform.Storage, publisher *skill.Publisher, owners skill.OwnerResolver) *Service {
-	return &Service{store: store, skills: skills, storage: storage, publisher: publisher, owners: owners}
+func NewService(store *Store, skills *skill.Store, storage platform.Storage, publisher *skill.Publisher, owners skill.OwnerResolver, git skill.GitBoundary) *Service {
+	return &Service{store: store, skills: skills, storage: storage, publisher: publisher, owners: owners, git: git}
 }
 
 // Submit scans and stores an archive. An exfiltration or secret finding returns
@@ -165,6 +167,9 @@ func (s *Service) reject(ctx context.Context, id, reason string, u *auth.User) (
 // approve publishes through the normal gate as the approving person, so a
 // blocking finding still holds the version.
 func (s *Service) approve(ctx context.Context, id, note string, edits []SubmissionEdit, u *auth.User) (*Submission, error) {
+	if sub, done, err := s.approveAsChange(ctx, id, note, edits, u); done || err != nil {
+		return sub, err
+	}
 	return s.store.Decide(ctx, id, func(tx pgx.Tx, sub *Submission) error {
 		archive, err := readAll(ctx, s.storage, sub.ArchivePath)
 		if err != nil {
@@ -348,4 +353,38 @@ func RegisterRoutes(api huma.API, svc *Service) {
 		}
 		return &struct{ Body Submission }{Body: *decided}, nil
 	})
+}
+
+// approveAsChange opens a pull request for a submission to a git-bound skill.
+// done is false for a native skill, which the caller publishes as usual.
+func (s *Service) approveAsChange(ctx context.Context, id, note string, edits []SubmissionEdit, u *auth.User) (*Submission, bool, error) {
+	if s.git == nil {
+		return nil, false, nil
+	}
+	sub, err := s.store.Get(ctx, id)
+	if err != nil || sub == nil {
+		return nil, false, err
+	}
+	bound, _, err := s.git.Bound(ctx, sub.SkillName)
+	if err != nil || !bound {
+		return nil, false, err
+	}
+	if sub.State != StatePending || sub.ChangeID != "" {
+		return nil, true, ErrDecided
+	}
+	archive, err := readAll(ctx, s.storage, sub.ArchivePath)
+	if err != nil {
+		return nil, true, fmt.Errorf("approve: read archive: %w", err)
+	}
+	if len(edits) > 0 {
+		if archive, err = applyEdits(archive, sub.FileManifest, edits); err != nil {
+			return nil, true, err
+		}
+	}
+	res, err := s.publisher.OpenChange(ctx, sub.SkillName, archive, note, s.git)
+	if err != nil {
+		return nil, true, err
+	}
+	out, err := s.store.AttachChange(ctx, id, res.Change.ID, u.Email, note)
+	return out, true, err
 }

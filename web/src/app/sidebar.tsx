@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound, Webhook } from "lucide-react";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound, Webhook, GitBranch, Plug } from "lucide-react";
 import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { getReviewQueue } from "@/api/sdk.gen";
 
@@ -37,6 +37,19 @@ const navItems: NavItem[] = [
     label: "Webhooks",
     path: "/webhooks",
     icon: <Webhook size={16} />,
+    privileged: true,
+  },
+  {
+    id: "git",
+    label: "Git sync",
+    path: "/git/connections",
+    icon: <GitBranch size={16} />,
+  },
+  {
+    id: "github",
+    label: "GitHub App",
+    path: "/settings/github",
+    icon: <Plug size={16} />,
     privileged: true,
   },
   {

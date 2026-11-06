@@ -17,6 +17,7 @@ import (
 	"github.com/skael-dev/skael/internal/analytics"
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
+	"github.com/skael-dev/skael/internal/gitsync"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/webhooks"
@@ -78,15 +79,19 @@ func (w *eventRetentionWorker) Work(ctx context.Context, _ *river.Job[eventReten
 
 // newRiverClient builds the client for all server background work. It touches
 // no database until Start.
-func newRiverClient(pool *pgxpool.Pool, cfg *platform.Config, analyticsStore *analytics.Store) (*river.Client[pgx.Tx], error) {
+func newRiverClient(pool *pgxpool.Pool, cfg *platform.Config, analyticsStore *analytics.Store, syncer *gitsync.Syncer) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), cfg.WebhookAllowPrivate))
 	river.AddWorker(workers, &evalLeaseReapWorker{queue: evalqueue.NewPool(pool)})
 	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: cfg.EventRetentionDays})
+	river.AddWorker(workers, &gitsync.SyncWorker{Syncer: syncer})
+	river.AddWorker(workers, &gitsync.SyncAllWorker{Store: syncer.Store()})
 
 	periodic := []*river.PeriodicJob{
 		river.NewPeriodicJob(river.PeriodicInterval(reapInterval),
 			func() (river.JobArgs, *river.InsertOpts) { return evalLeaseReapArgs{}, nil }, nil),
+		river.NewPeriodicJob(river.PeriodicInterval(gitsync.SyncInterval),
+			func() (river.JobArgs, *river.InsertOpts) { return gitsync.SyncAllArgs{}, nil }, nil),
 	}
 	if cfg.EventRetentionDays > 0 {
 		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),

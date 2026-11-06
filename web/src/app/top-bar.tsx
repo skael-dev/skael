@@ -16,6 +16,7 @@ const PAGE_TITLES: Record<string, string> = {
   sets: "Sets",
   "service-accounts": "Service accounts",
   contests: "Contest",
+  git: "Git sync",
 };
 
 function useBreadcrumbs(): Segment[] {

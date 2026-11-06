@@ -32,6 +32,33 @@ type PublishBody struct {
 	Created  bool           `json:"created"`
 	Quality  PublishQuality `json:"quality"`
 	Decision gate.Decision  `json:"decision"`
+	// Change is set instead of a version for a git-bound skill: the pull
+	// request whose merge publishes it.
+	Change *OutboundChange `json:"change,omitempty"`
+}
+
+// OpenChange scans archive like a publish, refuses what a publish would block,
+// and opens a pull request for a git-bound skill. The pull request's check and
+// the merged folder's publish decide the rest.
+func (p *Publisher) OpenChange(ctx context.Context, name string, archive []byte, note string, git GitBoundary) (*PublishBody, error) {
+	report, decision, err := p.ScanArchive(ctx, archive)
+	if err != nil {
+		return nil, err
+	}
+	if decision.Outcome == gate.Block {
+		payload, _ := json.Marshal(struct {
+			Scan     *scan.Report  `json:"scan"`
+			Decision gate.Decision `json:"decision"`
+		}{report, decision})
+		return nil, huma.NewError(http.StatusUnprocessableEntity,
+			"archive rejected: it contains credential-theft or data-exfiltration findings, which are unappealable",
+			fmt.Errorf("%s", payload))
+	}
+	change, err := git.OpenChange(ctx, name, archive, note)
+	if err != nil {
+		return nil, err
+	}
+	return &PublishBody{Change: change, Decision: decision}, nil
 }
 
 // Publisher runs an archive through the scan and the gate. It acts as the user

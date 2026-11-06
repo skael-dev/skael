@@ -58,6 +58,9 @@ type Version struct {
 	// outside, which is why the unchanged-checksum message below branches
 	// on GateState, not on Decision.Held().
 	Decision gate.Decision `json:"decision,omitempty"`
+	// Change is set instead of a version when the skill is git-bound: the
+	// pull request whose merge publishes it.
+	Change *OutboundChange `json:"change,omitempty"`
 	// GateState is the version's persisted state: "released", "needs_review",
 	// or "rejected". Unlike Decision, it cannot go stale — it is read back
 	// from the row itself, not recomputed — so it is the source of truth
@@ -376,6 +379,14 @@ func (c *Client) PublishVersion(name string, archive []byte, override bool) (*Ve
 		return nil, nil, nil, fmt.Errorf("decode publish version response: %w", err)
 	}
 	return &ver, nil, &ver.Decision, nil
+}
+
+// OutboundChange is the pull request the server opened for a git-bound skill.
+type OutboundChange struct {
+	ID       string `json:"id"`
+	PRNumber int    `json:"pr_number"`
+	PRURL    string `json:"pr_url"`
+	State    string `json:"state"`
 }
 
 // Review calls POST /api/skills/{name}/versions/{version}/review to approve

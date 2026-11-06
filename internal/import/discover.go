@@ -22,6 +22,26 @@ type DiscoveredSkill struct {
 }
 
 func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {
+	all, err := DiscoverAll(rootDir, subPath)
+	if err != nil {
+		return nil, err
+	}
+	// Dedup: if multiple directories produce the same skill name, keep the first.
+	seen := map[string]bool{}
+	var deduped []DiscoveredSkill
+	for _, ds := range all {
+		if !seen[ds.Name] {
+			seen[ds.Name] = true
+			deduped = append(deduped, ds)
+		}
+	}
+	return deduped, nil
+}
+
+// DiscoverAll returns every skill directory under subPath, sorted by name and
+// then path, including two directories that declare one name. A git
+// connection reports such a pair rather than keeping one without a word.
+func DiscoverAll(rootDir, subPath string) ([]DiscoveredSkill, error) {
 	searchDir := rootDir
 	if subPath != "" {
 		searchDir = filepath.Join(rootDir, filepath.FromSlash(subPath))
@@ -58,19 +78,11 @@ func Discover(rootDir, subPath string) ([]DiscoveredSkill, error) {
 		results = append(results, *ds)
 	}
 
-	// Dedup: if multiple directories produce the same skill name, keep the first.
-	seen := map[string]bool{}
-	var deduped []DiscoveredSkill
-	for _, ds := range results {
-		if !seen[ds.Name] {
-			seen[ds.Name] = true
-			deduped = append(deduped, ds)
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Name != results[j].Name {
+			return results[i].Name < results[j].Name
 		}
-	}
-	results = deduped
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Name < results[j].Name
+		return results[i].Path < results[j].Path
 	})
 	return results, nil
 }
