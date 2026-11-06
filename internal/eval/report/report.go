@@ -174,13 +174,22 @@ func Load(r io.Reader) (*Report, error) {
 // Comparable reports whether two reports measure the same thing. A changed
 // suite, panel, tier, grader, or engine version makes scores incomparable.
 func (r *Report) Comparable(o *Report) (bool, string) {
+	if r != nil && o != nil && r.Skill != o.Skill {
+		return false, fmt.Sprintf("different skills (%s and %s)", r.Skill, o.Skill)
+	}
+	return r.SameConditions(o)
+}
+
+// SameConditions reports whether two reports ran under the same conditions,
+// whatever skill each measured. A contest reusing one candidate's report from
+// another contest needs this and not Comparable, because its candidates may
+// be different skills.
+func (r *Report) SameConditions(o *Report) (bool, string) {
 	switch {
 	case r == nil || o == nil:
 		return false, "one of the reports is absent"
 	case r.SchemaVersion != o.SchemaVersion:
 		return false, fmt.Sprintf("different report schemas (%d and %d)", r.SchemaVersion, o.SchemaVersion)
-	case r.Skill != o.Skill:
-		return false, fmt.Sprintf("different skills (%s and %s)", r.Skill, o.Skill)
 	case r.SuiteRef != o.SuiteRef:
 		return false, fmt.Sprintf("different eval sets (%s and %s): the evals are not the same", suite.ShortRef(r.SuiteRef), suite.ShortRef(o.SuiteRef))
 	case r.EngineVersion != o.EngineVersion:

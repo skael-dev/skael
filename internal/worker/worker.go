@@ -29,11 +29,16 @@ type Config struct {
 	PollInterval time.Duration // default 15s
 	WorkRoot     string        // scratch; default os.TempDir()
 	Tier         string        // default from the job
+	// ContestParallel bounds how many contest candidates run at once. Each
+	// one runs its own sessions, so this multiplies the sandbox load.
+	ContestParallel int // default 2
 }
 
 const (
 	defaultLease        = 5 * time.Minute
 	defaultPollInterval = 15 * time.Second
+	// defaultContestParallel runs a two-candidate contest at once.
+	defaultContestParallel = 2
 )
 
 func (c Config) withDefaults() Config {
@@ -48,6 +53,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.WorkRoot == "" {
 		c.WorkRoot = os.TempDir()
+	}
+	if c.ContestParallel <= 0 {
+		c.ContestParallel = defaultContestParallel
 	}
 	return c
 }
@@ -67,6 +75,10 @@ type RunInput struct {
 	// a half-broken authored suite.
 	AllowVoid    bool
 	WorkspaceDir string
+	// Contest runs one contest candidate at Attempts per task, with no
+	// baseline and no probe.
+	Contest  bool
+	Attempts int
 }
 
 // Runner is the eval half, injected so the loop is testable with no Docker.

@@ -96,7 +96,7 @@ func (s *Store) Finish(ctx context.Context, id string, v Verdict, reports map[st
 
 	for label, raw := range reports {
 		if _, err := tx.Exec(ctx,
-			`UPDATE contest_candidates SET report_json = $3 WHERE contest_id = $1 AND label = $2`,
+			`UPDATE contest_candidates SET report_json = $3, reused_from = NULL WHERE contest_id = $1 AND label = $2`,
 			id, label, raw,
 		); err != nil {
 			return fmt.Errorf("contest.Store.Finish: report for %s: %w", label, err)
@@ -133,30 +133,109 @@ func (s *Store) Fail(ctx context.Context, id, reason string) error {
 	return nil
 }
 
-// CandidatesForJob returns the candidates a contest job must run, in order,
-// with the attempts per task the contest asked for.
-func (s *Store) CandidatesForJob(ctx context.Context, jobID string) ([]evalqueue.Candidate, int, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT cc.skill_id, cc.skill_name, cc.version, cc.label, c.attempts
-		FROM contest_candidates cc
-		JOIN contests c ON c.id = cc.contest_id
-		WHERE c.job_id = $1
-		ORDER BY cc.position`, jobID)
+// CandidatesForClaim returns the candidates a contest job must run, in order,
+// with the attempts per task the contest asked for. A candidate whose exact
+// archive finished in another contest today, on the same named suite, tier,
+// attempts and requested panel, carries that report and its source contest.
+// The match is recomputed on every claim, so a retried job on a new day runs
+// everything again. At least one candidate always runs: the worker checks a
+// reused report's conditions against a fresh one.
+func (s *Store) CandidatesForClaim(ctx context.Context, jobID string) ([]evalqueue.Candidate, int, error) {
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("contest.Store.CandidatesForJob: %w", err)
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: begin: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = tx.Rollback(ctx) }()
 
+	var contestID, suiteRef, tier string
+	var attempts int
+	var panel []byte
+	err = tx.QueryRow(ctx, `
+		SELECT c.id, c.suite_ref, c.tier, c.attempts, j.panel
+		FROM contests c JOIN eval_jobs j ON j.id = c.job_id
+		WHERE c.job_id = $1`, jobID).Scan(&contestID, &suiteRef, &tier, &attempts, &panel)
+	if err != nil {
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: contest: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE contest_candidates SET reused_from = NULL, report_json = NULL
+		WHERE contest_id = $1 AND reused_from IS NOT NULL`, contestID); err != nil {
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: clear reuse: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT cc.skill_id, cc.skill_name, cc.version, cc.label, COALESCE(sv.checksum, '')
+		FROM contest_candidates cc
+		LEFT JOIN skill_versions sv ON sv.skill_id = cc.skill_id AND sv.version = cc.version
+		WHERE cc.contest_id = $1
+		ORDER BY cc.position`, contestID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: %w", err)
+	}
 	var out []evalqueue.Candidate
-	attempts := 0
+	var digests []string
 	for rows.Next() {
 		var c evalqueue.Candidate
-		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &attempts); err != nil {
-			return nil, 0, fmt.Errorf("contest.Store.CandidatesForJob: scan: %w", err)
+		var digest string
+		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &digest); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: scan: %w", err)
 		}
 		out = append(out, c)
+		digests = append(digests, digest)
 	}
-	return out, attempts, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: %w", err)
+	}
+
+	// A derived suite does not exist until the worker writes it, so only a
+	// named suite can match another contest's.
+	if suiteRef != "" {
+		reused := 0
+		for i := range out {
+			if reused == len(out)-1 {
+				break
+			}
+			if digests[i] == "" {
+				continue
+			}
+			var from string
+			var raw []byte
+			err := tx.QueryRow(ctx, `
+				SELECT src.contest_id::text, src.report_json
+				FROM contest_candidates src
+				JOIN contests sc ON sc.id = src.contest_id
+				JOIN eval_jobs sj ON sj.id = sc.job_id
+				JOIN skill_versions ssv ON ssv.skill_id = src.skill_id AND ssv.version = src.version
+				WHERE src.skill_name = $1 AND ssv.checksum = $2
+				  AND src.report_json IS NOT NULL AND src.reused_from IS NULL
+				  AND sc.status = 'done' AND sc.id <> $3
+				  AND sc.suite_ref = $4 AND sc.tier = $5 AND sc.attempts = $6 AND sj.panel = $7::jsonb
+				  AND (sc.finished_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date
+				ORDER BY sc.finished_at DESC
+				LIMIT 1`,
+				out[i].SkillName, digests[i], contestID, suiteRef, tier, attempts, panel,
+			).Scan(&from, &raw)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: reuse for %s: %w", out[i].Label, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE contest_candidates SET reused_from = $3, report_json = $4
+				WHERE contest_id = $1 AND label = $2`, contestID, out[i].Label, from, raw); err != nil {
+				return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: record reuse for %s: %w", out[i].Label, err)
+			}
+			out[i].ReusedReport, out[i].ReusedFrom = raw, from
+			reused++
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: commit: %w", err)
+	}
+	return out, attempts, nil
 }
 
 // Get returns one contest with its candidates and losses, or (nil, nil).
@@ -223,7 +302,7 @@ func (s *Store) ListForSkill(ctx context.Context, skillID string) ([]Contest, er
 
 func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	rows, err := s.db.Query(ctx, `
-		SELECT position, skill_id, skill_name, version, label, report_json
+		SELECT position, skill_id, skill_name, version, label, report_json, COALESCE(reused_from::text, '')
 		FROM contest_candidates WHERE contest_id = $1 ORDER BY position`, c.ID)
 	if err != nil {
 		return fmt.Errorf("contest.Store: candidates: %w", err)
@@ -232,7 +311,7 @@ func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	c.Candidates = nil
 	for rows.Next() {
 		var cand Candidate
-		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report); err != nil {
+		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report, &cand.ReusedFrom); err != nil {
 			return fmt.Errorf("contest.Store: scan candidate: %w", err)
 		}
 		c.Candidates = append(c.Candidates, cand)

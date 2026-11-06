@@ -140,9 +140,15 @@ func TestEvalRequestFrom_CarriesTierAndPanel(t *testing.T) {
 			Agents: []string{"claude-code", "codex"},
 			Models: []string{"claude-opus-5", "gpt-5"},
 		},
+		Contest:  true,
+		Attempts: 3,
 	}
 
 	req := evalRequestFrom(in, 4, 8)
+
+	if !req.Contest || req.Attempts != 3 {
+		t.Fatalf("Contest = %v, Attempts = %d, want true and 3", req.Contest, req.Attempts)
+	}
 
 	if got, want := string(req.Tier), in.Tier; got != want {
 		t.Fatalf("Tier = %q, want %q", got, want)

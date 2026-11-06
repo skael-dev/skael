@@ -63,6 +63,7 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `WORKER_RUN_ROOT` | only in a container | `os.TempDir()` | Directory per-session sandbox workspaces are created under. These **are** bind-mounted into sandbox containers, so the path must resolve identically for the worker and for the daemon starting them. Required when containerized — the worker refuses to start without it. |
 | `WORKER_CONCURRENCY` | no | `1` | Concurrent sandbox sessions. Must be a positive integer |
 | `WORKER_GRADE_CONCURRENCY` | no | whetstone's default (8) | Concurrent judge calls. A separate resource from the sessions: a container is bounded by CPU and memory, a judge call by the account's rate limit. Must be a positive integer |
+| `WORKER_CONTEST_PARALLEL` | no | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load. Must be a positive integer |
 | `ANTHROPIC_BASE_URL` | no | `https://api.anthropic.com` | An Anthropic-compatible gateway for **both** the judge (dialled here) and the panel (dialled inside the sandbox, forwarded by the claude-code adapter). It posts to `{base}/v1/messages`, so the base carries no `/v1` |
 | `LLM_MODEL` | with a gateway | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members, which only the deep tier runs. Required behind a gateway that namespaces its identifiers |
 | `CLAUDE_CODE_OAUTH_TOKEN` | no | — | Bills the *panel* to a Claude subscription (`claude setup-token`). The judge still needs one of the two credentials above. Set beside `ANTHROPIC_BASE_URL` it selects the split: the judge keeps the gateway, the panel does not see it |
@@ -85,7 +86,7 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 
 The same four LLM variables configure `whetstone`, which additionally reads `WHETSTONE_LLM_TIMEOUT` and `WHETSTONE_BASE_TAG`. `whetstone doctor` prints what resolved.
 
-Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, or `WORKER_CONCURRENCY` fails startup with the offending value named.
+Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, `WORKER_CONCURRENCY` or `WORKER_CONTEST_PARALLEL` fails startup with the offending value named.
 
 ### Running the worker in a container
 

@@ -161,6 +161,26 @@ func BuildPlan(t Tier, p Panel, set *suite.EvalSet, void map[int]bool, triggers 
 	if !ok {
 		return nil, fmt.Errorf("runner: unknown tier %q", t)
 	}
+	return buildPlan(t, b, p, set, void, triggers)
+}
+
+// BuildContestPlan enumerates a contest candidate's sessions: the tier's evals
+// and members at the contest's attempts per task, and nothing else. A verdict
+// reads only skill-condition runs, so a baseline or a probe here is a session
+// spent on a number no contest reports.
+func BuildContestPlan(t Tier, attempts int, p Panel, set *suite.EvalSet, void map[int]bool) (*Plan, error) {
+	b, ok := budgets[t]
+	if !ok {
+		return nil, fmt.Errorf("runner: unknown tier %q", t)
+	}
+	if attempts < 1 {
+		return nil, fmt.Errorf("runner: a contest needs at least one attempt per task, got %d", attempts)
+	}
+	b.Runs, b.BaselineRuns, b.Probes = attempts, 0, 0
+	return buildPlan(t, b, p, set, void, nil)
+}
+
+func buildPlan(t Tier, b tierBudget, p Panel, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) (*Plan, error) {
 	if len(p) == 0 {
 		return nil, fmt.Errorf("runner: tier %s needs at least one panel member", t)
 	}

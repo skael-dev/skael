@@ -88,6 +88,10 @@ type EvalRequest struct {
 	// FreshBaseline runs every baseline session rather than reusing a
 	// matching one from an earlier eval.
 	FreshBaseline bool
+	// Contest plans one contest candidate: Attempts per task with the skill,
+	// and no baseline or probe, because a verdict reads neither.
+	Contest  bool
+	Attempts int
 }
 
 // RunEvalWith runs one evaluation end to end: load the approved spec and eval
@@ -264,7 +268,12 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	// 8. Plan and execute.
-	plan, err := runner.BuildPlan(req.Tier, panel, set, voidSet, triggers)
+	var plan *runner.Plan
+	if req.Contest {
+		plan, err = runner.BuildContestPlan(req.Tier, req.Attempts, panel, set, voidSet)
+	} else {
+		plan, err = runner.BuildPlan(req.Tier, panel, set, voidSet, triggers)
+	}
 	if err != nil {
 		return nil, err
 	}

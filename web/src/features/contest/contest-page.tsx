@@ -148,6 +148,20 @@ export function ContestPage() {
         {contest.attempts} attempts per task · {contest.tier} tier
         {contest.requested_by ? ` · requested by ${contest.requested_by}` : ""}
       </div>
+      {candidates.some((c) => c.reused_from) && (
+        <ul className="text-[11px] text-text-tertiary -mt-6 mb-8">
+          {candidates
+            .filter((c) => c.reused_from)
+            .map((c) => (
+              <li key={c.label}>
+                <span className="font-mono">{c.label}</span> reused its same-day run from{" "}
+                <Link to={`/contests/${c.reused_from}`} className="underline hover:text-text-primary">
+                  contest {c.reused_from?.slice(0, 8)}
+                </Link>
+              </li>
+            ))}
+        </ul>
+      )}
 
       {(contest.pairings ?? []).map((p) => (
         <PairingTable key={`${p.a}-${p.b}`} pairing={p} />

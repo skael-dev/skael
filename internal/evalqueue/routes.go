@@ -180,9 +180,10 @@ type RouteOptions struct {
 	Contests ContestLookup
 }
 
-// ContestLookup returns the candidates a contest job must run, in order.
+// ContestLookup returns the candidates a contest job must run, in order, with
+// any same-day report the claim may reuse attached.
 type ContestLookup interface {
-	CandidatesForJob(ctx context.Context, jobID string) ([]Candidate, int, error)
+	CandidatesForClaim(ctx context.Context, jobID string) ([]Candidate, int, error)
 }
 
 // RegisterRoutes wires up the eval job queue HTTP endpoints: claim,
@@ -224,7 +225,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 				log.Error().Str("job", string(j.ID)).Msg("evalqueue: contest job claimed but no contest lookup is wired")
 				return nil, huma.Error500InternalServerError("claim eval job: contests are not configured")
 			}
-			candidates, attempts, err := opts.Contests.CandidatesForJob(ctx, string(j.ID))
+			candidates, attempts, err := opts.Contests.CandidatesForClaim(ctx, string(j.ID))
 			if err != nil {
 				log.Error().Err(err).Str("job", string(j.ID)).Msg("evalqueue: contest candidate lookup failed")
 				return nil, huma.Error500InternalServerError("claim eval job: internal error")

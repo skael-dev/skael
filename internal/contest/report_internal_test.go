@@ -78,3 +78,26 @@ func TestDecideReports_RefusesAMissingCandidate(t *testing.T) {
 		t.Fatal("decided a contest with one candidate's runs missing")
 	}
 }
+
+// A worker posts only what it measured. The report the claim reused stands in
+// for the candidate it skipped, and a candidate with neither still refuses.
+func TestDecideReports_UsesTheReusedReportForASkippedCandidate(t *testing.T) {
+	c := &Contest{Candidates: []Candidate{
+		{Label: "a@1", ReusedFrom: "contest-0", Report: reportFor("a", map[string]int{"1": 3, "2": 3}, 3)},
+		{Label: "b@1"},
+	}}
+	posted := map[string]json.RawMessage{"b@1": reportFor("b", map[string]int{"1": 0, "2": 0}, 3)}
+
+	v, _, err := decideReports(c, posted)
+	if err != nil {
+		t.Fatalf("decideReports: %v", err)
+	}
+	if p := v.Pairings[0]; p.AWins != 2 {
+		t.Errorf("a@1 won %d tasks, want 2 from its reused report", p.AWins)
+	}
+
+	c.Candidates[0].ReusedFrom = ""
+	if _, _, err := decideReports(c, posted); err == nil {
+		t.Error("decided without a report for a candidate nothing reused")
+	}
+}

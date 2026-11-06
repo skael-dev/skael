@@ -240,11 +240,13 @@ type fakeRunner struct {
 
 	mu       sync.Mutex
 	gotInput worker.RunInput
+	ran      []string
 }
 
 func (f *fakeRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
 	f.mu.Lock()
 	f.gotInput = in
+	f.ran = append(f.ran, in.Skill)
 	f.mu.Unlock()
 
 	if f.block != nil {

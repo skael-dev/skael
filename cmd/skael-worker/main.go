@@ -165,6 +165,15 @@ func configFromEnv() (workerConfig, error) {
 		gradeConcurrency = n
 	}
 
+	contestParallel := 0
+	if v := os.Getenv("WORKER_CONTEST_PARALLEL"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return workerConfig{}, fmt.Errorf("skael-worker: WORKER_CONTEST_PARALLEL %q is not a positive integer", v)
+		}
+		contestParallel = n
+	}
+
 	runRoot := os.Getenv("WORKER_RUN_ROOT")
 	workRoot := os.Getenv("WORKER_WORK_ROOT")
 	sandboxCfg := resolve.FromEnv(os.Getenv)
@@ -180,6 +189,8 @@ func configFromEnv() (workerConfig, error) {
 			Lease:        lease,
 			PollInterval: poll,
 			WorkRoot:     workRoot,
+
+			ContestParallel: contestParallel,
 		},
 		Concurrency:      concurrency,
 		GradeConcurrency: gradeConcurrency,
@@ -489,6 +500,8 @@ func evalRequestFrom(in worker.RunInput, concurrency, gradeConcurrency int) whet
 		Agents:           in.Panel.Agents,
 		Models:           in.Panel.Models,
 		AllowVoid:        in.AllowVoid,
+		Contest:          in.Contest,
+		Attempts:         in.Attempts,
 		Concurrency:      concurrency,
 		GradeConcurrency: gradeConcurrency,
 	}

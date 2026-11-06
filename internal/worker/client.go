@@ -34,6 +34,13 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 	if !ok {
 		return nil, "", false, nil
 	}
+	candidates := make([]evalqueue.Candidate, 0, len(j.Candidates))
+	for _, c := range j.Candidates {
+		candidates = append(candidates, evalqueue.Candidate{
+			SkillID: c.SkillID, SkillName: c.SkillName, Version: c.Version, Label: c.Label,
+			ReusedReport: c.ReusedReport, ReusedFrom: c.ReusedFrom,
+		})
+	}
 	return &evalqueue.Job{
 		ID:          evalqueue.JobID(j.ID),
 		SkillID:     j.SkillID,
@@ -48,6 +55,10 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 		WorkerID:    j.WorkerID,
 		LastError:   j.LastError,
 		RequestedBy: j.RequestedBy,
+
+		ContestID:       j.ContestID,
+		Candidates:      candidates,
+		ContestAttempts: j.ContestAttempts,
 	}, token, true, nil
 }
 

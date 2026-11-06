@@ -3,6 +3,7 @@ package evalqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -52,7 +53,10 @@ type Job struct {
 	// versions on different days — the drift a contest exists to remove.
 	ContestID  string
 	Candidates []Candidate
-	CreatedAt  time.Time
+	// ContestAttempts is the attempts per task per candidate the contest
+	// asked for. Attempts above counts job retries.
+	ContestAttempts int
+	CreatedAt       time.Time
 	// StartedAt is set once on the first claim and never moved, so elapsed
 	// time is measured from the start of work, not the latest retry.
 	StartedAt *time.Time
@@ -64,6 +68,11 @@ type Candidate struct {
 	SkillName string `json:"skill_name"`
 	Version   int    `json:"version"`
 	Label     string `json:"label"`
+	// ReusedReport is a same-day report of this exact candidate from another
+	// contest, named by ReusedFrom. The worker runs the candidate anyway when
+	// the report's conditions differ from a fresh one.
+	ReusedReport json.RawMessage `json:"reused_report,omitempty"`
+	ReusedFrom   string          `json:"reused_from,omitempty"`
 }
 
 // Executor submits and cancels eval jobs.
