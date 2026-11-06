@@ -19,6 +19,7 @@ import (
 	"github.com/skael-dev/skael/internal/contest"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/gitsync"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/mcp"
 	"github.com/skael-dev/skael/internal/ownership"
@@ -66,6 +67,12 @@ type RegisterAPIDeps struct {
 	JobInserter webhooks.JobInserter
 	// RiverUI serves the job inspector. Nil only for spec generation.
 	RiverUI http.Handler
+	// Jobs enqueues outside a transaction, such as a git sync. Nil only for
+	// spec generation.
+	Jobs gitsync.JobInserter
+	// GitSync is the syncer the River worker runs. Nil builds one that only
+	// serves routes.
+	GitSync *gitsync.Syncer
 }
 
 // mountPeople serves auth-all's routes and merges them into the OpenAPI document,
@@ -179,7 +186,12 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	suiteRegistry := evalsuite.NewRegistry(d.Pool, d.Storage)
 	ownershipStore := ownership.NewStore(d.Pool)
 	ownerResolver := ownership.NewResolver(ownershipStore, d.UserStore)
+	syncer := d.GitSync
+	if syncer == nil {
+		syncer = gitsync.NewSyncer(gitsync.NewStore(d.Pool, cfg.MasterKeys), nil)
+	}
 	skillOptions := skill.RouteOptions{
+		Git:      syncer,
 		External: externalScanner,
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
@@ -209,8 +221,14 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		submissionStore.SetNotifier(notifier)
 	}
 	submissionService := submissions.NewService(submissionStore, skillStore, d.Storage,
-		skill.NewPublisher(skillStore, d.Storage, skillOptions), ownerResolver)
+		skill.NewPublisher(skillStore, d.Storage, skillOptions), ownerResolver, syncer)
 	submissions.RegisterRoutes(api, submissionService)
+
+	// Git sync. The App's secrets are sealed under SKAEL_MASTER_KEYS, and a
+	// sync publishes through the same publisher as a person.
+	gitsync.RegisterRoutes(api, syncer.Store(), gitsync.RouteOptions{PublicURL: cfg.PublicURL})
+	gitsync.RegisterConnectionRoutes(api, syncer, syncer.Store(), d.Jobs)
+	router.Post(gitsync.WebhookPath, gitsync.WebhookHandler(syncer.Store(), d.Jobs).ServeHTTP)
 
 	mcp.RegisterRoutes(router, skillStore, setStore, runStore, submissionService, cfg, caps.Response().Version)
 
@@ -257,6 +275,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Suites:       suiteRegistry,
 		QualityFloor: cfg.QualityFloor,
 		Ownership:    ownerResolver,
+		Git:          syncer,
 	})
 
 	// Eval suite registry. suiteRegistry was constructed above, alongside
@@ -269,6 +288,18 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	// Eval job queue. The server enqueues and ingests; it never holds a
 	// Docker socket or an LLM key — those live on the worker.
 	contestStore := contest.NewStore(d.Pool)
+	syncer.Bind(gitsync.Deps{
+		Skills:      skillStore,
+		Publisher:   skill.NewPublisher(skillStore, d.Storage, skillOptions),
+		Submissions: submissionStore,
+		Contests:    contestStore,
+		Queue:       evalPool,
+		Suites:      suiteRegistry,
+		Storage:     d.Storage,
+		Owners:      ownerResolver,
+		Users:       d.UserStore,
+		PublicURL:   cfg.PublicURL,
+	})
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: cfg.QualityFloor,

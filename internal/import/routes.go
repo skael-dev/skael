@@ -48,6 +48,21 @@ type RouteOptions struct {
 	// gate.OwnerState, which contributes nothing — that is what keeps every
 	// test harness on the pre-ownership behaviour.
 	Ownership skill.OwnerResolver
+	// Git refuses an import onto a git-bound skill. Nil means every skill is
+	// native.
+	Git skill.GitBoundary
+}
+
+// gitBound names the repo path that owns name, or "" for a native skill.
+func gitBound(ctx context.Context, git skill.GitBoundary, name string) (string, error) {
+	if git == nil {
+		return "", nil
+	}
+	bound, where, err := git.Bound(ctx, name)
+	if err != nil || !bound {
+		return "", err
+	}
+	return where, nil
 }
 
 // importQualityState mirrors the unexported type of the same name declared inside
@@ -196,6 +211,14 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				ds.Name = input.Body.Namespace + ":" + ds.Name
 			}
 
+			if where, err := gitBound(ctx, opts.Git, ds.Name); err != nil || where != "" {
+				msg := "git-bound to " + where + "; change it in the repo"
+				if err != nil {
+					msg = err.Error()
+				}
+				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: msg})
+				continue
+			}
 			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
@@ -264,7 +287,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	})
 
 	// POST /api/import/upload — local upload for CLI
-	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership))
+	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership, opts.Git))
 }
 
 func importSingleSkill(
@@ -476,7 +499,7 @@ func importSingleSkill(
 	return ver, true, quality, decision, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry, qualityFloor float64, ownership skill.OwnerResolver) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry, qualityFloor float64, ownership skill.OwnerResolver, git skill.GitBoundary) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
@@ -527,6 +550,14 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 		}
 
 		for _, ds := range discovered {
+			if where, err := gitBound(r.Context(), git, ds.Name); err != nil || where != "" {
+				msg := "git-bound to " + where + "; change it in the repo"
+				if err != nil {
+					msg = err.Error()
+				}
+				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: msg})
+				continue
+			}
 			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external, queue, suites, qualityFloor, ownership)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})

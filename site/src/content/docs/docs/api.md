@@ -176,6 +176,26 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/sets/{name}/resolve` | Resolve a set to exact versions and digests. `?include_excluded=true` lists excluded entries |
 | `GET` | `/api/sets/{name}/resolutions/{id}` | One stored resolution |
 | `GET` | `/api/sets/{name}/bundle` | Download one resolution as a `tar.gz`. `?resolved=<id>` selects it |
+| `GET` | `/api/admin/github` | Whether the instance has a GitHub App and a master key. Owner or admin only. See [Git sync](/docs/git-sync) |
+| `POST` | `/api/admin/github/manifest` | Start creating the GitHub App. Returns the GitHub URL and the manifest to post there. Owner or admin only |
+| `GET` | `/api/admin/github/callback` | GitHub returns here with the code. Redirects to the GitHub page |
+| `DELETE` | `/api/admin/github` | Forget the GitHub App. Owner or admin only |
+| `POST` | `/api/github/webhook` | GitHub's events, signed with the App's webhook secret. A push brings a sync forward |
+| `GET` | `/api/git/repos` | The repos the App's installations reach |
+| `POST` | `/api/git/connections/preview` | What a connection would adopt, create and refuse at the branch head |
+| `POST` | `/api/git/connections` | Create a connection. `adopt` names the existing skills to bind. Admin or an owner of the prefix |
+| `GET` | `/api/git/connections` | List connections |
+| `GET` | `/api/git/connections/{id}` | A connection with its skills and the folders the last sync refused |
+| `PUT` | `/api/git/connections/{id}` | Change `contest_mode`: `off`, `on_request` or `ready` |
+| `DELETE` | `/api/git/connections/{id}` | Delete a connection. Its skills become native |
+| `POST` | `/api/git/connections/{id}/sync` | Sync now |
+| `POST` | `/api/git/connections/{id}/adopt` | Bind a skill the last sync refused as taken |
+| `GET` | `/api/git/connections/{id}/pulls` | The Skael check on each open pull request, with each PR head and its contest |
+| `POST` | `/api/git/connections/{id}/pulls/{number}/contest` | Ask for a contest on a pull request's newest head |
+| `GET` | `/api/git/pr-heads/{id}/archive` | A stored PR head. A worker key with `eval:work`, or an owner or admin |
+| `GET` | `/api/skills/{name}/git` | Where a git-bound skill lives. `bound` is false for a native skill |
+| `GET` | `/api/skills/{name}/changes` | The pull requests Skael opened for a git-bound skill |
+| `POST` | `/api/skills/{name}/detach` | Make a git-bound skill native |
 | `GET` | `/api/service-accounts` | List service accounts. Owner or admin only. See [Service accounts](#service-accounts) |
 | `POST` | `/api/service-accounts` | Create a service account. Owner or admin only |
 | `DELETE` | `/api/service-accounts/{id}` | Delete a service account and revoke its keys. Owner or admin only |

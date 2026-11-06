@@ -19,6 +19,8 @@ import { SetList } from "@/features/sets/set-list";
 import { SetDetailPage } from "@/features/sets/set-detail";
 import { ServiceAccounts } from "@/features/service-accounts/service-accounts";
 import { Webhooks } from "@/features/webhooks/webhooks";
+import { GitHubSettings } from "@/features/github/github-settings";
+import { GitConnectionPage, GitConnections, NewGitConnection } from "@/features/github/git-connections";
 import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 
 function ErrorFallback() {
@@ -76,6 +78,10 @@ export function App() {
             <Route path="/quadrant" element={<Quadrant />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/ownership" element={<Ownership />} />
+            <Route path="/settings/github" element={<GitHubSettings />} />
+            <Route path="/git/connections" element={<GitConnections />} />
+            <Route path="/git/connections/new" element={<NewGitConnection />} />
+            <Route path="/git/connections/:id" element={<GitConnectionPage />} />
             <Route path="/sets" element={<SetList />} />
             <Route path="/sets/:name" element={<SetDetailPage />} />
             <Route path="/service-accounts" element={<ServiceAccounts />} />

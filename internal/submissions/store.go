@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skael-dev/skael/internal/audit"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -42,6 +43,9 @@ type Submission struct {
 	Version       *int              `json:"version,omitempty"`
 	DiffAgainst   int               `json:"-"`
 	CreatedAt     time.Time         `json:"created_at"`
+	// ChangeID is the pull request an approval opened for a git-bound skill.
+	// The submission stays pending until the change merges or closes.
+	ChangeID string `json:"change_id,omitempty"`
 }
 
 // Store persists submissions.
@@ -62,13 +66,15 @@ func (s *Store) SetNotifier(n ChangeNotifier) { s.notifier = n }
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 const columns = `id, skill_name, consumer, submitted_by, rationale, run_link, external_run_id,
-	archive_path, checksum, file_manifest, scan_result, state, decided_by, decided_at, reason, edited, version, diff_against, created_at`
+	archive_path, checksum, file_manifest, scan_result, state, decided_by, decided_at, reason, edited, version, diff_against, created_at,
+	COALESCE(change_id::text, '')`
 
 func scanRow(row pgx.Row) (*Submission, error) {
 	var sub Submission
 	var manifest, scanResult []byte
 	err := row.Scan(&sub.ID, &sub.SkillName, &sub.Consumer, &sub.SubmittedBy, &sub.Rationale, &sub.RunLink, &sub.ExternalRunID,
-		&sub.ArchivePath, &sub.Checksum, &manifest, &scanResult, &sub.State, &sub.DecidedBy, &sub.DecidedAt, &sub.Reason, &sub.Edited, &sub.Version, &sub.DiffAgainst, &sub.CreatedAt)
+		&sub.ArchivePath, &sub.Checksum, &manifest, &scanResult, &sub.State, &sub.DecidedBy, &sub.DecidedAt, &sub.Reason, &sub.Edited, &sub.Version, &sub.DiffAgainst, &sub.CreatedAt,
+		&sub.ChangeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -160,4 +166,59 @@ func (s *Store) Decide(ctx context.Context, id string, fn func(tx pgx.Tx, sub *S
 		}
 	}
 	return sub, tx.Commit(ctx)
+}
+
+// AttachChange records the pull request an approval opened. The submission
+// stays pending: the merge approves it, a close rejects it.
+func (s *Store) AttachChange(ctx context.Context, id, changeID, actor, note string) (*Submission, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("submissions.AttachChange: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	sub, err := scanRow(tx.QueryRow(ctx, `
+		UPDATE submissions SET change_id = $2, reason = $3
+		WHERE id = $1 AND state = 'pending' AND change_id IS NULL
+		RETURNING `+columns, id, changeID, note))
+	if err != nil {
+		return nil, err
+	}
+	if sub == nil {
+		return nil, ErrDecided
+	}
+	if err := audit.Record(ctx, tx, actor, "submission.change_opened", "submission:"+id, map[string]any{"change": changeID}); err != nil {
+		return nil, err
+	}
+	return sub, tx.Commit(ctx)
+}
+
+// ResolveChange decides the pending submission that waits on changeID: a merge
+// approves it with version, a close rejects it with reason. decider names who
+// decided: the approver on a merge, the connection on a close.
+func (s *Store) ResolveChange(ctx context.Context, changeID string, merged bool, version *int, decider, reason string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("submissions.ResolveChange: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	state := StateRejected
+	if merged {
+		state = StateApproved
+	}
+	sub, err := scanRow(tx.QueryRow(ctx, `
+		UPDATE submissions SET state = $2, decided_by = $3, decided_at = now(), reason = $4, version = $5
+		WHERE change_id = $1 AND state = 'pending'
+		RETURNING `+columns, changeID, state, decider, reason, version))
+	if err != nil {
+		return err
+	}
+	if sub == nil {
+		return nil
+	}
+	if s.notifier != nil {
+		if err := s.notifier.SubmissionDecided(ctx, tx, sub); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

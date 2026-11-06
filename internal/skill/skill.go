@@ -65,6 +65,9 @@ type Version struct {
 
 	// SubmissionID names the submission this version came from, if any.
 	SubmissionID *string `json:"submission_id,omitempty"`
+	// ContestID names the contest that evaluated this exact content as a pull
+	// request head before it merged.
+	ContestID *string `json:"contest_id,omitempty"`
 }
 
 // FileEntry describes a single file within a skill archive.

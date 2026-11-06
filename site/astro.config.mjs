@@ -31,6 +31,7 @@ export default defineConfig({
           { label: 'Core concepts', slug: 'docs/concepts' },
           { label: 'Quality scoring', slug: 'docs/quality' },
           { label: 'Skill ownership', slug: 'docs/ownership' },
+          { label: 'Git sync', slug: 'docs/git-sync' },
         ] },
         { label: 'Reference', items: [
           { label: 'CLI', slug: 'docs/cli' },

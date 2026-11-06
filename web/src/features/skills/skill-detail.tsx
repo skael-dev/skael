@@ -1,4 +1,5 @@
 import { scrollBehavior } from "@/lib/motion";
+import { GitBindingStrip } from "@/features/github/git-binding";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -928,6 +929,7 @@ export function SkillDetail() {
             {skill?.description || "No description."}
           </p>
         )}
+        {name && <GitBindingStrip name={name} />}
 
         {/* Meta strip */}
         {skillQuery.isLoading ? (

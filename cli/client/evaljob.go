@@ -45,6 +45,7 @@ type EvalJobCandidate struct {
 	Label        string          `json:"label"`
 	ReusedReport json.RawMessage `json:"reused_report,omitempty"`
 	ReusedFrom   string          `json:"reused_from,omitempty"`
+	PRHeadID     string          `json:"pr_head_id,omitempty"`
 }
 
 // ClaimEvalJob calls POST /api/eval/jobs/claim. It returns (nil, "", false,
@@ -180,4 +181,15 @@ func (c *Client) PostContestReport(contestID, token string, body []byte) error {
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// FetchPRHead calls GET /api/git/pr-heads/{id}/archive: the stored archive of a
+// skill folder at a pull request head, which a contest candidate evaluates.
+func (c *Client) FetchPRHead(id string) ([]byte, error) {
+	resp, err := c.do(http.MethodGet, "/api/git/pr-heads/"+url.PathEscape(id)+"/archive", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 }

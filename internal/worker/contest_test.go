@@ -167,3 +167,23 @@ func TestRunContest_RunsACandidateWhoseReusedReportDiffers(t *testing.T) {
 		t.Errorf("posted %d reports, want 2", len(api.contestReports))
 	}
 }
+
+// A PR head has no version, so the worker fetches its stored archive instead.
+func TestRunContest_FetchesAPRHeadByID(t *testing.T) {
+	api := newFakeAPI(t)
+	ref := fixtureSuiteRef(t)
+	job := contestJob(ref)
+	job.Candidates[1] = evalqueue.Candidate{SkillID: "s1", SkillName: "alpha", Label: "alpha@pr7", PRHeadID: "head-1"}
+	api.enqueue(job)
+
+	w := newTestWorker(t, api, &fakeRunner{reportSuiteRef: ref}, &fakeDeriver{})
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(api.prHeads) != 1 || api.prHeads[0] != "head-1" {
+		t.Errorf("fetched PR heads %v, want head-1", api.prHeads)
+	}
+	if len(api.contestReports) != 2 {
+		t.Errorf("posted %d reports, want both candidates", len(api.contestReports))
+	}
+}

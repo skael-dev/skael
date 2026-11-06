@@ -38,7 +38,7 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 	for _, c := range j.Candidates {
 		candidates = append(candidates, evalqueue.Candidate{
 			SkillID: c.SkillID, SkillName: c.SkillName, Version: c.Version, Label: c.Label,
-			ReusedReport: c.ReusedReport, ReusedFrom: c.ReusedFrom,
+			ReusedReport: c.ReusedReport, ReusedFrom: c.ReusedFrom, PRHeadID: c.PRHeadID,
 		})
 	}
 	return &evalqueue.Job{
@@ -158,4 +158,9 @@ func (h *HTTPAPI) PostContestReport(_ context.Context, contestID string, _ evalq
 		return fmt.Errorf("worker: encode contest report: %w", err)
 	}
 	return asLeaseLost(h.c.PostContestReport(contestID, token, body))
+}
+
+// FetchPRHead calls GET /api/git/pr-heads/{id}/archive.
+func (h *HTTPAPI) FetchPRHead(_ context.Context, id string) ([]byte, error) {
+	return h.c.FetchPRHead(id)
 }

@@ -50,9 +50,9 @@ func (s *Store) Create(ctx context.Context, c *Contest) error {
 		cand := &c.Candidates[i]
 		cand.Position = i
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO contest_candidates (contest_id, position, skill_id, skill_name, version, label)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			c.ID, cand.Position, cand.SkillID, cand.SkillName, cand.Version, cand.Label,
+			INSERT INTO contest_candidates (contest_id, position, skill_id, skill_name, version, label, pr_head_id)
+			VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6, NULLIF($7, '')::uuid)`,
+			c.ID, cand.Position, cand.SkillID, cand.SkillName, cand.Version, cand.Label, cand.PRHeadID,
 		); err != nil {
 			return fmt.Errorf("contest.Store.Create: candidate %s: %w", cand.Label, err)
 		}
@@ -164,9 +164,11 @@ func (s *Store) CandidatesForClaim(ctx context.Context, jobID string) ([]evalque
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT cc.skill_id, cc.skill_name, cc.version, cc.label, COALESCE(sv.checksum, '')
+		SELECT cc.skill_id, cc.skill_name, COALESCE(cc.version, 0), cc.label, COALESCE(cc.pr_head_id::text, ''),
+			COALESCE(sv.checksum, ph.digest, '')
 		FROM contest_candidates cc
 		LEFT JOIN skill_versions sv ON sv.skill_id = cc.skill_id AND sv.version = cc.version
+		LEFT JOIN git_pr_heads ph ON ph.id = cc.pr_head_id
 		WHERE cc.contest_id = $1
 		ORDER BY cc.position`, contestID)
 	if err != nil {
@@ -177,7 +179,7 @@ func (s *Store) CandidatesForClaim(ctx context.Context, jobID string) ([]evalque
 	for rows.Next() {
 		var c evalqueue.Candidate
 		var digest string
-		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &digest); err != nil {
+		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &c.PRHeadID, &digest); err != nil {
 			rows.Close()
 			return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: scan: %w", err)
 		}
@@ -302,7 +304,8 @@ func (s *Store) ListForSkill(ctx context.Context, skillID string) ([]Contest, er
 
 func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	rows, err := s.db.Query(ctx, `
-		SELECT position, skill_id, skill_name, version, label, report_json, COALESCE(reused_from::text, '')
+		SELECT position, skill_id, skill_name, COALESCE(version, 0), label, report_json, COALESCE(reused_from::text, ''),
+			COALESCE(pr_head_id::text, '')
 		FROM contest_candidates WHERE contest_id = $1 ORDER BY position`, c.ID)
 	if err != nil {
 		return fmt.Errorf("contest.Store: candidates: %w", err)
@@ -311,7 +314,7 @@ func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	c.Candidates = nil
 	for rows.Next() {
 		var cand Candidate
-		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report, &cand.ReusedFrom); err != nil {
+		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report, &cand.ReusedFrom, &cand.PRHeadID); err != nil {
 			return fmt.Errorf("contest.Store: scan candidate: %w", err)
 		}
 		c.Candidates = append(c.Candidates, cand)

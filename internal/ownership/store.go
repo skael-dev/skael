@@ -132,3 +132,34 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	}
 	return tag.RowsAffected() > 0, nil
 }
+
+// AddMembersTx adds userIDs to the rule for pattern inside tx, creating the
+// rule when none exists. It merges, unlike Upsert: a git connection joins the
+// people who already own its prefix and removes none of them.
+func AddMembersTx(ctx context.Context, tx pgx.Tx, pattern string, userIDs []string, addedBy string) error {
+	if err := ValidatePattern(pattern); err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return ErrNoMembers
+	}
+	var by any
+	if addedBy != "" {
+		by = addedBy
+	}
+	var id string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO ownership_rules (pattern, created_by) VALUES ($1, $2)
+		ON CONFLICT (pattern) DO UPDATE SET updated_at = now()
+		RETURNING id`, pattern, by).Scan(&id); err != nil {
+		return fmt.Errorf("ownership.AddMembersTx rule: %w", err)
+	}
+	for _, uid := range userIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO ownership_rule_members (rule_id, user_id, added_by) VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING`, id, uid, by); err != nil {
+			return fmt.Errorf("ownership.AddMembersTx member %s: %w", uid, err)
+		}
+	}
+	return nil
+}

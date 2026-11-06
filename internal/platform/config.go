@@ -70,6 +70,10 @@ type Config struct {
 	// default) accepts any verified report with a complete panel and no
 	// critical contract violations.
 	QualityFloor float64
+
+	// MasterKeys seals secrets stored from the UI, such as the GitHub App's
+	// private key. Empty is valid: features that store a secret stay off.
+	MasterKeys *Keyring
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -87,7 +91,13 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	masterKeys, err := ParseKeyring(os.Getenv("SKAEL_MASTER_KEYS"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
+		MasterKeys:           masterKeys,
 		DatabaseURL:          dbURL,
 		StoragePath:          envDefault("STORAGE_PATH", "./data/skills"),
 		ListenAddr:           envDefault("LISTEN_ADDR", ":8080"),

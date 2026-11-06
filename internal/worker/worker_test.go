@@ -113,6 +113,7 @@ type fakeAPI struct {
 	contestReported string
 	failCause       string
 	heartbeats      int
+	prHeads         []string
 	heartbeatErr    error
 
 	bundle []byte
@@ -208,6 +209,13 @@ func (f *fakeAPI) FetchSuite(_ context.Context, ref string) ([]byte, error) {
 }
 
 func (f *fakeAPI) FetchBundle(_ context.Context, _ string, _ int) ([]byte, error) {
+	return f.bundle, nil
+}
+
+func (f *fakeAPI) FetchPRHead(_ context.Context, id string) ([]byte, error) {
+	f.mu.Lock()
+	f.prHeads = append(f.prHeads, id)
+	f.mu.Unlock()
 	return f.bundle, nil
 }
 

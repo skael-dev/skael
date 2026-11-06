@@ -151,6 +151,33 @@ type RouteOptions struct {
 	// that is what keeps every test harness and the CLI's local pre-scan on
 	// the pre-ownership behaviour.
 	Ownership OwnerResolver
+	// Git routes a change to a git-bound skill into a pull request. Nil means
+	// every skill is native.
+	Git GitBoundary
+}
+
+// OutboundChange is the pull request Skael opened for a change to a git-bound
+// skill. The skill gets a version when it merges.
+type OutboundChange struct {
+	ID       string `json:"id"`
+	PRNumber int    `json:"pr_number"`
+	PRURL    string `json:"pr_url"`
+	State    string `json:"state"`
+}
+
+// GitBoundary knows which skills git owns and opens their changes as pull
+// requests. An interface because git sync imports this package.
+type GitBoundary interface {
+	// Bound reports whether git owns the skill, and names its repo path.
+	Bound(ctx context.Context, name string) (bool, string, error)
+	// OpenChange commits archive to a new branch and opens a pull request,
+	// on behalf of the user in ctx.
+	OpenChange(ctx context.Context, name string, archive []byte, note string) (*OutboundChange, error)
+}
+
+// ErrGitBound answers a write that git owns.
+func ErrGitBound(name, where string) error {
+	return huma.Error409Conflict(fmt.Sprintf("%s is git-bound to %s; change it in the repo", name, where))
 }
 
 // RegisterRoutes wires up all skill-related HTTP endpoints onto the provided
@@ -347,20 +374,34 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		RawBody  []byte `contentType:"application/gzip,application/octet-stream"`
 	}
 	type publishOutput struct {
-		Body *PublishBody
+		Status int
+		Body   *PublishBody
 	}
 	huma.Register(api, huma.Operation{
 		OperationID:   "publish-skill-version",
 		Method:        http.MethodPost,
 		Path:          "/api/skills/{name}/versions",
-		Summary:       "Publish a new skill version",
+		Summary:       "Publish a new skill version. A git-bound skill gets a pull request instead, with 202.",
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, input *publishInput) (*publishOutput, error) {
+		if opts.Git != nil {
+			bound, _, err := opts.Git.Bound(ctx, input.Name)
+			if err != nil {
+				return nil, fmt.Errorf("publish: git binding: %w", err)
+			}
+			if bound {
+				res, err := publisher.OpenChange(ctx, input.Name, input.RawBody, "", opts.Git)
+				if err != nil {
+					return nil, err
+				}
+				return &publishOutput{Status: http.StatusAccepted, Body: res}, nil
+			}
+		}
 		res, err := publisher.Publish(ctx, input.Name, input.RawBody, input.Override)
 		if err != nil {
 			return nil, err
 		}
-		return &publishOutput{Body: res}, nil
+		return &publishOutput{Status: http.StatusCreated, Body: res}, nil
 	})
 
 	// -----------------------------------------------------------------
@@ -638,6 +679,17 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 	}, func(ctx context.Context, input *mergeInput) (*mergeOutput, error) {
 		if input.Body.Source == input.Body.Target {
 			return nil, huma.Error400BadRequest("cannot merge a skill into itself")
+		}
+		if opts.Git != nil {
+			for _, n := range []string{input.Body.Source, input.Body.Target} {
+				bound, where, err := opts.Git.Bound(ctx, n)
+				if err != nil {
+					return nil, fmt.Errorf("merge: git binding: %w", err)
+				}
+				if bound {
+					return nil, ErrGitBound(n, where)
+				}
+			}
 		}
 		merged, err := store.Merge(ctx, input.Body.Source, input.Body.Target)
 		if err != nil {

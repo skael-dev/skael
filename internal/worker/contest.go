@@ -41,7 +41,13 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 
 	bundles := make([][]byte, len(job.Candidates))
 	for i, cand := range job.Candidates {
-		b, err := w.api.FetchBundle(runCtx, cand.SkillName, cand.Version)
+		var b []byte
+		var err error
+		if cand.PRHeadID != "" {
+			b, err = w.api.FetchPRHead(runCtx, cand.PRHeadID)
+		} else {
+			b, err = w.api.FetchBundle(runCtx, cand.SkillName, cand.Version)
+		}
 		if err != nil {
 			return fmt.Errorf("worker: fetch bundle for %s: %w", cand.Label, err)
 		}
