@@ -36,6 +36,10 @@ Only an admin, or a person who may change the ownership rule for the prefix, can
 | Create | A name the registry does not have. | Created as version 1 |
 | Refuse | Outside the prefix, declared by two folders, or already in another connection. | Refused, with the reason |
 
+![The preview of a new connection: one skill to adopt, one with the same name and another origin with its diff open, two to create, and one refused because it is outside the prefix](../../../../public/git-sync-preview.png)
+
+In this example, `platform:deploy-helper` exists in Skael but did not come from this repo. The diff shows that the repo's version changes one step and adds two. The summary line counts it as refused until you select it.
+
 An unselected skill in the second group is refused as "name taken". You can adopt it later from the connection page.
 
 ## Who publishes

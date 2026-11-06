@@ -61,7 +61,7 @@ Auth is via user accounts + personal API keys (no static server key). `DISABLE_S
 | `WORKER_LEASE` | no | `5m` | How long a claimed job's lease lasts before it's considered abandoned (Go duration) |
 | `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
 | `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under. Never bind-mounted into a sandbox, so it does not need to be host-visible |
-| `WORKER_RUN_ROOT` | only in a container | `os.TempDir()` | Directory per-session sandbox workspaces are created under. These **are** bind-mounted into sandbox containers, so the path must resolve identically for the worker and for the daemon starting them. Required when containerized — the worker refuses to start without it. |
+| `WORKER_RUN_ROOT` | only in a container | `os.TempDir()` | Directory per-session sandbox workspaces are created under. These **are** bind-mounted into sandbox containers, so the path must resolve identically for the worker and for the daemon starting them. Required when containerized — the worker refuses to start without it. The worker creates the directory at start if it does not exist. |
 | `WORKER_CONCURRENCY` | no | `1` | Concurrent sandbox sessions. Must be a positive integer |
 | `WORKER_GRADE_CONCURRENCY` | no | whetstone's default (8) | Concurrent judge calls. A separate resource from the sessions: a container is bounded by CPU and memory, a judge call by the account's rate limit. Must be a positive integer |
 | `WORKER_CONTEST_PARALLEL` | no | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load. Must be a positive integer |
