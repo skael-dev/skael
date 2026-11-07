@@ -180,6 +180,7 @@ type Server struct {
 	riverUI  *riverui.Handler
 	people   *auth.People
 	settings *settings.Live
+	keys     *settings.KeyService
 
 	stopRiverUI context.CancelFunc
 	stopWatch   context.CancelFunc
@@ -264,6 +265,11 @@ func (b *Builder) Build() (*Server, error) {
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
 	syncer := gitsync.NewSyncer(gitsync.NewStore(b.pool, cfg.MasterKeys), nil)
+	mk := b.masterKey
+	if mk == nil {
+		mk = &settings.MasterKey{Keys: cfg.MasterKeys, Source: settings.KeySourceEnv}
+	}
+	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()})
 	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
@@ -276,6 +282,7 @@ func (b *Builder) Build() (*Server, error) {
 		Pool:           b.pool,
 		Config:         cfg,
 		Settings:       live,
+		Keys:           keyService,
 		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,
@@ -324,6 +331,7 @@ func (b *Builder) Build() (*Server, error) {
 		riverUI:    riverUI,
 		people:     people,
 		settings:   live,
+		keys:       keyService,
 	}, nil
 }
 
@@ -332,6 +340,15 @@ func (b *Builder) Build() (*Server, error) {
 func (s *Server) Start(ctx context.Context) error {
 	if err := s.people.Auth.CheckSchema(ctx); err != nil {
 		return fmt.Errorf("auth schema: %w", err)
+	}
+	if err := s.keys.EnsureCanary(ctx); err != nil {
+		return fmt.Errorf("master key canary: %w", err)
+	}
+	if st, err := s.keys.Status(ctx); err != nil {
+		return fmt.Errorf("master key status: %w", err)
+	} else if st.Degraded() {
+		log.Warn().Strs("missing_keys", st.Missing).Int("unreadable_secrets", len(st.Unreadable)).
+			Msg("a master key is missing or a stored secret does not open; Settings lists each secret to enter again")
 	}
 	if err := s.river.Start(ctx); err != nil {
 		return fmt.Errorf("start river: %w", err)
@@ -397,4 +414,24 @@ func (s *Server) ListenAndServe() error {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 	return nil
+}
+
+// githubSealed reports and discards the GitHub App when its secrets no longer open.
+type githubSealed struct{ store *gitsync.Store }
+
+func (g githubSealed) Unreadable(ctx context.Context) ([]settings.Unreadable, error) {
+	bad, err := g.store.SealedUnreadable(ctx)
+	if err != nil || !bad {
+		return nil, err
+	}
+	return []settings.Unreadable{{Name: "GitHub App", Where: "Settings → GitHub: connect the App again"}}, nil
+}
+
+func (g githubSealed) Discard(ctx context.Context, actor string) error {
+	bad, err := g.store.SealedUnreadable(ctx)
+	if err != nil || !bad {
+		return err
+	}
+	_, err = g.store.Delete(ctx, actor)
+	return err
 }

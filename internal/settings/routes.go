@@ -160,3 +160,49 @@ func RegisterRoutes(api huma.API, live *Live) {
 		return &settingsOutput{Body: Body(live.Get())}, nil
 	})
 }
+
+type settingsKeyOutput struct {
+	Body KeyStatus
+}
+
+// RegisterKeyRoutes serves the master key's state and the recovery action.
+func RegisterKeyRoutes(api huma.API, keys *KeyService) {
+	huma.Register(api, huma.Operation{
+		OperationID: "get-master-key",
+		Method:      http.MethodGet,
+		Path:        "/api/admin/master-key",
+		Summary:     "Show the master key's source and fingerprint, and every secret it cannot open",
+	}, func(ctx context.Context, _ *struct{}) (*settingsKeyOutput, error) {
+		if _, err := requirePrivileged(ctx); err != nil {
+			return nil, err
+		}
+		st, err := keys.Status(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("master key: internal error", err)
+		}
+		return &settingsKeyOutput{Body: st}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "reset-master-key",
+		Method:      http.MethodPost,
+		Path:        "/api/admin/master-key/reset",
+		Summary:     "Discard every secret the current master key cannot open, and start using the key",
+	}, func(ctx context.Context, _ *struct{}) (*settingsKeyOutput, error) {
+		u, err := requirePrivileged(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !keys.key.Keys.Enabled() {
+			return nil, huma.Error409Conflict("no master key is in effect")
+		}
+		if err := keys.Reset(ctx, u.Email); err != nil {
+			return nil, huma.Error500InternalServerError("reset master key: internal error", err)
+		}
+		st, err := keys.Status(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("master key: internal error", err)
+		}
+		return &settingsKeyOutput{Body: st}, nil
+	})
+}

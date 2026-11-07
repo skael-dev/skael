@@ -160,6 +160,7 @@ Without `SKAEL_MASTER_KEYS`, the server generates a master key on first start an
 | `DATABASE_URL` | env only, required yes | — | The Postgres connection string. |
 | `LISTEN_ADDR` | env only | `:8080` | The HTTP listen address. |
 | `SKAEL_MASTER_KEYS` | env only | — | Seals the secrets stored from the UI. Comma-separated id:base64key pairs of 32 bytes; the first seals, every one opens. Unset, the server generates a key file in the data directory. |
+| `SKAEL_DATA_DIR` | env only | — | Where the server keeps the generated master key. Mount it on a volume. Unset uses the storage directory when STORAGE_PATH is a directory, else ./data. |
 | `COOKIE_SECURE` | env only | `false` | Marks the session cookie Secure. Needs TLS in front: a browser refuses a Secure cookie over plain HTTP, which breaks sign-in. |
 | `TRUSTED_PROXIES` | env only | — | CIDR blocks or addresses whose X-Forwarded-For, X-Real-IP and X-Forwarded-Proto are believed. Empty trusts none. Behind a proxy, set it, or every client shares one rate-limit bucket. |
 | `CORS_ORIGINS` | env only | — | Comma-separated origins allowed to call the API from a browser. |

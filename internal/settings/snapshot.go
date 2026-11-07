@@ -41,9 +41,11 @@ type Resolved struct {
 	Reference string
 	// Problem says why a configured value is not in effect, such as an
 	// invalid env value or a reference that names nothing.
-	Problem   string
-	UpdatedBy string
-	UpdatedAt time.Time
+	Problem string
+	// Unreadable is a sealed secret that no master key opens.
+	Unreadable bool
+	UpdatedBy  string
+	UpdatedAt  time.Time
 }
 
 // Snapshot is every setting at one version. It never changes once built.
@@ -101,12 +103,12 @@ func resolveStored(d *Def, row Stored, env EnvFunc, keys Opener, r *Resolved) {
 		return
 	}
 	if keys == nil {
-		r.Problem = "no master key can open the saved secret"
+		r.Problem, r.Unreadable = "no master key can open the saved secret", true
 		return
 	}
 	plain, err := keys.Open(row.Sealed, aad(d.Key))
 	if err != nil {
-		r.Problem = "the saved secret cannot be opened: " + err.Error()
+		r.Problem, r.Unreadable = "the saved secret does not open with the current master key; enter it again", true
 		return
 	}
 	r.Value, r.Source = string(plain), SourceUI

@@ -57,9 +57,16 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, _, err := settings.LoadConfig(nil)
+	cfg, snap, err := settings.LoadConfig(nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("configuration error")
+	}
+	masterKey, err := settings.EnsureMasterKey(cfg, snap)
+	if err != nil {
+		log.Fatal().Err(err).Msg("master key error")
+	}
+	if masterKey.Generated {
+		log.Warn().Str("path", masterKey.Path).Msg("generated a master key; back up this file with Postgres")
 	}
 
 	pool, err := platform.NewPool(ctx, cfg.DatabaseURL, &platform.PoolConfig{
@@ -78,7 +85,7 @@ func main() {
 		log.Fatal().Err(err).Msg("migration error")
 	}
 
-	srv, err := server.NewBuilder(pool, cfg).WithVersion(version).Build()
+	srv, err := server.NewBuilder(pool, cfg).WithVersion(version).WithMasterKey(masterKey).Build()
 	if err != nil {
 		log.Fatal().Err(err).Msg("server build error")
 	}

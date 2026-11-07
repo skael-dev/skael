@@ -56,7 +56,9 @@ type RegisterAPIDeps struct {
 	Config *platform.Config
 	// Settings is the live settings snapshot. Nil resolves from an empty
 	// environment, for spec generation.
-	Settings  *settings.Live
+	Settings *settings.Live
+	// Keys checks the master key. Nil for spec generation.
+	Keys      *settings.KeyService
 	People    *auth.People
 	UserStore *auth.UserStore
 	KeyStore  *auth.KeyStore
@@ -119,6 +121,11 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	publicURL := func() string { return snap().String("public_url") }
 	externalScanner := newScannerSource(live)
 	settings.RegisterRoutes(api, live)
+	keyService := d.Keys
+	if keyService == nil {
+		keyService = settings.NewKeyService(nil, &settings.MasterKey{Keys: cfg.MasterKeys}, live)
+	}
+	settings.RegisterKeyRoutes(api, keyService)
 
 	// Health (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
@@ -159,13 +166,16 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage)
+		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage, d.Keys)
 		if !ready {
 			detail, _ := json.Marshal(checks)
 			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
 		}
 		out := &struct{ Body readyBody }{}
 		out.Body.Status = "ready"
+		if checks.MasterKey == "degraded" {
+			out.Body.Status = "degraded"
+		}
 		out.Body.Checks = checks
 		return out, nil
 	})

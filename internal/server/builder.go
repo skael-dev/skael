@@ -27,6 +27,7 @@ type Builder struct {
 	extraRoutes []RouteRegistrar
 	caps        *Capabilities
 	env         settings.EnvFunc
+	masterKey   *settings.MasterKey
 }
 
 // NewBuilder creates a Builder with OSS defaults: no extension points, no
@@ -116,5 +117,11 @@ func (b *Builder) Capabilities() *Capabilities {
 // WithEnv replaces the process environment the settings resolve against.
 func (b *Builder) WithEnv(env map[string]string) *Builder {
 	b.env = func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	return b
+}
+
+// WithMasterKey records where the master key came from, for the settings page.
+func (b *Builder) WithMasterKey(k *settings.MasterKey) *Builder {
+	b.masterKey = k
 	return b
 }

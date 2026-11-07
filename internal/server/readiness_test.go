@@ -22,7 +22,7 @@ func TestReadinessChecks_OK(t *testing.T) {
 	storage, err := platform.NewLocalStorage(dir)
 	require.NoError(t, err)
 
-	checks, ready := readinessChecks(context.Background(), pool, storage)
+	checks, ready := readinessChecks(context.Background(), pool, storage, nil)
 	require.True(t, ready)
 	require.Equal(t, "ok", checks.Database)
 	require.Equal(t, "ok", checks.Storage)
@@ -44,7 +44,7 @@ func TestReadinessChecks_StorageFailure(t *testing.T) {
 	// Remove the storage directory so Ping fails.
 	require.NoError(t, os.RemoveAll(dir))
 
-	checks, ready := readinessChecks(context.Background(), pool, storage)
+	checks, ready := readinessChecks(context.Background(), pool, storage, nil)
 	require.False(t, ready)
 	require.Equal(t, "ok", checks.Database, "database should still be ok")
 	require.Equal(t, "unavailable", checks.Storage, "storage status must be 'unavailable', not the raw error")

@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -111,4 +113,35 @@ func gcm(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(b)
+}
+
+// ActiveID returns the id of the key that seals, or "".
+func (k *Keyring) ActiveID() string {
+	if !k.Enabled() {
+		return ""
+	}
+	return k.keys[0].id
+}
+
+// Fingerprint identifies the active key without revealing it: the first 16
+// hex digits of a SHA-256 of the key.
+func (k *Keyring) Fingerprint() string {
+	if !k.Enabled() {
+		return ""
+	}
+	sum := sha256.Sum256(k.keys[0].key)
+	return hex.EncodeToString(sum[:8])
+}
+
+// GenerateKey returns a new "id:base64key" pair with a random id.
+func GenerateKey() (string, error) {
+	key := make([]byte, 32)
+	id := make([]byte, 4)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("keyring: generate: %w", err)
+	}
+	if _, err := rand.Read(id); err != nil {
+		return "", fmt.Errorf("keyring: generate: %w", err)
+	}
+	return "g" + hex.EncodeToString(id) + ":" + base64.StdEncoding.EncodeToString(key), nil
 }
