@@ -126,7 +126,7 @@ func startTestServer(t *testing.T) (serverURL, apiKey string, cleanup func()) {
 
 	// 10. Register analytics routes.
 	analyticsStore := analytics.NewStore(pool)
-	analytics.RegisterRoutes(api, analyticsStore)
+	analytics.RegisterRoutes(api, analyticsStore, analytics.Options{})
 
 	// 11. Start server on a random OS-assigned port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

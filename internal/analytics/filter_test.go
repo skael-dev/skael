@@ -49,7 +49,7 @@ func TestConsumerAndRoleFilters(t *testing.T) {
 	report("other", "implementer", 1)
 
 	r := chi.NewMux()
-	analytics.RegisterRoutes(humachi.New(r, huma.DefaultConfig("Test API", "1.0.0")), store)
+	analytics.RegisterRoutes(humachi.New(r, huma.DefaultConfig("Test API", "1.0.0")), store, analytics.Options{})
 	get := func(path string, out any) {
 		t.Helper()
 		rr := httptest.NewRecorder()

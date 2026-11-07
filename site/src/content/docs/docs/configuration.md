@@ -128,6 +128,8 @@ Activation events come from the hooks that `skael hook install` adds to each age
 | Variable | Where | Default | Description |
 |---|---|---|---|
 | `EVENT_RETENTION_DAYS` | Settings page | `90` | Activation events older than this are deleted daily. 0 keeps every event. |
+| `ACTIVATION_RECORD_IDENTITY` | Settings page | `true` | Stores the person whose key sent each activation. Off stores no person, only the model, the harness and a hash of the machine. Turn it off where a works council or monitoring rule requires it. |
+| `ACTIVATION_MEMBER_VISIBILITY` | Settings page | `aggregate` | Owners and admins always see everything recorded, and every member sees their own activations. Aggregates hide any model or harness that fewer than 5 people used. One of: `aggregate`, `person`. |
 
 ### Webhooks
 

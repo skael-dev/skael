@@ -459,3 +459,34 @@ func TestOpenCodePlugin_ReportsToolInvocationSource(t *testing.T) {
 	assert.Contains(t, string(data), "tool_invocation",
 		"the OpenCode plugin must label its events as tool invocations")
 }
+
+// The model, the installed version and the session fallback reach the server.
+// No user can check these by hand: the hook runs inside the agent.
+func TestHookScript_ReportsTheModelAndTheInstalledVersion(t *testing.T) {
+	requireJQ(t)
+	scriptPath, err := hooks.WriteHookScript(t.TempDir())
+	require.NoError(t, err)
+	env := newHookEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(env.home, ".skael", "state.json"),
+		[]byte(`{"skills":[{"name":"brainstorming","version":7}]}`), 0o600))
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	require.NoError(t, os.WriteFile(transcript, []byte(
+		`{"type":"assistant","message":{"model":"claude-opus-4-5"}}`+"\n"+
+			`{"type":"assistant","message":{"model":"claude-sonnet-5"}}`+"\n"), 0o600))
+
+	code, bodies := env.run(t, scriptPath,
+		`{"session_id":"s1","transcript_path":"`+transcript+`","tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`,
+		"SKAEL_AGENT=claude-code")
+	require.Equal(t, 0, code)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "claude-sonnet-5", bodies[0]["model"])
+	assert.EqualValues(t, 7, bodies[0]["version"])
+
+	env2 := newHookEnv(t)
+	code, _ = env2.run(t, scriptPath, `{"hook_event_name":"SessionStart","session_id":"s2","model":"claude-haiku-4-5"}`, "SKAEL_AGENT=claude-code")
+	require.Equal(t, 0, code)
+	code, bodies = env2.run(t, scriptPath, `{"session_id":"s2","tool_name":"Skill","tool_input":{"skill":"brainstorming"}}`, "SKAEL_AGENT=claude-code")
+	require.Equal(t, 0, code)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "claude-haiku-4-5", bodies[0]["model"])
+}

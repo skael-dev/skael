@@ -162,6 +162,13 @@ var Defs = []Def{
 	{Key: "event_retention_days", Env: "EVENT_RETENTION_DAYS", Kind: KindInt, Section: "analytics", Label: "Event retention (days)",
 		Help: "Activation events older than this are deleted daily. 0 keeps every event.", Default: "90", Min: num(0)},
 
+	{Key: "activation.record_identity", Env: "ACTIVATION_RECORD_IDENTITY", Kind: KindBool, Section: "analytics", Label: "Record who ran a skill",
+		Help:    "Stores the person whose key sent each activation. Off stores no person, only the model, the harness and a hash of the machine. Turn it off where a works council or monitoring rule requires it.",
+		Default: "true", Scope: ScopeOrg},
+	{Key: "activation.member_visibility", Env: "ACTIVATION_MEMBER_VISIBILITY", Kind: KindEnum, Section: "analytics", Label: "What members see",
+		Help:    "Owners and admins always see everything recorded, and every member sees their own activations. Aggregates hide any model or harness that fewer than 5 people used.",
+		Default: "aggregate", Scope: ScopeOrg,
+		Options: []SettingsOption{{"aggregate", "Aggregates only"}, {"person", "Per person"}}},
 	{Key: "webhooks.allow_private", Env: "WEBHOOK_ALLOW_PRIVATE", Kind: KindBool, Section: "webhooks", Label: "Allow private addresses",
 		Help:    "Lets deliveries reach private addresses, loopback, shared address space and http URLs, for a consumer on your own network. Link-local addresses stay refused.",
 		Default: "false"},

@@ -150,7 +150,7 @@ var routeRules = []RouteRule{
 	read("/api/eval/suites/{ref}/triggers"), post("/api/eval/suites/{ref}/review"),
 	post("/api/eval/contests"), read("/api/eval/contests/{id}"), read("/api/skills/{name}/contests"),
 	post("/api/import/resolve"), post("/api/import"), read("/api/import/sources"), post("/api/import/upload"),
-	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/skills"),
+	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/breakdown"), read("/api/analytics/skills"),
 	read("/api/skills/{name}/activations"), read("/api/skills/{name}/timeseries"),
 	read("/api/analytics/timeseries"), read("/api/analytics/consumers"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
 }

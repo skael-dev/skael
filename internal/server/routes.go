@@ -289,7 +289,10 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	if analyticsStore == nil {
 		analyticsStore = analytics.NewStore(d.Pool)
 	}
-	analytics.RegisterRoutes(api, analyticsStore)
+	analytics.RegisterRoutes(api, analyticsStore, analytics.Options{
+		RecordIdentity:   func() bool { return snap().Bool("activation.record_identity") },
+		MemberVisibility: func() string { return snap().String("activation.member_visibility") },
+	})
 
 	// Import.
 	importStore := skillimport.NewStore(d.Pool)
