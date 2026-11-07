@@ -1,6 +1,5 @@
 -- +goose Up
--- Skill, suite, submission and PR head archives, when the server stores them
--- in Postgres. An archive is at most 10 MB.
+-- Archives, when the server stores them in Postgres. Each is at most 10 MB.
 CREATE TABLE archives (
     name        TEXT PRIMARY KEY,
     data        BYTEA NOT NULL,
@@ -15,8 +14,7 @@ CREATE TABLE storage_backend (
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- An install that already holds an archive wrote it to the filesystem default
--- or to its STORAGE_PATH; either way it is not Postgres.
+-- An install that already holds an archive did not write it to Postgres.
 INSERT INTO storage_backend (kind)
 SELECT 'filesystem'
 WHERE EXISTS (SELECT 1 FROM skill_versions)
