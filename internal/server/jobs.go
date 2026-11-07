@@ -18,6 +18,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/gitsync"
+	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/webhooks"
@@ -83,13 +84,14 @@ func (w *eventRetentionWorker) Work(ctx context.Context, _ *river.Job[eventReten
 
 // newRiverClient builds the client for all server background work. It touches
 // no database until Start.
-func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *analytics.Store, syncer *gitsync.Syncer) (*river.Client[pgx.Tx], error) {
+func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *analytics.Store, syncer *gitsync.Syncer, version string) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), func() bool { return live.Get().Bool("webhooks.allow_private") }))
 	river.AddWorker(workers, &evalLeaseReapWorker{queue: evalqueue.NewPool(pool)})
 	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: func() int { return live.Get().Int("event_retention_days") }})
 	river.AddWorker(workers, &gitsync.SyncWorker{Syncer: syncer})
 	river.AddWorker(workers, &gitsync.SyncAllWorker{Store: syncer.Store()})
+	river.AddWorker(workers, &pingWorker{pool: pool, live: live, version: version, client: &http.Client{Timeout: 10 * time.Second}})
 
 	periodic := []*river.PeriodicJob{
 		river.NewPeriodicJob(river.PeriodicInterval(reapInterval),
@@ -98,6 +100,9 @@ func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *ana
 			func() (river.JobArgs, *river.InsertOpts) { return gitsync.SyncAllArgs{}, nil }, nil),
 		river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return eventRetentionArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true}),
+		river.NewPeriodicJob(river.PeriodicInterval(onboarding.PingInterval),
+			func() (river.JobArgs, *river.InsertOpts) { return pingArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true}),
 	}
 
@@ -140,4 +145,31 @@ func NewNotifierForTest(pool *pgxpool.Pool) *webhooks.Notifier {
 		panic(err)
 	}
 	return webhooks.NewNotifier(client, sets.NewStore(pool))
+}
+
+type pingArgs struct{}
+
+func (pingArgs) Kind() string { return "install_ping" }
+
+// pingWorker sends the anonymous install ping unless the owner turned it off.
+type pingWorker struct {
+	river.WorkerDefaults[pingArgs]
+	pool    *pgxpool.Pool
+	live    *settings.Live
+	version string
+	client  *http.Client
+}
+
+func (w *pingWorker) Work(ctx context.Context, _ *river.Job[pingArgs]) error {
+	if !w.live.Get().Bool("telemetry.enabled") {
+		return nil
+	}
+	p, err := onboarding.BuildPing(ctx, w.pool, w.version)
+	if err != nil {
+		return err
+	}
+	if err := onboarding.SendPing(ctx, w.client, onboarding.PingURL, p); err != nil {
+		log.Debug().Err(err).Msg("install ping not sent")
+	}
+	return nil
 }

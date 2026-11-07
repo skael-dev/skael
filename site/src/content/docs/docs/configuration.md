@@ -139,6 +139,26 @@ By default, a delivery reaches only public HTTPS addresses, so a webhook cannot 
 |---|---|---|---|
 | `WEBHOOK_ALLOW_PRIVATE` | Settings page | `false` | Lets deliveries reach private addresses, loopback, shared address space and http URLs, for a consumer on your own network. Link-local addresses stay refused. |
 
+### Install ping
+
+The ping tells the skael project how many installs run and which versions they run. It sends one JSON object a day to `https://telemetry.skael.dev/v1/ping`:
+
+```json
+{
+  "install_id": "a random UUID made at install",
+  "version": "0.19.0",
+  "postgres_version": "17.2",
+  "workers": 2,
+  "evals_configured": true
+}
+```
+
+It sends no user, email, skill, repository, host name or IP address of yours beyond the connection itself. Sample data never counts. Turn it off here or with `TELEMETRY_ENABLED=false`.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `TELEMETRY_ENABLED` | Settings page | `true` | Once a day, sends the skael version, the Postgres version, the number of workers and whether evaluation is set up, with a random install id. Never names, skills or email addresses. |
+
 ### Rate limits
 
 Each class also has a per-IP ceiling of ten times its limit, checked before the per-key budget, so one address cannot exceed it with many keys. Behind a proxy, set `TRUSTED_PROXIES`, or every client shares one budget.

@@ -313,7 +313,7 @@ func (b *Builder) Build() (*Server, error) {
 		mk = &settings.MasterKey{Keys: cfg.MasterKeys, Source: settings.KeySourceEnv}
 	}
 	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()})
-	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer)
+	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, b.caps.Response().Version)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}

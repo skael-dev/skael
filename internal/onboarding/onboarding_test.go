@@ -2,6 +2,9 @@ package onboarding_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,4 +68,29 @@ func TestClaim_TheCodeIsStableUntilSomeoneSignsUp(t *testing.T) {
 	ok, err = c.Verify(ctx, "AAAA-BBBB-CCCC")
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+func TestPing_SendsOnlyTheDocumentedFields(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	p, err := onboarding.BuildPing(ctx, pool, "0.19.0")
+	require.NoError(t, err)
+	require.NotEmpty(t, p.InstallID)
+	require.NotEmpty(t, p.PostgresVersion)
+
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	require.NoError(t, onboarding.SendPing(ctx, srv.Client(), srv.URL, p))
+	keys := make([]string, 0, len(got))
+	for k := range got {
+		keys = append(keys, k)
+	}
+	require.ElementsMatch(t, []string{"install_id", "version", "postgres_version", "workers", "evals_configured"}, keys)
 }

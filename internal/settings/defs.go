@@ -90,6 +90,7 @@ var Sections = []Section{
 	{ID: "quality", Title: "Quality gate", Binary: BinaryServer},
 	{ID: "analytics", Title: "Analytics", Binary: BinaryServer},
 	{ID: "webhooks", Title: "Webhooks", Binary: BinaryServer},
+	{ID: "telemetry", Title: "Install ping", Binary: BinaryServer},
 	{ID: "rate_limits", Title: "Rate limits", Binary: BinaryServer},
 	{ID: "deployment", Title: "Deployment", Binary: BinaryServer},
 	{ID: "storage", Title: "Storage", Binary: BinaryServer},
@@ -172,6 +173,10 @@ var Defs = []Def{
 	{Key: "webhooks.allow_private", Env: "WEBHOOK_ALLOW_PRIVATE", Kind: KindBool, Section: "webhooks", Label: "Allow private addresses",
 		Help:    "Lets deliveries reach private addresses, loopback, shared address space and http URLs, for a consumer on your own network. Link-local addresses stay refused.",
 		Default: "false"},
+
+	{Key: "telemetry.enabled", Env: "TELEMETRY_ENABLED", Kind: KindBool, Section: "telemetry", Label: "Send the install ping",
+		Help:    "Once a day, sends the skael version, the Postgres version, the number of workers and whether evaluation is set up, with a random install id. Never names, skills or email addresses.",
+		Default: "true"},
 
 	{Key: "rate_limit.auth", Env: "RATE_LIMIT_AUTH", Kind: KindInt, Section: "rate_limits", Label: "Sign-in requests per minute",
 		Help: "For /api/auth/*, per IP address.", Default: "20", Min: num(1)},
