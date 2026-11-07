@@ -57,6 +57,8 @@ type RegisterAPIDeps struct {
 	// Settings is the live settings snapshot. Nil resolves from an empty
 	// environment, for spec generation.
 	Settings *settings.Live
+	// ArchiveStore names the archive store in effect, for the settings page.
+	ArchiveStore string
 	// Keys checks the master key. Nil for spec generation.
 	Keys      *settings.KeyService
 	People    *auth.People
@@ -120,7 +122,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	floor := func() float64 { return snap().Float("quality_floor") }
 	publicURL := func() string { return snap().String("public_url") }
 	externalScanner := newScannerSource(live)
-	settings.RegisterRoutes(api, live)
+	settings.RegisterRoutes(api, live, d.ArchiveStore)
 	keyService := d.Keys
 	if keyService == nil {
 		keyService = settings.NewKeyService(nil, &settings.MasterKey{Keys: cfg.MasterKeys}, live)

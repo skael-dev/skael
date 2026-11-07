@@ -603,6 +603,14 @@ export function InstanceSettings() {
             {envOnly.map((s) => (
               <div key={s.id}>
                 {s.id === "deployment" && key.data && <MasterKeyPanel status={key.data} />}
+                {s.id === "storage" && (
+                  <div className="bg-bg-secondary border border-border rounded-lg px-4 py-3 mb-3 text-xs flex gap-6">
+                    <span className="text-text-tertiary">Archives are in</span>
+                    <span className="font-mono text-text-primary">
+                      {settings.data.archive_store === "postgres" ? "Postgres (the archives table)" : settings.data.archive_store}
+                    </span>
+                  </div>
+                )}
                 <SectionCard section={s} publicURL={publicURL} />
               </div>
             ))}

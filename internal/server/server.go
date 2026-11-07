@@ -239,11 +239,12 @@ func (b *Builder) Build() (*Server, error) {
 		log.Warn().Str("setting", r.Def.Env).Msg(r.Problem)
 	}
 
-	storageCfg := *cfg
-	if storageCfg.StoragePath == "" {
-		storageCfg.StoragePath = settings.DefaultStoragePath
+	storageCtx, cancelStorage := context.WithTimeout(context.Background(), 10*time.Second)
+	storage, storageAt, err := platform.OpenStorage(storageCtx, b.pool, cfg.StoragePath, settings.DefaultStoragePath)
+	cancelStorage()
+	if err == nil {
+		log.Info().Str("store", storageAt).Msg("archive store")
 	}
-	storage, err := platform.NewStorageFromConfig(&storageCfg)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: storage: %w", err)
 	}
@@ -302,6 +303,7 @@ func (b *Builder) Build() (*Server, error) {
 		Config:         cfg,
 		Settings:       live,
 		Keys:           keyService,
+		ArchiveStore:   storageAt,
 		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,

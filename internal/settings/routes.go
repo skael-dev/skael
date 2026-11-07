@@ -48,6 +48,8 @@ type SettingsSection struct {
 type SettingsBody struct {
 	Version  int64             `json:"version"`
 	Sections []SettingsSection `json:"sections"`
+	// ArchiveStore is the store in effect: a directory, an s3:// URL, or postgres.
+	ArchiveStore string `json:"archive_store"`
 }
 
 type settingsOutput struct {
@@ -117,8 +119,14 @@ func Body(snap *Snapshot) SettingsBody {
 	return out
 }
 
-// RegisterRoutes serves the settings page to owners and admins.
-func RegisterRoutes(api huma.API, live *Live) {
+// RegisterRoutes serves the settings page to owners and admins. archiveStore
+// names the archive store in effect.
+func RegisterRoutes(api huma.API, live *Live, archiveStore string) {
+	body := func() SettingsBody {
+		b := Body(live.Get())
+		b.ArchiveStore = archiveStore
+		return b
+	}
 	huma.Register(api, huma.Operation{
 		OperationID: "get-settings",
 		Method:      http.MethodGet,
@@ -128,7 +136,7 @@ func RegisterRoutes(api huma.API, live *Live) {
 		if _, err := requirePrivileged(ctx); err != nil {
 			return nil, err
 		}
-		return &settingsOutput{Body: Body(live.Get())}, nil
+		return &settingsOutput{Body: body()}, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -157,7 +165,7 @@ func RegisterRoutes(api huma.API, live *Live) {
 		if err := live.Load(ctx); err != nil {
 			return nil, huma.Error500InternalServerError("reload settings: internal error", err)
 		}
-		return &settingsOutput{Body: Body(live.Get())}, nil
+		return &settingsOutput{Body: body()}, nil
 	})
 }
 
