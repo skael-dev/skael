@@ -68,6 +68,11 @@ type EvalDeps struct {
 	// runner.Options.PanelExcludeEnv. Resolved values rather than env
 	// lookups, for the same reason PanelModels is.
 	PanelExcludeEnv []string
+	// MemberAuth gives a member its own credentials; see
+	// runner.Options.MemberAuth. MemberProvider labels the member's backend
+	// in the report. Both are nil outside a server-configured worker.
+	MemberAuth     func(agent, model string) ([]string, bool)
+	MemberProvider func(agent, model string) string
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -210,6 +215,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Sleep: sleepFn, Logger: ui.Info,
 		WorkspaceRoot:   d.WorkspaceRoot,
 		PanelExcludeEnv: d.PanelExcludeEnv,
+		MemberAuth:      d.MemberAuth,
 	})
 	if err != nil {
 		return nil, err
@@ -352,7 +358,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	modelPanelOut := make([]report.PanelMember, 0, len(panel))
 	for _, m := range panel {
 		modelPanelOut = append(modelPanelOut, report.PanelMember{
-			Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion})
+			Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion, Provider: d.providerOf(m)})
 	}
 
 	scheduled := map[runner.Member]bool{}
@@ -371,7 +377,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 			continue
 		}
 		mi := report.MemberInput{
-			Member:  report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion},
+			Member:  report.PanelMember{Agent: m.Agent, Model: m.Model, Class: string(m.Class), CLIVersion: cliVersion, Provider: d.providerOf(m)},
 			Healthy: healthy[m],
 			Detail:  healthDetail[m],
 		}
@@ -1015,4 +1021,11 @@ func init() {
 		"Run every baseline session rather than reusing a matching one from an earlier eval")
 	evalCmd.Flags().Int64Var(&evalResume, "resume", 0, "Resume an existing eval id instead of starting a new one")
 	rootCmd.AddCommand(evalCmd)
+}
+
+func (d EvalDeps) providerOf(m runner.Member) string {
+	if d.MemberProvider == nil {
+		return ""
+	}
+	return d.MemberProvider(m.Agent, m.Model)
 }

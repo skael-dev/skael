@@ -119,7 +119,7 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
+	mounts, authVars, err := r.authFor(a, k.Agent, k.Model)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
@@ -248,7 +248,7 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, authVars, err := resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
+	mounts, authVars, err := r.authFor(a, p.Member.Agent, p.Member.Model)
 	if err != nil {
 		return finish(err)
 	}
@@ -499,6 +499,17 @@ func backoff(attempt int) time.Duration {
 // Env vars win because a stale host login otherwise defeats a correctly
 // configured gateway. exclude withholds names the panel must not see (the
 // judge's gateway in split mode).
+// authFor resolves one member's credentials: its own when MemberAuth names
+// them, else the process environment and the adapter's auth directories.
+func (r *Runner) authFor(a agent.Adapter, agentName, model string) ([]sandbox.Mount, []string, error) {
+	if r.o.MemberAuth != nil {
+		if env, ok := r.o.MemberAuth(agentName, model); ok {
+			return nil, env, nil
+		}
+	}
+	return resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
+}
+
 func resolveAuth(a agent.Adapter, exclude []string, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
 	env := authEnv(a.Caps().AuthEnv, exclude)
 	if len(env) > 0 {

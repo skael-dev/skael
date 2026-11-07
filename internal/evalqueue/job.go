@@ -57,6 +57,9 @@ type Job struct {
 	// asked for. Attempts above counts job retries.
 	ContestAttempts int
 	CreatedAt       time.Time
+	// Eval is the server's judge and panel at claim time. It is not stored:
+	// a retried job takes the configuration current at its new claim.
+	Eval *EvalConfig
 	// StartedAt is set once on the first claim and never moved, so elapsed
 	// time is measured from the start of work, not the latest retry.
 	StartedAt *time.Time

@@ -89,6 +89,9 @@ func toJobOutput(j *Job) jobOutput {
 type claimOutputBody struct {
 	Job        jobOutput `json:"job"`
 	ClaimToken string    `json:"claim_token"`
+	// Eval is the judge and panel the server's providers define. Absent when
+	// none is configured; the worker then uses its own environment.
+	Eval *EvalConfig `json:"eval,omitempty"`
 }
 
 type claimOutput struct {
@@ -179,6 +182,8 @@ type RouteOptions struct {
 	// Contests supplies a contest job's candidates at claim time. A local
 	// interface, because internal/contest imports this package's Job type.
 	Contests ContestLookup
+	// EvalConfig returns the configured judge and panel, or nil.
+	EvalConfig func(ctx context.Context) (*EvalConfig, error)
 }
 
 // ContestLookup returns the candidates a contest job must run, in order, with
@@ -234,11 +239,19 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			out.Candidates, out.ContestAttempts = candidates, attempts
 		}
 
+		var eval *EvalConfig
+		if opts.EvalConfig != nil {
+			if eval, err = opts.EvalConfig(ctx); err != nil {
+				log.Error().Err(err).Msg("evalqueue: eval config lookup failed")
+				return nil, huma.Error500InternalServerError("claim eval job: internal error")
+			}
+		}
 		return &claimOutput{
 			Status: http.StatusOK,
 			Body: claimOutputBody{
 				Job:        out,
 				ClaimToken: token,
+				Eval:       eval,
 			},
 		}, nil
 	})

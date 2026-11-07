@@ -25,6 +25,7 @@ import (
 	"github.com/skael-dev/skael/internal/mcp"
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/providers"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/runs"
 	"github.com/skael-dev/skael/internal/scan"
@@ -34,6 +35,7 @@ import (
 	"github.com/skael-dev/skael/internal/submissions"
 	gosync "github.com/skael-dev/skael/internal/sync"
 	"github.com/skael-dev/skael/internal/webhooks"
+	"github.com/skael-dev/skael/internal/workers"
 )
 
 // RegisterAPIDeps bundles everything RegisterAPIRoutes needs to wire the API.
@@ -323,10 +325,14 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Users:       d.UserStore,
 		PublicURL:   publicURL,
 	})
+	providerStore := providers.NewStore(d.Pool)
+	providers.RegisterRoutes(api, providerStore)
+	workers.RegisterRoutes(api, workers.NewStore(d.Pool), providerStore, d.KeyStore, publicURL)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: floor,
 		Contests:     contestStore,
+		EvalConfig:   providerStore.EvalConfig,
 	})
 
 	// Contests advise and never gate: nothing registered here releases a

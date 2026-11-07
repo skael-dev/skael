@@ -87,7 +87,7 @@ var routeRules = []RouteRule{
 	del("/api/sets/{name}"),
 
 	// The worker's loop.
-	post("/api/eval/jobs/claim", ScopeEvalWork),
+	post("/api/eval/jobs/claim", ScopeEvalWork), post("/api/eval/workers/checkin", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/heartbeat", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/fail", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/report", ScopeEvalWork),
@@ -120,6 +120,9 @@ var routeRules = []RouteRule{
 	read("/api/admin/audit"), read("/api/users/search"),
 	read("/api/admin/settings"), put("/api/admin/settings"),
 	read("/api/admin/master-key"), post("/api/admin/master-key/reset"), post("/api/admin/settings/test/{section}"),
+	read("/api/admin/providers"), post("/api/admin/providers"), put("/api/admin/providers/{id}"), del("/api/admin/providers/{id}"),
+	put("/api/admin/providers/panel"), post("/api/admin/providers/presets/{id}"),
+	read("/api/admin/workers"), post("/api/admin/workers/key"),
 	read("/api/admin/github"), del("/api/admin/github"), post("/api/admin/github/manifest"),
 	read("/api/admin/github/callback"), post("/api/github/webhook"),
 	read("/api/git/repos"), post("/api/git/connections/preview"), read("/api/git/connections"), post("/api/git/connections"),

@@ -41,7 +41,15 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 			ReusedReport: c.ReusedReport, ReusedFrom: c.ReusedFrom, PRHeadID: c.PRHeadID,
 		})
 	}
+	var eval *evalqueue.EvalConfig
+	if len(j.Eval) > 0 && string(j.Eval) != "null" {
+		eval = &evalqueue.EvalConfig{}
+		if err := json.Unmarshal(j.Eval, eval); err != nil {
+			return nil, "", false, fmt.Errorf("decode the claim's eval config: %w", err)
+		}
+	}
 	return &evalqueue.Job{
+		Eval:        eval,
 		ID:          evalqueue.JobID(j.ID),
 		SkillID:     j.SkillID,
 		SkillName:   j.SkillName,
