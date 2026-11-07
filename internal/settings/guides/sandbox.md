@@ -1,0 +1,1 @@
+The docker driver needs a Docker socket on the worker's host. The kubernetes driver schedules each session as a pod and needs no socket. The northflank driver runs each session as a service in a Northflank project.

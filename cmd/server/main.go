@@ -16,6 +16,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/server"
+	"github.com/skael-dev/skael/internal/settings"
 )
 
 var (
@@ -36,8 +37,15 @@ func main() {
 		Msg("skael-server starting")
 
 	for _, arg := range os.Args[1:] {
-		if arg == "--openapi" {
+		switch arg {
+		case "--openapi":
 			printOpenAPISpec()
+			os.Exit(0)
+		case "--config-docs":
+			fmt.Print(settings.ConfigDocs())
+			os.Exit(0)
+		case "--env-example":
+			fmt.Print(settings.EnvExample())
 			os.Exit(0)
 		}
 	}
@@ -49,7 +57,7 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := platform.LoadConfig()
+	cfg, _, err := settings.LoadConfig(nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("configuration error")
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/alternayte/auth-all/humaauth"
@@ -28,6 +29,7 @@ import (
 	"github.com/skael-dev/skael/internal/runs"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/sets"
+	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/submissions"
 	gosync "github.com/skael-dev/skael/internal/sync"
@@ -50,8 +52,11 @@ import (
 // huma.Register call in Build() after RegisterAPIRoutes returns, or the
 // guard cannot see it and the spec can silently drift again.
 type RegisterAPIDeps struct {
-	Pool      *pgxpool.Pool
-	Config    *platform.Config
+	Pool   *pgxpool.Pool
+	Config *platform.Config
+	// Settings is the live settings snapshot. Nil resolves from an empty
+	// environment, for spec generation.
+	Settings  *settings.Live
 	People    *auth.People
 	UserStore *auth.UserStore
 	KeyStore  *auth.KeyStore
@@ -105,6 +110,15 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	if cfg == nil {
 		cfg = &platform.Config{}
 	}
+	live := d.Settings
+	if live == nil {
+		live = settings.Static(nil)
+	}
+	snap := func() *settings.Snapshot { return live.Get() }
+	floor := func() float64 { return snap().Float("quality_floor") }
+	publicURL := func() string { return snap().String("public_url") }
+	externalScanner := newScannerSource(live)
+	settings.RegisterRoutes(api, live)
 
 	// Health (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
@@ -176,10 +190,6 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	// Skills. The eval queue and suite registry are constructed here (ahead
 	// of their own route registration below) because publish needs them to
 	// enqueue an evaluation for a skill that has a registered suite.
-	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
-	if externalScanner != nil {
-		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
-	}
 	skillStore := skill.NewStore(d.Pool)
 	evalPool := evalqueue.NewPool(d.Pool)
 	qualityStore := quality.NewStore(d.Pool)
@@ -196,7 +206,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
 
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Ownership:    ownerResolver,
 	}
 	skill.RegisterRoutes(api, router, skillStore, d.Storage, skillOptions)
@@ -209,7 +219,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		skillStore.SetNotifier(notifier)
 		setStore.SetNotifier(notifier)
 	}
-	webhooks.RegisterRoutes(api, d.Pool, webhooks.NewStore(d.Pool), notifier, cfg.WebhookAllowPrivate)
+	webhooks.RegisterRoutes(api, d.Pool, webhooks.NewStore(d.Pool), notifier, func() bool { return snap().Bool("webhooks.allow_private") })
 	router.Mount(RiverUIPrefix, privilegedOnly(d.RiverUI))
 
 	// Run signals. Outcomes read and write their own tables and never reach the
@@ -226,7 +236,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Git sync. The App's secrets are sealed under SKAEL_MASTER_KEYS, and a
 	// sync publishes through the same publisher as a person.
-	gitsync.RegisterRoutes(api, syncer.Store(), gitsync.RouteOptions{PublicURL: cfg.PublicURL})
+	gitsync.RegisterRoutes(api, syncer.Store(), gitsync.RouteOptions{PublicURL: publicURL})
 	gitsync.RegisterConnectionRoutes(api, syncer, syncer.Store(), d.Jobs)
 	router.Post(gitsync.WebhookPath, gitsync.WebhookHandler(syncer.Store(), d.Jobs).ServeHTTP)
 
@@ -268,12 +278,12 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Import.
 	importStore := skillimport.NewStore(d.Pool)
-	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
+	importFetcher := skillimport.NewLiveFetcher("https://api.github.com", func() string { return snap().String("github_token") })
 	skillimport.RegisterRoutes(api, router, importStore, skillStore, d.Storage, importFetcher, skillimport.RouteOptions{
 		External:     externalScanner,
 		Queue:        evalPool,
 		Suites:       suiteRegistry,
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Ownership:    ownerResolver,
 		Git:          syncer,
 	})
@@ -298,11 +308,11 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Storage:     d.Storage,
 		Owners:      ownerResolver,
 		Users:       d.UserStore,
-		PublicURL:   cfg.PublicURL,
+		PublicURL:   publicURL,
 	})
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Contests:     contestStore,
 	})
 
@@ -314,4 +324,19 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	quality.RegisterRoutes(api, qualityStore, skillStore)
 
 	return evalPool
+}
+
+// newScannerSource rebuilds the external scanner when its settings change.
+func newScannerSource(live *settings.Live) func() *scan.ExternalScanner {
+	var cur atomic.Pointer[scan.ExternalScanner]
+	build := func(s *settings.Snapshot) {
+		sc := scan.NewExternalScanner(s.String("external_scan.cmd"), s.Duration("external_scan.timeout"))
+		if sc != nil && (cur.Load() == nil || cur.Load().Name != sc.Name) {
+			log.Info().Str("scanner", sc.Name).Msg("external security scanner enabled")
+		}
+		cur.Store(sc)
+	}
+	build(live.Get())
+	live.OnChange(build)
+	return cur.Load
 }

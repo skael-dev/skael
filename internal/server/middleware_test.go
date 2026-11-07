@@ -1,27 +1,28 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/settings"
+	"github.com/skael-dev/skael/internal/testutil"
 )
 
 // edgeChain builds the real edge middleware stack — the same call Build makes,
 // in the same order — over a handler that answers 200 to anything. Requests
 // never reach a database, so the whole chain can be measured directly.
-func edgeChain(t *testing.T, cfg *platform.Config) http.Handler {
+func edgeChain(t *testing.T, cfg *platform.Config, env map[string]string) http.Handler {
 	t.Helper()
 
 	// The request logger writes a line per request; these tests send thousands.
@@ -30,7 +31,7 @@ func edgeChain(t *testing.T, cfg *platform.Config) http.Handler {
 	t.Cleanup(func() { log.Logger = prev })
 
 	router := chi.NewMux()
-	mountMetrics := InstallEdgeMiddleware(router, cfg, false)
+	mountMetrics := InstallEdgeMiddleware(router, cfg, settings.Static(env))
 	mountMetrics()
 	router.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -41,17 +42,15 @@ func edgeChain(t *testing.T, cfg *platform.Config) http.Handler {
 // TestBuild_AssemblesWithMetricsEnabled guards the assembly order itself. Chi
 // panics if Use is called once any route exists on the mux, so mounting
 // /metrics in the middle of the middleware stack took the server down at boot
-// for every deployment that had not set METRICS_ENABLED=false. No database is
-// touched before the router is built, so a pool that never connects is enough
-// to exercise it.
+// for every deployment that had not set METRICS_ENABLED=false. Build reads
+// the settings, so it needs a migrated database.
 func TestBuild_AssemblesWithMetricsEnabled(t *testing.T) {
-	t.Setenv("METRICS_ENABLED", "true")
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := testutil.SetupTestDB(t)
 
-	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/nowhere?sslmode=disable")
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-
-	srv, err := NewBuilder(pool, &platform.Config{StoragePath: t.TempDir(), ListenAddr: ":0"}).Build()
+	srv, err := NewBuilder(pool, &platform.Config{StoragePath: t.TempDir(), ListenAddr: ":0", MetricsEnabled: true}).Build()
 	require.NoError(t, err)
 	require.NotNil(t, srv.Handler)
 
@@ -105,7 +104,7 @@ func TestEdgeChain_ForgedHeadersCannotEscapeAuthLimit(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := edgeChain(t, &platform.Config{RateLimitAuth: limit})
+			h := edgeChain(t, &platform.Config{}, map[string]string{"RATE_LIMIT_AUTH": strconv.Itoa(limit)})
 
 			allowed := countAllowed(t, h, attempts, func(i int) *http.Request {
 				r := login("203.0.113.9:5000")
@@ -132,10 +131,8 @@ func TestEdgeChain_TrustedProxyIsBelieved(t *testing.T) {
 
 	for _, header := range []string{"X-Real-IP", "X-Forwarded-For"} {
 		t.Run(header, func(t *testing.T) {
-			h := edgeChain(t, &platform.Config{
-				RateLimitAuth:  limit,
-				TrustedProxies: "10.0.0.0/8",
-			})
+			h := edgeChain(t, &platform.Config{TrustedProxies: "10.0.0.0/8"},
+				map[string]string{"RATE_LIMIT_AUTH": strconv.Itoa(limit)})
 
 			build := func(client string) func(int) *http.Request {
 				return func(int) *http.Request {
@@ -162,12 +159,8 @@ func TestEdgeChain_TrustedProxyIsBelieved(t *testing.T) {
 // a fresh key on every request.
 func TestEdgeChain_TrustedProxyPreservesLimiterProperties(t *testing.T) {
 	// Read: 3 per subject, so the IP ceiling is 3 × 10 = 30.
-	h := edgeChain(t, &platform.Config{
-		RateLimitAuth:   20,
-		RateLimitEvents: 20,
-		RateLimitRead:   3,
-		RateLimitWrite:  20,
-		TrustedProxies:  "10.0.0.0/8",
+	h := edgeChain(t, &platform.Config{TrustedProxies: "10.0.0.0/8"}, map[string]string{
+		"RATE_LIMIT_AUTH": "20", "RATE_LIMIT_EVENTS": "20", "RATE_LIMIT_READ": "3", "RATE_LIMIT_WRITE": "20",
 	})
 
 	// Both developers sit behind one office NAT, reaching skael through the

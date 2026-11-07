@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/settings"
 )
 
 // RouteRegistrar is a function that registers additional routes onto the Huma
@@ -25,6 +26,7 @@ type Builder struct {
 	scanRules   ScanRuleProvider
 	extraRoutes []RouteRegistrar
 	caps        *Capabilities
+	env         settings.EnvFunc
 }
 
 // NewBuilder creates a Builder with OSS defaults: no extension points, no
@@ -109,4 +111,10 @@ func (b *Builder) WithLicense(l *LicenseInfo) *Builder {
 // primarily useful for testing — in production you call Build.
 func (b *Builder) Capabilities() *Capabilities {
 	return b.caps
+}
+
+// WithEnv replaces the process environment the settings resolve against.
+func (b *Builder) WithEnv(env map[string]string) *Builder {
+	b.env = func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	return b
 }

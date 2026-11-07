@@ -29,6 +29,7 @@ import (
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/gitsync"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
 	skweb "github.com/skael-dev/skael/web"
 )
@@ -93,8 +94,8 @@ func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*ski
 // call it only after adding every middleware of their own: chi panics if Use
 // is called once any route exists on the mux, and route registration order has
 // no effect on which middleware a route runs through.
-func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure bool) (mountMetrics func()) {
-	router.Use(platform.SecurityHeaders(cookieSecure))
+func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, live *settings.Live) (mountMetrics func()) {
+	router.Use(platform.SecurityHeaders(cfg.CookieSecure))
 	router.Use(platform.RequestID)
 
 	if cfg.CORSOrigins != "" {
@@ -116,39 +117,42 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 	router.Use(platform.ClientIP(platform.ParseTrustedProxies(cfg.TrustedProxies)))
 	router.Use(platform.RequestLogger)
 
-	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{
-		Auth:   cfg.RateLimitAuth,
-		Events: cfg.RateLimitEvents,
-		Read:   cfg.RateLimitRead,
-		Write:  cfg.RateLimitWrite,
-		Suites: cfg.RateLimitSuites,
+	router.Use(platform.LiveRateLimiter(func() platform.RateLimitConfig {
+		s := live.Get()
+		return platform.RateLimitConfig{
+			Auth:   s.Int("rate_limit.auth"),
+			Events: s.Int("rate_limit.events"),
+			Read:   s.Int("rate_limit.read"),
+			Write:  s.Int("rate_limit.write"),
+			Suites: s.Int("rate_limit.suites"),
+		}
 	}))
 
-	if os.Getenv("METRICS_ENABLED") != "false" {
+	if cfg.MetricsEnabled {
 		router.Use(platform.MetricsMiddleware)
 		return func() { router.Get("/metrics", promhttp.Handler().ServeHTTP) }
 	}
 	return func() {}
 }
 
-func peopleConfig(cfg *platform.Config, cookieSecure bool) auth.PeopleConfig {
+func peopleConfig(cfg *platform.Config, s *settings.Snapshot) auth.PeopleConfig {
 	pc := auth.PeopleConfig{
-		PublicURL:          cfg.PublicURL,
-		CookieSecure:       cookieSecure,
-		DisableSignup:      cfg.DisableSignup,
-		AllowedDomains:     splitList(cfg.SignupAllowedDomains),
+		PublicURL:          s.String("public_url"),
+		CookieSecure:       cfg.CookieSecure,
+		DisableSignup:      s.Bool("signup.disabled"),
+		AllowedDomains:     s.List("signup.allowed_domains"),
 		TrustedOrigins:     splitList(cfg.CORSOrigins),
 		TrustedProxies:     splitList(cfg.TrustedProxies),
-		OIDCIssuer:         cfg.OIDCIssuer,
-		OIDCClientID:       cfg.OIDCClientID,
-		OIDCClientSecret:   cfg.OIDCClientSecret,
-		GoogleClientID:     cfg.GoogleClientID,
-		GoogleClientSecret: cfg.GoogleClientSecret,
-		GitHubClientID:     cfg.GitHubClientID,
-		GitHubClientSecret: cfg.GitHubClientSecret,
+		OIDCIssuer:         s.String("oidc.issuer"),
+		OIDCClientID:       s.String("oidc.client_id"),
+		OIDCClientSecret:   s.String("oidc.client_secret"),
+		GoogleClientID:     s.String("google.client_id"),
+		GoogleClientSecret: s.String("google.client_secret"),
+		GitHubClientID:     s.String("github.client_id"),
+		GitHubClientSecret: s.String("github.client_secret"),
 	}
-	if cfg.SMTPHost != "" {
-		pc.EmailSender = auth.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom)
+	if host := s.String("smtp.host"); host != "" {
+		pc.EmailSender = auth.NewSMTPSender(host, s.Int("smtp.port"), s.String("smtp.username"), s.String("smtp.password"), s.String("smtp.from"))
 	}
 	return pc
 }
@@ -172,11 +176,13 @@ type Server struct {
 
 	listenAddr string
 
-	river   *river.Client[pgx.Tx]
-	riverUI *riverui.Handler
-	people  *auth.People
+	river    *river.Client[pgx.Tx]
+	riverUI  *riverui.Handler
+	people   *auth.People
+	settings *settings.Live
 
 	stopRiverUI context.CancelFunc
+	stopWatch   context.CancelFunc
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -194,17 +200,30 @@ func (b *Builder) Build() (*Server, error) {
 
 	cfg := b.config
 
-	// Startup warnings.
-	cookieSecure := os.Getenv("COOKIE_SECURE") == "true"
-	if !cookieSecure {
+	if !cfg.CookieSecure {
 		log.Warn().Msg("COOKIE_SECURE is not set")
 	}
-	if os.Getenv("DISABLE_SIGNUP") != "true" {
-		log.Warn().Msg("DISABLE_SIGNUP is not set")
+
+	env := b.env
+	if env == nil {
+		env = os.LookupEnv
+	}
+	live := settings.NewLive(settings.NewStore(b.pool, cfg.MasterKeys), env, cfg.MasterKeys)
+	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 10*time.Second)
+	err := live.Load(loadCtx)
+	cancelLoad()
+	if err != nil {
+		return nil, fmt.Errorf("server.Build: settings: %w", err)
+	}
+	for _, r := range live.Get().Problems() {
+		log.Warn().Str("setting", r.Def.Env).Msg(r.Problem)
 	}
 
-	// 5. Create storage (local filesystem or S3, per STORAGE_PATH).
-	storage, err := platform.NewStorageFromConfig(cfg)
+	storageCfg := *cfg
+	if storageCfg.StoragePath == "" {
+		storageCfg.StoragePath = settings.DefaultStoragePath
+	}
+	storage, err := platform.NewStorageFromConfig(&storageCfg)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: storage: %w", err)
 	}
@@ -212,14 +231,14 @@ func (b *Builder) Build() (*Server, error) {
 	// 6. Create auth stores.
 	userStore := auth.NewUserStore(b.pool)
 	keyStore := auth.NewKeyStore(b.pool)
-	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, cookieSecure))
+	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, live.Get()))
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: %w", err)
 	}
 
 	// 7. Create chi router with middleware.
 	router := chi.NewMux()
-	mountMetrics := InstallEdgeMiddleware(router, cfg, cookieSecure)
+	mountMetrics := InstallEdgeMiddleware(router, cfg, live)
 
 	router.Use(auth.Middleware(people, keyStore))
 
@@ -245,7 +264,7 @@ func (b *Builder) Build() (*Server, error) {
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
 	syncer := gitsync.NewSyncer(gitsync.NewStore(b.pool, cfg.MasterKeys), nil)
-	riverClient, err := newRiverClient(b.pool, cfg, analyticsStore, syncer)
+	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}
@@ -256,6 +275,7 @@ func (b *Builder) Build() (*Server, error) {
 	RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
+		Settings:       live,
 		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,
@@ -303,6 +323,7 @@ func (b *Builder) Build() (*Server, error) {
 		river:      riverClient,
 		riverUI:    riverUI,
 		people:     people,
+		settings:   live,
 	}, nil
 }
 
@@ -322,12 +343,18 @@ func (s *Server) Start(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("start river ui: %w", err)
 	}
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	s.stopWatch = stopWatch
+	go s.settings.Watch(watchCtx)
 	return nil
 }
 
 // Stop ends background work. ListenAndServe calls it on shutdown.
 func (s *Server) Stop(ctx context.Context) error {
 	s.stopRiverUI()
+	if s.stopWatch != nil {
+		s.stopWatch()
+	}
 	return s.river.Stop(ctx)
 }
 

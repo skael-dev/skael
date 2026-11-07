@@ -72,7 +72,8 @@ func (r *receiver) ofType(typ string) []received {
 func startWebhookServer(t *testing.T, allowPrivate bool) *machineAPI {
 	t.Helper()
 	pool := testutil.SetupTestDB(t)
-	srv, err := server.NewBuilder(pool, &platform.Config{StoragePath: t.TempDir(), ListenAddr: ":0", WebhookAllowPrivate: allowPrivate}).Build()
+	srv, err := server.NewBuilder(pool, &platform.Config{StoragePath: t.TempDir(), ListenAddr: ":0"}).
+		WithEnv(map[string]string{"WEBHOOK_ALLOW_PRIVATE": strconv.FormatBool(allowPrivate)}).Build()
 	require.NoError(t, err)
 	require.NoError(t, srv.Start(context.Background()))
 	t.Cleanup(func() {

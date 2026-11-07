@@ -1,0 +1,1 @@
+Each class also has a per-IP ceiling of ten times its limit, checked before the per-key budget, so one address cannot exceed it with many keys. Behind a proxy, set `TRUSTED_PROXIES`, or every client shares one budget.

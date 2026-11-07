@@ -252,7 +252,7 @@ func newHarness(t *testing.T) *harness {
 		Storage:     storage,
 		Owners:      owners,
 		Users:       users,
-		PublicURL:   "https://skael.example.com",
+		PublicURL:   func() string { return "https://skael.example.com" },
 	})
 
 	var adminID string

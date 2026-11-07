@@ -19,7 +19,7 @@ const (
 
 type Fetcher struct {
 	apiBase     string
-	githubToken string
+	githubToken func() string
 	httpClient  *http.Client
 }
 
@@ -29,6 +29,11 @@ type FetchResult struct {
 }
 
 func NewFetcher(apiBase, githubToken string) *Fetcher {
+	return NewLiveFetcher(apiBase, func() string { return githubToken })
+}
+
+// NewLiveFetcher is NewFetcher with the token read on every request.
+func NewLiveFetcher(apiBase string, githubToken func() string) *Fetcher {
 	return &Fetcher{
 		apiBase:     apiBase,
 		githubToken: githubToken,
@@ -51,8 +56,8 @@ func (f *Fetcher) Fetch(src Source) (*FetchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build fetch request: %w", err)
 	}
-	if f.githubToken != "" {
-		req.Header.Set("Authorization", "Bearer "+f.githubToken)
+	if token := f.githubToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 

@@ -173,8 +173,9 @@ type RouteOptions struct {
 	Releaser *skill.Releaser
 	// QualityFloor is the minimum headline score a verified report must
 	// reach to clear a held version. It comes from
-	// platform.Config.QualityFloor, the same value publish decides with.
-	QualityFloor float64
+	// the quality_floor setting, the same value publish decides with. Nil
+	// means 0.
+	QualityFloor func() float64
 	// Contests supplies a contest job's candidates at claim time. A local
 	// interface, because internal/contest imports this package's Job type.
 	Contests ContestLookup
@@ -592,7 +593,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 					Headline:                 rec.Headline,
 					CriticalForbidViolations: rec.CriticalForbidViolations,
 					SuiteDerived:             rec.SuiteDerived,
-				}, opts.QualityFloor); err != nil {
+				}, opts.floor()); err != nil {
 				_ = sp.Rollback(ctx)
 				log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: reconsider held version failed")
 			} else {
@@ -740,4 +741,11 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			Body:   rerunOutputBody{JobID: string(id)},
 		}, nil
 	})
+}
+
+func (o RouteOptions) floor() float64 {
+	if o.QualityFloor == nil {
+		return 0
+	}
+	return o.QualityFloor()
 }

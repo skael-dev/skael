@@ -83,7 +83,7 @@ func (p *Publisher) scanDir(ctx context.Context, dir string) (*scan.Report, erro
 	if err != nil {
 		return nil, fmt.Errorf("publish: scan: %w", err)
 	}
-	scan.MergeExternal(ctx, p.opts.External, dir, report)
+	scan.MergeExternal(ctx, p.opts.external(), dir, report)
 	scan.Relativize(report, dir)
 	return report, nil
 }
@@ -106,7 +106,7 @@ func (p *Publisher) ScanArchive(ctx context.Context, rawBody []byte) (*scan.Repo
 	if err != nil {
 		return nil, gate.Decision{}, err
 	}
-	return report, DecidePublish(report, gate.OwnerState{}, p.opts.QualityFloor, false), nil
+	return report, DecidePublish(report, gate.OwnerState{}, p.opts.floor(), false), nil
 }
 
 // Publish creates a version of the named skill from rawBody.
@@ -151,7 +151,7 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 		}
 	}
 
-	decision := DecidePublish(report, owner, p.opts.QualityFloor, publishOverrideAllowed(ctx, override))
+	decision := DecidePublish(report, owner, p.opts.floor(), publishOverrideAllowed(ctx, override))
 
 	if decision.Outcome == gate.Block {
 		payload, _ := json.Marshal(struct {

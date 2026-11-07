@@ -18,8 +18,8 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/gitsync"
-	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/sets"
+	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/webhooks"
 )
 
@@ -63,27 +63,31 @@ func (w *evalLeaseReapWorker) Work(ctx context.Context, _ *river.Job[evalLeaseRe
 type eventRetentionWorker struct {
 	river.WorkerDefaults[eventRetentionArgs]
 	store *analytics.Store
-	days  int
+	days  func() int
 }
 
 func (w *eventRetentionWorker) Work(ctx context.Context, _ *river.Job[eventRetentionArgs]) error {
-	deleted, err := w.store.CleanupOldEvents(ctx, w.days)
+	days := w.days()
+	if days <= 0 {
+		return nil
+	}
+	deleted, err := w.store.CleanupOldEvents(ctx, days)
 	if err != nil {
 		return err
 	}
 	if deleted > 0 {
-		log.Info().Int64("deleted", deleted).Int("retention_days", w.days).Msg("event retention cleanup complete")
+		log.Info().Int64("deleted", deleted).Int("retention_days", days).Msg("event retention cleanup complete")
 	}
 	return nil
 }
 
 // newRiverClient builds the client for all server background work. It touches
 // no database until Start.
-func newRiverClient(pool *pgxpool.Pool, cfg *platform.Config, analyticsStore *analytics.Store, syncer *gitsync.Syncer) (*river.Client[pgx.Tx], error) {
+func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *analytics.Store, syncer *gitsync.Syncer) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
-	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), cfg.WebhookAllowPrivate))
+	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), func() bool { return live.Get().Bool("webhooks.allow_private") }))
 	river.AddWorker(workers, &evalLeaseReapWorker{queue: evalqueue.NewPool(pool)})
-	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: cfg.EventRetentionDays})
+	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: func() int { return live.Get().Int("event_retention_days") }})
 	river.AddWorker(workers, &gitsync.SyncWorker{Syncer: syncer})
 	river.AddWorker(workers, &gitsync.SyncAllWorker{Store: syncer.Store()})
 
@@ -92,11 +96,9 @@ func newRiverClient(pool *pgxpool.Pool, cfg *platform.Config, analyticsStore *an
 			func() (river.JobArgs, *river.InsertOpts) { return evalLeaseReapArgs{}, nil }, nil),
 		river.NewPeriodicJob(river.PeriodicInterval(gitsync.SyncInterval),
 			func() (river.JobArgs, *river.InsertOpts) { return gitsync.SyncAllArgs{}, nil }, nil),
-	}
-	if cfg.EventRetentionDays > 0 {
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),
+		river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return eventRetentionArgs{}, nil },
-			&river.PeriodicJobOpts{RunOnStart: true}))
+			&river.PeriodicJobOpts{RunOnStart: true}),
 	}
 
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{

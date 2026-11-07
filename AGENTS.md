@@ -62,3 +62,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - git-bound: a skill whose source of truth is a connection. The opposite is native. Avoid: synced, managed, mirrored.
 - outbound change: the PR Skael opens for a publish to a git-bound skill, which gets a version when it merges. Avoid: change request, draft.
 - PR head: the stored archive of a skill folder at a PR's head SHA, which a contest can evaluate without a version. Avoid: preview version, draft version.
+- provider: one named LLM backend the server stores, with an adapter, a base URL, an auth style and the worker env name of its credential, chosen by the judge and each panel member. A sign-in provider is a different thing. Avoid: LLM connection, backend, integration.
+- claim code: the one-time code the server logs at first start, which the first owner must enter. Avoid: setup token, bootstrap password.
+- check-in: a worker's report on each poll, idle or not, of its version, driver, credential names, verify results and image digest. A heartbeat extends a job lease and is a different thing. Avoid: registration.
+- sample data: rows marked as sample that "Load sample data" adds and one click removes. Avoid: demo data, seed data.

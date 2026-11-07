@@ -494,7 +494,7 @@ func (r *run) reportContests(ctx context.Context, gh *GitHub, pr int, sha string
 		if err != nil || c == nil {
 			return err
 		}
-		link := strings.TrimSuffix(r.s.deps.PublicURL, "/") + "/contests/" + c.ID
+		link := strings.TrimSuffix(r.s.deps.publicURL(), "/") + "/contests/" + c.ID
 		switch c.Status {
 		case contest.StatusDone:
 			lines = append(lines, fmt.Sprintf("- `%s`: %s. [Contest](%s)", h.SkillName, c.Detail, link))
