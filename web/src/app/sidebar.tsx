@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound, Webhook, GitBranch, Plug, SlidersHorizontal } from "lucide-react";
+import { Layers, BarChart3, ShieldCheck, Settings, LogOut, Target, UsersRound, ListChecks, KeyRound, Webhook, GitBranch, Plug, SlidersHorizontal, FlaskConical } from "lucide-react";
 import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { getReviewQueue } from "@/api/sdk.gen";
 
@@ -61,6 +61,13 @@ const navItems: NavItem[] = [
 ];
 
 const bottomItems: NavItem[] = [
+  {
+    id: "evaluation",
+    label: "Evaluation",
+    path: "/settings/evaluation",
+    icon: <FlaskConical size={16} />,
+    privileged: true,
+  },
   {
     id: "instance",
     label: "Instance settings",
