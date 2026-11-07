@@ -51,6 +51,9 @@ type PeopleConfig struct {
 	EmailSender                                email.Sender
 	// Inspecting builds routes for the OpenAPI document with no database.
 	Inspecting bool
+	// FirstPerson, when set, must accept the creation of the first person.
+	// The server uses it to require the claim code.
+	FirstPerson func(ctx context.Context) error
 	// Live, when set, returns the public URL, the signup rules, the sign-in
 	// providers and the email sender on each use, so a settings change applies
 	// without a restart. The other fields of its result are ignored.
@@ -215,6 +218,11 @@ func (p *People) beforeUserCreate(pool *pgxpool.Pool) hook.BeforeUserCreateFunc 
 			return fmt.Errorf("auth: count users: %w", err)
 		}
 		if humans == 0 {
+			if p.cfg.FirstPerson != nil {
+				if err := p.cfg.FirstPerson(ctx); err != nil {
+					return err
+				}
+			}
 			ev.User.Role = RoleOwner
 		}
 		return nil

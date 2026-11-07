@@ -28,6 +28,7 @@ type Builder struct {
 	caps        *Capabilities
 	env         settings.EnvFunc
 	masterKey   *settings.MasterKey
+	claim       bool
 }
 
 // NewBuilder creates a Builder with OSS defaults: no extension points, no
@@ -123,5 +124,12 @@ func (b *Builder) WithEnv(env map[string]string) *Builder {
 // WithMasterKey records where the master key came from, for the settings page.
 func (b *Builder) WithMasterKey(k *settings.MasterKey) *Builder {
 	b.masterKey = k
+	return b
+}
+
+// WithClaim requires the claim code, which the server logs at start, before
+// the first person can sign up.
+func (b *Builder) WithClaim() *Builder {
+	b.claim = true
 	return b
 }

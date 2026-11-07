@@ -23,6 +23,7 @@ import (
 	"github.com/skael-dev/skael/internal/gitsync"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/mcp"
+	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/providers"
@@ -59,6 +60,9 @@ type RegisterAPIDeps struct {
 	// Settings is the live settings snapshot. Nil resolves from an empty
 	// environment, for spec generation.
 	Settings *settings.Live
+	// Claim guards the first sign-up. ClaimEnforced is false in tests.
+	Claim         *onboarding.Claim
+	ClaimEnforced bool
 	// ArchiveStore names the archive store in effect, for the settings page.
 	ArchiveStore string
 	// Keys checks the master key. Nil for spec generation.
@@ -275,6 +279,9 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body []gosync.ManifestEntry
 	}, error) {
+		if d.Pool != nil {
+			onboarding.MarkSynced(ctx, d.Pool)
+		}
 		entries, err := syncStore.GetManifest(ctx)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("", err)
@@ -328,6 +335,18 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Users:       d.UserStore,
 		PublicURL:   publicURL,
 	})
+	claim := d.Claim
+	if claim == nil {
+		claim = onboarding.NewClaim(d.Pool)
+	}
+	onboarding.RegisterSetupRoutes(api, claim, d.ClaimEnforced, cfg.CookieSecure)
+	onboarding.RegisterRoutes(api, d.Pool,
+		onboarding.NewSample(d.Pool, skillStore, skill.NewPublisher(skillStore, d.Storage, skillOptions), qualityStore, d.Storage),
+		func() onboarding.SetupFacts {
+			s := snap()
+			signIn := s.String("oidc.issuer") != "" || s.String("google.client_id") != "" || s.String("github.client_id") != ""
+			return onboarding.SetupFacts{PublicURL: s.String("public_url"), SMTPHost: s.String("smtp.host"), SignIn: signIn}
+		})
 	providerStore := providers.NewStore(d.Pool)
 	providers.RegisterRoutes(api, providerStore)
 	workers.RegisterRoutes(api, workers.NewStore(d.Pool), providerStore, d.KeyStore, publicURL)

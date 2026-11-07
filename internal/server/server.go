@@ -29,6 +29,7 @@ import (
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/gitsync"
+	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
@@ -200,6 +201,8 @@ type Server struct {
 	people   *auth.People
 	settings *settings.Live
 	keys     *settings.KeyService
+	claim    *onboarding.Claim
+	claimOn  bool
 
 	stopRiverUI context.CancelFunc
 	stopWatch   context.CancelFunc
@@ -252,7 +255,17 @@ func (b *Builder) Build() (*Server, error) {
 	// 6. Create auth stores.
 	userStore := auth.NewUserStore(b.pool)
 	keyStore := auth.NewKeyStore(b.pool)
-	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, live))
+	claim := onboarding.NewClaim(b.pool)
+	pc := peopleConfig(cfg, live)
+	if b.claim {
+		pc.FirstPerson = func(ctx context.Context) error {
+			if !auth.Claimed(ctx) {
+				return auth.ErrClaimRequired
+			}
+			return nil
+		}
+	}
+	people, err := auth.NewPeople(b.pool, keyStore, pc)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: %w", err)
 	}
@@ -261,6 +274,16 @@ func (b *Builder) Build() (*Server, error) {
 	router := chi.NewMux()
 	mountMetrics := InstallEdgeMiddleware(router, cfg, live)
 
+	if b.claim {
+		router.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, err := r.Cookie(onboarding.ClaimCookie); err == nil && claim.Claimed(r) {
+					r = r.WithContext(auth.ContextWithClaim(r.Context()))
+				}
+				next.ServeHTTP(w, r)
+			})
+		})
+	}
 	router.Use(auth.Middleware(people, keyStore))
 
 	// 8. Enforce body size limit before Huma buffers the request body.
@@ -304,6 +327,8 @@ func (b *Builder) Build() (*Server, error) {
 		Settings:       live,
 		Keys:           keyService,
 		ArchiveStore:   storageAt,
+		Claim:          claim,
+		ClaimEnforced:  b.claim,
 		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,
@@ -353,6 +378,8 @@ func (b *Builder) Build() (*Server, error) {
 		people:     people,
 		settings:   live,
 		keys:       keyService,
+		claim:      claim,
+		claimOn:    b.claim,
 	}, nil
 }
 
@@ -370,6 +397,15 @@ func (s *Server) Start(ctx context.Context) error {
 	} else if st.Degraded() {
 		log.Warn().Strs("missing_keys", st.Missing).Int("unreadable_secrets", len(st.Unreadable)).
 			Msg("a master key is missing or a stored secret does not open; Settings lists each secret to enter again")
+	}
+	if s.claimOn {
+		code, err := s.claim.Ensure(ctx)
+		if err != nil {
+			return fmt.Errorf("claim code: %w", err)
+		}
+		if code != "" {
+			log.Warn().Str("claim_code", code).Msg("no owner yet: open this server in a browser and enter the claim code to create the owner")
+		}
 	}
 	if err := s.river.Start(ctx); err != nil {
 		return fmt.Errorf("start river: %w", err)
