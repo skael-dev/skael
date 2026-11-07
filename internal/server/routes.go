@@ -126,6 +126,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		keyService = settings.NewKeyService(nil, &settings.MasterKey{Keys: cfg.MasterKeys}, live)
 	}
 	settings.RegisterKeyRoutes(api, keyService)
+	settings.RegisterTestRoute(api, live, settingsTesters(&http.Client{Timeout: 15 * time.Second}))
 
 	// Health (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
@@ -188,7 +189,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 			panic(err)
 		}
 	}
-	caps.SetSignIn(people.SignInMethods())
+	caps.SetSignIn(people.SignInMethods)
 	auth.RegisterRoutes(api, people, d.UserStore, d.KeyStore)
 	mountPeople(api, router, people)
 	auth.RegisterServiceAccountRoutes(api, d.Pool, d.KeyStore)

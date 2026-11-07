@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -135,14 +136,32 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, live *settin
 	return func() {}
 }
 
-func peopleConfig(cfg *platform.Config, s *settings.Snapshot) auth.PeopleConfig {
+func peopleConfig(cfg *platform.Config, live *settings.Live) auth.PeopleConfig {
+	return auth.PeopleConfig{
+		CookieSecure:   cfg.CookieSecure,
+		TrustedOrigins: splitList(cfg.CORSOrigins),
+		TrustedProxies: splitList(cfg.TrustedProxies),
+		Live:           newPeopleSource(live),
+	}
+}
+
+// newPeopleSource rebuilds the sign-in settings when a snapshot changes.
+func newPeopleSource(live *settings.Live) func() auth.PeopleConfig {
+	var cur atomic.Pointer[auth.PeopleConfig]
+	build := func(s *settings.Snapshot) {
+		pc := livePeople(s)
+		cur.Store(&pc)
+	}
+	build(live.Get())
+	live.OnChange(build)
+	return func() auth.PeopleConfig { return *cur.Load() }
+}
+
+func livePeople(s *settings.Snapshot) auth.PeopleConfig {
 	pc := auth.PeopleConfig{
 		PublicURL:          s.String("public_url"),
-		CookieSecure:       cfg.CookieSecure,
 		DisableSignup:      s.Bool("signup.disabled"),
 		AllowedDomains:     s.List("signup.allowed_domains"),
-		TrustedOrigins:     splitList(cfg.CORSOrigins),
-		TrustedProxies:     splitList(cfg.TrustedProxies),
 		OIDCIssuer:         s.String("oidc.issuer"),
 		OIDCClientID:       s.String("oidc.client_id"),
 		OIDCClientSecret:   s.String("oidc.client_secret"),
@@ -232,7 +251,7 @@ func (b *Builder) Build() (*Server, error) {
 	// 6. Create auth stores.
 	userStore := auth.NewUserStore(b.pool)
 	keyStore := auth.NewKeyStore(b.pool)
-	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, live.Get()))
+	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, live))
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: %w", err)
 	}
@@ -424,7 +443,7 @@ func (g githubSealed) Unreadable(ctx context.Context) ([]settings.Unreadable, er
 	if err != nil || !bad {
 		return nil, err
 	}
-	return []settings.Unreadable{{Name: "GitHub App", Where: "Settings → GitHub: connect the App again"}}, nil
+	return []settings.Unreadable{{Name: "GitHub App", Where: "GitHub App: connect it again"}}, nil
 }
 
 func (g githubSealed) Discard(ctx context.Context, actor string) error {

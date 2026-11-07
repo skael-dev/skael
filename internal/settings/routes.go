@@ -206,3 +206,46 @@ func RegisterKeyRoutes(api huma.API, keys *KeyService) {
 		return &settingsKeyOutput{Body: st}, nil
 	})
 }
+
+// TestResult is what a section's test action found.
+type TestResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+// Tester runs one section's test against the current settings.
+type Tester func(ctx context.Context, snap *Snapshot, actorEmail string) TestResult
+
+type settingsTestInput struct {
+	Section string `path:"section"`
+}
+
+type settingsTestOutput struct {
+	Body TestResult
+}
+
+// RegisterTestRoute serves the test action of each section that has one.
+func RegisterTestRoute(api huma.API, live *Live, testers map[string]Tester) {
+	huma.Register(api, huma.Operation{
+		OperationID: "test-settings",
+		Method:      http.MethodPost,
+		Path:        "/api/admin/settings/test/{section}",
+		Summary:     "Run a section's test against the saved settings",
+	}, func(ctx context.Context, in *settingsTestInput) (*settingsTestOutput, error) {
+		u, err := requirePrivileged(ctx)
+		if err != nil {
+			return nil, err
+		}
+		sec := SectionByID(in.Section)
+		if sec == nil || sec.Test == "" {
+			return nil, huma.Error404NotFound("this section has no test")
+		}
+		t := testers[sec.Test]
+		if t == nil {
+			return nil, huma.Error404NotFound("this section has no test")
+		}
+		testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+		return &settingsTestOutput{Body: t(testCtx, live.Get(), u.Email)}, nil
+	})
+}

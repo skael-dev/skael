@@ -56,7 +56,7 @@ func TestMasterKey_AFileKeyIsGeneratedOnceAndALostKeyIsRecovered(t *testing.T) {
 	st, err = ks.Status(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{first.Keys.ActiveID()}, st.Missing)
-	require.Equal(t, []settings.Unreadable{{Name: "SMTP password", Where: "Settings → Email"}}, st.Unreadable)
+	require.Equal(t, []settings.Unreadable{{Name: "SMTP password", Where: "Instance settings → Email"}}, st.Unreadable)
 	require.Empty(t, live.Get().String("smtp.password"))
 
 	require.NoError(t, ks.Reset(ctx, "owner@x.com"))

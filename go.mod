@@ -3,7 +3,7 @@ module github.com/skael-dev/skael
 go 1.26.0
 
 require (
-	github.com/alternayte/auth-all v0.7.0
+	github.com/alternayte/auth-all v0.8.0
 	github.com/alternayte/auth-all/humaauth v0.4.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	authall "github.com/alternayte/auth-all"
 	"github.com/alternayte/auth-all/apierr"
@@ -50,6 +51,10 @@ type PeopleConfig struct {
 	EmailSender                                email.Sender
 	// Inspecting builds routes for the OpenAPI document with no database.
 	Inspecting bool
+	// Live, when set, returns the public URL, the signup rules, the sign-in
+	// providers and the email sender on each use, so a settings change applies
+	// without a restart. The other fields of its result are ignored.
+	Live func() PeopleConfig
 }
 
 // SignInMethods says which sign-in methods an instance offers.
@@ -65,6 +70,32 @@ type People struct {
 	Auth  *authall.Auth
 	Admin *admin.Plugin
 	cfg   PeopleConfig
+
+	mu        sync.Mutex
+	providerK string
+	providerV []oauth.Provider
+}
+
+// current returns the settings in effect now.
+func (p *People) current() PeopleConfig {
+	if p.cfg.Live != nil {
+		return p.cfg.Live()
+	}
+	return p.cfg
+}
+
+// providers returns the configured providers. An OIDC provider discovers its
+// endpoints on first use, so the same objects are kept until the settings change.
+func (p *People) providers() []oauth.Provider {
+	c := p.current()
+	key := strings.Join([]string{c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret,
+		c.GoogleClientID, c.GoogleClientSecret, c.GitHubClientID, c.GitHubClientSecret}, "\x00")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.providerV == nil || p.providerK != key {
+		p.providerK, p.providerV = key, c.providers()
+	}
+	return p.providerV
 }
 
 // NewPeople builds auth-all with Skael's roles, key resolver and signup rules.
@@ -102,20 +133,17 @@ func NewPeople(pool *pgxpool.Pool, keys *KeyStore, cfg PeopleConfig) (*People, e
 			&keyPlugin{keys: keys},
 		),
 	}
-	if cfg.PublicURL != "" {
-		opts = append(opts, authall.WithBaseURL(cfg.PublicURL))
-	}
+	p := &People{Admin: adm, cfg: cfg}
+	opts = append(opts,
+		authall.WithBaseURLSource(func(context.Context) (string, error) { return p.current().PublicURL, nil }),
+		authall.WithEmailSenderSource(func(context.Context) (email.Sender, error) { return p.current().EmailSender, nil }),
+		authall.WithProviderSource(func(context.Context) ([]oauth.Provider, error) { return p.providers(), nil }),
+	)
 	if len(cfg.TrustedOrigins) > 0 {
 		opts = append(opts, authall.WithTrustedOrigins(cfg.TrustedOrigins...))
 	}
 	if len(cfg.TrustedProxies) > 0 {
 		opts = append(opts, authall.WithTrustedProxies(cfg.TrustedProxies...))
-	}
-	if cfg.EmailSender != nil {
-		opts = append(opts, authall.WithEmailSender(cfg.EmailSender))
-	}
-	for _, p := range cfg.providers() {
-		opts = append(opts, authall.WithProvider(p))
 	}
 	if cfg.Inspecting {
 		opts = append(opts, authall.WithoutProviderCheck())
@@ -130,7 +158,7 @@ func NewPeople(pool *pgxpool.Pool, keys *KeyStore, cfg PeopleConfig) (*People, e
 	if err != nil {
 		return nil, fmt.Errorf("auth.NewPeople: %w", err)
 	}
-	p := &People{Auth: a, Admin: adm, cfg: cfg}
+	p.Auth = a
 	a.Hooks().OnBeforeUserCreate(p.beforeUserCreate(pool))
 	a.Hooks().OnBeforeSessionCreate(func(_ context.Context, ev *hook.SessionCreate) error {
 		if KindOf(ev.User) == KindService {
@@ -158,13 +186,14 @@ func (c PeopleConfig) providers() []oauth.Provider {
 
 // SignInMethods reports what the sign-in page may show.
 func (p *People) SignInMethods() SignInMethods {
+	c := p.current()
 	m := SignInMethods{
 		Password:       true,
-		Signup:         !p.cfg.DisableSignup,
-		ForgotPassword: p.cfg.EmailSender != nil,
+		Signup:         !c.DisableSignup,
+		ForgotPassword: c.EmailSender != nil,
 		Providers:      []string{},
 	}
-	for _, provider := range p.cfg.providers() {
+	for _, provider := range p.providers() {
 		m.Providers = append(m.Providers, provider.ID())
 	}
 	return m
@@ -174,7 +203,8 @@ func (p *People) SignInMethods() SignInMethods {
 // writes a role, because auth_users refuses the empty role auth-all defaults to.
 func (p *People) beforeUserCreate(pool *pgxpool.Pool) hook.BeforeUserCreateFunc {
 	return func(ctx context.Context, ev *hook.UserCreate) error {
-		if err := SignupAllowed(ev.Provider, ev.User.Email, p.cfg.DisableSignup, p.cfg.AllowedDomains); err != nil {
+		c := p.current()
+		if err := SignupAllowed(ev.Provider, ev.User.Email, c.DisableSignup, c.AllowedDomains); err != nil {
 			return err
 		}
 		// auth-all writes NULL for a host field it holds no value for.

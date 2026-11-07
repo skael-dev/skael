@@ -164,7 +164,7 @@ func (k *KeyService) Status(ctx context.Context) (KeyStatus, error) {
 	}
 	for _, r := range k.live.Get().Problems() {
 		if r.Unreadable {
-			st.Unreadable = append(st.Unreadable, Unreadable{Name: r.Def.Label, Where: "Settings → " + sectionTitle(r.Def.Section)})
+			st.Unreadable = append(st.Unreadable, Unreadable{Name: r.Def.Label, Where: "Instance settings → " + sectionTitle(r.Def.Section)})
 		}
 	}
 	for _, src := range k.sources {

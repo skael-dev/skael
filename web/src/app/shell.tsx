@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "@/app/sidebar";
 import { TopBar } from "@/app/top-bar";
+import { MasterKeyAlert } from "@/features/instance-settings/master-key-alert";
 import { CommandPalette } from "@/components/command-palette";
 import { ShortcutSheet } from "@/features/keyboard/shortcut-sheet";
 import { useKeyboardLayer } from "@/features/keyboard/use-keyboard-layer";
@@ -26,6 +27,7 @@ export function Shell() {
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar onOpenCommand={openCommand} onOpenShortcuts={openShortcuts} />
         <main className="flex-1 overflow-y-auto">
+          <MasterKeyAlert />
           <Outlet />
         </main>
       </div>

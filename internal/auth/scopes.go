@@ -119,7 +119,7 @@ var routeRules = []RouteRule{
 	post("/api/admin/users/{id}/disable"), post("/api/admin/users/{id}/enable"),
 	read("/api/admin/audit"), read("/api/users/search"),
 	read("/api/admin/settings"), put("/api/admin/settings"),
-	read("/api/admin/master-key"), post("/api/admin/master-key/reset"),
+	read("/api/admin/master-key"), post("/api/admin/master-key/reset"), post("/api/admin/settings/test/{section}"),
 	read("/api/admin/github"), del("/api/admin/github"), post("/api/admin/github/manifest"),
 	read("/api/admin/github/callback"), post("/api/github/webhook"),
 	read("/api/git/repos"), post("/api/git/connections/preview"), read("/api/git/connections"), post("/api/git/connections"),
