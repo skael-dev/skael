@@ -7,71 +7,13 @@ skael is a single Go binary that embeds the dashboard and serves the API. It nee
 
 ## Configuration
 
-Every variable the server reads. `DATABASE_URL` is the only required one; everything else has a working default. S3 settings are separate — see [Object storage](#object-storage-s3-compatible).
+`DATABASE_URL` is the only required variable. On first start the server prints a claim code to its log; open the server in a browser and enter it to create the owner account.
 
-Migrations run automatically on startup. Auth is via user accounts and personal API keys — there is no static server key; sign up to create the first account.
+The owner sets almost everything else on **Instance settings**: the public URL, sign-up, sign-in providers, email, import, scanning, the quality floor, retention, webhooks and rate limits. A change applies on every replica without a restart. Each section has an **Info** guide and, where it makes sense, a **Test** button.
 
-### Core
+An environment variable wins over the page and locks its field, so a GitOps or Helm install keeps working. A few settings are read before the database and live only in the environment. [Configuration](/docs/configuration) lists every setting, generated from the same definitions the server uses.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | yes | — | Postgres connection string |
-| `STORAGE_PATH` | no | `./data/skills` | Archive storage: a local directory, or `s3://bucket/prefix` for S3 |
-| `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
-| `DISABLE_SIGNUP` | no | `false` | `true` closes signups once you've created the accounts you need. Only the literal `true` counts. The server logs a startup warning while it is unset |
-| `PUBLIC_URL` | with SSO, SMTP or GitHub | — | The URL people use to reach the server, for example `https://skael.example.com`. Provider callbacks and email links are built from it |
-| `SIGNUP_ALLOWED_DOMAINS` | no | — | Comma-separated email domains. Set it to refuse a new account on every sign-in path from any other domain |
-| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | no | — | Sign-in through any OpenID Connect provider. The first sign-in creates a `member`, even with `DISABLE_SIGNUP=true`. Register `PUBLIC_URL/api/auth/oauth/oidc/callback` as the redirect URI |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | — | Sign-in through Google. `DISABLE_SIGNUP=true` refuses new accounts on this path |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | no | — | Sign-in through GitHub. `DISABLE_SIGNUP=true` refuses new accounts on this path. `GITHUB_TOKEN` is separate and serves import only |
-| `SKAEL_MASTER_KEYS` | for GitHub | — | Encrypts secrets stored from the UI, such as the GitHub App's private key. Comma-separated `id:base64key` pairs of 32 bytes each; the first seals, every one opens. Generate one with `openssl rand -base64 32`. Keep it: a new key makes stored secrets unreadable. To rotate, put the new key first and keep the old one after it |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | no | — / `587` / — / — / — | Turns on self-service password reset. Without `SMTP_HOST`, the sign-in page has no "forgot password" link, and the owner issues temporary passwords |
-| `COOKIE_SECURE` | no | `false` | `true` marks the session cookie `Secure`. Requires TLS in front — a browser refuses a `Secure` cookie over plain HTTP, which breaks login with no error. The server logs a startup warning while it is unset |
-| `TRUSTED_PROXIES` | no | — | Comma-separated addresses or CIDR blocks whose `X-Forwarded-For` / `X-Real-IP` are believed. Unset means neither header is trusted and the socket address wins — correct for a directly exposed server. Set it when running behind a reverse proxy, or every client shares one rate-limit bucket. See [Production](/docs/production#telling-skael-about-the-proxy) |
-| `CORS_ORIGINS` | no | — | Comma-separated allowed origins, e.g. `https://app.example.com,http://localhost:5173`. Unset means no CORS headers are sent |
-| `METRICS_ENABLED` | no | `true` | Set to `false` to drop the `/metrics` Prometheus endpoint and its instrumentation. Only the literal `false` disables it |
-| `GITHUB_TOKEN` | no | — | GitHub token used by skill import; raises the GitHub API rate limit |
-
-### Publish gate and evaluation
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `QUALITY_FLOOR` | no | `0` | Minimum headline quality score (0–100) a verified evaluation must reach to release a version held for review. `0` accepts any verified report with a complete panel and no critical contract violations |
-
-`QUALITY_FLOOR` is the only setting whose value the server validates. A value that isn't a number, or falls outside 0–100, stops the server from booting with an error naming the variable. Every other numeric and duration setting silently falls back to its default instead: `DB_MAX_CONNS=twenty` gives you 25 with no warning, `RATE_LIMIT_WRITE=` gives you 60, `LOG_LEVEL=verbose` gives you `info`. The floor is treated differently on purpose — a security control that reads as unset because of a typo looks configured and does nothing.
-
-### Database pool
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DB_MAX_CONNS` | no | `25` | Maximum connections in the pool |
-| `DB_MIN_CONNS` | no | `5` | Idle connections the pool keeps open |
-| `DB_MAX_CONN_LIFETIME` | no | `1h` | Maximum lifetime of a connection before it is closed (Go duration) |
-| `DB_MAX_CONN_IDLE_TIME` | no | `30m` | Maximum idle time before a connection is closed (Go duration) |
-| `DB_HEALTH_CHECK_PERIOD` | no | `1m` | Interval between pool health checks (Go duration) |
-
-### Rate limits
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `RATE_LIMIT_AUTH` | no | `20` | Per-minute budget for `/api/auth/*` — login, signup, password reset |
-| `RATE_LIMIT_EVENTS` | no | `600` | Per-minute budget for `POST /api/events` — activation tracking |
-| `RATE_LIMIT_READ` | no | `300` | Per-minute budget for GET/HEAD routes — list, search, manifest, downloads |
-| `RATE_LIMIT_WRITE` | no | `60` | Per-minute budget for every other mutating route — publish, import, delete |
-| `RATE_LIMIT_SUITES` | no | `20` | Per-minute budget for `POST /api/eval/suites`, which accepts up to a 10MB archive per call |
-
-`/api/auth/*` is keyed by source IP alone: those requests are unauthenticated, so a key on them is unverified and must not mint a fresh budget. Every other class is keyed by API key where one is present and by IP otherwise, and is additionally capped by a shared per-IP ceiling of ten times the class limit, checked first — so one source address cannot get more by rotating keys. Raising a class's limit raises its ceiling with it. Over-limit requests get a 429 with `Retry-After`, which the CLI honours.
-
-### Scanning, logging and retention
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run over each skill on publish and import. `{dir}` is replaced with the skill directory; the command must emit SARIF on stdout, e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`. Findings merge into the built-in scan |
-| `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
-| `EVENT_RETENTION_DAYS` | no | `90` | Days of activation events to keep. The server purges older rows at startup and then daily while it runs. `0` disables the purge |
-| `LOG_LEVEL` | no | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` |
-| `LOG_FORMAT` | no | — | `pretty` for colorized console output. Anything else, including unset, logs JSON |
-| `LOG_PRETTY` | no | `false` | `true` does the same as `LOG_FORMAT=pretty`; either one is enough |
+Migrations run automatically on startup.
 
 ## Bring your own Postgres
 
@@ -89,7 +31,7 @@ docker run -p 8080:8080 \
 docker compose up -d
 ```
 
-This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`; sign up to create your first account. Publishing and scanning work right away. Evaluations do not — that's a separate opt-in piece, see below.
+This starts the platform plus a Postgres container with a persistent volume. The platform is at `http://localhost:8080`. Enter the claim code from `docker compose logs server` to create the owner account. Publishing and scanning work right away. Evaluations do not — that's a separate opt-in piece, see below.
 
 ## Evaluation worker (optional)
 
@@ -145,37 +87,29 @@ Auth must also arrive as environment variables rather than as a mounted `~/.clau
 
 ### Worker configuration
 
-These two tables are duplicated on [Quality scoring](/docs/quality#worker-environment-variables) — change both together.
+The server chooses the judge and the panel on the **Evaluation** page. Pick one of the presets (Anthropic API key, OpenRouter, LiteLLM, or an Anthropic or gateway judge with a Claude subscription panel), then **Add a worker**: it creates a key that can only run eval jobs and shows a Compose, `docker run` or Helm snippet with every variable the worker needs.
 
-Required — the worker exits at startup naming whichever is missing:
+Each worker checks in while it runs. The Evaluation page shows what each worker lacks, such as a missing credential or a sandbox image that differs from the other workers.
 
-| Variable | Description |
-|---|---|
-| `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
-| `SKAEL_API_KEY` | API key the worker authenticates with. Use a service account key with the `eval:work` scope. A privileged personal key still works. |
-| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model, and (forwarded into the sandbox) for the claude-code panel agent — never a subscription CLI on PATH |
-
-Optional, with defaults:
-
-| Variable | Default | Description |
-|---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token`. Set beside `ANTHROPIC_BASE_URL` it splits the two: the judge keeps the gateway, the panel runs on the subscription |
-| `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
-| `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
-| `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
-| `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
-| `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
-| `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
-| `WORKER_CONTEST_PARALLEL` | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load |
-| `ANTHROPIC_AUTH_TOKEN` | — | Credential sent as `Authorization: Bearer` — what OpenRouter issues. An alternative to `ANTHROPIC_API_KEY`, and it wins when both are set |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | An Anthropic-compatible gateway for the judge *and* the panel, unless `CLAUDE_CODE_OAUTH_TOKEN` is also set. Posts to `{base}/v1/messages` |
-| `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members at the deep tier. Required behind a gateway that namespaces its identifiers |
-
-The judge's credential is checked at startup — the worker exits naming the variables to set. The panel agent is not checked at startup: if no credential reaches the sandbox and no auth directory is mounted, the worker logs a warning naming the missing variables and the job comes back with an incomplete panel rather than an error. Only the claude-code adapter is wired up today. See [Quality scoring](/docs/quality) for the OpenRouter example and what changing the model means for score comparability.
+A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration, and the page marks it as pinned by env. [Configuration](/docs/configuration#worker) lists every worker variable.
 
 ## Storage
 
-By default, skill archives are stored on the local filesystem under `STORAGE_PATH` (paths are validated to stay within the storage root). In Docker/Kubernetes, mount a persistent volume there — otherwise archives are lost when the container restarts.
+A new install with no `STORAGE_PATH` keeps skill archives in Postgres, so the server needs no volume and one database backup holds everything. An install that started on the filesystem keeps its directory; the migration records that.
+
+Set `STORAGE_PATH` to a directory to keep archives on disk, and mount a persistent volume there.
+
+## Kubernetes (Helm)
+
+`deploy/helm/skael` installs the server and, optionally, workers that run each session as a pod through the kubernetes sandbox driver:
+
+```bash
+helm upgrade --install skael deploy/helm/skael \
+  --set server.database.url='postgres://skael:...@postgres:5432/skael' \
+  --set ingress.enabled=true --set ingress.host=skael.example.com --set ingress.tls=true
+```
+
+The chart generates the master key into a Secret on install, keeps it on upgrade and on uninstall, and runs the server with a read-only root file system. To add workers, create a Secret with `SKAEL_API_KEY` from **Evaluation → Add a worker** and each provider credential, then set `worker.enabled=true` and `worker.existingSecret`.
 
 ## Object storage (S3-compatible)
 

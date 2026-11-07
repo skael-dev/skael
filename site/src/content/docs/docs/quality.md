@@ -22,91 +22,21 @@ Two things, run separately:
 
 Without a worker running, jobs just sit in the queue — nothing gets scored.
 
-### One credential, two jobs
+### Choosing the judge and the panel
 
-The judge and the claude-code panel agent both need Anthropic credentials, and in the simplest setup one variable covers both.
+An owner sets both on the **Evaluation** page. The server never holds an LLM key: a **provider** names a backend and the variable on each worker that holds its key.
 
-- **The judge.** A separate model compares the two transcripts and scores the result. It authenticates with `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, which the worker checks at startup and exits naming if neither is set. It talks to the direct Anthropic API by default, and to any Anthropic-compatible gateway you point it at (see [Choosing a model and a gateway](#choosing-a-model-and-a-gateway) below). It never falls back to a subscription CLI on PATH.
-- **The panel agent.** The claude-code adapter is the only one wired up (`codex`, `cursor`, and `opencode` are registered but their parsers aren't implemented yet, so they can't run and have no credentials to configure). It reads credentials as environment variables in the worker's own process and forwards whichever are set into the sandbox:
-  - `ANTHROPIC_API_KEY` — the same variable the judge uses. API-billed, no login step. This is what the Claude Code CLI uses by default in non-interactive mode, and it's the recommended setup for a server or VPS.
-  - `CLAUDE_CODE_OAUTH_TOKEN` — subscription-billed (Pro/Max) instead of pay-per-call. Generate it once on any machine where you can log in interactively: `claude setup-token`. Set the resulting token as this variable on the worker.
+- **The judge** grades every run. It must be a metered API, the Anthropic API or a compatible gateway, because a score that releases a version must come from a backend pinned to a model. A Claude subscription can never judge.
+- **The panel** runs the tasks. The first member is the primary member, whose score is the lift. Later members are floor members, which only the `deep` tier runs. Each member chooses its own provider and model, so one panel can mix a gateway and a subscription.
+- **A Claude subscription** serves panel members through `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. Anthropic's terms limit a subscription to ordinary individual use, so use it only on your own worker.
 
-Set one of these and both jobs are covered. Neither is checked for the panel at startup, since the sandbox may already have credentials baked into its image — but if neither is set and no auth directory is available either, the worker logs a warning naming the adapter and the variables that would fix it, instead of the job silently coming back with an **incomplete panel** (see "Reading a score" below).
+The presets set up the common combinations in one step: an Anthropic API key, OpenRouter, LiteLLM or another gateway, and an Anthropic or gateway judge with a subscription panel. Model fields offer the models each worker's providers list.
 
-For local development on a machine that already has an interactive Claude Code login, the adapter also falls back to mounting `~/.claude` and `~/.config/claude` from the host into the sandbox, read-only. That's a convenience, not something to rely on for a server: on macOS the actual credential lives in the Keychain, not in `~/.claude`, so copying that directory to a Linux worker was never going to authenticate anything. Set an environment variable instead.
+`model_panel` records each member's model and provider. A change of either starts a new score trend, because two panels are not the same measurement. The report also records the sandbox image, and the Evaluation page flags a worker whose image differs from the others.
 
-### Worker environment variables
+Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line. The judge's agreement with human labels (κ) was measured for one judge model; swap the judge and that calibration no longer describes the judge in use.
 
-Required — the worker exits at startup naming whichever is missing:
-
-| Variable | Description |
-|---|---|
-| `SKAEL_ENDPOINT` | Base URL of the skael server the worker claims jobs from |
-| `SKAEL_API_KEY` | API key the worker authenticates with |
-| `ANTHROPIC_API_KEY` | Direct Anthropic API key for the judge model — never a subscription CLI on PATH |
-
-Optional, with defaults:
-
-| Variable | Default | Description |
-|---|---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Subscription auth for the claude-code panel agent, as an alternative to `ANTHROPIC_API_KEY`. Generate with `claude setup-token`. Beside `ANTHROPIC_BASE_URL` it also splits the judge from the panel — see [Keeping the panel on a subscription](#keeping-the-panel-on-a-subscription) |
-| `WORKER_ID` | `{hostname}-{pid}` | Identifies this worker in job leases |
-| `WORKER_LEASE` | `5m` | How long a claimed job's lease lasts before it's considered abandoned |
-| `WORKER_POLL` | `15s` | Interval between claim attempts when the queue is empty |
-| `WORKER_WORK_ROOT` | OS temp dir | Directory to materialise eval workspaces under |
-| `WORKER_CONCURRENCY` | `1` | Concurrent sandbox sessions. Must be a positive integer |
-| `WORKER_GRADE_CONCURRENCY` | whetstone's default (8) | Concurrent judge calls. A container is bounded by CPU and memory, a judge call by the account's rate limit, so the two are separate knobs |
-| `WORKER_CONTEST_PARALLEL` | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load |
-
-By default the worker also needs a Docker daemon it can reach — every evaluation runs inside a sandboxed session, one job at a time per worker process. Run more worker replicas for more throughput.
-
-### Choosing a model and a gateway
-
-Four variables configure every model call. `skael-worker` and `whetstone` read the same four, and the judge that scores a run and the panel agents that attempt the tasks use one gateway. Set none of these and everything talks to Anthropic's own API.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | — | Credential, sent as `x-api-key`. |
-| `ANTHROPIC_AUTH_TOKEN` | — | Credential, sent as `Authorization: Bearer` — what OpenRouter issues. Wins when both are set. |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Gateway base URL. It posts to `{base}/v1/messages`, so the base carries no `/v1`. |
-| `LLM_MODEL` | shipped defaults | Comma-separated model ids, most capable first. |
-
-The auth header is inferred from the credential you set, so there is nothing to keep in sync. Run `whetstone doctor` to see what resolved.
-
-A complete OpenRouter setup, covering both the judge and the panel:
-
-```bash
-ANTHROPIC_BASE_URL=https://openrouter.ai/api
-ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
-LLM_MODEL=anthropic/claude-sonnet-5,anthropic/claude-haiku-4.5
-```
-
-`LLM_MODEL` is not optional there. OpenRouter model identifiers are namespaced (`anthropic/claude-sonnet-5`), unlike Anthropic's bare names (`claude-opus-5`), and the panel would otherwise keep asking your gateway for Claude Code's bare alias `sonnet`. A gateway that namespaces its identifiers answers those with a 404; every panel member then fails its health probe and the run refuses with the model names in the error. Check the ids against your gateway's own catalogue before you set them: a retired id fails the same way a mistyped one does.
-
-### Keeping the panel on a subscription
-
-Set `CLAUDE_CODE_OAUTH_TOKEN` alongside `ANTHROPIC_BASE_URL` and the two separate. The judge keeps the gateway, because a published score must come from a metered, reproducible backend. The panel authenticates with the subscription token instead, and the worker withholds the gateway variables from the sandbox so it cannot follow the judge onto the gateway.
-
-```bash
-ANTHROPIC_BASE_URL=https://openrouter.ai/api
-ANTHROPIC_AUTH_TOKEN=<your OpenRouter key>
-LLM_MODEL=anthropic/claude-sonnet-5
-CLAUDE_CODE_OAUTH_TOKEN=<output of: claude setup-token>
-```
-
-`LLM_MODEL` then names the judge alone. The panel asks for the shipped alias, which is what a subscription serves.
-
-This is a local and small-team setup rather than a shared-instance one. The panel it produces is recorded in `model_panel` like any other, so turning it on splits a skill's score trend at the changeover, and a subscription-backed panel is neither metered nor pinned to a model version. `whetstone doctor` and the worker's startup log both name the split when it is active.
-
-The list is ordered. The first entry judges every run and is the panel's primary member. Later entries are the panel's floor members, which only the `deep` tier runs — one list rather than a slot per tier, because a half-configured pair produced a panel with one working member and one that 404s, which is not an error but a *complete* run: it scores, reports `panel_complete: false`, and so can never release a version held for review, after paying for a full tier to get there.
-
-Naming a model without a gateway moves the judge alone. The panel keeps running the shipped alias against Anthropic directly, which is what you want when only the judge is BYOK — and it keeps your existing scores comparable, since a changed panel splits the trend line.
-
-You are not limited to Claude models. OpenRouter's Anthropic-compatible endpoint accepts the same request shape whatever model you route to, so `google/gemini-2.5-flash-lite` and the rest of its catalogue work for the judge too. Reasoning models are the one thing to watch: if a model spends its whole output budget on thinking tokens, the reply carries no text block and the run fails rather than scoring something empty. Give those a larger budget or pick a non-reasoning model for the judge.
-
-Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line — the platform records which model judged each run and splits the trend when it differs, with the reason shown, the same way it already splits on a changed suite or panel (see "Comparing versions over time" below).
-
-The judge is also a calibrated instrument: its agreement with human labels (κ) was measured for a specific judge model. Swap the judge and that calibration no longer describes the judge actually in use.
+A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration from the environment, as before this release, and the Evaluation page marks it as pinned by env. `whetstone` on a developer machine reads the same variables; `whetstone doctor` shows what resolved. [Configuration](/docs/configuration#worker-llm-credentials) lists them.
 
 ## A skill needs a suite first
 
