@@ -76,6 +76,9 @@ type Store struct {
 	keys *platform.Keyring
 }
 
+// ErrSealed means a stored App secret does not open with any master key.
+var ErrSealed = errors.New("the GitHub App's secrets do not open with the current master key")
+
 // NewStore builds a Store. keys may hold no key; then nothing can be saved.
 func NewStore(pool *pgxpool.Pool, keys *platform.Keyring) *Store {
 	return &Store{pool: pool, keys: keys}
@@ -106,7 +109,7 @@ func (s *Store) App(ctx context.Context) (*App, error) {
 	}{{&a.PrivateKey, pk, aadPrivateKey}, {&a.WebhookSecret, ws, aadWebhookSecret}, {&a.ClientSecret, cs, aadClientSecret}} {
 		plain, err := s.keys.Open(f.sealed, f.aad)
 		if err != nil {
-			return nil, fmt.Errorf("gitsync.Store.App: open %s: %w", f.aad, err)
+			return nil, fmt.Errorf("gitsync.Store.App: open %s: %w: %w", f.aad, ErrSealed, err)
 		}
 		*f.dst = plain
 	}
@@ -310,4 +313,13 @@ func (s *Store) Complete(ctx context.Context, client *http.Client, state, code s
 		return nil, err
 	}
 	return a, nil
+}
+
+// SealedUnreadable reports whether the App exists and its secrets no longer open.
+func (s *Store) SealedUnreadable(ctx context.Context) (bool, error) {
+	_, err := s.App(ctx)
+	if errors.Is(err, ErrSealed) {
+		return true, nil
+	}
+	return false, err
 }

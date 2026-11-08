@@ -85,6 +85,11 @@ func ValidateURL(ctx context.Context, raw string, allowPrivate bool) error {
 // on the resolved IP of every connection, including each redirect, so DNS
 // rebinding and a redirect to a metadata service both fail at dial.
 func NewClient(allowPrivate bool) *http.Client {
+	return NewLiveClient(func() bool { return allowPrivate })
+}
+
+// NewLiveClient is NewClient with the address rule read on every dial and redirect.
+func NewLiveClient(allowPrivate func() bool) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 		Control: func(_, address string, _ syscall.RawConn) error {
@@ -92,7 +97,7 @@ func NewClient(allowPrivate bool) *http.Client {
 			if err != nil {
 				return fmt.Errorf("%w: %s", ErrRefusedAddress, address)
 			}
-			if refused(ap.Addr(), allowPrivate) {
+			if refused(ap.Addr(), allowPrivate()) {
 				return fmt.Errorf("%w: %s", ErrRefusedAddress, ap.Addr())
 			}
 			return nil
@@ -117,7 +122,7 @@ func NewClient(allowPrivate bool) *http.Client {
 			if req.Method != http.MethodPost {
 				return http.ErrUseLastResponse
 			}
-			return checkScheme(req.URL, allowPrivate)
+			return checkScheme(req.URL, allowPrivate())
 		},
 	}
 }

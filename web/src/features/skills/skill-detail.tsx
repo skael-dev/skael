@@ -18,6 +18,7 @@ import type { ScanReport } from "@/features/security/scan-findings";
 import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityReport } from "@/features/quality/quality-report";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
+import { UsageBreakdown } from "@/features/analytics/usage-breakdown";
 import { OwnersCard } from "@/features/skills/owners-card";
 import { RunOutcomes } from "@/features/skills/run-outcomes";
 import { cn } from "@/lib/utils";
@@ -400,6 +401,7 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
 
       {/* Activations chart */}
       <SkillActivationsChart skillName={skill.name} days={period} />
+      <UsageBreakdown days={period} skill={skill.name} />
 
       {/* Agent breakdown */}
       {Object.keys(byAgent).length > 0 && (

@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"github.com/alternayte/auth-all/apierr"
 )
 
 type User struct {
@@ -55,3 +56,19 @@ func CheckAPIKey(storedHash, key string) bool {
 	}
 	return subtle.ConstantTimeCompare(h[:], expected) == 1
 }
+
+type claimKey struct{}
+
+// ContextWithClaim marks ctx as carrying the verified claim code.
+func ContextWithClaim(ctx context.Context) context.Context {
+	return context.WithValue(ctx, claimKey{}, true)
+}
+
+// Claimed reports whether ctx carries the verified claim code.
+func Claimed(ctx context.Context) bool {
+	v, _ := ctx.Value(claimKey{}).(bool)
+	return v
+}
+
+// ErrClaimRequired refuses the first sign-up without the claim code.
+var ErrClaimRequired = apierr.ErrForbidden.WithMessage("Enter the claim code from the server log before you create the owner.")

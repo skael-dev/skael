@@ -11,8 +11,8 @@ Each skill is either **git-bound** or **native**. A native skill works as it alw
 
 Skael acts as one GitHub App per instance. You create it from the UI, and you need two server settings first:
 
-- `SKAEL_MASTER_KEYS` encrypts the App's private key in Postgres. Generate a key with `openssl rand -base64 32` and set `SKAEL_MASTER_KEYS=k1:<key>`. Keep the key: a new key makes the stored App unreadable. To rotate, put a new key first and keep the old key after it.
-- `PUBLIC_URL` is where GitHub sends its redirect and its webhooks.
+- A master key encrypts the App's private key in Postgres. The server generates one on first start unless `SKAEL_MASTER_KEYS` is set. Back it up with Postgres; see [Backup & restore](/docs/backup-restore).
+- The public URL, on Settings → General, is where GitHub sends its redirect and its webhooks.
 
 Then:
 

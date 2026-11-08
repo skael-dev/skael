@@ -185,7 +185,7 @@ func (w *Worker) contestSuite(ctx context.Context, job *evalqueue.Job, bundles [
 	ins := make([]DeriveInput, 0, len(job.Candidates))
 	for i, cand := range job.Candidates {
 		ins = append(ins, DeriveInput{
-			Skill: cand.SkillName, Bundle: bundles[i], Tier: job.Tier, Panel: job.Panel,
+			Skill: cand.SkillName, Bundle: bundles[i], Tier: job.Tier, Panel: job.Panel, Eval: job.Eval,
 		})
 	}
 	res, err := w.deriver.Contest(ctx, ins)
@@ -235,7 +235,7 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 	rep, err := w.runner.Run(ctx, RunInput{
 		JobID: job.ID,
 		Skill: cand.SkillName, Version: cand.Version, SuiteRef: suiteRef,
-		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
+		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
 		AllowVoid: allowVoid, Contest: true, Attempts: job.ContestAttempts,
 	})
 	if err != nil {

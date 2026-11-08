@@ -68,6 +68,8 @@ type RunInput struct {
 	SuiteRef string
 	Tier     string
 	Panel    evalqueue.Panel
+	// Eval is the server's judge and panel, or nil.
+	Eval *evalqueue.EvalConfig
 
 	// AllowVoid excludes void tasks instead of refusing. Sourced from the
 	// suite's machine_generated flag, not origin — an unreviewed authored
@@ -126,6 +128,7 @@ type DeriveInput struct {
 	Bundle []byte
 	Tier   string
 	Panel  evalqueue.Panel
+	Eval   *evalqueue.EvalConfig
 }
 
 // DeriveResult is a suite ready to push to the registry.
@@ -223,7 +226,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 			return fmt.Errorf("worker: job %s has no suite_ref and this worker has no deriver configured", job.ID)
 		}
 		res, err := w.deriver.Derive(runCtx, DeriveInput{
-			Skill: job.SkillName, Bundle: bundle, Tier: job.Tier, Panel: job.Panel,
+			Skill: job.SkillName, Bundle: bundle, Tier: job.Tier, Panel: job.Panel, Eval: job.Eval,
 		})
 		if err != nil {
 			return fmt.Errorf("worker: derive suite for %s: %w", job.SkillName, err)
@@ -269,7 +272,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	rep, runErr := w.runner.Run(runCtx, RunInput{
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
-		Tier: tier, Panel: job.Panel, WorkspaceDir: workDir,
+		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
 		AllowVoid: meta.MachineGenerated,
 	})
 

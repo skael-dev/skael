@@ -87,7 +87,7 @@ var routeRules = []RouteRule{
 	del("/api/sets/{name}"),
 
 	// The worker's loop.
-	post("/api/eval/jobs/claim", ScopeEvalWork),
+	post("/api/eval/jobs/claim", ScopeEvalWork), post("/api/eval/workers/checkin", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/heartbeat", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/fail", ScopeEvalWork),
 	post("/api/eval/jobs/{id}/report", ScopeEvalWork),
@@ -114,10 +114,16 @@ var routeRules = []RouteRule{
 	// No scope: people only. Public routes are listed too, because the auth
 	// middleware passes them before this table applies.
 	read("/api/health"), read("/api/health/ready"), read("/api/capabilities"),
+	read("/api/setup"), post("/api/setup/claim"), read("/api/onboarding"), post("/api/onboarding/sample"), del("/api/onboarding/sample"),
 	read("/api/auth/account"), read("/api/auth/keys"), post("/api/auth/keys"), del("/api/auth/keys/{id}"),
 	read("/api/admin/users"), put("/api/admin/users/{id}/role"), post("/api/admin/users/{id}/password"),
 	post("/api/admin/users/{id}/disable"), post("/api/admin/users/{id}/enable"),
 	read("/api/admin/audit"), read("/api/users/search"),
+	read("/api/admin/settings"), put("/api/admin/settings"),
+	read("/api/admin/master-key"), post("/api/admin/master-key/reset"), post("/api/admin/settings/test/{section}"),
+	read("/api/admin/providers"), post("/api/admin/providers"), put("/api/admin/providers/{id}"), del("/api/admin/providers/{id}"),
+	put("/api/admin/providers/panel"), post("/api/admin/providers/presets/{id}"),
+	read("/api/admin/workers"), post("/api/admin/workers/key"),
 	read("/api/admin/github"), del("/api/admin/github"), post("/api/admin/github/manifest"),
 	read("/api/admin/github/callback"), post("/api/github/webhook"),
 	read("/api/git/repos"), post("/api/git/connections/preview"), read("/api/git/connections"), post("/api/git/connections"),
@@ -145,7 +151,7 @@ var routeRules = []RouteRule{
 	read("/api/eval/suites/{ref}/triggers"), post("/api/eval/suites/{ref}/review"),
 	post("/api/eval/contests"), read("/api/eval/contests/{id}"), read("/api/skills/{name}/contests"),
 	post("/api/import/resolve"), post("/api/import"), read("/api/import/sources"), post("/api/import/upload"),
-	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/skills"),
+	post("/api/events"), read("/api/analytics/overview"), read("/api/analytics/breakdown"), read("/api/analytics/skills"),
 	read("/api/skills/{name}/activations"), read("/api/skills/{name}/timeseries"),
 	read("/api/analytics/timeseries"), read("/api/analytics/consumers"), read("/api/analytics/unregistered"), post("/api/analytics/dismiss"),
 }

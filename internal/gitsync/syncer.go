@@ -83,8 +83,9 @@ type Deps struct {
 	// skill, for the PR check.
 	Owners skill.OwnerResolver
 	Users  *auth.UserStore
-	// PublicURL links a check run to Skael's contest page.
-	PublicURL string
+	// PublicURL links a check run to Skael's contest page. It is read when
+	// the check run is written.
+	PublicURL func() string
 }
 
 // github returns a client for the stored App, rebuilt when the App changes.
@@ -613,4 +614,11 @@ func (e *UserError) Error() string { return e.msg }
 
 func userErrorf(format string, args ...any) error {
 	return &UserError{msg: fmt.Sprintf(format, args...)}
+}
+
+func (d Deps) publicURL() string {
+	if d.PublicURL == nil {
+		return ""
+	}
+	return d.PublicURL()
 }

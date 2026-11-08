@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/alternayte/auth-all/humaauth"
@@ -22,16 +23,20 @@ import (
 	"github.com/skael-dev/skael/internal/gitsync"
 	skillimport "github.com/skael-dev/skael/internal/import"
 	"github.com/skael-dev/skael/internal/mcp"
+	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/ownership"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/providers"
 	"github.com/skael-dev/skael/internal/quality"
 	"github.com/skael-dev/skael/internal/runs"
 	"github.com/skael-dev/skael/internal/scan"
 	"github.com/skael-dev/skael/internal/sets"
+	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/submissions"
 	gosync "github.com/skael-dev/skael/internal/sync"
 	"github.com/skael-dev/skael/internal/webhooks"
+	"github.com/skael-dev/skael/internal/workers"
 )
 
 // RegisterAPIDeps bundles everything RegisterAPIRoutes needs to wire the API.
@@ -50,8 +55,18 @@ import (
 // huma.Register call in Build() after RegisterAPIRoutes returns, or the
 // guard cannot see it and the spec can silently drift again.
 type RegisterAPIDeps struct {
-	Pool      *pgxpool.Pool
-	Config    *platform.Config
+	Pool   *pgxpool.Pool
+	Config *platform.Config
+	// Settings is the live settings snapshot. Nil resolves from an empty
+	// environment, for spec generation.
+	Settings *settings.Live
+	// Claim guards the first sign-up. ClaimEnforced is false in tests.
+	Claim         *onboarding.Claim
+	ClaimEnforced bool
+	// ArchiveStore names the archive store in effect, for the settings page.
+	ArchiveStore string
+	// Keys checks the master key. Nil for spec generation.
+	Keys      *settings.KeyService
 	People    *auth.People
 	UserStore *auth.UserStore
 	KeyStore  *auth.KeyStore
@@ -105,6 +120,21 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	if cfg == nil {
 		cfg = &platform.Config{}
 	}
+	live := d.Settings
+	if live == nil {
+		live = settings.Static(nil)
+	}
+	snap := func() *settings.Snapshot { return live.Get() }
+	floor := func() float64 { return snap().Float("quality_floor") }
+	publicURL := func() string { return snap().String("public_url") }
+	externalScanner := newScannerSource(live)
+	settings.RegisterRoutes(api, live, d.ArchiveStore)
+	keyService := d.Keys
+	if keyService == nil {
+		keyService = settings.NewKeyService(nil, &settings.MasterKey{Keys: cfg.MasterKeys}, live)
+	}
+	settings.RegisterKeyRoutes(api, keyService)
+	settings.RegisterTestRoute(api, live, settingsTesters(&http.Client{Timeout: 15 * time.Second}))
 
 	// Health (auth middleware skips /api/health).
 	huma.Register(api, huma.Operation{
@@ -145,13 +175,16 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage)
+		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage, d.Keys)
 		if !ready {
 			detail, _ := json.Marshal(checks)
 			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
 		}
 		out := &struct{ Body readyBody }{}
 		out.Body.Status = "ready"
+		if checks.MasterKey == "degraded" {
+			out.Body.Status = "degraded"
+		}
 		out.Body.Checks = checks
 		return out, nil
 	})
@@ -164,7 +197,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 			panic(err)
 		}
 	}
-	caps.SetSignIn(people.SignInMethods())
+	caps.SetSignIn(people.SignInMethods)
 	auth.RegisterRoutes(api, people, d.UserStore, d.KeyStore)
 	mountPeople(api, router, people)
 	auth.RegisterServiceAccountRoutes(api, d.Pool, d.KeyStore)
@@ -176,10 +209,6 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	// Skills. The eval queue and suite registry are constructed here (ahead
 	// of their own route registration below) because publish needs them to
 	// enqueue an evaluation for a skill that has a registered suite.
-	externalScanner := scan.NewExternalScanner(cfg.ExternalScanCmd, cfg.ExternalScanTimeout)
-	if externalScanner != nil {
-		log.Info().Str("scanner", externalScanner.Name).Msg("external security scanner enabled")
-	}
 	skillStore := skill.NewStore(d.Pool)
 	evalPool := evalqueue.NewPool(d.Pool)
 	qualityStore := quality.NewStore(d.Pool)
@@ -196,7 +225,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Queue:    evalQueueAdapter{q: evalPool},
 		Suites:   evalSuiteAdapter{r: suiteRegistry},
 
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Ownership:    ownerResolver,
 	}
 	skill.RegisterRoutes(api, router, skillStore, d.Storage, skillOptions)
@@ -209,7 +238,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		skillStore.SetNotifier(notifier)
 		setStore.SetNotifier(notifier)
 	}
-	webhooks.RegisterRoutes(api, d.Pool, webhooks.NewStore(d.Pool), notifier, cfg.WebhookAllowPrivate)
+	webhooks.RegisterRoutes(api, d.Pool, webhooks.NewStore(d.Pool), notifier, func() bool { return snap().Bool("webhooks.allow_private") })
 	router.Mount(RiverUIPrefix, privilegedOnly(d.RiverUI))
 
 	// Run signals. Outcomes read and write their own tables and never reach the
@@ -226,7 +255,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 	// Git sync. The App's secrets are sealed under SKAEL_MASTER_KEYS, and a
 	// sync publishes through the same publisher as a person.
-	gitsync.RegisterRoutes(api, syncer.Store(), gitsync.RouteOptions{PublicURL: cfg.PublicURL})
+	gitsync.RegisterRoutes(api, syncer.Store(), gitsync.RouteOptions{PublicURL: publicURL})
 	gitsync.RegisterConnectionRoutes(api, syncer, syncer.Store(), d.Jobs)
 	router.Post(gitsync.WebhookPath, gitsync.WebhookHandler(syncer.Store(), d.Jobs).ServeHTTP)
 
@@ -250,6 +279,9 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body []gosync.ManifestEntry
 	}, error) {
+		if d.Pool != nil {
+			onboarding.MarkSynced(ctx, d.Pool)
+		}
 		entries, err := syncStore.GetManifest(ctx)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("", err)
@@ -264,16 +296,19 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	if analyticsStore == nil {
 		analyticsStore = analytics.NewStore(d.Pool)
 	}
-	analytics.RegisterRoutes(api, analyticsStore)
+	analytics.RegisterRoutes(api, analyticsStore, analytics.Options{
+		RecordIdentity:   func() bool { return snap().Bool("activation.record_identity") },
+		MemberVisibility: func() string { return snap().String("activation.member_visibility") },
+	})
 
 	// Import.
 	importStore := skillimport.NewStore(d.Pool)
-	importFetcher := skillimport.NewFetcher("https://api.github.com", cfg.GitHubToken)
+	importFetcher := skillimport.NewLiveFetcher("https://api.github.com", func() string { return snap().String("github_token") })
 	skillimport.RegisterRoutes(api, router, importStore, skillStore, d.Storage, importFetcher, skillimport.RouteOptions{
 		External:     externalScanner,
 		Queue:        evalPool,
 		Suites:       suiteRegistry,
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Ownership:    ownerResolver,
 		Git:          syncer,
 	})
@@ -298,12 +333,28 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		Storage:     d.Storage,
 		Owners:      ownerResolver,
 		Users:       d.UserStore,
-		PublicURL:   cfg.PublicURL,
+		PublicURL:   publicURL,
 	})
+	claim := d.Claim
+	if claim == nil {
+		claim = onboarding.NewClaim(d.Pool)
+	}
+	onboarding.RegisterSetupRoutes(api, claim, d.ClaimEnforced, cfg.CookieSecure)
+	onboarding.RegisterRoutes(api, d.Pool,
+		onboarding.NewSample(d.Pool, skillStore, skill.NewPublisher(skillStore, d.Storage, skillOptions), qualityStore, d.Storage),
+		func() onboarding.SetupFacts {
+			s := snap()
+			signIn := s.String("oidc.issuer") != "" || s.String("google.client_id") != "" || s.String("github.client_id") != ""
+			return onboarding.SetupFacts{PublicURL: s.String("public_url"), SMTPHost: s.String("smtp.host"), SignIn: signIn}
+		})
+	providerStore := providers.NewStore(d.Pool)
+	providers.RegisterRoutes(api, providerStore)
+	workers.RegisterRoutes(api, workers.NewStore(d.Pool), providerStore, d.KeyStore, publicURL)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
-		QualityFloor: cfg.QualityFloor,
+		QualityFloor: floor,
 		Contests:     contestStore,
+		EvalConfig:   providerStore.EvalConfig,
 	})
 
 	// Contests advise and never gate: nothing registered here releases a
@@ -314,4 +365,19 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	quality.RegisterRoutes(api, qualityStore, skillStore)
 
 	return evalPool
+}
+
+// newScannerSource rebuilds the external scanner when its settings change.
+func newScannerSource(live *settings.Live) func() *scan.ExternalScanner {
+	var cur atomic.Pointer[scan.ExternalScanner]
+	build := func(s *settings.Snapshot) {
+		sc := scan.NewExternalScanner(s.String("external_scan.cmd"), s.Duration("external_scan.timeout"))
+		if sc != nil && (cur.Load() == nil || cur.Load().Name != sc.Name) {
+			log.Info().Str("scanner", sc.Name).Msg("external security scanner enabled")
+		}
+		cur.Store(sc)
+	}
+	build(live.Get())
+	live.OnChange(build)
+	return cur.Load
 }

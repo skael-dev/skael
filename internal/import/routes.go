@@ -30,8 +30,9 @@ import (
 // the import handlers. Each is independently optional (nil disables the
 // behavior it powers).
 type RouteOptions struct {
-	// External is the opt-in external scanner (Phase 2); nil disables it.
-	External *scan.ExternalScanner
+	// External returns the opt-in external scanner at use time; nil, or a nil
+	// result, disables it.
+	External func() *scan.ExternalScanner
 	// Queue, when set together with Suites, lets an import enqueue an
 	// evaluation for a skill that has a registered suite. A queue outage
 	// must never fail an import — mirrors the publish path.
@@ -42,7 +43,7 @@ type RouteOptions struct {
 	// evaluation must reach to clear a held version. Mirrors
 	// skill.RouteOptions.QualityFloor; the zero value means any verified,
 	// complete, contract-clean report clears.
-	QualityFloor float64
+	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership, mirroring
 	// skill.RouteOptions.Ownership. A nil resolver leaves the zero
 	// gate.OwnerState, which contributes nothing — that is what keeps every
@@ -75,7 +76,6 @@ type importQualityState struct {
 }
 
 func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher, opts RouteOptions) {
-	external := opts.External
 
 	// Rate limit: 10 requests per minute for the resolve endpoint.
 	resolveLimiter := rate.NewLimiter(rate.Every(time.Minute/10), 1)
@@ -219,7 +219,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: msg})
 				continue
 			}
-			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership)
+			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, opts.external(), opts.Queue, opts.Suites, opts.floor(), opts.Ownership)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -287,7 +287,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 	})
 
 	// POST /api/import/upload — local upload for CLI
-	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, external, opts.Queue, opts.Suites, opts.QualityFloor, opts.Ownership, opts.Git))
+	router.Post("/api/import/upload", makeUploadHandler(skillStore, importStore, storage, opts))
 }
 
 func importSingleSkill(
@@ -499,7 +499,8 @@ func importSingleSkill(
 	return ver, true, quality, decision, nil
 }
 
-func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, external *scan.ExternalScanner, queue evalqueue.Executor, suites *evalsuite.Registry, qualityFloor float64, ownership skill.OwnerResolver, git skill.GitBoundary) http.HandlerFunc {
+func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, opts RouteOptions) http.HandlerFunc {
+	queue, suites, ownership, git := opts.Queue, opts.Suites, opts.Ownership, opts.Git
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
@@ -558,7 +559,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: msg})
 				continue
 			}
-			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, external, queue, suites, qualityFloor, ownership)
+			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, opts.external(), queue, suites, opts.floor(), ownership)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue
@@ -575,4 +576,18 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 			log.Warn().Err(err).Msg("import upload: encode response failed (headers already sent)")
 		}
 	}
+}
+
+func (o RouteOptions) floor() float64 {
+	if o.QualityFloor == nil {
+		return 0
+	}
+	return o.QualityFloor()
+}
+
+func (o RouteOptions) external() *scan.ExternalScanner {
+	if o.External == nil {
+		return nil
+	}
+	return o.External()
 }

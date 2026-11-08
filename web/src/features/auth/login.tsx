@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getSetup } from "@/api/sdk.gen";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth, type LoginResult } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -16,6 +18,10 @@ export function Login() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const methods = useSignInMethods();
+  const setup = useQuery({ queryKey: ["setup"], queryFn: async () => (await getSetup()).data ?? { claim_required: false } });
+  useEffect(() => {
+    if (setup.data?.claim_required) navigate("/signup", { replace: true });
+  }, [setup.data, navigate]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

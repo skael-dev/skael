@@ -90,9 +90,9 @@ func TestInstallClaudeHook_Idempotent(t *testing.T) {
 
 	content := string(data)
 
-	// Count occurrences of "_managed_by": "skael" — must be exactly 1.
+	// One managed hook per event: PreToolUse, SessionStart and PostModelSwitch.
 	count := strings.Count(content, `"_managed_by"`)
-	assert.Equal(t, 1, count, "must have exactly one skael-managed hook after two installs")
+	assert.Equal(t, 3, count, "must have exactly one skael-managed hook per event after two installs")
 }
 
 // TestUninstallClaudeHook verifies that after uninstall, no skael-managed entries remain.

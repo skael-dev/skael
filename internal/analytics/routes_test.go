@@ -27,7 +27,7 @@ func setupAnalyticsAPI(t *testing.T) (http.Handler, *analytics.Store) {
 
 	r := chi.NewMux()
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
-	analytics.RegisterRoutes(api, store)
+	analytics.RegisterRoutes(api, store, analytics.Options{})
 
 	return r, store
 }

@@ -7,11 +7,13 @@ Losing the database while the archive store survives is as bad as the reverse: t
 
 ## What to back up
 
-Two things, always as a pair:
+Two things, always as a pair, and the master key:
 
 **Postgres** — holds every skill record, version, user account, API key, and analytics event. Nothing in the archive store is queryable without it.
 
 **Archive store** — holds the `.tar.gz` archives that `skael sync` downloads. Each archive is stored at `{name}/{checksum[:16]}.tar.gz` (content-addressed, not by version number). The database row references that exact path; if the file is missing, the DB row is useless.
+
+**Master key** — seals the secrets saved on the Settings page and the GitHub App's private key. Without `SKAEL_MASTER_KEYS`, the server generates it as `master.key` in its data directory: `SKAEL_DATA_DIR`, else a local `STORAGE_PATH`, else `./data`. Settings → Deployment shows its path and fingerprint. A lost key loses no skill, version, user or score: the server starts, and Settings lists each secret to enter again.
 
 Back up the database first, then the archive store. A snapshot that captures the DB after an archive was written but before the matching row was committed is safe to restore — the unused archive will be ignored. The reverse (DB row present, archive missing) breaks downloads for that version.
 

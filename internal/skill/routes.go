@@ -133,8 +133,9 @@ type OwnerResolver interface {
 // disables the behavior it powers) so a caller — including tests — can opt
 // into only what it needs.
 type RouteOptions struct {
-	// External is the opt-in external scanner (Phase 2); nil disables it.
-	External *scan.ExternalScanner
+	// External returns the opt-in external scanner at use time; nil, or a nil
+	// result, disables it.
+	External func() *scan.ExternalScanner
 	// Queue, when set together with Suites, lets publish enqueue an
 	// evaluation for a skill that has a registered suite. A queue outage
 	// must never fail a publish — see the enqueue step below.
@@ -143,9 +144,9 @@ type RouteOptions struct {
 	Suites SuiteLookup
 	// QualityFloor is the minimum headline quality score a verified
 	// evaluation must reach to clear a held version. It comes from
-	// platform.Config.QualityFloor; the zero value means any verified,
-	// complete, contract-clean report clears.
-	QualityFloor float64
+	// the quality_floor setting at decision time; nil or zero means any
+	// verified, complete, contract-clean report clears.
+	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership for publish. A nil
 	// resolver leaves the zero gate.OwnerState, which contributes nothing —
 	// that is what keeps every test harness and the CLI's local pre-scan on
@@ -925,4 +926,18 @@ func makeLatestScanHandler(store *Store) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(ver.ScanResult) //nolint:errcheck
 	}
+}
+
+func (o RouteOptions) floor() float64 {
+	if o.QualityFloor == nil {
+		return 0
+	}
+	return o.QualityFloor()
+}
+
+func (o RouteOptions) external() *scan.ExternalScanner {
+	if o.External == nil {
+		return nil
+	}
+	return o.External()
 }

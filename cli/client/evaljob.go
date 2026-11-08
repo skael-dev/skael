@@ -35,6 +35,8 @@ type EvalJob struct {
 	ContestID       string             `json:"contest_id,omitempty"`
 	Candidates      []EvalJobCandidate `json:"candidates,omitempty"`
 	ContestAttempts int                `json:"contest_attempts,omitempty"`
+	// Eval is the claim's judge and panel, raw, for the worker to decode.
+	Eval json.RawMessage `json:"-"`
 }
 
 // EvalJobCandidate is one contest entry as the claim returns it.
@@ -70,12 +72,14 @@ func (c *Client) ClaimEvalJob(workerID string, leaseSeconds int) (*EvalJob, stri
 	}
 
 	var out struct {
-		Job        EvalJob `json:"job"`
-		ClaimToken string  `json:"claim_token"`
+		Job        EvalJob         `json:"job"`
+		ClaimToken string          `json:"claim_token"`
+		Eval       json.RawMessage `json:"eval,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, "", false, fmt.Errorf("decode claim eval job response: %w", err)
 	}
+	out.Job.Eval = out.Eval
 	return &out.Job, out.ClaimToken, true, nil
 }
 
@@ -192,4 +196,22 @@ func (c *Client) FetchPRHead(id string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+}
+
+// WorkerCheckin calls POST /api/eval/workers/checkin with body and decodes the
+// reply into out. Both are the server's workers wire types.
+func (c *Client) WorkerCheckin(body, out any) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal worker check-in: %w", err)
+	}
+	resp, err := c.do(http.MethodPost, "/api/eval/workers/checkin", bytes.NewReader(payload), "application/json")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode worker check-in reply: %w", err)
+	}
+	return nil
 }

@@ -1,0 +1,1 @@
+By default, a delivery reaches only public HTTPS addresses, so a webhook cannot be used to reach your internal network. Allow private addresses only when a consumer runs on your own network. Link-local addresses, such as cloud metadata endpoints, stay refused.

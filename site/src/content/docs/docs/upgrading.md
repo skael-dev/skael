@@ -11,6 +11,22 @@ A migration can lock a table while it runs. On a large registry, stop the server
 
 The [release notes](https://github.com/skael-dev/skael/releases) state what each version changes.
 
+## What stays compatible
+
+Within 0.x minor releases, skael keeps these promises:
+
+- **Every prior release upgrades in place.** Migrations run from any earlier release's schema, and a test upgrades a v0.18.0 database with data in it on every change.
+- **Environment variable names keep working.** A variable that moves to the Settings page still wins over the page and locks its field, so a deploy that sets it changes nothing. A variable that is removed or renamed gets a deprecation note in the release notes first.
+- **API paths keep working.** A path that changes gets a deprecation note first. A new request field is optional, so an older CLI or worker keeps working against a newer server.
+- **Archives stay where they are.** An install that started with archives on the filesystem keeps them there, even though a new install now stores them in Postgres.
+
+### Upgrading to 0.19
+
+- The first start generates a master key file unless `SKAEL_MASTER_KEYS` is set. Back it up with Postgres; see [Backup & restore](/docs/backup-restore).
+- Server settings you set as environment variables stay in effect and show as locked on **Instance settings**. Unset them to manage them on the page.
+- A worker with `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its environment configuration. Remove both to let the **Evaluation** page choose the judge and panel. Reports now record each member's provider and the sandbox image, so the first score after you switch starts a new trend.
+- Run `skael hook install` again on developer machines so activations carry the model and the installed version.
+
 ## Procedure
 
 ### 1. Back up first

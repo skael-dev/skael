@@ -27,6 +27,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 	"github.com/skael-dev/skael/internal/eval/store"
+	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/worker"
 )
@@ -119,8 +120,11 @@ func configFromEnv() (workerConfig, error) {
 			"skael-worker: missing required environment variable(s): %s", joinComma(missing))
 	}
 
+	// A worker that pins its own gateway or panel must be able to judge at
+	// start. Otherwise the server's providers choose per job, and the
+	// credentials they name are checked when a job needs them.
 	prov := provider.APIFromEnv()
-	if err := prov.Validate(); err != nil {
+	if err := prov.Validate(); err != nil && provider.PinnedByEnv(os.Getenv) {
 		return workerConfig{}, fmt.Errorf(
 			"skael-worker: no LLM gateway for the judge: %w. A subscription CLI on PATH is never used here, "+
 				"because a published score must come from a metered, reproducible backend", err)
@@ -304,9 +308,9 @@ func run(cfg workerConfig) error {
 	// something stronger than its own context can leave resources behind.
 	resolve.Sweep(context.Background(), drv)
 
-	gw, err := cfg.Provider.Gateway(judgeGatewayOptions())
-	if err != nil {
-		return fmt.Errorf("skael-worker: LLM gateway: %w", err)
+	b := newBackends(cfg.Provider)
+	if b.pinned {
+		log.Info().Str("provider", cfg.Provider.Detail).Msg("skael-worker: pinned by env; the server's providers do not apply")
 	}
 
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
@@ -317,18 +321,12 @@ func run(cfg workerConfig) error {
 	}
 
 	r := &realRunner{
-		driver: drv, gateway: gw, concurrency: cfg.Concurrency,
+		driver: drv, backends: b, concurrency: cfg.Concurrency,
 		gradeConcurrency: cfg.GradeConcurrency, runRoot: cfg.RunRoot,
-		panelModels: cfg.Provider.PanelModels(), panelBase: cfg.Provider.BaseURL,
-		panelExcludeEnv: cfg.Provider.PanelExcludeEnv(),
+		image: cfg.SandboxCfg.ImageIdentity(),
 	}
 
-	der, err := derive.New(deriverOptions(gw))
-	if err != nil {
-		return fmt.Errorf("skael-worker: suite deriver: %w", err)
-	}
-
-	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{d: der})
+	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{backends: b})
 	if err != nil {
 		return fmt.Errorf("skael-worker: %w", err)
 	}
@@ -343,6 +341,8 @@ func run(cfg workerConfig) error {
 		Dur("poll_interval", cfg.PollInterval).
 		Msg("skael-worker: polling for jobs")
 
+	k := newCheckin(cfg)
+	go k.loop(ctx, cfg.PollInterval)
 	err = pollLoop(ctx, w, cfg.PollInterval)
 	if errors.Is(err, context.Canceled) {
 		log.Info().Msg("skael-worker: shutting down on signal")
@@ -384,32 +384,32 @@ func pollLoop(ctx context.Context, w *worker.Worker, pollInterval time.Duration)
 // reason to have one anywhere near the workspace it was just handed.
 type realRunner struct {
 	driver           sandbox.Driver
-	gateway          llm.Gateway
+	backends         *backends
 	concurrency      int
 	gradeConcurrency int
 	runRoot          string
-	panelModels      []string
-	panelBase        string
-	panelExcludeEnv  []string
+	image            string
 }
 
 // evalDepsFrom maps the resolved worker onto the deps RunEvalWith consumes.
 // It is a separate function for the same reason evalRequestFrom is: this hop
 // carries panel configuration that nothing downstream can reconstruct, and a
 // field dropped here is not an error but a run against a panel nobody chose.
-func evalDepsFrom(r *realRunner, st *store.Store) whetstone.EvalDeps {
+func evalDepsFrom(r *realRunner, jb jobBackends, st *store.Store) whetstone.EvalDeps {
 	return whetstone.EvalDeps{
 		Store:           st,
 		Driver:          r.driver,
-		Gateway:         r.gateway,
+		Gateway:         jb.gateway,
 		Adapters:        agent.Get,
 		Now:             time.Now,
 		Sleep:           time.Sleep,
 		EngineVersion:   version,
 		WorkspaceRoot:   r.runRoot,
-		PanelModels:     r.panelModels,
-		PanelBaseURL:    r.panelBase,
-		PanelExcludeEnv: r.panelExcludeEnv,
+		PanelModels:     jb.panelModels,
+		PanelBaseURL:    jb.panelBase,
+		PanelExcludeEnv: jb.panelExcludeEnv,
+		MemberAuth:      jb.memberAuth,
+		MemberProvider:  jb.memberProvider,
 	}
 }
 
@@ -428,11 +428,18 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Str("tier", in.Tier).
 		Msg("skael-worker: claimed job")
 
-	deps := evalDepsFrom(r, st)
+	jb, err := r.backends.forJob(in.Eval)
+	if err != nil {
+		return nil, err
+	}
+	deps := evalDepsFrom(r, jb, st)
 
 	req := evalRequestFrom(in, r.concurrency, r.gradeConcurrency)
 
 	rep, err := whetstone.RunEvalWith(ctx, deps, req)
+	if rep != nil {
+		rep.SandboxImage = r.image
+	}
 	if err != nil {
 		log.Error().
 			Str("job_id", string(in.JobID)).
@@ -458,14 +465,30 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 // realDeriver adapts derive.Deriver to worker.Deriver. The two Input types are
 // separate because internal/worker must not import internal/eval/derive —
 // that is what keeps the run loop testable with no LLM and no Docker.
-type realDeriver struct{ d *derive.Deriver }
+type realDeriver struct{ backends *backends }
+
+func (r *realDeriver) deriver(eval *evalqueue.EvalConfig) (*derive.Deriver, error) {
+	jb, err := r.backends.forJob(eval)
+	if err != nil {
+		return nil, err
+	}
+	d, err := derive.New(deriverOptions(jb.gateway))
+	if err != nil {
+		return nil, fmt.Errorf("skael-worker: suite deriver: %w", err)
+	}
+	return d, nil
+}
 
 func (r *realDeriver) Derive(ctx context.Context, in worker.DeriveInput) (*worker.DeriveResult, error) {
 	panel, err := runner.ParsePanel(in.Panel.Agents, in.Panel.Models)
 	if err != nil {
 		return nil, fmt.Errorf("skael-worker: derive: %w", err)
 	}
-	res, err := r.d.Derive(ctx, derive.Input{
+	d, err := r.deriver(in.Eval)
+	if err != nil {
+		return nil, err
+	}
+	res, err := d.Derive(ctx, derive.Input{
 		Skill: in.Skill, Bundle: in.Bundle, Tier: in.Tier, Panel: panel,
 	})
 	if err != nil {
@@ -486,7 +509,11 @@ func (r *realDeriver) Contest(ctx context.Context, ins []worker.DeriveInput) (*w
 	for _, c := range ins {
 		in = append(in, derive.Input{Skill: c.Skill, Bundle: c.Bundle, Tier: c.Tier, Panel: panel})
 	}
-	res, err := r.d.Contest(ctx, in)
+	d, err := r.deriver(ins[0].Eval)
+	if err != nil {
+		return nil, err
+	}
+	res, err := d.Contest(ctx, in)
 	if err != nil {
 		return nil, err
 	}

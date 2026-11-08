@@ -1,0 +1,1 @@
+A version with a registered eval suite is held until a verified evaluation scores it. The floor is the lowest headline that releases it. A floor of 0 releases every verified report with a complete panel and no critical contract violation.

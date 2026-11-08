@@ -29,6 +29,11 @@ type Options struct {
 	// provider (circular), so it receives the names as data.
 	PanelExcludeEnv []string
 
+	// MemberAuth, when it returns ok, gives one member its own credential
+	// variables in place of the process environment. A panel whose members
+	// use different providers needs it.
+	MemberAuth func(agent, model string) (env []string, ok bool)
+
 	// WorkspaceRoot overrides os.TempDir() for a containerized runner whose
 	// /tmp is invisible to the host daemon. Must be bind-mounted at the same
 	// path on both sides or Docker silently mounts an empty directory.

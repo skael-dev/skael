@@ -188,8 +188,12 @@ agents-md:
 private:
     ./checks/private-words.sh
 
-# Run all checks (vet + fmt + lint + comments + agents-md + private + test + integration)
-check: vet fmt-check lint comments agents-md private test test-integration
+# Fail when configuration.md or .env.example drift from internal/settings
+settings-docs:
+    ./checks/settings.sh
+
+# Run all checks (vet + fmt + lint + comments + agents-md + private + settings-docs + test + integration)
+check: vet fmt-check lint comments agents-md private settings-docs test test-integration
 
 # --- Docker ---
 

@@ -54,8 +54,9 @@ func Middleware(people *People, keyStore *KeyStore) func(http.Handler) http.Hand
 
 			// Skip explicitly exempt API paths.
 			// GitHub's webhook carries its own signature, which the handler checks.
+			// The setup routes serve a fresh instance before anyone can sign in.
 			if r.URL.Path == "/api/health" || r.URL.Path == "/api/health/ready" || r.URL.Path == "/api/capabilities" ||
-				r.URL.Path == "/api/github/webhook" {
+				r.URL.Path == "/api/github/webhook" || r.URL.Path == "/api/setup" || r.URL.Path == "/api/setup/claim" {
 				next.ServeHTTP(w, r)
 				return
 			}

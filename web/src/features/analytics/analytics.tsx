@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { UsageBreakdown } from "@/features/analytics/usage-breakdown";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3 } from "lucide-react";
@@ -163,6 +164,10 @@ export function Analytics() {
         {/* Activations chart */}
         <div className="mb-9">
           <ActivationsChart days={days} filter={filter} />
+        </div>
+
+        <div className="mb-9">
+          <UsageBreakdown days={days} />
         </div>
       </div>
 

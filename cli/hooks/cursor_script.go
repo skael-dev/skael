@@ -52,7 +52,16 @@ else
   DEV_HASH="nohash"
 fi
 
+MODEL=$(printf '%s' "$INPUT" | jq -r '.model // empty' 2>/dev/null || true)
+if ! printf '%s' "$MODEL" | grep -Eq '^[A-Za-z0-9._:/@-]{1,128}$'; then MODEL=""; fi
+STATE_FILE="${HOME}/.skael/state.json"
+
 for SKILL in $SKILL_NAMES; do
+  VERSION=0
+  if [ -f "$STATE_FILE" ]; then
+    VERSION=$(jq -r --arg n "$SKILL" '[.skills[]? | select(.name == $n) | .version][0] // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+  fi
+  case "$VERSION" in ''|*[!0-9]*) VERSION=0 ;; esac
   EVENT=$(jq -n \
     --arg sn "$SKILL" \
     --arg ag "cursor" \
@@ -60,7 +69,9 @@ for SKILL in $SKILL_NAMES; do
     --arg ph "$PROJECT_HASH" \
     --arg dh "$DEV_HASH" \
     --arg es "transcript_scan" \
-    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh,event_source:$es}')
+    --arg md "$MODEL" \
+    --argjson sv "$VERSION" \
+    '{skill_name:$sn,agent:$ag,trigger_type:$tt,project_hash:$ph,developer_hash:$dh,event_source:$es,model:$md,version:$sv}')
   curl -sf -X POST \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \

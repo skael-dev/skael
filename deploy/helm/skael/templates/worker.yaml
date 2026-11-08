@@ -1,0 +1,106 @@
+{{- if .Values.worker.enabled }}
+{{- if not .Values.worker.existingSecret }}
+{{- fail "set worker.existingSecret to a Secret with SKAEL_API_KEY and the provider credentials" }}
+{{- end }}
+{{- $ns := .Values.worker.sandboxNamespace }}
+{{- if .Values.worker.createSandboxNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels: {{- include "skael.labels" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "skael.fullname" . }}-worker
+  labels: {{- include "skael.labels" . | nindent 4 }}
+---
+# The worker's whole privilege, inside the sandbox namespace only. pods/exec can
+# run commands in any pod there, so that namespace holds nothing but sessions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "skael.fullname" . }}-worker-sandbox
+  namespace: {{ $ns }}
+  labels: {{- include "skael.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "skael.fullname" . }}-worker-sandbox
+  namespace: {{ $ns }}
+  labels: {{- include "skael.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "skael.fullname" . }}-worker
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "skael.fullname" . }}-worker-sandbox
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skael.fullname" . }}-worker
+  labels: {{- include "skael.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "skael.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "skael.fullname" . }}-worker
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
+          envFrom:
+            - secretRef: {name: {{ .Values.worker.existingSecret }}}
+          env:
+            - name: SKAEL_ENDPOINT
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "skael.fullname" .) .Release.Namespace .Values.service.port) .Values.worker.endpoint | quote }}
+            - name: WORKER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: SANDBOX_DRIVER
+              value: kubernetes
+            - name: SANDBOX_K8S_NAMESPACE
+              value: {{ $ns | quote }}
+            {{- if .Values.worker.hardwareIsolated }}
+            - name: SANDBOX_K8S_HARDWARE_ISOLATED
+              value: "true"
+            {{- end }}
+            {{- if .Values.worker.networkPolicy }}
+            - name: SANDBOX_K8S_NETWORK_POLICY
+              value: "true"
+            {{- end }}
+            {{- if .Values.worker.runtimeClass }}
+            - name: SANDBOX_K8S_RUNTIME_CLASS
+              value: {{ .Values.worker.runtimeClass | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.worker.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+{{- end }}

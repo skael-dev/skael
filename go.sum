@@ -8,6 +8,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/alternayte/auth-all v0.7.0 h1:/SEx7+r1MuX3Cl3txV4JC00B8L8wu1J9YVzYVJ4AThM=
 github.com/alternayte/auth-all v0.7.0/go.mod h1:R0cqJZoxuzllxbONfiPNNNXvHJoHS7efm8pA0/JEplE=
+github.com/alternayte/auth-all v0.8.0 h1:tTT3rgPFCoFeChavVZ8CfWobH0YUvP15KoHhFUmSjNk=
+github.com/alternayte/auth-all v0.8.0/go.mod h1:R0cqJZoxuzllxbONfiPNNNXvHJoHS7efm8pA0/JEplE=
 github.com/alternayte/auth-all/humaauth v0.4.0 h1:wsbFpd37NvrA3yhxSE+2Jd0r6j+Q/LetSzjPSk6MsBg=
 github.com/alternayte/auth-all/humaauth v0.4.0/go.mod h1:S4PsZLHEAprJ1LzOg0hC9UfgtCWzDS6rgvxMDCbr7uQ=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=

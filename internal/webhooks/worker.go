@@ -41,8 +41,8 @@ type DeliveryWorker struct {
 }
 
 // NewDeliveryWorker constructs the worker.
-func NewDeliveryWorker(store *Store, allowPrivate bool) *DeliveryWorker {
-	return &DeliveryWorker{store: store, client: NewClient(allowPrivate)}
+func NewDeliveryWorker(store *Store, allowPrivate func() bool) *DeliveryWorker {
+	return &DeliveryWorker{store: store, client: NewLiveClient(allowPrivate)}
 }
 
 // NextRetry doubles from one minute up to maxBackoff.

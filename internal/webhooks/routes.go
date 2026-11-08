@@ -74,7 +74,7 @@ func validateTarget(ctx context.Context, raw string, allowPrivate bool) error {
 
 // RegisterRoutes wires endpoint management. Only instance owners and admins
 // reach it, because an endpoint receives data about every matching skill.
-func RegisterRoutes(api huma.API, pool *pgxpool.Pool, store *Store, notifier *Notifier, allowPrivate bool) {
+func RegisterRoutes(api huma.API, pool *pgxpool.Pool, store *Store, notifier *Notifier, allowPrivate func() bool) {
 	type webhookEndpointsBody struct {
 		Endpoints []Endpoint `json:"endpoints"`
 	}
@@ -106,7 +106,7 @@ func RegisterRoutes(api huma.API, pool *pgxpool.Pool, store *Store, notifier *No
 		if err := validateSets(ctx, pool, b.SetIDs); err != nil {
 			return err
 		}
-		return validateTarget(ctx, b.URL, allowPrivate)
+		return validateTarget(ctx, b.URL, allowPrivate())
 	}
 	setIDs := func(ids []string) []string {
 		if ids == nil {

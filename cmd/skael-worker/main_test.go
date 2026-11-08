@@ -20,31 +20,43 @@ func writeFakeExecutable(t *testing.T, path string) {
 	}
 }
 
-func TestConfigFromEnv_RefusesWithoutAnAPIGatewayKey(t *testing.T) {
+// With no provider on the server and no key on the worker, a job fails and
+// names the variable to set. The worker still starts: the server's providers
+// may name another credential.
+func TestBackends_AJobWithNoProviderNamesTheMissingKey(t *testing.T) {
 	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
 	t.Setenv("SKAEL_API_KEY", "k")
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("LLM_MODEL", "")
 
-	_, err := configFromEnv()
-	if err == nil {
-		t.Fatal("the worker started without an API gateway key")
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("the worker refused to start: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
-		t.Fatalf("the error does not name the missing variable: %v", err)
+	_, err = newBackends(cfg.Provider).forJob(nil)
+	if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Fatalf("the job error does not name the missing variable: %v", err)
 	}
 }
 
 // A subscription gateway is whetstone's affordance, not the worker's: a
 // verified score must come from a metered, reproducible backend.
-func TestConfigFromEnv_DoesNotFallBackToAnAgentCLI(t *testing.T) {
+func TestBackends_DoNotFallBackToAnAgentCLI(t *testing.T) {
 	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
 	t.Setenv("SKAEL_API_KEY", "k")
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("LLM_MODEL", "")
 	dir := t.TempDir()
 	writeFakeExecutable(t, filepath.Join(dir, "claude"))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if _, err := configFromEnv(); err == nil {
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newBackends(cfg.Provider).forJob(nil); err == nil {
 		t.Fatal("the worker accepted a subscription CLI in place of an API key")
 	}
 }
@@ -192,26 +204,64 @@ func TestEvalRequestFrom_DefaultsConcurrencyToOne(t *testing.T) {
 // sandbox is handed the judge's gateway, so a panel meant to run on a
 // subscription silently runs on the gateway instead.
 func TestEvalDepsFrom_CarriesThePanelSplit(t *testing.T) {
-	r := &realRunner{
-		runRoot:         "/var/lib/skael/run",
+	r := &realRunner{runRoot: "/var/lib/skael/run"}
+	jb := jobBackends{
 		panelModels:     []string{"anthropic/claude-sonnet-5"},
 		panelBase:       "https://openrouter.ai/api",
 		panelExcludeEnv: []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"},
+		memberAuth:      func(_, _ string) ([]string, bool) { return []string{"X=1"}, true },
+		memberProvider:  func(_, _ string) string { return "subscription" },
 	}
 
-	deps := evalDepsFrom(r, nil)
+	deps := evalDepsFrom(r, jb, nil)
 
-	if !reflect.DeepEqual(deps.PanelExcludeEnv, r.panelExcludeEnv) {
-		t.Fatalf("PanelExcludeEnv = %v, want %v", deps.PanelExcludeEnv, r.panelExcludeEnv)
+	if !reflect.DeepEqual(deps.PanelExcludeEnv, jb.panelExcludeEnv) {
+		t.Fatalf("PanelExcludeEnv = %v, want %v", deps.PanelExcludeEnv, jb.panelExcludeEnv)
 	}
-	if !reflect.DeepEqual(deps.PanelModels, r.panelModels) {
-		t.Fatalf("PanelModels = %v, want %v", deps.PanelModels, r.panelModels)
+	if !reflect.DeepEqual(deps.PanelModels, jb.panelModels) {
+		t.Fatalf("PanelModels = %v, want %v", deps.PanelModels, jb.panelModels)
 	}
-	if deps.PanelBaseURL != r.panelBase {
-		t.Fatalf("PanelBaseURL = %q, want %q", deps.PanelBaseURL, r.panelBase)
+	if deps.PanelBaseURL != jb.panelBase {
+		t.Fatalf("PanelBaseURL = %q, want %q", deps.PanelBaseURL, jb.panelBase)
 	}
 	if deps.WorkspaceRoot != r.runRoot {
 		t.Fatalf("WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, r.runRoot)
+	}
+	if deps.MemberAuth == nil || deps.MemberProvider == nil {
+		t.Fatal("MemberAuth and MemberProvider must reach EvalDeps, or every member runs on the process env")
+	}
+}
+
+// TestBackendsForJob_MapsEachMemberToItsOwnCredential guards the hop from the
+// server's providers to a sandbox's env: a subscription member gets only the
+// OAuth token, and a gateway member gets the gateway and its bearer token.
+func TestBackendsForJob_MapsEachMemberToItsOwnCredential(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "sk-judge", "CLAUDE_CODE_OAUTH_TOKEN": "oat", "OPENROUTER_API_KEY": "or"}
+	b := &backends{env: func(k string) string { return env[k] }}
+	eval := &evalqueue.EvalConfig{
+		Judge: evalqueue.EvalBackend{Provider: "Anthropic", Adapter: "anthropic", CredentialEnv: "ANTHROPIC_API_KEY", Model: "claude-opus-5"},
+		Members: []evalqueue.EvalBackend{
+			{Provider: "Claude subscription", Adapter: "subscription", CredentialEnv: "CLAUDE_CODE_OAUTH_TOKEN", Model: "sonnet"},
+			{Provider: "OpenRouter", Adapter: "gateway", BaseURL: "https://openrouter.ai/api", AuthStyle: "bearer", CredentialEnv: "OPENROUTER_API_KEY", Model: "anthropic/claude-haiku-4.5"},
+		},
+	}
+	jb, err := b.forJob(eval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := jb.memberAuth("claude-code", "sonnet"); !reflect.DeepEqual(got, []string{"CLAUDE_CODE_OAUTH_TOKEN=oat"}) {
+		t.Fatalf("subscription member env = %v", got)
+	}
+	if got, _ := jb.memberAuth("claude-code", "anthropic/claude-haiku-4.5"); !reflect.DeepEqual(got, []string{"ANTHROPIC_BASE_URL=https://openrouter.ai/api", "ANTHROPIC_AUTH_TOKEN=or"}) {
+		t.Fatalf("gateway member env = %v", got)
+	}
+	if got := jb.memberProvider("claude-code", "anthropic/claude-haiku-4.5"); got != "gateway:openrouter.ai" {
+		t.Fatalf("gateway member label = %q", got)
+	}
+
+	delete(env, "OPENROUTER_API_KEY")
+	if _, err := b.forJob(eval); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+		t.Fatalf("a missing credential must name its variable, got %v", err)
 	}
 }
 

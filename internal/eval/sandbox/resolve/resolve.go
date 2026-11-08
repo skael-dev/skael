@@ -7,6 +7,8 @@ package resolve
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -156,4 +158,26 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// ImageIdentity names the environment a session runs in, so two workers on
+// different images can be told apart. The docker driver builds its base from
+// imagespec, so the Dockerfile's hash names it; the other drivers run the
+// image they are given.
+func (c Config) ImageIdentity() string {
+	switch c.Driver {
+	case "kubernetes":
+		return c.K8s.Image
+	case "northflank":
+		if c.NF.Image != "" {
+			return c.NF.Image
+		}
+		return imagespec.PublishedBaseImage
+	}
+	tag := c.BaseTag
+	if tag == "" {
+		tag = imagespec.DefaultBaseTag
+	}
+	sum := sha256.Sum256([]byte(imagespec.BaseDockerfile(tag == imagespec.SlimBaseTag)))
+	return tag + "@sha256:" + hex.EncodeToString(sum[:6])
 }

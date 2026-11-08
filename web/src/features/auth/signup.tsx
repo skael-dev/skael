@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { claimInstance, getSetup } from "@/api/sdk.gen";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -13,6 +15,61 @@ export function Signup() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const setup = useQuery({ queryKey: ["setup"], queryFn: async () => (await getSetup()).data ?? { claim_required: false } });
+  const [claimed, setClaimed] = useState(false);
+  const [code, setCode] = useState("");
+
+  async function handleClaim(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setIsSubmitting(true);
+    const res = await claimInstance({ body: { code: code.trim() } });
+    setIsSubmitting(false);
+    if (res.response?.status === 204) {
+      setClaimed(true);
+      return;
+    }
+    setError("That is not the claim code. Copy it from the server log: the line that says claim_code.");
+  }
+
+  if (setup.data?.claim_required && !claimed) {
+    return (
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center p-4">
+        <div className="w-full max-w-sm animate-fade-up">
+          <div className="bg-bg-secondary border border-border rounded-xl p-8 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+            <h1 className="text-xl font-semibold text-text-primary mb-1">Claim this instance</h1>
+            <p className="text-sm text-text-secondary mb-6">
+              The server printed a claim code to its log when it started. Enter it to create the owner account.
+            </p>
+            <form onSubmit={handleClaim} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="claim" className="text-xs font-medium text-text-secondary uppercase tracking-wider">
+                  Claim code
+                </label>
+                <input
+                  id="claim"
+                  required
+                  autoFocus
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase())}
+                  placeholder="XXXX-XXXX-XXXX"
+                  className="w-full h-9 rounded-md bg-bg-primary border border-border px-3 text-sm font-mono
+                    text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-active"
+                />
+                <p className="text-[11px] text-text-tertiary m-0">
+                  For example: <code className="font-mono">docker compose logs server | grep claim_code</code>
+                </p>
+              </div>
+              {error && <p className="text-xs text-danger m-0">{error}</p>}
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : "Continue"}
+              </Button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

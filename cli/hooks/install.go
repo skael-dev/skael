@@ -45,26 +45,29 @@ func InstallClaudeHook(configPath, endpoint, apiKey, scriptPath string) error {
 	if err != nil {
 		return err
 	}
-
 	cmd := fmt.Sprintf("SKAEL_AGENT=claude-code %s", scriptPath)
-
-	newHookEntry := map[string]any{
-		"type":        "command",
-		"command":     cmd,
-		"_managed_by": managedBy,
-	}
-
-	// Ensure hooks section exists.
 	hooksSection := getOrCreateMap(settings, "hooks")
 	settings["hooks"] = hooksSection
+	for _, ev := range claudeEvents {
+		upsertManagedHook(hooksSection, ev.name, ev.matcher, cmd)
+	}
+	return writeJSONFile(configPath, settings)
+}
 
-	// Ensure PreToolUse array exists.
-	preToolUse := getOrCreateSlice(hooksSection, "PreToolUse")
-	hooksSection["PreToolUse"] = preToolUse
+// claudeEvents are the events the activation script handles: the Skill tool
+// call it reports, and the session start and model switch that tell it which
+// model a session runs when the transcript does not.
+var claudeEvents = []struct{ name, matcher string }{
+	{"PreToolUse", "Skill"},
+	{"SessionStart", ""},
+	{"PostModelSwitch", ""},
+}
 
-	// Look for an existing skael-managed matcher entry.
-	found := false
-	for _, raw := range preToolUse {
+// upsertManagedHook updates the skael-managed command under event, or appends
+// a new entry for it.
+func upsertManagedHook(hooksSection map[string]any, event, matcher, cmd string) {
+	list := getOrCreateSlice(hooksSection, event)
+	for _, raw := range list {
 		entry, ok := raw.(map[string]any)
 		if !ok {
 			continue
@@ -74,33 +77,19 @@ func InstallClaudeHook(configPath, endpoint, apiKey, scriptPath string) error {
 			continue
 		}
 		for i, h := range innerHooks {
-			hMap, ok := h.(map[string]any)
-			if !ok {
-				continue
-			}
-			if hMap["_managed_by"] == managedBy {
-				// Update the command in-place.
+			if hMap, ok := h.(map[string]any); ok && hMap["_managed_by"] == managedBy {
 				hMap["command"] = cmd
 				innerHooks[i] = hMap
-				found = true
-				break
+				hooksSection[event] = list
+				return
 			}
 		}
-		if found {
-			break
-		}
 	}
-
-	if !found {
-		// Append a new matcher entry.
-		newEntry := map[string]any{
-			"matcher": "Skill",
-			"hooks":   []any{newHookEntry},
-		}
-		hooksSection["PreToolUse"] = append(preToolUse, newEntry)
+	entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "_managed_by": managedBy}}}
+	if matcher != "" {
+		entry["matcher"] = matcher
 	}
-
-	return writeJSONFile(configPath, settings)
+	hooksSection[event] = append(list, entry)
 }
 
 // UninstallClaudeHook removes all hook entries tagged with _managed_by=skael from
@@ -113,21 +102,28 @@ func UninstallClaudeHook(configPath string) error {
 		}
 		return err
 	}
-
 	hooksSection, ok := settings["hooks"].(map[string]any)
 	if !ok {
 		return nil
 	}
-
-	preToolUse, ok := hooksSection["PreToolUse"].([]any)
-	if !ok {
-		return nil
+	for _, ev := range claudeEvents {
+		removeManagedHooks(hooksSection, ev.name)
 	}
+	if len(hooksSection) == 0 {
+		delete(settings, "hooks")
+	}
+	return writeJSONFile(configPath, settings)
+}
 
-	// Filter out any matcher entries that only contain skael-managed hooks,
-	// and strip skael-managed inner hooks from entries that mix them.
+// removeManagedHooks strips skael-managed hooks under event, dropping entries
+// left empty and the event when nothing remains.
+func removeManagedHooks(hooksSection map[string]any, event string) {
+	list, ok := hooksSection[event].([]any)
+	if !ok {
+		return
+	}
 	var cleaned []any
-	for _, raw := range preToolUse {
+	for _, raw := range list {
 		entry, ok := raw.(map[string]any)
 		if !ok {
 			cleaned = append(cleaned, raw)
@@ -140,31 +136,22 @@ func UninstallClaudeHook(configPath string) error {
 		}
 		var filteredInner []any
 		for _, h := range innerHooks {
-			hMap, ok := h.(map[string]any)
-			if ok && hMap["_managed_by"] == managedBy {
-				continue // remove
+			if hMap, ok := h.(map[string]any); ok && hMap["_managed_by"] == managedBy {
+				continue
 			}
 			filteredInner = append(filteredInner, h)
 		}
 		if len(filteredInner) == 0 {
-			// Whole entry was skael-managed — drop it.
 			continue
 		}
 		entry["hooks"] = filteredInner
 		cleaned = append(cleaned, entry)
 	}
-
 	if len(cleaned) == 0 {
-		delete(hooksSection, "PreToolUse")
+		delete(hooksSection, event)
 	} else {
-		hooksSection["PreToolUse"] = cleaned
+		hooksSection[event] = cleaned
 	}
-
-	if len(hooksSection) == 0 {
-		delete(settings, "hooks")
-	}
-
-	return writeJSONFile(configPath, settings)
 }
 
 // InstallClaudeAutoSync adds a UserPromptSubmit hook that runs the debounced auto-sync script.

@@ -1,106 +1,310 @@
 ---
 title: Configuration
-description: Every environment variable the server and the worker read.
+description: Every setting the server and the worker read, and where to change it.
 ---
 
-## Server env vars
+<!-- Generated from internal/settings by `go run ./cmd/server --config-docs`. Do not edit. -->
 
-| Variable | Required | Default | Description |
+An owner or admin changes most server settings on the Settings page, and a change applies on every replica without a restart. An environment variable wins over the page and locks its field. Settings marked *env only* are read before the database, so they are set only in the environment.
+
+A secret field on the page takes a value, which the server seals under the master key, or a reference: `env:NAME` reads another variable, and `file:/path` reads a mounted file.
+
+## Server
+
+### General
+
+Set the public URL to the address people type to reach skael, with no path. Behind a reverse proxy, this is the proxy's address. Sign-in callbacks, links in email and the GitHub App's webhooks use it, so change it before you set up any of them.
+
+| Variable | Where | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | yes | — | Postgres connection string |
-| `STORAGE_PATH` | no | `./data/skills` | Archive storage; local dir, or `s3://bucket/prefix` for S3 |
-| `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
-| `DISABLE_SIGNUP` | no | `false` | Set to `true` (the literal string) to lock signups after setup. The server logs a startup warning when unset |
-| `PUBLIC_URL` | with SSO, SMTP or GitHub | — | The URL people use to reach the server. Provider callbacks and email links are built from it |
-| `SIGNUP_ALLOWED_DOMAINS` | no | — | Comma-separated email domains. Set it to refuse a new account on every sign-in path from any other domain |
-| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | no | — | Sign-in through any OpenID Connect provider. The first sign-in creates a `member`, even with `DISABLE_SIGNUP=true`. Register `PUBLIC_URL/api/auth/oauth/oidc/callback` |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | — | Sign-in through Google |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | no | — | Sign-in through GitHub. `GITHUB_TOKEN` is separate and serves import only |
-| `SKAEL_MASTER_KEYS` | for GitHub | — | Encrypts secrets stored from the UI, such as the GitHub App's private key. Comma-separated `id:base64key` pairs of 32 bytes each; the first seals, every one opens. Generate one with `openssl rand -base64 32`. Keep it: a new key makes stored secrets unreadable. To rotate, put the new key first and keep the old one after it |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | no | — / `587` / — / — / — | Turns on self-service password reset |
-| `S3_ENDPOINT` / `S3_REGION` | no | `s3.amazonaws.com` / `us-east-1` | Only when `STORAGE_PATH=s3://…`. Only `S3_REGION` falls back to `AWS_REGION`; the endpoint has no `AWS_*` fallback |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | no | — | Both fall back to `AWS_*`. The pair is all-or-nothing: set only one and it is silently ignored. Omit both for an IAM instance role |
-| `S3_USE_PATH_STYLE` / `S3_USE_SSL` | no | `false` / `true` | `S3_USE_PATH_STYLE=true` for MinIO |
-| `EVENT_RETENTION_DAYS` | no | `90` | Days of skill_events to keep. The server purges older rows at startup and then daily while it runs. `0` disables cleanup |
-| `WEBHOOK_ALLOW_PRIVATE` | no | `false` | Set to `true` (the literal string) to let webhook deliveries reach private addresses, loopback, shared address space and `http` URLs. Link-local addresses stay refused. See [Webhooks](/docs/webhooks#address-rule) |
-| `EXTERNAL_SCAN_CMD` | no | — | Opt-in external scanner run on publish/import; `{dir}` → skill dir, must emit SARIF on stdout (e.g. `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout`). Findings merge into the native scan. |
-| `EXTERNAL_SCAN_TIMEOUT` | no | `60s` | Per-scan timeout for `EXTERNAL_SCAN_CMD` (Go duration) |
-| `DB_MAX_CONNS` | no | `25` | Maximum number of connections in the pool |
-| `DB_MIN_CONNS` | no | `5` | Minimum number of idle connections the pool maintains |
-| `DB_MAX_CONN_LIFETIME` | no | `1h` | Maximum lifetime of a connection before it is closed (Go duration) |
-| `DB_MAX_CONN_IDLE_TIME` | no | `30m` | Maximum idle time before a connection is closed (Go duration) |
-| `DB_HEALTH_CHECK_PERIOD` | no | `1m` | Interval between pool health checks (Go duration) |
-| `CORS_ORIGINS` | no | — | Comma-separated allowed origins for CORS (e.g. `https://app.skael.dev,http://localhost:5173`) |
-| `TRUSTED_PROXIES` | no | — | Comma-separated CIDR blocks and/or bare addresses (IPv4 or IPv6) whose `X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto` may be believed, e.g. `10.0.0.0/8,192.168.1.5`. Empty (the default) ignores these headers and uses the socket address — correct for a directly-exposed server. Set it to the proxy's address when running behind one, or every client shares one rate-limit bucket |
-| `LOG_LEVEL` | no | `info` | Zerolog level: `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic` |
-| `LOG_FORMAT` | no | — | Set to `pretty` for colorized console output (development). Unset or anything else logs JSON, for production/log aggregation |
-| `LOG_PRETTY` | no | `false` | Set to `true` for the same colorized console output as `LOG_FORMAT=pretty`; either one triggers it |
-| `COOKIE_SECURE` | no | `false` | Set to `true` to mark the session cookie `Secure` (requires a TLS-terminating reverse proxy in front — the browser refuses a `Secure` cookie over plain HTTP, which silently breaks login). The server logs a startup warning when unset |
-| `RATE_LIMIT_AUTH` | no | `20` | Per-minute request budget for `/api/auth/*`, keyed by IP only (unauthenticated by definition) |
-| `RATE_LIMIT_EVENTS` | no | `600` | Per-minute budget for `POST /api/events`, keyed by API key where present, else IP |
-| `RATE_LIMIT_READ` | no | `300` | Per-minute budget for GET/HEAD routes (list, search, manifest, downloads), keyed by API key where present, else IP |
-| `RATE_LIMIT_WRITE` | no | `60` | Per-minute budget for all other mutating routes (publish, import, delete), keyed by API key where present, else IP |
-| `RATE_LIMIT_SUITES` | no | `20` | Per-minute budget for `POST /api/eval/suites` (accepts up to a base64-encoded 10MB archive per call — decode, unpack, storage write, DB insert), keyed by API key where present, else IP |
-| `METRICS_ENABLED` | no | `true` | Set to `false` to disable the `/metrics` Prometheus endpoint |
-| `GITHUB_TOKEN` | no | — | GitHub personal access token for import; raises API rate limits |
-| `QUALITY_FLOOR` | no | `0` | Minimum headline quality score a verified evaluation must reach to release a version held for review. `0` accepts any verified report with a complete panel and no critical contract violations. |
+| `PUBLIC_URL` | Settings page, required with SSO, SMTP or GitHub | — | The URL people use to reach skael. Sign-in callbacks, email links and GitHub webhooks are built from it. |
 
-Auth is via user accounts + personal API keys (no static server key). `DISABLE_SIGNUP=true` locks password, Google and GitHub signups after setup. OIDC stays open, because the identity provider is the gate.
+### Sign-up
 
-## Worker env vars
+The first person to sign up becomes the owner. After that, every new account is a member.
 
-`cmd/skael-worker` reads its own environment, independent of the server's `.env`:
+Disable sign-up after your team has joined, or limit sign-up to your email domains. Invite people from Settings → Team instead. OIDC sign-in still creates accounts when sign-up is disabled, because your identity provider decides who may sign in.
 
-| Variable | Required | Default | Description |
+| Variable | Where | Default | Description |
 |---|---|---|---|
-| `SKAEL_ENDPOINT` | yes | — | Base URL of the Skael server the worker claims jobs from |
-| `SKAEL_API_KEY` | yes | — | API key the worker authenticates with |
-| `ANTHROPIC_API_KEY` | one of the two | — | LLM credential, sent as `x-api-key`. The worker never falls back to a subscription CLI on PATH. Panel execution is separate: agent adapters with `AuthDirs` (e.g. claude-code) mount host credential directories into the sandbox and are subscription-backed wherever those exist |
-| `ANTHROPIC_AUTH_TOKEN` | one of the two | — | LLM credential, sent as `Authorization: Bearer`. What OpenRouter and most compatible gateways issue. Wins over `ANTHROPIC_API_KEY` when both are set |
-| `WORKER_ID` | no | `{hostname}-{pid}` | Identifies this worker in job leases |
-| `WORKER_LEASE` | no | `5m` | How long a claimed job's lease lasts before it's considered abandoned (Go duration) |
-| `WORKER_POLL` | no | `15s` | Interval between claim attempts when the queue is empty (Go duration) |
-| `WORKER_WORK_ROOT` | no | `os.TempDir()` | Directory to materialise eval workspaces under. Never bind-mounted into a sandbox, so it does not need to be host-visible |
-| `WORKER_RUN_ROOT` | only in a container | `os.TempDir()` | Directory per-session sandbox workspaces are created under. These **are** bind-mounted into sandbox containers, so the path must resolve identically for the worker and for the daemon starting them. Required when containerized — the worker refuses to start without it. The worker creates the directory at start if it does not exist. |
-| `WORKER_CONCURRENCY` | no | `1` | Concurrent sandbox sessions. Must be a positive integer |
-| `WORKER_GRADE_CONCURRENCY` | no | whetstone's default (8) | Concurrent judge calls. A separate resource from the sessions: a container is bounded by CPU and memory, a judge call by the account's rate limit. Must be a positive integer |
-| `WORKER_CONTEST_PARALLEL` | no | `2` | Contest candidates run at once. Each candidate runs its own sessions, so this multiplies the sandbox load. Must be a positive integer |
-| `ANTHROPIC_BASE_URL` | no | `https://api.anthropic.com` | An Anthropic-compatible gateway for **both** the judge (dialled here) and the panel (dialled inside the sandbox, forwarded by the claude-code adapter). It posts to `{base}/v1/messages`, so the base carries no `/v1` |
-| `LLM_MODEL` | with a gateway | shipped defaults | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members, which only the deep tier runs. Required behind a gateway that namespaces its identifiers |
-| `CLAUDE_CODE_OAUTH_TOKEN` | no | — | Bills the *panel* to a Claude subscription (`claude setup-token`). The judge still needs one of the two credentials above. Set beside `ANTHROPIC_BASE_URL` it selects the split: the judge keeps the gateway, the panel does not see it |
-| `SANDBOX_DRIVER` | no | `docker` | Selects the sandbox driver. `docker` starts sandbox containers on the local daemon; `kubernetes` schedules a pod through the cluster API instead; `northflank` runs each session as a service in a Northflank project. An unrecognised value fails startup naming it |
-| `SANDBOX_K8S_NAMESPACE` | with `kubernetes` | — | Namespace the driver creates session pods in. This namespace must hold nothing but session pods: `pods/exec` is the driver's entire privilege surface, and whoever holds it can execute in any pod there |
-| `SANDBOX_K8S_IMAGE` | no | `imagespec.PublishedBaseImage` (`ghcr.io/skael-dev/whetstone-base:<n>`) | Image a session pod runs. The driver resolves a published image and does not build one, so this must already be in a registry. The default is the image the release publishes, so an operator who wants the shipped environment does not name it. Set it to run your own base |
-| `SANDBOX_K8S_PULL_SECRET` | no | — | Name of an image pull secret in `SANDBOX_K8S_NAMESPACE`, for a private registry |
-| `SANDBOX_K8S_RUNTIME_CLASS` | no | — | `runtimeClassName` set on session pods, for example `kata`, for a hardware-isolated runtime |
-| `SANDBOX_K8S_HARDWARE_ISOLATED` | no | unset | Asserts the runtime is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value, including `TRUE` or `1`, reads as unasserted and the driver refuses runs that need isolation, same as the docker driver with none configured |
-| `SANDBOX_K8S_NETWORK_POLICY` | no | unset | Asserts the cluster's CNI enforces `NetworkPolicy`. Accepted only as the exact lowercase string `true`; any other value, including `TRUE` or `1`, reads as unasserted and the driver refuses a run that restricts the network. Verify the assertion against the real cluster with `whetstone doctor --check-egress` before relying on it |
-| `SANDBOX_NF_TOKEN` | with `northflank` | — | Northflank API token. Never printed by `whetstone doctor`, which reports only whether it is set |
-| `SANDBOX_NF_PROJECT` | with `northflank` | — | Project the driver creates session services in. Give it a project of its own: the driver deletes every service carrying its owner label, including orphans found at startup |
-| `SANDBOX_NF_IMAGE` | no | `imagespec.PublishedBaseImage` (`ghcr.io/skael-dev/whetstone-base:<n>`) | Base image a session runs |
-| `SANDBOX_NF_REGISTRY_CREDENTIAL` | no | — | Saved Northflank credential name, for a private registry. Not needed for the default image |
-| `SANDBOX_NF_PLAN` | no | `nf-compute-20` | Resource plan for each session service |
-| `SANDBOX_NF_CLI` | no | `northflank` | Path to the CLI the driver shells out to for workspace transfer |
-| `SANDBOX_NF_ALLOWED_DOMAINS` | for restricted runs | — | Comma-separated domains the operator's own project egress policy permits. Spaces around a comma are trimmed |
-| `SANDBOX_NF_NETWORK_POLICY` | no | unset | Asserts that the domains above are actually enforced by the project's egress policy. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a restricted run |
-| `SANDBOX_NF_HARDWARE_ISOLATED` | no | unset | Asserts the plan is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses runs that need isolation, same as the docker driver with none configured |
+| `DISABLE_SIGNUP` | Settings page | `false` | Refuses new password, Google and GitHub accounts. OIDC stays open, because the identity provider is the gate. |
+| `SIGNUP_ALLOWED_DOMAINS` | Settings page | — | Comma-separated. A new account from any other domain is refused on every sign-in path. |
 
-The same four LLM variables configure `whetstone`, which additionally reads `WHETSTONE_LLM_TIMEOUT` and `WHETSTONE_BASE_TAG`. `whetstone doctor` prints what resolved.
+### Sign-in providers
 
-Unlike the server, the worker's duration and integer parsing does **not** silently fall back — a malformed `WORKER_LEASE`, `WORKER_POLL`, `WORKER_CONCURRENCY` or `WORKER_CONTEST_PARALLEL` fails startup with the offending value named.
+Each provider needs an application at the provider, and each application needs the callback URL of this instance. Set the public URL first.
 
-### Running the worker in a container
+#### Google
 
-Supported, and how `docker compose --profile worker up` runs it (`Dockerfile.worker`). This section covers the **Docker driver** (`SANDBOX_DRIVER=docker`, the default). The worker starts sandbox containers as *siblings* through a mounted `/var/run/docker.sock` — not Docker-in-Docker. Two constraints follow, both load-bearing, and **both apply to the Docker driver only** — see below for why the Kubernetes driver needs neither:
+1. In Google Cloud, open APIs & Services → Credentials and create an OAuth client ID of type Web application.
+2. Add the authorized redirect URI `https://skael.example.com/api/auth/oauth/google/callback`.
+3. Paste the client ID and the client secret here.
 
-- **`WORKER_RUN_ROOT` must be bind-mounted at the same path on both sides** (`-v /var/lib/skael/run:/var/lib/skael/run`). Session workspaces are bind-mounted into each sandbox and the *host* daemon resolves that path. A container-local path names nothing on the host, and Docker creates a missing bind source as an empty directory rather than failing — so the sandbox starts with no task and no skill and scores as a skill that did nothing. `requireHostSharedRoots` in `cmd/skael-worker` refuses to start containerized without it, because nothing downstream can distinguish that from a genuinely bad skill.
-- **Auth must arrive as environment variables, not as a mounted credential directory.** `runner.resolveAuth` prefers an adapter's `AuthEnv` over its `AuthDirs` and returns *no* mounts when any of them is set, which is what removes the other class of host-path bind. Mounting `~/.claude` is the one auth style that stays host-only — subscription-backed panel execution still works containerized via `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`), which is a token rather than a directory. `docker-compose.yml` carries all three supported setups (Anthropic key, subscription panel, OpenRouter) with two commented out.
+#### GitHub
 
-### Running the worker against a Kubernetes cluster
+1. In GitHub, open Settings → Developer settings → OAuth Apps → New OAuth App.
+2. Set the homepage URL to `https://skael.example.com` and the authorization callback URL to `https://skael.example.com/api/auth/oauth/github/callback`.
+3. Generate a client secret, and paste the client ID and the secret here.
 
-`SANDBOX_DRIVER=kubernetes` schedules a session as a pod through the cluster API instead of talking to a Docker socket. This is the main practical reason the driver exists: a worker on a containerd node, or a worker that must not hold a Docker socket at all, has neither host-path constraint above to satisfy. `WORKER_RUN_ROOT` does not apply, because nothing is bind-mounted, and no node needs a Docker socket. Grant the worker's service account only `deploy/kubernetes/worker-rbac.yaml`, and put nothing but session pods in that namespace — `pods/exec` is the driver's entire privilege surface, and whoever holds it can execute in any pod there.
+This OAuth App is only for sign-in. Git sync uses the GitHub App on Settings → GitHub.
 
-- **The Kubernetes driver resolves a published image; it does not build one.** `SANDBOX_K8S_IMAGE` names an image already in a registry, and defaults to `imagespec.PublishedBaseImage`, which `resolve.FromEnv` supplies. `Options.Validate` still requires a non-empty value, so a driver constructed directly rather than through `resolve` fails fast instead of pulling nothing. The default is `ghcr.io/skael-dev/whetstone-base:<n>`, where `<n>` is the version suffix of `imagespec.DefaultBaseTag`. The release workflow's `images` job publishes it from `imagespec.BaseDockerfile(false)` (`go run ./cmd/whetstone --print-base-dockerfile`), tagged by that suffix, never by the release version — the constant is bumped only when the base image's contents change, and tagging per release would publish a new environment every time and split every score trend. Bumping `DefaultBaseTag` requires a release before a Kubernetes worker can pull the new base; until then it keeps resolving the old tag.
+#### Any OpenID Connect provider
 
-Each of the events/read/write/suites classes also enforces a shared per-IP ceiling — `ipCeilingFactor` (10) × that class's limit — checked before the per-key budget, so one source address can't exceed it no matter how many distinct API keys it presents; raising the class's env var raises the ceiling proportionally.
+1. In your provider (Okta, Entra ID, Auth0, Keycloak, Authentik, Google Workspace), create a web application with the authorization code flow.
+2. Register the redirect URI `https://skael.example.com/api/auth/oauth/oidc/callback`.
+3. Paste the issuer URL, the client ID and the client secret here. The issuer URL is the address that serves `/.well-known/openid-configuration`.
 
+The test fetches the discovery document and checks that the issuer answers.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `OIDC_ISSUER` | Settings page | — | The issuer URL of any OpenID Connect provider. The first sign-in creates a member, even with sign-up disabled. |
+| `OIDC_CLIENT_ID` | Settings page | — | From the application you register at the provider. |
+| `OIDC_CLIENT_SECRET` | Settings page | — | From the application you register at the provider. |
+| `GOOGLE_CLIENT_ID` | Settings page | — | An OAuth client of type Web application in Google Cloud. |
+| `GOOGLE_CLIENT_SECRET` | Settings page | — | From the same Google OAuth client. |
+| `GITHUB_CLIENT_ID` | Settings page | — | A GitHub OAuth App. The GitHub App for git sync and the import token are separate. |
+| `GITHUB_CLIENT_SECRET` | Settings page | — | From the same GitHub OAuth App. |
+
+### Email
+
+Email turns on password reset and email change. Without it, an owner resets a password with `skael-server reset-password --email <address>`.
+
+| Provider | Host | Port | Username | Password |
+|---|---|---|---|---|
+| Postmark | `smtp.postmarkapp.com` | 587 | the server API token | the server API token |
+| Amazon SES | `email-smtp.<region>.amazonaws.com` | 587 | the SMTP user name | the SMTP password |
+| Resend | `smtp.resend.com` | 465 | `resend` | the API key |
+| SendGrid | `smtp.sendgrid.net` | 587 | `apikey` | the API key |
+| Mailgun | `smtp.mailgun.org` | 587 | the SMTP login | the SMTP password |
+| Gmail | `smtp.gmail.com` | 587 | your address | an app password |
+
+The provider must allow the from address. The test sends one email to your own address.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `SMTP_HOST` | Settings page | — | Turns on password reset and email change. For example smtp.postmarkapp.com or email-smtp.us-east-1.amazonaws.com. |
+| `SMTP_PORT` | Settings page | `587` | 587 uses STARTTLS, 465 uses TLS from the first byte. |
+| `SMTP_USERNAME` | Settings page | — | Leave empty for a relay without authentication. |
+| `SMTP_PASSWORD` | Settings page | — | The SMTP password or the provider's API token. |
+| `SMTP_FROM` | Settings page | — | For example Skael <skael@example.com>. The provider must allow this sender. |
+
+### Import
+
+Import reads public GitHub repositories. Without a token, GitHub allows 60 requests an hour from the server's address, and a large import stops at that limit. A fine-grained personal access token with read access to public repositories raises the limit to 5000.
+
+The test reads the token's rate limit from GitHub.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `GITHUB_TOKEN` | Settings page | — | A personal access token for import. It raises GitHub's rate limit from 60 to 5000 requests an hour. Read-only public access is enough. |
+
+### Security scanning
+
+The built-in scanner runs on every publish and import. An external scanner runs after it, and its findings join the same report. The tool must be installed on the server and must print SARIF to standard output.
+
+- gitleaks finds secrets: `gitleaks dir {dir} --report-format sarif --report-path /dev/stdout --exit-code 0`
+- Cisco skill-scanner finds risky agent instructions: `skill-scanner scan {dir} --format sarif`, installed with `pip install cisco-ai-skill-scanner`
+
+The test runs the command on a sample skill and parses its output.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `EXTERNAL_SCAN_CMD` | Settings page | — | Runs on every publish and import in addition to the built-in scanner. {dir} is the skill directory, and the command must print SARIF. The tool must be installed on the server. |
+| `EXTERNAL_SCAN_TIMEOUT` | Settings page | `60s` | A Go duration, for example 60s or 2m. |
+
+### Quality gate
+
+A version with a registered eval suite is held until a verified evaluation scores it. The floor is the lowest headline that releases it. A floor of 0 releases every verified report with a complete panel and no critical contract violation.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `QUALITY_FLOOR` | Settings page | `0` | The minimum headline a verified evaluation must reach to release a held version. 0 accepts any verified report with a complete panel and no critical contract violation. |
+
+### Analytics
+
+Activation events come from the hooks that `skael hook install` adds to each agent, and from runs that consumers report. The server deletes events older than the retention once a day.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `EVENT_RETENTION_DAYS` | Settings page | `90` | Activation events older than this are deleted daily. 0 keeps every event. |
+| `ACTIVATION_RECORD_IDENTITY` | Settings page | `true` | Stores the person whose key sent each activation. Off stores no person, only the model, the harness and a hash of the machine. Turn it off where a works council or monitoring rule requires it. |
+| `ACTIVATION_MEMBER_VISIBILITY` | Settings page | `aggregate` | Owners and admins always see everything recorded, and every member sees their own activations. Aggregates hide any model or harness that fewer than 5 people used. One of: `aggregate`, `person`. |
+
+### Webhooks
+
+By default, a delivery reaches only public HTTPS addresses, so a webhook cannot be used to reach your internal network. Allow private addresses only when a consumer runs on your own network. Link-local addresses, such as cloud metadata endpoints, stay refused.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `WEBHOOK_ALLOW_PRIVATE` | Settings page | `false` | Lets deliveries reach private addresses, loopback, shared address space and http URLs, for a consumer on your own network. Link-local addresses stay refused. |
+
+### Install ping
+
+The ping tells the skael project how many installs run and which versions they run. It sends one JSON object a day to `https://telemetry.skael.dev/v1/ping`:
+
+```json
+{
+  "install_id": "a random UUID made at install",
+  "version": "0.19.0",
+  "postgres_version": "17.2",
+  "workers": 2,
+  "evals_configured": true
+}
+```
+
+It sends no user, email, skill, repository, host name or IP address of yours beyond the connection itself. Sample data never counts. Turn it off here or with `TELEMETRY_ENABLED=false`.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `TELEMETRY_ENABLED` | Settings page | `true` | Once a day, sends the skael version, the Postgres version, the number of workers and whether evaluation is set up, with a random install id. Never names, skills or email addresses. |
+
+### Rate limits
+
+Each class also has a per-IP ceiling of ten times its limit, checked before the per-key budget, so one address cannot exceed it with many keys. Behind a proxy, set `TRUSTED_PROXIES`, or every client shares one budget.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `RATE_LIMIT_AUTH` | Settings page | `20` | For /api/auth/*, per IP address. |
+| `RATE_LIMIT_EVENTS` | Settings page | `600` | For POST /api/events, per API key, else per IP address. |
+| `RATE_LIMIT_READ` | Settings page | `300` | For GET and HEAD, per API key, else per IP address. |
+| `RATE_LIMIT_WRITE` | Settings page | `60` | For every other method, per API key, else per IP address. |
+| `RATE_LIMIT_SUITES` | Settings page | `20` | For POST /api/eval/suites, which accepts up to 10 MB a call. |
+
+### Deployment
+
+These settings are read before the server reads its database, or a wrong value could lock you out of this page. Set them in the environment and restart.
+
+Without `SKAEL_MASTER_KEYS`, the server generates a master key on first start and writes it to `master.key` in the data directory. Back up that file with Postgres. If the key is lost, the server still starts, and this page lists each secret to enter again.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | env only, required yes | — | The Postgres connection string. |
+| `LISTEN_ADDR` | env only | `:8080` | The HTTP listen address. |
+| `SKAEL_MASTER_KEYS` | env only | — | Seals the secrets stored from the UI. Comma-separated id:base64key pairs of 32 bytes; the first seals, every one opens. Unset, the server generates a key file in the data directory. |
+| `SKAEL_DATA_DIR` | env only | — | Where the server keeps the generated master key. Mount it on a volume. Unset uses the storage directory when STORAGE_PATH is a directory, else ./data. |
+| `COOKIE_SECURE` | env only | `false` | Marks the session cookie Secure. Needs TLS in front: a browser refuses a Secure cookie over plain HTTP, which breaks sign-in. |
+| `TRUSTED_PROXIES` | env only | — | CIDR blocks or addresses whose X-Forwarded-For, X-Real-IP and X-Forwarded-Proto are believed. Empty trusts none. Behind a proxy, set it, or every client shares one rate-limit bucket. |
+| `CORS_ORIGINS` | env only | — | Comma-separated origins allowed to call the API from a browser. |
+
+### Storage
+
+A new install with no `STORAGE_PATH` stores archives in Postgres. Skill archives are at most 10 MB, so one Postgres backup then holds everything. An install that started with a directory keeps it.
+
+Set `STORAGE_PATH=s3://bucket/prefix` for S3, MinIO, R2 or Spaces. A change of store does not move existing archives.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `STORAGE_PATH` | env only | — | Where archives live: a local directory, or s3://bucket/prefix. Unset on a new install stores archives in Postgres. An existing install keeps the store it started with. |
+| `S3_ENDPOINT` | env only | `s3.amazonaws.com` | Set for MinIO, R2 or Spaces. No AWS_* fallback. |
+| `S3_REGION` | env only | `us-east-1` | Falls back to AWS_REGION. |
+| `S3_ACCESS_KEY_ID` | env only | — | Falls back to AWS_ACCESS_KEY_ID. Set both keys or neither; omit both for an IAM role. |
+| `S3_SECRET_ACCESS_KEY` | env only | — | Falls back to AWS_SECRET_ACCESS_KEY. |
+| `S3_USE_PATH_STYLE` | env only | `false` | true for MinIO. |
+| `S3_USE_SSL` | env only | `true` | TLS to the S3 endpoint. |
+
+### Database pool
+
+The pool defaults suit one server replica. With several replicas, keep the sum of their maximum connections below the database's `max_connections`.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `DB_MAX_CONNS` | env only | `25` | The most connections in the pool. |
+| `DB_MIN_CONNS` | env only | `5` | Idle connections the pool keeps. |
+| `DB_MAX_CONN_LIFETIME` | env only | `1h` | A connection closes after this long. |
+| `DB_MAX_CONN_IDLE_TIME` | env only | `30m` | An idle connection closes after this long. |
+| `DB_HEALTH_CHECK_PERIOD` | env only | `1m` | How often the pool checks its connections. |
+
+### Logging and metrics
+
+The server writes JSON logs by default. `LOG_FORMAT=pretty` writes colored lines for development.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `LOG_LEVEL` | env only | `info` | The lowest level written. One of: `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`. |
+| `LOG_FORMAT` | env only | — | pretty writes colored console lines for development. Unset writes JSON. One of: `pretty`, `json`. |
+| `LOG_PRETTY` | env only | `false` | The same as LOG_FORMAT=pretty. |
+| `METRICS_ENABLED` | env only | `true` | false removes the /metrics endpoint. |
+
+## Worker
+
+`skael-worker` reads only its own environment.
+
+### Worker
+
+A worker runs evaluations. The server holds no Docker socket and no LLM key, so evaluations run only on workers. Settings → Workers → Add a worker creates a key and shows the command to start one.
+
+Invalid durations and numbers stop the worker at start with the variable named.
+
+#### Running the worker in a container
+
+With the docker driver, the worker starts sandbox containers as siblings through a mounted `/var/run/docker.sock`. Two rules follow, and both apply to the docker driver only:
+
+- Bind-mount `WORKER_RUN_ROOT` at the same path on both sides, for example `-v /var/lib/skael/run:/var/lib/skael/run`. Session workspaces are bind-mounted into each sandbox, and the host daemon resolves that path. The worker refuses to start in a container without it.
+- Give credentials as environment variables, not as a mounted directory. A Claude subscription works in a container through `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `SKAEL_ENDPOINT` | env only, required yes | — | The skael server the worker claims jobs from. |
+| `SKAEL_API_KEY` | env only, required yes | — | A key with permission to claim eval jobs. Settings → Workers → Add a worker creates one. |
+| `WORKER_ID` | env only | `{hostname}-{pid}` | Names this worker in leases and on the Workers page. |
+| `WORKER_LEASE` | env only | `5m` | How long a claimed job is held before another worker may take it. |
+| `WORKER_POLL` | env only | `15s` | How often an idle worker asks for a job and checks in. |
+| `WORKER_WORK_ROOT` | env only | `the OS temp directory` | Where eval workspaces are built. Never mounted into a sandbox. |
+| `WORKER_RUN_ROOT` | env only, required in a container | `the OS temp directory` | Where session workspaces are created. They are bind-mounted into sandboxes, so in a container the path must be the same on the host. Required when containerized. |
+| `WORKER_CONCURRENCY` | env only | `1` | Sandbox sessions at once within one eval. |
+| `WORKER_GRADE_CONCURRENCY` | env only | `8` | Judge calls at once. A judge call is bound by the account's rate limit, not by the host. |
+| `WORKER_CONTEST_PARALLEL` | env only | `2` | Each candidate runs its own sessions, so this multiplies the sandbox load. |
+
+### Worker LLM credentials
+
+The server chooses the judge and the panel. A worker holds only the credentials that the server's providers name, and reports which ones it has.
+
+A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration, and the Workers page marks it as pinned by env.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | env only | — | The credential of the Anthropic API preset, sent as x-api-key. |
+| `ANTHROPIC_AUTH_TOKEN` | env only | — | A gateway credential sent as a bearer token, such as an OpenRouter key. |
+| `ANTHROPIC_BASE_URL` | env only | — | Set on a worker, it pins that worker to its own gateway and the server's providers do not apply to it. |
+| `LLM_MODEL` | env only | — | Set on a worker, it pins that worker's panel, most capable first, and the server's panel does not apply to it. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | env only | — | From claude setup-token. The credential of the Claude subscription provider, for panel members only. |
+
+### Sandbox driver
+
+The docker driver needs a Docker socket on the worker's host. The kubernetes driver schedules each session as a pod and needs no socket. The northflank driver runs each session as a service in a Northflank project.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `SANDBOX_DRIVER` | env only | `docker` | Where an eval session runs. One of: `docker`, `kubernetes`, `northflank`. |
+
+### Kubernetes driver
+
+Grant the worker's service account only `deploy/kubernetes/worker-rbac.yaml`, and put nothing but session pods in the namespace: `pods/exec` is the driver's whole privilege, and whoever holds it can run commands in any pod there.
+
+The driver uses a published image and builds none. The default is the image the release publishes, tagged by its base version and never by the release version, so a release does not change the eval environment.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `SANDBOX_K8S_NAMESPACE` | env only, required with kubernetes | — | The namespace session pods run in. It must hold nothing but session pods. |
+| `SANDBOX_K8S_IMAGE` | env only | `the published whetstone base image` | The image a session pod runs. It must already be in a registry. |
+| `SANDBOX_K8S_PULL_SECRET` | env only | — | An image pull secret in the namespace, for a private registry. |
+| `SANDBOX_K8S_RUNTIME_CLASS` | env only | — | runtimeClassName for a hardware-isolated runtime, for example kata. |
+| `SANDBOX_K8S_HARDWARE_ISOLATED` | env only | — | Asserts the runtime is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
+| `SANDBOX_K8S_NETWORK_POLICY` | env only | — | Asserts the cluster's CNI enforces NetworkPolicy. Check it with whetstone doctor --check-egress. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
+
+### Northflank driver
+
+Give the driver a project of its own. It deletes every service with its owner label, including orphans it finds at start. `whetstone doctor` reports only whether the token is set.
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `SANDBOX_NF_TOKEN` | env only, required with northflank | — | The Northflank API token. |
+| `SANDBOX_NF_PROJECT` | env only, required with northflank | — | Give sessions a project of their own: the driver deletes every service with its owner label. |
+| `SANDBOX_NF_IMAGE` | env only | `the published whetstone base image` | The base image a session runs. |
+| `SANDBOX_NF_REGISTRY_CREDENTIAL` | env only | — | A saved Northflank credential, for a private registry. |
+| `SANDBOX_NF_PLAN` | env only | `nf-compute-20` | The resource plan of each session service. |
+| `SANDBOX_NF_CLI` | env only | `northflank` | The CLI the driver uses for workspace transfer. |
+| `SANDBOX_NF_ALLOWED_DOMAINS` | env only, required for restricted runs | — | The domains your project's egress policy permits. |
+| `SANDBOX_NF_NETWORK_POLICY` | env only | — | Asserts the project's egress policy enforces the allowed domains. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
+| `SANDBOX_NF_HARDWARE_ISOLATED` | env only | — | Asserts the plan is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |

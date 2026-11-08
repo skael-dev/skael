@@ -351,3 +351,43 @@ func RegisterServiceAccountRoutes(api huma.API, pool *pgxpool.Pool, keys *KeySto
 		return &struct{ Body auditListBody }{Body: auditListBody{Entries: entries}}, nil
 	})
 }
+
+// WorkersAccount is the service account that every worker key belongs to.
+const WorkersAccount = "eval-workers"
+
+// CreateWorkerKey issues a key that can only claim and run eval jobs, under the
+// eval-workers service account, which it creates on first use.
+func CreateWorkerKey(ctx context.Context, pool *pgxpool.Pool, keys *KeyStore, keyName, actor string) (string, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth.CreateWorkerKey: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	var id string
+	err = tx.QueryRow(ctx, `SELECT id FROM auth_users WHERE kind = 'service' AND email_normalized = $1`,
+		WorkersAccount+"@service-account.invalid").Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		a, cerr := CreateServiceAccountTx(ctx, tx, WorkersAccount, actor)
+		if cerr != nil {
+			return "", cerr
+		}
+		id = a.ID
+	} else if err != nil {
+		return "", fmt.Errorf("auth.CreateWorkerKey: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("auth.CreateWorkerKey: %w", err)
+	}
+	full, prefix, err := GenerateAPIKey()
+	if err != nil {
+		return "", err
+	}
+	hash, err := HashAPIKey(full)
+	if err != nil {
+		return "", err
+	}
+	if _, err := keys.CreateLimited(ctx, id, keyName, prefix, hash, []string{ScopeEvalWork}, nil); err != nil {
+		return "", err
+	}
+	return full, nil
+}

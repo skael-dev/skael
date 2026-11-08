@@ -36,6 +36,16 @@ export default (async () => {
         .digest("hex")
         .slice(0, 16)
 
+      const skill = input.tool.replace(/^skills_/, '')
+      let version = 0
+      try {
+        const { readFileSync } = await import("fs")
+        const { join } = await import("path")
+        const { homedir } = await import("os")
+        const state = JSON.parse(readFileSync(join(homedir(), ".skael", "state.json"), "utf8"))
+        version = state.skills?.find((s: { name: string }) => s.name === skill)?.version ?? 0
+      } catch {}
+
       fetch(` + "`${config.endpoint}/api/events`" + `, {
         method: "POST",
         headers: {
@@ -43,7 +53,8 @@ export default (async () => {
           "Authorization": "Bearer " + config.api_key,
         },
         body: JSON.stringify({
-          skill_name: input.tool.replace(/^skills_/, ''),
+          skill_name: skill,
+          version,
           agent: "opencode",
           event_source: "tool_invocation",
           trigger_type: "auto",

@@ -77,7 +77,8 @@ type githubCallbackOutput struct {
 
 // RouteOptions are the dependencies the routes need beyond the store.
 type RouteOptions struct {
-	PublicURL string
+	// PublicURL is read on each request.
+	PublicURL func() string
 	// HTTPClient reaches GitHub. Nil means a client with a 30 s timeout.
 	HTTPClient *http.Client
 }
@@ -117,7 +118,7 @@ func RegisterRoutes(api huma.API, store *Store, opts RouteOptions) {
 		if _, err := requirePrivileged(ctx); err != nil {
 			return nil, err
 		}
-		out := &githubStatusOutput{Body: githubStatusBody{KeysReady: store.KeysReady(), PublicURL: opts.PublicURL}}
+		out := &githubStatusOutput{Body: githubStatusBody{KeysReady: store.KeysReady(), PublicURL: opts.publicURL()}}
 		if !store.KeysReady() {
 			return out, nil
 		}
@@ -144,7 +145,7 @@ func RegisterRoutes(api huma.API, store *Store, opts RouteOptions) {
 		if !store.KeysReady() {
 			return nil, huma.Error409Conflict("set SKAEL_MASTER_KEYS before you connect GitHub; it encrypts the App's private key")
 		}
-		if opts.PublicURL == "" {
+		if opts.publicURL() == "" {
 			return nil, huma.Error422UnprocessableEntity("set PUBLIC_URL first; GitHub sends its webhooks and its redirect there")
 		}
 		existing, err := store.App(ctx)
@@ -165,7 +166,7 @@ func RegisterRoutes(api huma.API, store *Store, opts RouteOptions) {
 		}
 		postURL, manifest, err := Manifest(ManifestRequest{
 			Name: strings.TrimSpace(in.Body.Name), Organization: in.Body.Organization,
-			WebBaseURL: web, APIBaseURL: apiBase, PublicURL: opts.PublicURL,
+			WebBaseURL: web, APIBaseURL: apiBase, PublicURL: opts.publicURL(),
 		}, state)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("start GitHub App: internal error", err)
@@ -240,4 +241,11 @@ func baseURLs(web, apiBase string) (string, string, error) {
 		apiBase = web + "/api/v3"
 	}
 	return web, apiBase, nil
+}
+
+func (o RouteOptions) publicURL() string {
+	if o.PublicURL == nil {
+		return ""
+	}
+	return o.PublicURL()
 }

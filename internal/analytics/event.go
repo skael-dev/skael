@@ -23,6 +23,14 @@ type Event struct {
 	// deriving activations by reading a session transcript afterwards. The two
 	// are not the same measurement and must never be summed unlabelled.
 	EventSource string `json:"event_source"`
+
+	// UserID is the person whose key sent the event, empty when the org
+	// records no identity. Model, Version and HarnessVersion are empty or 0
+	// when the hook could not tell.
+	UserID         string `json:"-"`
+	Model          string `json:"model,omitempty"`
+	Version        int    `json:"version,omitempty"`
+	HarnessVersion string `json:"harness_version,omitempty"`
 }
 
 // ActivationSummary summarises activations for a specific skill over a time window.
@@ -87,11 +95,12 @@ func (s *Store) Insert(ctx context.Context, e Event) error {
 	// The registration check runs inside the INSERT so ingest stays one round
 	// trip. Alias resolution matches the read path.
 	const q = `
-		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash, event_source, registered)
+		INSERT INTO skill_events (skill_name, agent, trigger_type, project_hash, developer_hash, event_source, registered,
+			user_id, model, version, harness_version)
 		VALUES ($1, $2, $3, $4, $5, $6, EXISTS (
 			SELECT 1 FROM skills s
 			WHERE s.name = COALESCE((SELECT a.canonical FROM skill_aliases a WHERE a.alias = $1), $1)
-		))
+		), NULLIF($7, '')::uuid, NULLIF($8, ''), NULLIF($9, 0), NULLIF($10, ''))
 	`
 	source := e.EventSource
 	if source == "" {
@@ -100,6 +109,7 @@ func (s *Store) Insert(ctx context.Context, e Event) error {
 	}
 	if _, err := s.pool.Exec(ctx, q,
 		e.SkillName, e.Agent, e.TriggerType, e.ProjectHash, e.DeveloperHash, source,
+		e.UserID, e.Model, e.Version, e.HarnessVersion,
 	); err != nil {
 		return fmt.Errorf("analytics.Store.Insert: %w", err)
 	}

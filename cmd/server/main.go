@@ -16,6 +16,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/server"
+	"github.com/skael-dev/skael/internal/settings"
 )
 
 var (
@@ -36,8 +37,15 @@ func main() {
 		Msg("skael-server starting")
 
 	for _, arg := range os.Args[1:] {
-		if arg == "--openapi" {
+		switch arg {
+		case "--openapi":
 			printOpenAPISpec()
+			os.Exit(0)
+		case "--config-docs":
+			fmt.Print(settings.ConfigDocs())
+			os.Exit(0)
+		case "--env-example":
+			fmt.Print(settings.EnvExample())
 			os.Exit(0)
 		}
 	}
@@ -49,9 +57,16 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := platform.LoadConfig()
+	cfg, snap, err := settings.LoadConfig(nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("configuration error")
+	}
+	masterKey, err := settings.EnsureMasterKey(cfg, snap)
+	if err != nil {
+		log.Fatal().Err(err).Msg("master key error")
+	}
+	if masterKey.Generated {
+		log.Warn().Str("path", masterKey.Path).Msg("generated a master key; back up this file with Postgres")
 	}
 
 	pool, err := platform.NewPool(ctx, cfg.DatabaseURL, &platform.PoolConfig{
@@ -70,7 +85,7 @@ func main() {
 		log.Fatal().Err(err).Msg("migration error")
 	}
 
-	srv, err := server.NewBuilder(pool, cfg).WithVersion(version).Build()
+	srv, err := server.NewBuilder(pool, cfg).WithVersion(version).WithMasterKey(masterKey).WithClaim().Build()
 	if err != nil {
 		log.Fatal().Err(err).Msg("server build error")
 	}

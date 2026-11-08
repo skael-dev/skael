@@ -1,0 +1,1 @@
+Set the public URL to the address people type to reach skael, with no path. Behind a reverse proxy, this is the proxy's address. Sign-in callbacks, links in email and the GitHub App's webhooks use it, so change it before you set up any of them.

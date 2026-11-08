@@ -7,6 +7,8 @@ import (
 	"regexp"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/skael-dev/skael/internal/auth"
 )
 
 // validEventSkillName mirrors the registry's name rule. Events arrive from hook
@@ -14,9 +16,27 @@ import (
 // untrusted input and must not be stored on the strength of the key alone.
 var validEventSkillName = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 
+// Options are the org's activation settings, read on each request.
+type Options struct {
+	// RecordIdentity false stores no user on an event. Nil records it.
+	RecordIdentity func() bool
+	// MemberVisibility is "aggregate" or "person". Nil is aggregate.
+	MemberVisibility func() string
+}
+
+func (o Options) recordIdentity() bool { return o.RecordIdentity == nil || o.RecordIdentity() }
+
+func (o Options) memberVisibility() string {
+	if o.MemberVisibility == nil {
+		return VisibilityAggregate
+	}
+	return o.MemberVisibility()
+}
+
 // RegisterRoutes wires up all analytics-related HTTP endpoints onto the
 // provided Huma API.
-func RegisterRoutes(api huma.API, store *Store) {
+func RegisterRoutes(api huma.API, store *Store, opts Options) {
+	registerBreakdown(api, store, opts)
 	// -----------------------------------------------------------------
 	// POST /api/events — ingest a skill activation event
 	// -----------------------------------------------------------------
@@ -30,6 +50,10 @@ func RegisterRoutes(api huma.API, store *Store) {
 		// all. Without it, Huma's schema marks the field required and rejects
 		// those payloads outright — before the whitelist check below even runs.
 		EventSource string `json:"event_source,omitempty" maxLength:"32"`
+		// Each is optional: older hooks send none of them.
+		Model          string `json:"model,omitempty" maxLength:"128" pattern:"^[A-Za-z0-9._:/@-]*$"`
+		Version        int    `json:"version,omitempty" minimum:"0"`
+		HarnessVersion string `json:"harness_version,omitempty" maxLength:"32" pattern:"^[0-9.]*$"`
 	}
 	type ingestInput struct {
 		Body ingestBody
@@ -61,14 +85,21 @@ func RegisterRoutes(api huma.API, store *Store) {
 			return nil, huma.Error422UnprocessableEntity(
 				fmt.Sprintf("invalid event_source %q", input.Body.EventSource))
 		}
-		if err := store.Insert(ctx, Event{
-			SkillName:     input.Body.SkillName,
-			Agent:         input.Body.Agent,
-			TriggerType:   input.Body.TriggerType,
-			ProjectHash:   input.Body.ProjectHash,
-			DeveloperHash: input.Body.DeveloperHash,
-			EventSource:   source,
-		}); err != nil {
+		ev := Event{
+			SkillName:      input.Body.SkillName,
+			Agent:          input.Body.Agent,
+			TriggerType:    input.Body.TriggerType,
+			ProjectHash:    input.Body.ProjectHash,
+			DeveloperHash:  input.Body.DeveloperHash,
+			EventSource:    source,
+			Model:          input.Body.Model,
+			Version:        input.Body.Version,
+			HarnessVersion: input.Body.HarnessVersion,
+		}
+		if u := auth.UserFromContext(ctx); u != nil && u.Kind != auth.KindService && opts.recordIdentity() {
+			ev.UserID = u.ID
+		}
+		if err := store.Insert(ctx, ev); err != nil {
 			return nil, fmt.Errorf("ingest event: %w", err)
 		}
 		return nil, nil

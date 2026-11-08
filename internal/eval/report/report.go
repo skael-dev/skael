@@ -25,6 +25,10 @@ type PanelMember struct {
 	Model      string `json:"model"`
 	Class      string `json:"class"`
 	CLIVersion string `json:"cli_version"`
+	// Provider names the backend that served the member: empty for
+	// Anthropic's own API, "subscription" for a Claude subscription, or
+	// "gateway:<host>". A changed provider splits the trend like a changed model.
+	Provider string `json:"provider,omitempty"`
 }
 
 // MemberReport is one panel member's measured result.
@@ -92,6 +96,9 @@ type Report struct {
 
 	ModelPanel    []PanelMember `json:"model_panel"`
 	PanelComplete bool          `json:"panel_complete"`
+	// SandboxImage identifies the environment the panel ran in. Empty on a
+	// report written before it was recorded.
+	SandboxImage string `json:"sandbox_image,omitempty"`
 
 	// Headline is the published 0–100 score: minimum across healthy members.
 	Headline float64 `json:"headline"`
@@ -200,6 +207,8 @@ func (r *Report) SameConditions(o *Report) (bool, string) {
 		return false, "different model panels: a score change could be the models rather than the skill"
 	case !sameCLIVersions(r.ModelPanel, o.ModelPanel):
 		return false, "different agent CLI versions on the panel: a score change could be the CLI rather than the skill"
+	case r.SandboxImage != "" && o.SandboxImage != "" && r.SandboxImage != o.SandboxImage:
+		return false, fmt.Sprintf("different sandbox images (%s and %s): the environment can move the number without the skill changing", r.SandboxImage, o.SandboxImage)
 	case r.PanelComplete != o.PanelComplete:
 		return false, "one panel was incomplete, so its minimum was taken over fewer members"
 	case r.GraderModel != o.GraderModel:
@@ -225,7 +234,7 @@ func samePanel(a, b []PanelMember) bool {
 func sortedKeys(ms []PanelMember) []string {
 	out := make([]string, len(ms))
 	for i, m := range ms {
-		out[i] = m.Agent + "\x00" + m.Model + "\x00" + m.Class
+		out[i] = m.Agent + "\x00" + m.Model + "\x00" + m.Class + "\x00" + m.Provider
 	}
 	sort.Strings(out)
 	return out

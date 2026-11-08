@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
+import { GettingStarted } from "@/features/onboarding/getting-started";
 import { useNavigate } from "react-router-dom";
 import { keepPreviousData, useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TrendingUp, Layers, AlertTriangle, Search, ArrowUpDown, Copy, Check, Zap, Download } from "lucide-react";
@@ -493,11 +494,17 @@ export function SkillList() {
   // must keep the filter bar on screen, so the user can clear it.
   const filtering = Boolean(query || debouncedQuery || tagFilter || authorFilter || unscoredOnly);
   if (!filtering && skills.length === 0 && unregisteredCount === 0) {
-    return <Onboarding />;
+    return (
+      <>
+        <GettingStarted />
+        <Onboarding />
+      </>
+    );
   }
 
   return (
     <div className="flex flex-col min-h-full relative">
+      <GettingStarted />
       {/* Hero */}
       <div className="relative overflow-hidden">
         <div className="px-5 md:px-12 pt-8 md:pt-12 relative max-w-screen-xl w-full mx-auto">

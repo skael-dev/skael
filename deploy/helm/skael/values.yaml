@@ -1,0 +1,62 @@
+# Image tags default to the chart's appVersion.
+image:
+  repository: ghcr.io/skael-dev/skael
+  tag: ""
+  pullPolicy: IfNotPresent
+
+server:
+  replicas: 1
+  # Postgres. Name an existing Secret with a DATABASE_URL key, or set url and the
+  # chart writes the Secret.
+  database:
+    existingSecret: ""
+    url: ""
+  # The master key seals secrets saved on the Settings page. With no existing
+  # Secret, the chart generates one on install and keeps it on upgrade. Back it
+  # up: a lost key means entering those secrets again.
+  masterKeys:
+    existingSecret: ""
+  # The URL people use. Optional here: the owner can set it on the Settings page.
+  publicURL: ""
+  # Any other server variable from the configuration docs. A variable here wins
+  # over the Settings page and locks its field.
+  env: {}
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  host: skael.example.com
+  tls: false
+  tlsSecret: ""
+  annotations: {}
+
+worker:
+  enabled: false
+  replicas: 1
+  image:
+    repository: ghcr.io/skael-dev/skael-worker
+    tag: ""
+  # The server's URL as the worker reaches it. Empty uses the in-cluster service.
+  endpoint: ""
+  # A Secret with SKAEL_API_KEY (from Evaluation → Add a worker) and every
+  # provider credential the Evaluation page lists, such as ANTHROPIC_API_KEY.
+  existingSecret: ""
+  # Session pods run in this namespace through the kubernetes sandbox driver.
+  # It must hold nothing but session pods.
+  sandboxNamespace: skael-sandbox
+  createSandboxNamespace: true
+  # Assert only what the cluster enforces; see the configuration docs.
+  hardwareIsolated: false
+  networkPolicy: false
+  runtimeClass: ""
+  env: {}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}

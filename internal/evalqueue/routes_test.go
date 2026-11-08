@@ -70,7 +70,7 @@ func newTestServerWithRole(t *testing.T, role string) *testServer {
 	// not clear"; a zero floor would make every verified score clear.
 	evalqueue.RegisterRoutes(api, q, qual, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
-		QualityFloor: testQualityFloor,
+		QualityFloor: func() float64 { return testQualityFloor },
 	})
 
 	return &testServer{handler: r, skills: skillStore, queue: q, suites: suiteRegistry, pool: pool}

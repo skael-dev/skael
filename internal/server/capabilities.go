@@ -37,7 +37,7 @@ type Capabilities struct {
 	version  string
 	features map[string]bool
 	license  *LicenseInfo
-	signIn   auth.SignInMethods
+	signIn   func() auth.SignInMethods
 }
 
 func NewCapabilities() *Capabilities {
@@ -72,8 +72,9 @@ func (c *Capabilities) SetVersion(v string) {
 	c.version = v
 }
 
-// SetSignIn records the sign-in methods the SPA may show.
-func (c *Capabilities) SetSignIn(m auth.SignInMethods) { c.signIn = m }
+// SetSignIn records where the sign-in methods the SPA may show come from. It
+// is read on each request, so a settings change shows without a restart.
+func (c *Capabilities) SetSignIn(m func() auth.SignInMethods) { c.signIn = m }
 
 func (c *Capabilities) Response() CapabilitiesResponse {
 	return CapabilitiesResponse{
@@ -89,8 +90,15 @@ func (c *Capabilities) Response() CapabilitiesResponse {
 			AdvancedAnalytics: c.features["advanced_analytics"],
 		},
 		License: c.license,
-		SignIn:  c.signIn,
+		SignIn:  c.signInMethods(),
 	}
+}
+
+func (c *Capabilities) signInMethods() auth.SignInMethods {
+	if c.signIn == nil {
+		return auth.SignInMethods{Providers: []string{}}
+	}
+	return c.signIn()
 }
 
 func (c *Capabilities) Register(api huma.API) {

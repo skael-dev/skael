@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,7 +29,9 @@ import (
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/gitsync"
+	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
 	skweb "github.com/skael-dev/skael/web"
 )
@@ -93,8 +96,8 @@ func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*ski
 // call it only after adding every middleware of their own: chi panics if Use
 // is called once any route exists on the mux, and route registration order has
 // no effect on which middleware a route runs through.
-func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure bool) (mountMetrics func()) {
-	router.Use(platform.SecurityHeaders(cookieSecure))
+func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, live *settings.Live) (mountMetrics func()) {
+	router.Use(platform.SecurityHeaders(cfg.CookieSecure))
 	router.Use(platform.RequestID)
 
 	if cfg.CORSOrigins != "" {
@@ -116,39 +119,60 @@ func InstallEdgeMiddleware(router chi.Router, cfg *platform.Config, cookieSecure
 	router.Use(platform.ClientIP(platform.ParseTrustedProxies(cfg.TrustedProxies)))
 	router.Use(platform.RequestLogger)
 
-	router.Use(platform.ClassifiedRateLimiter(platform.RateLimitConfig{
-		Auth:   cfg.RateLimitAuth,
-		Events: cfg.RateLimitEvents,
-		Read:   cfg.RateLimitRead,
-		Write:  cfg.RateLimitWrite,
-		Suites: cfg.RateLimitSuites,
+	router.Use(platform.LiveRateLimiter(func() platform.RateLimitConfig {
+		s := live.Get()
+		return platform.RateLimitConfig{
+			Auth:   s.Int("rate_limit.auth"),
+			Events: s.Int("rate_limit.events"),
+			Read:   s.Int("rate_limit.read"),
+			Write:  s.Int("rate_limit.write"),
+			Suites: s.Int("rate_limit.suites"),
+		}
 	}))
 
-	if os.Getenv("METRICS_ENABLED") != "false" {
+	if cfg.MetricsEnabled {
 		router.Use(platform.MetricsMiddleware)
 		return func() { router.Get("/metrics", promhttp.Handler().ServeHTTP) }
 	}
 	return func() {}
 }
 
-func peopleConfig(cfg *platform.Config, cookieSecure bool) auth.PeopleConfig {
-	pc := auth.PeopleConfig{
-		PublicURL:          cfg.PublicURL,
-		CookieSecure:       cookieSecure,
-		DisableSignup:      cfg.DisableSignup,
-		AllowedDomains:     splitList(cfg.SignupAllowedDomains),
-		TrustedOrigins:     splitList(cfg.CORSOrigins),
-		TrustedProxies:     splitList(cfg.TrustedProxies),
-		OIDCIssuer:         cfg.OIDCIssuer,
-		OIDCClientID:       cfg.OIDCClientID,
-		OIDCClientSecret:   cfg.OIDCClientSecret,
-		GoogleClientID:     cfg.GoogleClientID,
-		GoogleClientSecret: cfg.GoogleClientSecret,
-		GitHubClientID:     cfg.GitHubClientID,
-		GitHubClientSecret: cfg.GitHubClientSecret,
+func peopleConfig(cfg *platform.Config, live *settings.Live) auth.PeopleConfig {
+	return auth.PeopleConfig{
+		CookieSecure:   cfg.CookieSecure,
+		TrustedOrigins: splitList(cfg.CORSOrigins),
+		TrustedProxies: splitList(cfg.TrustedProxies),
+		Live:           newPeopleSource(live),
 	}
-	if cfg.SMTPHost != "" {
-		pc.EmailSender = auth.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom)
+}
+
+// newPeopleSource rebuilds the sign-in settings when a snapshot changes.
+func newPeopleSource(live *settings.Live) func() auth.PeopleConfig {
+	var cur atomic.Pointer[auth.PeopleConfig]
+	build := func(s *settings.Snapshot) {
+		pc := livePeople(s)
+		cur.Store(&pc)
+	}
+	build(live.Get())
+	live.OnChange(build)
+	return func() auth.PeopleConfig { return *cur.Load() }
+}
+
+func livePeople(s *settings.Snapshot) auth.PeopleConfig {
+	pc := auth.PeopleConfig{
+		PublicURL:          s.String("public_url"),
+		DisableSignup:      s.Bool("signup.disabled"),
+		AllowedDomains:     s.List("signup.allowed_domains"),
+		OIDCIssuer:         s.String("oidc.issuer"),
+		OIDCClientID:       s.String("oidc.client_id"),
+		OIDCClientSecret:   s.String("oidc.client_secret"),
+		GoogleClientID:     s.String("google.client_id"),
+		GoogleClientSecret: s.String("google.client_secret"),
+		GitHubClientID:     s.String("github.client_id"),
+		GitHubClientSecret: s.String("github.client_secret"),
+	}
+	if host := s.String("smtp.host"); host != "" {
+		pc.EmailSender = auth.NewSMTPSender(host, s.Int("smtp.port"), s.String("smtp.username"), s.String("smtp.password"), s.String("smtp.from"))
 	}
 	return pc
 }
@@ -172,11 +196,16 @@ type Server struct {
 
 	listenAddr string
 
-	river   *river.Client[pgx.Tx]
-	riverUI *riverui.Handler
-	people  *auth.People
+	river    *river.Client[pgx.Tx]
+	riverUI  *riverui.Handler
+	people   *auth.People
+	settings *settings.Live
+	keys     *settings.KeyService
+	claim    *onboarding.Claim
+	claimOn  bool
 
 	stopRiverUI context.CancelFunc
+	stopWatch   context.CancelFunc
 }
 
 // Build assembles all server components from the builder and returns a Server
@@ -194,17 +223,31 @@ func (b *Builder) Build() (*Server, error) {
 
 	cfg := b.config
 
-	// Startup warnings.
-	cookieSecure := os.Getenv("COOKIE_SECURE") == "true"
-	if !cookieSecure {
+	if !cfg.CookieSecure {
 		log.Warn().Msg("COOKIE_SECURE is not set")
 	}
-	if os.Getenv("DISABLE_SIGNUP") != "true" {
-		log.Warn().Msg("DISABLE_SIGNUP is not set")
+
+	env := b.env
+	if env == nil {
+		env = os.LookupEnv
+	}
+	live := settings.NewLive(settings.NewStore(b.pool, cfg.MasterKeys), env, cfg.MasterKeys)
+	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 10*time.Second)
+	err := live.Load(loadCtx)
+	cancelLoad()
+	if err != nil {
+		return nil, fmt.Errorf("server.Build: settings: %w", err)
+	}
+	for _, r := range live.Get().Problems() {
+		log.Warn().Str("setting", r.Def.Env).Msg(r.Problem)
 	}
 
-	// 5. Create storage (local filesystem or S3, per STORAGE_PATH).
-	storage, err := platform.NewStorageFromConfig(cfg)
+	storageCtx, cancelStorage := context.WithTimeout(context.Background(), 10*time.Second)
+	storage, storageAt, err := platform.OpenStorage(storageCtx, b.pool, cfg.StoragePath, settings.DefaultStoragePath)
+	cancelStorage()
+	if err == nil {
+		log.Info().Str("store", storageAt).Msg("archive store")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: storage: %w", err)
 	}
@@ -212,15 +255,35 @@ func (b *Builder) Build() (*Server, error) {
 	// 6. Create auth stores.
 	userStore := auth.NewUserStore(b.pool)
 	keyStore := auth.NewKeyStore(b.pool)
-	people, err := auth.NewPeople(b.pool, keyStore, peopleConfig(cfg, cookieSecure))
+	claim := onboarding.NewClaim(b.pool)
+	pc := peopleConfig(cfg, live)
+	if b.claim {
+		pc.FirstPerson = func(ctx context.Context) error {
+			if !auth.Claimed(ctx) {
+				return auth.ErrClaimRequired
+			}
+			return nil
+		}
+	}
+	people, err := auth.NewPeople(b.pool, keyStore, pc)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: %w", err)
 	}
 
 	// 7. Create chi router with middleware.
 	router := chi.NewMux()
-	mountMetrics := InstallEdgeMiddleware(router, cfg, cookieSecure)
+	mountMetrics := InstallEdgeMiddleware(router, cfg, live)
 
+	if b.claim {
+		router.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, err := r.Cookie(onboarding.ClaimCookie); err == nil && claim.Claimed(r) {
+					r = r.WithContext(auth.ContextWithClaim(r.Context()))
+				}
+				next.ServeHTTP(w, r)
+			})
+		})
+	}
 	router.Use(auth.Middleware(people, keyStore))
 
 	// 8. Enforce body size limit before Huma buffers the request body.
@@ -245,7 +308,12 @@ func (b *Builder) Build() (*Server, error) {
 	// serves — see internal/server/routes.go.
 	analyticsStore := analytics.NewStore(b.pool)
 	syncer := gitsync.NewSyncer(gitsync.NewStore(b.pool, cfg.MasterKeys), nil)
-	riverClient, err := newRiverClient(b.pool, cfg, analyticsStore, syncer)
+	mk := b.masterKey
+	if mk == nil {
+		mk = &settings.MasterKey{Keys: cfg.MasterKeys, Source: settings.KeySourceEnv}
+	}
+	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()})
+	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, b.caps.Response().Version)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}
@@ -256,6 +324,11 @@ func (b *Builder) Build() (*Server, error) {
 	RegisterAPIRoutes(api, router, RegisterAPIDeps{
 		Pool:           b.pool,
 		Config:         cfg,
+		Settings:       live,
+		Keys:           keyService,
+		ArchiveStore:   storageAt,
+		Claim:          claim,
+		ClaimEnforced:  b.claim,
 		People:         people,
 		UserStore:      userStore,
 		KeyStore:       keyStore,
@@ -303,6 +376,10 @@ func (b *Builder) Build() (*Server, error) {
 		river:      riverClient,
 		riverUI:    riverUI,
 		people:     people,
+		settings:   live,
+		keys:       keyService,
+		claim:      claim,
+		claimOn:    b.claim,
 	}, nil
 }
 
@@ -311,6 +388,24 @@ func (b *Builder) Build() (*Server, error) {
 func (s *Server) Start(ctx context.Context) error {
 	if err := s.people.Auth.CheckSchema(ctx); err != nil {
 		return fmt.Errorf("auth schema: %w", err)
+	}
+	if err := s.keys.EnsureCanary(ctx); err != nil {
+		return fmt.Errorf("master key canary: %w", err)
+	}
+	if st, err := s.keys.Status(ctx); err != nil {
+		return fmt.Errorf("master key status: %w", err)
+	} else if st.Degraded() {
+		log.Warn().Strs("missing_keys", st.Missing).Int("unreadable_secrets", len(st.Unreadable)).
+			Msg("a master key is missing or a stored secret does not open; Settings lists each secret to enter again")
+	}
+	if s.claimOn {
+		code, err := s.claim.Ensure(ctx)
+		if err != nil {
+			return fmt.Errorf("claim code: %w", err)
+		}
+		if code != "" {
+			log.Warn().Str("claim_code", code).Msg("no owner yet: open this server in a browser and enter the claim code to create the owner")
+		}
 	}
 	if err := s.river.Start(ctx); err != nil {
 		return fmt.Errorf("start river: %w", err)
@@ -322,12 +417,18 @@ func (s *Server) Start(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("start river ui: %w", err)
 	}
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	s.stopWatch = stopWatch
+	go s.settings.Watch(watchCtx)
 	return nil
 }
 
 // Stop ends background work. ListenAndServe calls it on shutdown.
 func (s *Server) Stop(ctx context.Context) error {
 	s.stopRiverUI()
+	if s.stopWatch != nil {
+		s.stopWatch()
+	}
 	return s.river.Stop(ctx)
 }
 
@@ -370,4 +471,24 @@ func (s *Server) ListenAndServe() error {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 	return nil
+}
+
+// githubSealed reports and discards the GitHub App when its secrets no longer open.
+type githubSealed struct{ store *gitsync.Store }
+
+func (g githubSealed) Unreadable(ctx context.Context) ([]settings.Unreadable, error) {
+	bad, err := g.store.SealedUnreadable(ctx)
+	if err != nil || !bad {
+		return nil, err
+	}
+	return []settings.Unreadable{{Name: "GitHub App", Where: "GitHub App: connect it again"}}, nil
+}
+
+func (g githubSealed) Discard(ctx context.Context, actor string) error {
+	bad, err := g.store.SealedUnreadable(ctx)
+	if err != nil || !bad {
+		return err
+	}
+	_, err = g.store.Delete(ctx, actor)
+	return err
 }

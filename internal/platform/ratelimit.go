@@ -150,45 +150,66 @@ func newClassLimiter(configured, fallback int) classLimiter {
 	}
 }
 
+// classified is one generation of limiters, built for one config.
+type classified struct {
+	cfg     RateLimitConfig
+	authIP  *limiterSet
+	nonAuth map[rateLimitClass]classLimiter
+}
+
+func newClassified(cfg RateLimitConfig) *classified {
+	return &classified{
+		cfg:    cfg,
+		authIP: newLimiterSet(effectiveLimit(cfg.Auth, defaultRateLimitAuth)),
+		nonAuth: map[rateLimitClass]classLimiter{
+			classEvents: newClassLimiter(cfg.Events, defaultRateLimitEvents),
+			classRead:   newClassLimiter(cfg.Read, defaultRateLimitRead),
+			classWrite:  newClassLimiter(cfg.Write, defaultRateLimitWrite),
+			classSuites: newClassLimiter(cfg.Suites, defaultRateLimitSuites),
+		},
+	}
+}
+
+func (c *classified) allow(r *http.Request) bool {
+	class := classifyRequest(r)
+	if class == classAuth {
+		return c.authIP.allow(ipSubject(r))
+	}
+	cl := c.nonAuth[class]
+	return cl.ip.allow(ipSubject(r)) && cl.subject.allow(rateLimitSubject(r))
+}
+
+func rejectRateLimited(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+}
+
 // ClassifiedRateLimiter returns middleware with a separate per-minute budget
 // per route class. Auth is IP-only; other classes check an IP ceiling first
 // (stops forged-key bursts before they grow the per-subject map), then a
 // per-subject budget keyed by API key or IP.
 func ClassifiedRateLimiter(cfg RateLimitConfig) func(http.Handler) http.Handler {
-	authIP := newLimiterSet(effectiveLimit(cfg.Auth, defaultRateLimitAuth))
+	return LiveRateLimiter(func() RateLimitConfig { return cfg })
+}
 
-	nonAuth := map[rateLimitClass]classLimiter{
-		classEvents: newClassLimiter(cfg.Events, defaultRateLimitEvents),
-		classRead:   newClassLimiter(cfg.Read, defaultRateLimitRead),
-		classWrite:  newClassLimiter(cfg.Write, defaultRateLimitWrite),
-		classSuites: newClassLimiter(cfg.Suites, defaultRateLimitSuites),
+// LiveRateLimiter is ClassifiedRateLimiter with budgets read on each request.
+// A changed budget starts new, empty buckets.
+func LiveRateLimiter(get func() RateLimitConfig) func(http.Handler) http.Handler {
+	var mu sync.Mutex
+	cur := newClassified(get())
+	current := func() *classified {
+		cfg := get()
+		mu.Lock()
+		defer mu.Unlock()
+		if cur.cfg != cfg {
+			cur = newClassified(cfg)
+		}
+		return cur
 	}
-
-	reject := func(w http.ResponseWriter) {
-		w.Header().Set("Retry-After", "60")
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-	}
-
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			class := classifyRequest(r)
-
-			if class == classAuth {
-				if !authIP.allow(ipSubject(r)) {
-					reject(w)
-					return
-				}
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			cl := nonAuth[class]
-			if !cl.ip.allow(ipSubject(r)) {
-				reject(w)
-				return
-			}
-			if !cl.subject.allow(rateLimitSubject(r)) {
-				reject(w)
+			if !current().allow(r) {
+				rejectRateLimited(w)
 				return
 			}
 			next.ServeHTTP(w, r)
