@@ -93,6 +93,7 @@ func run(args []string) int {
 	prepareOnce.Do(func() { prepareCommands(rootCmd) })
 	rootCmd.SetArgs(args)
 	err := rootCmd.Execute()
+	defer maybeNoticeVersion(args)
 	if err == nil {
 		return 0
 	}

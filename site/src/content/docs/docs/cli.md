@@ -434,6 +434,17 @@ Prints the version, git commit, and build date injected at build time.
 
 A binary built with `go install` or `go run` has none of those injected and reports `dev` for the version (with `none` for the commit and `unknown` for the date). Only release builds print real values.
 
+### Version notice
+
+At most once a day, a command reads the server's version from `/api/capabilities` and compares it with the CLI's. When they differ, it prints one line to stderr after the command's own output:
+
+- An older CLI says so and shows how to update it. It keeps working; only newer features need the update.
+- A newer CLI says the server needs upgrading for its newer features.
+
+The notice never changes an exit code or stdout. It stays silent with `--json` or `--quiet`, on a `dev` build, and when the server does not answer within 2 seconds. It asks your own server only, never an outside service. `skael doctor` always shows both versions.
+
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`) or `brew upgrade --cask skael-dev/skael/skael`, then `skael init --force` in each repo to refresh the skael skill.
+
 ## Skill scope
 
 Every installed skill lives at one of two scopes:

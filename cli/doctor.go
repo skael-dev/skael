@@ -70,6 +70,22 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		add("config", "ok", detail, ui.Faint(detail))
 	}
 
+	// ── 1b. CLI and server versions ───────────────────────────────────────────
+	if cfg != nil {
+		server, err := serverVersion(cfg.Endpoint)
+		switch {
+		case err != nil:
+			detail := fmt.Sprintf("cli %s · server unknown (%s)", buildVersion, err)
+			add("version", "skip", detail, detail)
+		case versionNotice(buildVersion, server) != "":
+			detail := fmt.Sprintf("cli %s · server %s · %s", buildVersion, server, versionNotice(buildVersion, server))
+			add("version", "warn", detail, detail)
+		default:
+			detail := fmt.Sprintf("cli %s · server %s", buildVersion, server)
+			add("version", "ok", detail, ui.Faint(detail))
+		}
+	}
+
 	// ── 2. Platform health ────────────────────────────────────────────────────
 	if cfg != nil {
 		c := client.New(cfg.Endpoint, cfg.APIKey)
