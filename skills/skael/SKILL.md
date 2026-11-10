@@ -9,7 +9,9 @@ description: Use the skael CLI to find, install, pull and publish agent skills f
 
 ## Before you start
 
-Run `skael doctor`. It reports the config, the server and each agent.
+Run `skael doctor`. It reports the config, the server and each agent. `skael version` prints the CLI version.
+
+The full command reference is at https://skael.dev/docs/cli. Read it for a flag this skill does not list, rather than guessing.
 
 The CLI reads `SKAEL_URL` and `SKAEL_KEY`. If either is absent, it reads `~/.skael/config.json`, which `skael setup <url> <api-key>` writes. Never print a key. Never write a key into a file in the repo.
 
@@ -41,19 +43,27 @@ skael list
 skael show <skill> --versions
 ```
 
-## Install a skill for this developer
+## Follow skills on this machine
+
+`skael add` follows a skill, a pattern or a set, and installs what it resolves to. `skael sync` and the auto-sync hook keep everything followed current, so a new skill released under a followed pattern, or added to a followed set, arrives with no command.
 
 ```sh
 skael add <skill>
+skael add 'payments:*'        # every released skill under payments:
+skael add --set <name>
 skael sync
-skael remove <skill>
+skael remove <skill>          # or 'payments:*', or --set <name>
 ```
 
-`add` and `sync` write to each detected agent's skills directory.
+Quote a pattern so the shell does not expand it. Skills go to `.agents/skills`, and also to `.claude/skills` when Claude Code is detected. `--scope user` writes under your home folder instead of the repo.
 
-## Pull a set
+`remove` stops following a source. A skill another followed source still wants stays.
 
-A set is a named list of skills. Each entry is the latest version or one exact version. Use a set when a repo, a run or a machine needs a known group of skills.
+When two followed sources want different versions of one skill, `add` exits 2 and names both. Remove one of them; do not pin around it.
+
+## Write a set once
+
+A set is a named list of skills. An entry is a skill at its latest version, a skill at one exact version, a pattern such as `payments:*`, `*` for every released skill, or an exclusion such as `!payments:legacy`. Use `pull` when a repo, a CI run or a machine needs a known group of skills written once.
 
 ```sh
 skael sets list
@@ -62,7 +72,9 @@ skael sets resolve <name>
 skael pull --set <name> --dir . --no-hooks
 ```
 
-`pull` writes each skill to `<dir>/.agents/skills/<skill>/`, and it writes `manifest.json` beside them. The manifest records the exact versions and digests. It writes every skill or none.
+`pull` writes each skill to `<dir>/.agents/skills/<skill>/`, and to `<dir>/.claude/skills/` when Claude Code is detected, with `manifest.json` beside them. The manifest records the exact versions and digests. It writes every skill or none. `pull` records nothing: sync never follows it. To follow a set, use `skael add --set`.
+
+To undo a pull, delete the skill folders it wrote; `manifest.json` lists them. The next `pull` of the set also removes skills that left it.
 
 Use `--no-hooks` on a machine or in CI. It writes files only and changes no agent config. Omit it on a developer machine to install activation tracking too.
 
@@ -116,7 +128,7 @@ A submission publishes nothing. A person decides it in the web UI. No command de
 These commands need an owner or admin key.
 
 ```sh
-skael sets create <name> <skill> <skill>@latest <skill>@3 --description "..."
+skael sets create <name> <skill> <skill>@3 'payments:*' '!payments:legacy' --description "..."
 skael sets update <name> <skill>@4
 skael sets delete <name>
 
@@ -127,6 +139,19 @@ skael service-accounts keys revoke <account> <key-id>
 
 The scopes are `skills:read`, `sets:read`, `eval:work`, `events:write`, `outcomes:write` and `submissions:write`. The server shows a new key once. Give it to the person who asked for it, and do not store it.
 
+## Other commands
+
+These exist. Read https://skael.dev/docs/cli before you use one.
+
+- `skael import <url|path>` imports skills from a GitHub repo or a local folder.
+- `skael contest <skill>@<v> <skill>@<v>` runs candidates against one suite and names a winner or "too close to call".
+- `skael owners show|set|add|rm` reads and changes who reviews a skill name or namespace.
+- `skael review <skill> <version>` shows or decides a held version. Decide one only when a person asks you to.
+- `skael hook install|status|uninstall` manages activation tracking in each agent.
+- `skael webhooks` manages webhook endpoints. It needs an owner or admin key.
+
 ## Keep this skill current
 
-`skael init` writes this file to `.agents/skills/skael/SKILL.md`. It never overwrites a changed copy unless you pass `--force`.
+`skael init` writes this file to `.agents/skills/skael/SKILL.md`, and to `.claude/skills/skael/SKILL.md` when Claude Code is detected. It never overwrites a changed copy unless you pass `--force`.
+
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`) or `brew upgrade --cask skael-dev/skael/skael`. Then run `skael init --force` to refresh this file to the version that ships with the new CLI.

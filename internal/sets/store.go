@@ -142,7 +142,8 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 var ErrNameTaken = errors.New("set name already exists")
 
 func (s *Store) loadEntries(ctx context.Context, q Querier, set *Set) error {
-	rows, err := q.Query(ctx, `SELECT skill_name, version, kind FROM set_entries WHERE set_id = $1 ORDER BY kind, skill_name`, set.ID)
+	rows, err := q.Query(ctx, `SELECT skill_name, version, kind FROM set_entries WHERE set_id = $1
+		ORDER BY CASE kind WHEN 'name' THEN 0 WHEN 'pattern' THEN 1 ELSE 2 END, skill_name`, set.ID)
 	if err != nil {
 		return fmt.Errorf("sets: load entries: %w", err)
 	}

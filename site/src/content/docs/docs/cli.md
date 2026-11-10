@@ -40,32 +40,43 @@ One-command onboarding: validates the key, writes `~/.skael/config.json`, detect
 | `--skip-hooks` | false | Skip hook installation |
 | `--no-auto-sync` | false | Skip auto-sync hook installation |
 
-## skael add `<name>`
+## skael add `<skill | pattern> | --set <name>`
 
-Installs a skill from the registry. Downloads the latest version, verifies the checksum, extracts to all detected agent directories, and adds the skill to `~/.skael/config.json`.
+Follows a skill, every released skill under a pattern, or a set, and installs what it resolves to. It records the followed source in `~/.skael/config.json`, and `skael sync` and the auto-sync hook keep it current. A new skill released under a followed pattern, or added to a followed set, arrives with no command.
+
+```sh
+skael add code-review
+skael add 'payments:*'
+skael add --set payments
+```
+
+A pattern is a prefix ending in `*`, such as `payments:*`, or `*` for every released skill. Quote it so the shell does not expand it. Any member can follow a pattern; it creates nothing on the server and reaches only released skills the member can already read.
+
+When two followed sources want different versions of one skill, `add` exits 2, names both sources, and records nothing.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--scope project\|user` | config default | Override skill placement scope |
+| `--set <name>` | none | Follow a set |
+| `--scope project\|user` | config default | Override placement scope for this source |
 
-## skael remove `<name>`
+## skael remove `<skill | pattern> | --set <name>`
 
-Uninstalls a skill. Removes files from agent directories and removes the skill from `~/.skael/config.json`.
+Stops following a source and removes each skill that no other followed source still wants. A skill you also follow by name, or through another pattern or set, stays.
 
 ## skael sync
 
-Updates installed skills to the latest versions from the platform. Only skills listed in `~/.skael/config.json` are synced — not the full registry. Only changed skills are downloaded. Supports `--dry-run`.
+Resolves every followed source in `~/.skael/config.json` and installs what changed: new and updated skills, skills added to a followed set, and skills released under a followed pattern. It removes skills no source wants any more. Only changed skills are downloaded. Supports `--dry-run`.
 
 | Flag | Default | Description |
 |---|---|---|
 | `--scope project\|user` | config or `project` | Override skill placement scope for this run |
-| `--agent <name>` | all detected | Sync only for the named agent |
+| `--agent <name>` | both folders | `claude-code` writes only `.claude/skills`; any other agent writes only `.agents/skills` |
 | `--dry-run` | false | Show what would happen without making changes |
 | `--quiet` | false | Suppress non-error output |
 
 ## skael init `[name]`
 
-With no argument, `init` writes the skael skill to `.agents/skills/skael/SKILL.md` in the current directory. The binary carries this skill, which tells an agent how to use the CLI.
+With no argument, `init` writes the skael skill to `.agents/skills/skael/SKILL.md` in the current directory, and to `.claude/skills/skael/SKILL.md` when Claude Code is detected. The binary carries this skill, which tells an agent how to use the CLI.
 
 - A second run changes nothing and exits 0.
 - If the file differs from the skill in the binary, `init` refuses and exits 2. Pass `--force` to overwrite it.
@@ -79,7 +90,9 @@ The directory is named after the skill. If it already exists, `init` fails and w
 
 ## skael pull `--set <name>`
 
-Resolves a set to exact versions, downloads its bundle, and writes the skills under `<dir>/.agents/skills/`. It works on a clean machine with only `SKAEL_URL` and `SKAEL_KEY` set.
+Resolves a set to exact versions, downloads its bundle, and writes the skills under `<dir>/.agents/skills/`, and under `<dir>/.claude/skills/` when Claude Code is detected. It works on a clean machine with only `SKAEL_URL` and `SKAEL_KEY` set.
+
+Pull writes once. It records nothing, and `skael sync` never follows it. To follow a set on a developer machine, use `skael add --set <name>`. To undo a pull, delete the skill folders that `manifest.json` lists.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -113,7 +126,7 @@ Reads and manages named sets of skills. `--json` prints the API response unchang
 | `skael sets update <name> [entry...]` | owner or admin | Replace all entries, or change `--description`. What you omit stays |
 | `skael sets delete <name>` | owner or admin | Delete a set |
 
-Write an entry as `name` or `name@latest` to follow the latest version, or as `name@3` to pin one version.
+Write an entry as `name` or `name@latest` to follow the latest version, or as `name@3` to pin one version. A pattern such as `'payments:*'` follows every released skill under it, and `'*'` follows every released skill. An exclusion such as `'!payments:legacy'` leaves skills out after every include. A skill a pattern matches with nothing released is skipped and the set stays complete. Saving refuses an exact entry that an exclusion also covers.
 
 `skael sets resolve` exits 0 on an incomplete set, because that is a valid answer. Read `complete` in the output. Use `skael pull` to get exit code 10.
 
@@ -436,13 +449,11 @@ Every installed skill lives at one of two scopes:
 
 The project root is the nearest ancestor directory containing a `.git` folder, walking up from your current directory. If none is found, it falls back to the current directory.
 
-Each agent places skills at a different path per scope:
+Skael writes to two folders at each scope:
 
-| Agent | user scope | project scope |
-|---|---|---|
-| Claude Code | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` |
-| Cursor | `~/.cursor/skills/<name>` | `<project>/.cursor/skills/<name>` |
-| Codex | `~/.codex/skills/<name>` | `<project>/.agents/skills/<name>` |
-| OpenCode | `~/.config/opencode/skills/<name>` | `<project>/.opencode/skills/<name>` |
+| Folder | user scope | project scope | Read by |
+|---|---|---|---|
+| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode |
+| Claude Code, when detected | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` | Claude Code |
 
-Codex is the odd one out: its project-scope path is `.agents/skills`, not `.codex/skills`. Every other agent uses the same directory name for both scopes.
+Claude Code reads only `.claude/skills`, so Skael writes a second copy there when it detects Claude Code. A skill that an older version placed in `.cursor/skills`, `.opencode/skills` or `.codex/skills` moves on the next `skael sync`.

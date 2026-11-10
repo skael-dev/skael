@@ -3,8 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-
-	"github.com/skael-dev/skael/cli/agents"
 )
 
 // Scope controls where synced skills are placed.
@@ -47,13 +45,4 @@ func gitRoot(start string) string {
 		}
 		dir = parent
 	}
-}
-
-// agentSkillsBase returns the base skills directory for an agent under the
-// given scope (without the skill-name leaf).
-func agentSkillsBase(a agents.Agent, scope Scope, home, root string) string {
-	if scope == ScopeProject {
-		return a.ProjectSkillsDir(root)
-	}
-	return a.UserSkillsDir(home)
 }

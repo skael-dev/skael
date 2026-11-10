@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/skael-dev/skael/cli/client"
+	"github.com/skael-dev/skael/internal/pattern"
 	"github.com/skael-dev/skael/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -46,9 +47,12 @@ the output, or use skael pull, which exits 10.`,
 var setsCreateCmd = &cobra.Command{
 	Use:   "create <name> [entry...]",
 	Short: "Create a set (owner or admin)",
-	Long:  "Create a set. Write each entry as name, name@latest or name@3.",
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runSetsCreate,
+	Long: `Create a set. Write each entry as name, name@latest or name@3, a pattern such
+as 'payments:*' or '*' for every released skill, or an exclusion such as
+'!payments:legacy', which applies after every include. Quote a pattern so the
+shell does not expand it.`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runSetsCreate,
 }
 
 var setsUpdateCmd = &cobra.Command{
@@ -90,10 +94,18 @@ func printRaw(raw json.RawMessage) error {
 	return err
 }
 
-// parseSetEntries reads name, name@latest and name@3.
+// parseSetEntries reads name, name@latest and name@3, a pattern such as
+// payments:* or *, and an exclusion such as !payments:legacy.
 func parseSetEntries(args []string) ([]client.SetEntry, error) {
 	entries := make([]client.SetEntry, 0, len(args))
 	for _, arg := range args {
+		if body := strings.TrimPrefix(arg, "!"); body != arg || strings.Contains(arg, "*") {
+			if err := pattern.Validate(body); err != nil {
+				return nil, usageError("invalid_entry", fmt.Sprintf("entry %q: %s", arg, err), "write payments:*, * or !name")
+			}
+			entries = append(entries, client.SetEntry{Name: arg})
+			continue
+		}
 		name, version, pinned := strings.Cut(arg, "@")
 		if !skillNameRe.MatchString(name) {
 			return nil, usageError("invalid_entry", fmt.Sprintf("invalid skill name in entry %q", arg), "write name, name@latest or name@3")
@@ -112,6 +124,9 @@ func parseSetEntries(args []string) ([]client.SetEntry, error) {
 }
 
 func entryLabel(e client.SetEntry) string {
+	if strings.HasPrefix(e.Name, "!") || strings.Contains(e.Name, "*") {
+		return e.Name
+	}
 	if e.Version == 0 {
 		return e.Name + "@latest"
 	}
@@ -242,7 +257,10 @@ func runSetsUpdate(cmd *cobra.Command, args []string) error {
 		description = setsUpdateDescription
 	}
 	if len(entries) == 0 {
-		entries = current.Value.Entries
+		// Kind is derived by the server and read-only, so it is not sent back.
+		for _, e := range current.Value.Entries {
+			entries = append(entries, client.SetEntry{Name: e.Name, Version: e.Version})
+		}
 	}
 	res, err := c.UpdateSet(args[0], description, entries)
 	if err != nil {

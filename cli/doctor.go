@@ -129,8 +129,16 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Count skills in the agent's skills directory (scope-resolved).
-		skillsDir := agentSkillsBase(agent, scope, home, projectRoot)
+		// Count skills in the folder this agent reads: .claude/skills for
+		// Claude Code, .agents/skills for the others.
+		base := projectRoot
+		if scope == ScopeUser {
+			base = home
+		}
+		skillsDir := filepath.Join(base, ".agents", "skills")
+		if agent.Name() == (&agents.ClaudeCode{}).Name() {
+			skillsDir = filepath.Join(base, ".claude", "skills")
+		}
 		entries, err := os.ReadDir(skillsDir)
 		skillCount := 0
 		if err == nil {
