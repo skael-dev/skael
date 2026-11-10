@@ -191,6 +191,16 @@ describe("EvalStatus", () => {
     expect(screen.getByRole("button", { name: /re-run full evaluation/i })).toBeInTheDocument();
   });
 
+  it("hides an old failure once a later run succeeds", async () => {
+    mockEvals([
+      { id: "j2", status: "done", queue_position: 0, last_error: "", enqueued_at: "2026-08-02T00:00:00Z" },
+      { id: "j1", status: "failed", queue_position: 0, last_error: "sandbox image missing", enqueued_at: "2026-08-01T00:00:00Z" },
+    ]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+    expect(await screen.findByRole("button", { name: /full evaluation/i })).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox image missing/i)).not.toBeInTheDocument();
+  });
+
   it("surfaces a failed job's error", async () => {
     mockEvals([{ id: "j1", status: "failed", queue_position: 0, last_error: "sandbox image missing", enqueued_at: "2026-08-01T00:00:00Z" }]);
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));

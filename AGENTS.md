@@ -24,7 +24,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - The repository is public. Specs, plans, status and decisions live in the private build directory, .build, with docs as its symlink. A clone without it still builds.
 - Before you change an area, read its section in that directory's decisions file if it exists. Never name a private file in a commit, a PR or a tracked file.
 - The web app and site use npm, not Bun.
-- `cmd/server` holds no Docker socket and no LLM key. Only `cmd/skael-worker` runs evaluations, through the queue.
+- `cmd/server` holds no Docker socket and calls no LLM. It seals provider keys and sends them only in a job claim. Only `cmd/skael-worker` runs evaluations, through the queue.
 - Register every API group inside RegisterAPIRoutes in `internal/server/routes.go`.
 - Call every chi Use before any route registration, or the server panics at start.
 - Prefix a Huma body type with its route group. The names are global, and a collision panics at start.
@@ -34,7 +34,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - A server-side scan calls scan.Relativize before it decides, stores or returns the report.
 - A hold is a set of reasons. A verified score clears only scan, and an owner clears only ownership. Their persisted names never change.
 - The server computes a contest verdict. A worker posts only measurements.
-- `internal/eval/provider` is the only place the environment becomes an LLM backend. Add a mode there, not a variable.
+- `internal/eval/provider` is the only place a backend is resolved. Add a provider type on the server, not a variable.
 - Install docs never offer go install, because `go.mod` has a replace directive.
 - A commit message is a subject and a short paragraph of why. Detail goes in the PR body.
 
@@ -62,9 +62,9 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - git-bound: a skill whose source of truth is a connection. The opposite is native. Avoid: synced, managed, mirrored.
 - outbound change: the PR Skael opens for a publish to a git-bound skill, which gets a version when it merges. Avoid: change request, draft.
 - PR head: the stored archive of a skill folder at a PR's head SHA, which a contest can evaluate without a version. Avoid: preview version, draft version.
-- provider: one named LLM backend the server stores, with an adapter, a base URL, an auth style and the worker env name of its credential, chosen by the judge and each panel member. A sign-in provider is a different thing. Avoid: LLM connection, backend, integration.
+- provider: one named LLM backend the server stores, with a type, a base URL, an optional auth header and its key, sealed on the server, chosen by the judge and each panel member. A sign-in provider is a different thing. Avoid: LLM connection, backend, integration.
 - claim code: the one-time code the server logs at first start, which the first owner must enter. Avoid: setup token, bootstrap password.
-- check-in: a worker's report on each poll, idle or not, of its version, driver, credential names, verify results and image digest. A heartbeat extends a job lease and is a different thing. Avoid: registration.
+- check-in: a worker's report on each poll, idle or not, of its version, driver, harness and image digest. A heartbeat extends a job lease and is a different thing. Avoid: registration.
 - sample data: rows marked as sample that "Load sample data" adds and one click removes. Avoid: demo data, seed data.
 - harness: the agent CLI that runs one panel session in the sandbox, OpenCode only. Avoid: agent CLI.
 - job event: one progress record a worker posts for an eval job: phase, session start or end, judge call, or cancelled. A check-in and a heartbeat are different things. Avoid: log line, progress update.

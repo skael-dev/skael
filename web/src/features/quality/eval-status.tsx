@@ -154,7 +154,10 @@ export function EvalStatus({
     );
   }
 
-  const lastFailed = jobs.find((j) => j.status === "failed");
+  // Jobs come newest first. Only the newest finished job speaks for the skill:
+  // an old failure stays hidden once a later run succeeds.
+  const lastFinished = jobs.find((j) => !ACTIVE.has(j.status));
+  const lastFailed = lastFinished?.status === "failed" ? lastFinished : undefined;
   const stale = quality != null && quality.version < latestVersion;
   const rerun = quality != null;
 
