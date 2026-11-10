@@ -156,7 +156,14 @@ func ProxyPod(o Options, n names) *corev1.Pod {
 				// message, which the driver reports.
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 				Ports:                    []corev1.ContainerPort{{ContainerPort: proxyPort}},
-				VolumeMounts:             []corev1.VolumeMount{{Name: "config", MountPath: "/etc/tinyproxy"}},
+				// Each file by subPath, not the directory: a ConfigMap directory
+				// reaches its files through a timestamped "..<date>" directory,
+				// and an Ubuntu host's AppArmor profile for tinyproxy denies
+				// reading through it, so the proxy exits at start.
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "config", MountPath: "/etc/tinyproxy/tinyproxy.conf", SubPath: "tinyproxy.conf", ReadOnly: true},
+					{Name: "config", MountPath: "/etc/tinyproxy/filter", SubPath: "filter", ReadOnly: true},
+				},
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: boolPtr(false),
 					Capabilities: &corev1.Capabilities{

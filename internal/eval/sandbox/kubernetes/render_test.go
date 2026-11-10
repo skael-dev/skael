@@ -260,3 +260,17 @@ func TestProxyConfigMap_CarriesBothRenderedHalves(t *testing.T) {
 		t.Errorf("filter does not carry the allowed domain: %q", filter)
 	}
 }
+
+// An Ubuntu host's AppArmor profile for tinyproxy denies reading through a
+// ConfigMap directory's "..<date>" symlink target, so the proxy must mount
+// each file by subPath at the exact path its config names.
+func TestProxyPod_MountsEachConfigFileBySubPath(t *testing.T) {
+	p := ProxyPod(enforcedOptions().withDefaults(), testNames(t))
+	got := map[string]string{}
+	for _, m := range p.Spec.Containers[0].VolumeMounts {
+		got[m.MountPath] = m.SubPath
+	}
+	if got["/etc/tinyproxy/tinyproxy.conf"] != "tinyproxy.conf" || got["/etc/tinyproxy/filter"] != "filter" || len(got) != 2 {
+		t.Fatalf("proxy mounts = %v, want each file by subPath", got)
+	}
+}
