@@ -69,3 +69,6 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - harness: the agent CLI that runs one panel session in the sandbox, OpenCode only. Avoid: agent CLI.
 - job event: one progress record a worker posts for an eval job: phase, session start or end, judge call, or cancelled. A check-in and a heartbeat are different things. Avoid: log line, progress update.
 - stalled: a running job with no job event for 3 minutes, whatever its lease. Avoid: stuck, hung, dead.
+- followed source: a skill name, a pattern or a set that skael add recorded, which sync keeps current. Avoid: subscription, watch.
+- pattern entry: a set entry or followed source written as prefix:* or *, matching released skills by canonical name. Avoid: glob, wildcard, namespace entry.
+- exclusion: a set entry written as !name or !prefix:*, applied after every include. Avoid: deny entry, blocklist.

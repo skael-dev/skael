@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skael-dev/skael/cli/agents"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,7 +20,8 @@ var skillNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
 var initCmd = &cobra.Command{
 	Use:   "init [name]",
 	Short: "Install the skael skill into this repo, or scaffold a new skill directory",
-	Long: `With no argument, write the skael skill to .agents/skills/skael/SKILL.md. A
+	Long: `With no argument, write the skael skill to .agents/skills/skael/SKILL.md, and
+to .claude/skills/skael/SKILL.md when Claude Code is detected. A
 second run changes nothing. A changed file is refused unless --force is given.
 
 With a name, scaffold a new skill directory.`,
@@ -96,36 +98,48 @@ Describe what this skill does and when an agent should use it.
 	return nil
 }
 
+// initSkaelSkill writes the skael skill where agents read skills:
+// .agents/skills, and .claude/skills when Claude Code is detected.
 func initSkaelSkill() error {
-	path := filepath.Join(".agents", "skills", "skael", "SKILL.md")
-
-	status := "created"
-	current, err := os.ReadFile(path)
-	switch {
-	case err == nil && bytes.Equal(current, skills.Skael):
-		status = "unchanged"
-	case err == nil && !initForce:
-		return usageError("file_changed", path+" differs from the skill this binary carries", "skael init --force")
-	case err == nil:
-		status = "overwritten"
-	case !errors.Is(err, os.ErrNotExist):
-		return failure("read_error", fmt.Sprintf("read %s: %s", path, err), "")
+	paths := []string{filepath.Join(".agents", "skills", "skael", "SKILL.md")}
+	if home, err := os.UserHomeDir(); err == nil && (&agents.ClaudeCode{}).Detected(home) {
+		paths = append(paths, filepath.Join(".claude", "skills", "skael", "SKILL.md"))
 	}
-
-	if status != "unchanged" {
+	statuses := map[string]string{}
+	for _, path := range paths {
+		status := "created"
+		current, err := os.ReadFile(path)
+		switch {
+		case err == nil && bytes.Equal(current, skills.Skael):
+			status = "unchanged"
+		case err == nil && !initForce:
+			return usageError("file_changed", path+" differs from the skill this binary carries", "skael init --force")
+		case err == nil:
+			status = "overwritten"
+		case !errors.Is(err, os.ErrNotExist):
+			return failure("read_error", fmt.Sprintf("read %s: %s", path, err), "")
+		}
+		statuses[path] = status
+	}
+	for _, path := range paths {
+		if statuses[path] == "unchanged" {
+			continue
+		}
 		if err := writeFileAtomically(path, skills.Skael); err != nil {
 			return failure("write_error", fmt.Sprintf("write %s: %s", path, err), "")
 		}
 	}
 
 	if ui.JSONMode {
-		return ui.PrintJSON(map[string]string{"path": path, "status": status})
+		return ui.PrintJSON(map[string]any{"path": paths[0], "status": statuses[paths[0]], "files": statuses})
 	}
-	if status == "unchanged" {
-		ui.Info("%s is up to date", path)
-		return nil
+	for _, path := range paths {
+		if statuses[path] == "unchanged" {
+			ui.Info("%s is up to date", path)
+		} else {
+			ui.Success("Wrote %s", path)
+		}
 	}
-	ui.Success("Wrote %s", path)
 	return nil
 }
 

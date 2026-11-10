@@ -40,7 +40,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="text-[10px] font-mono uppercase tracking-[0.08em] text-text-tertiary mb-2">
         {title}
       </h2>
-      <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">{children}</div>
+      <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">
+        {children}
+      </div>
     </section>
   );
 }
@@ -106,7 +108,7 @@ export function SetDetailPage() {
       const res = await getSet({ path: { name } });
       if (res.error !== undefined) {
         throw new Error(
-          apiErrorMessage("load the set", res, { 404: "Open the list of sets and pick another." }),
+          apiErrorMessage("load the set", res, { 404: "Open the list of sets and pick another." })
         );
       }
       return res.data!;
@@ -138,7 +140,7 @@ export function SetDetailPage() {
 
   const skillRow = useListNavigation<string>((skill) => navigate(skillPath(skill)));
   const callerRow = useListNavigation<SetCaller>((c) =>
-    copyWithToast(c.resolution_id, "resolution id"),
+    copyWithToast(c.resolution_id, "resolution id")
   );
 
   const refresh = async () => {
@@ -190,9 +192,7 @@ export function SetDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-60">
           <h1 className="font-mono text-lg font-medium text-text-primary break-all">{set.name}</h1>
-          <p className="text-xs text-text-tertiary mt-1">
-            {set.description || "No description."}
-          </p>
+          <p className="text-xs text-text-tertiary mt-1">{set.description || "No description."}</p>
         </div>
         {canEdit && !editing && (
           <div className="flex items-center gap-2">
@@ -219,11 +219,7 @@ export function SetDetailPage() {
       </div>
 
       {editing ? (
-        <SetEditor
-          initial={set}
-          onSaved={() => setParams({})}
-          onCancel={() => setParams({})}
-        />
+        <SetEditor initial={set} onSaved={() => setParams({})} onCancel={() => setParams({})} />
       ) : (
         <Section title="Entries">
           {entries.length === 0 ? (
@@ -235,19 +231,30 @@ export function SetDetailPage() {
               }
             />
           ) : (
-            entries.map((entry) => (
-              <div key={entry.name} {...skillRow(entry.name)} className={rowClass}>
-                <Link
-                  to={skillPath(entry.name)}
-                  className="flex-1 min-w-0 truncate font-mono text-[13px] text-text-primary hover:text-accent transition-colors"
-                >
-                  {entry.name}
-                </Link>
-                <span className="font-mono text-[11px] text-text-secondary">
-                  {entry.version ? `pinned v${entry.version}` : "latest"}
-                </span>
-              </div>
-            ))
+            entries.map((entry) =>
+              entry.kind && entry.kind !== "name" ? (
+                <div key={entry.name} className={rowClass}>
+                  <span className="flex-1 min-w-0 truncate font-mono text-[13px] text-text-primary">
+                    {entry.name}
+                  </span>
+                  <span className="font-mono text-[11px] text-text-secondary">
+                    {entry.kind === "exclusion" ? "leaves out" : "pattern · latest"}
+                  </span>
+                </div>
+              ) : (
+                <div key={entry.name} {...skillRow(entry.name)} className={rowClass}>
+                  <Link
+                    to={skillPath(entry.name)}
+                    className="flex-1 min-w-0 truncate font-mono text-[13px] text-text-primary hover:text-accent transition-colors"
+                  >
+                    {entry.name}
+                  </Link>
+                  <span className="font-mono text-[11px] text-text-secondary">
+                    {entry.version ? `pinned v${entry.version}` : "latest"}
+                  </span>
+                </div>
+              )
+            )
           )}
         </Section>
       )}

@@ -13,7 +13,7 @@ Every publish creates a new immutable version (sequential integers — `1`, `2`,
 
 ## Selective sync
 
-Skills are installed explicitly with `skael add`, which tracks them in `~/.skael/config.json` (like `package.json` for skills). `skael sync` only updates skills you've installed — not the full registry. Downloaded archives are checksum-verified before extraction. `skael remove` uninstalls a skill and removes it from your config.
+Skills are installed explicitly with `skael add`, which follows a skill, a pattern such as `payments:*`, or a set, and records it in `~/.skael/config.json` (like `package.json` for skills). `skael sync` updates what you follow — not the full registry — and installs new skills released under a followed pattern. Downloaded archives are checksum-verified before extraction. `skael remove` stops following a source and removes skills nothing else wants.
 
 ## Auto-sync
 

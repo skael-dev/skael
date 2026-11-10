@@ -4,11 +4,9 @@ package ownership
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
-)
 
-var nameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$`)
+	"github.com/skael-dev/skael/internal/pattern"
+)
 
 // Rule is one ownership assignment.
 type Rule struct {
@@ -34,48 +32,22 @@ func (r Resolution) Contains(userID string) bool {
 	return false
 }
 
-func IsPrefix(p string) bool { return strings.HasSuffix(p, "*") }
+// IsPrefix reports whether p matches by prefix.
+func IsPrefix(p string) bool { return pattern.IsPrefix(p) }
 
 // Scope returns the prefix a name must begin with to match p.
-func Scope(p string) string {
-	if !IsPrefix(p) {
-		return p
-	}
-	return strings.TrimSuffix(p, "*")
-}
+func Scope(p string) string { return pattern.Scope(p) }
 
-// ValidatePattern enforces the grammar: an exact skill name, a prefix ending
-// in "*", or the bare "*".
+// ValidatePattern enforces the shared pattern grammar.
 func ValidatePattern(p string) error {
-	if p == "" {
-		return fmt.Errorf("ownership: pattern is empty")
-	}
-	if p == "*" {
-		return nil
-	}
-	if strings.Count(p, "*") > 1 {
-		return fmt.Errorf("ownership: pattern %q has more than one %q", p, "*")
-	}
-	if i := strings.Index(p, "*"); i >= 0 && i != len(p)-1 {
-		return fmt.Errorf("ownership: pattern %q may only use %q as the final character", p, "*")
-	}
-	base := strings.TrimSuffix(p, "*")
-	base = strings.TrimSuffix(base, ":")
-	if base == "" {
-		return fmt.Errorf("ownership: pattern %q has no name part", p)
-	}
-	if !nameRe.MatchString(base) {
-		return fmt.Errorf("ownership: pattern %q is not a valid skill name or namespace", p)
+	if err := pattern.Validate(p); err != nil {
+		return fmt.Errorf("ownership: %w", err)
 	}
 	return nil
 }
 
-func Matches(pattern, name string) bool {
-	if !IsPrefix(pattern) {
-		return pattern == name
-	}
-	return strings.HasPrefix(name, Scope(pattern))
-}
+// Matches reports whether name falls under the rule's pattern.
+func Matches(p, name string) bool { return pattern.Matches(p, name) }
 
 // Resolve picks the single rule that governs name: exact match, then longest
 // prefix, then unowned. Longest match replaces rather than stacks.

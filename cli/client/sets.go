@@ -60,6 +60,7 @@ func (c *Client) deleteAt(path string) error {
 type SetEntry struct {
 	Name    string `json:"name"`
 	Version int    `json:"version,omitempty"`
+	Kind    string `json:"kind,omitempty"`
 }
 
 // Set is a named list of skills.

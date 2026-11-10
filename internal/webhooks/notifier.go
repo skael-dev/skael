@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 	"github.com/rs/zerolog/log"
 
+	"github.com/skael-dev/skael/internal/pattern"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/submissions"
@@ -143,18 +144,32 @@ func (n *Notifier) VersionReleased(ctx context.Context, tx pgx.Tx, ev skill.Rele
 }
 
 // SkillChanged implements skill.ChangeNotifier: it rechecks each set that names
-// the skill or one of its aliases.
+// the skill or one of its aliases, and each set whose pattern matches it.
 func (n *Notifier) SkillChanged(ctx context.Context, tx pgx.Tx, skillName string) error {
 	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT set_id FROM set_entries
-		WHERE skill_name = $1 OR skill_name IN (SELECT alias FROM skill_aliases WHERE canonical = $1)
+		SELECT DISTINCT set_id, kind, skill_name FROM set_entries
+		WHERE kind = 'pattern'
+		   OR skill_name = $1 OR skill_name IN (SELECT alias FROM skill_aliases WHERE canonical = $1)
 		ORDER BY set_id`, skillName)
 	if err != nil {
 		return fmt.Errorf("webhooks: sets of %s: %w", skillName, err)
 	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	type entry struct{ setID, kind, name string }
+	entries, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (entry, error) {
+		var e entry
+		return e, r.Scan(&e.setID, &e.kind, &e.name)
+	})
 	if err != nil {
 		return fmt.Errorf("webhooks: sets of %s: %w", skillName, err)
+	}
+	var ids []string
+	for _, e := range entries {
+		if e.kind == "pattern" && !pattern.Matches(e.name, skillName) {
+			continue
+		}
+		if !slices.Contains(ids, e.setID) {
+			ids = append(ids, e.setID)
+		}
 	}
 	for _, id := range ids {
 		if err := n.SetChanged(ctx, tx, id); err != nil {

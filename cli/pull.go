@@ -35,7 +35,10 @@ var pullCmd = &cobra.Command{
 	Use:   "pull --set <name>",
 	Short: "Resolve a set and write its skills into a directory",
 	Long: `Resolve a set to exact versions, download its bundle, verify each archive
-against the resolved digest, and write the skills under <dir>/.agents/skills/.
+against the resolved digest, and write the skills under <dir>/.agents/skills/,
+and under <dir>/.claude/skills/ when Claude Code is detected. Pull writes
+once: it records nothing, and sync never follows it. Use "skael add --set"
+to follow a set.
 
 Other entries in that directory stay. Skills named by the previous pull's
 manifest and absent from this one are removed.
@@ -95,6 +98,16 @@ func runPull(cmd *cobra.Command, args []string) error {
 	}
 	if err := installBundle(target, &res, manifest, archives); err != nil {
 		return failure("write_error", fmt.Sprintf("write %s: %s", target, err), "")
+	}
+	// Claude Code reads only .claude/skills, so it gets the same bundle there.
+	if home, err := os.UserHomeDir(); err == nil && (&agents.ClaudeCode{}).Detected(home) {
+		claude, err := filepath.Abs(filepath.Join(pullDir, ".claude", "skills"))
+		if err != nil {
+			return usageError("invalid_path", fmt.Sprintf("invalid --dir: %s", err), "")
+		}
+		if err := installBundle(claude, &res, manifest, archives); err != nil {
+			return failure("write_error", fmt.Sprintf("write %s: %s", claude, err), "")
+		}
 	}
 
 	hookFailures := 0

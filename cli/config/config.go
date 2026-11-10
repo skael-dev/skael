@@ -9,9 +9,11 @@ import (
 	"strings"
 )
 
-// SkillEntry records a skill the user has explicitly installed.
+// SkillEntry is a followed source: a skill name, a pattern such as
+// "payments:*" (Kind "pattern"), or a set (Kind "set").
 type SkillEntry struct {
 	Name  string `json:"name"`
+	Kind  string `json:"kind,omitempty"`
 	Scope string `json:"scope,omitempty"`
 }
 
@@ -42,16 +44,33 @@ type SyncedSkill struct {
 	Version    int         `json:"version"`
 	Checksum   string      `json:"checksum"`
 	Placements []Placement `json:"placements,omitempty"`
+	// Sources are the followed sources that want this skill.
+	Sources []string `json:"sources,omitempty"`
 }
 
-// FindSkill returns the entry and index for the given name, or (-1) if not found.
+// FindSkill returns the skill-name entry for name, or (-1) if not found.
 func (c *Config) FindSkill(name string) (SkillEntry, int) {
+	return c.FindSource("", name)
+}
+
+// FindSource returns the followed source of a kind and name, or (-1).
+func (c *Config) FindSource(kind, name string) (SkillEntry, int) {
 	for i, s := range c.Skills {
-		if s.Name == name {
+		if s.Name == name && s.Kind == kind {
 			return s, i
 		}
 	}
 	return SkillEntry{}, -1
+}
+
+// RemoveSource stops following a source. Returns true if it was followed.
+func (c *Config) RemoveSource(kind, name string) bool {
+	_, idx := c.FindSource(kind, name)
+	if idx < 0 {
+		return false
+	}
+	c.Skills = append(c.Skills[:idx], c.Skills[idx+1:]...)
+	return true
 }
 
 // AddSkill adds a skill to the config, or updates its scope if already present.

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skael-dev/skael/internal/audit"
+	"github.com/skael-dev/skael/internal/pattern"
 	"github.com/skael-dev/skael/internal/scan"
 )
 
@@ -27,10 +28,31 @@ type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// SetEntry is one skill in a set. Version 0 means latest.
+// SetEntry is one entry in a set: an exact skill name, a pattern such as
+// "payments:*" or "*", or an exclusion such as "!payments:legacy". Version 0
+// means latest; only an exact name may pin one.
 type SetEntry struct {
-	Name    string `json:"name"`
-	Version int    `json:"version,omitempty" doc:"An exact version. Omit it for latest."`
+	Name    string `json:"name" doc:"A skill name, a pattern such as payments:* or *, or an exclusion such as !payments:legacy."`
+	Version int    `json:"version,omitempty" doc:"An exact version. Omit it for latest. Only a skill name takes one."`
+	Kind    string `json:"kind,omitempty" readOnly:"true" enum:"name,pattern,exclusion" doc:"Derived from the name."`
+}
+
+// Entry kinds.
+const (
+	KindName      = "name"
+	KindPattern   = "pattern"
+	KindExclusion = "exclusion"
+)
+
+// KindOf derives an entry's kind from its name.
+func KindOf(name string) string {
+	switch {
+	case strings.HasPrefix(name, "!"):
+		return KindExclusion
+	case strings.Contains(name, "*"):
+		return KindPattern
+	}
+	return KindName
 }
 
 // Set is a named list of skills.
@@ -120,7 +142,8 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 var ErrNameTaken = errors.New("set name already exists")
 
 func (s *Store) loadEntries(ctx context.Context, q Querier, set *Set) error {
-	rows, err := q.Query(ctx, `SELECT skill_name, version FROM set_entries WHERE set_id = $1 ORDER BY skill_name`, set.ID)
+	rows, err := q.Query(ctx, `SELECT skill_name, version, kind FROM set_entries WHERE set_id = $1
+		ORDER BY CASE kind WHEN 'name' THEN 0 WHEN 'pattern' THEN 1 ELSE 2 END, skill_name`, set.ID)
 	if err != nil {
 		return fmt.Errorf("sets: load entries: %w", err)
 	}
@@ -197,7 +220,7 @@ func writeEntries(ctx context.Context, q Querier, setID string, entries []SetEnt
 		return fmt.Errorf("sets: clear entries: %w", err)
 	}
 	for _, e := range entries {
-		if _, err := q.Exec(ctx, `INSERT INTO set_entries (set_id, skill_name, version) VALUES ($1, $2, $3)`, setID, e.Name, e.Version); err != nil {
+		if _, err := q.Exec(ctx, `INSERT INTO set_entries (set_id, skill_name, version, kind) VALUES ($1, $2, $3, $4)`, setID, e.Name, e.Version, KindOf(e.Name)); err != nil {
 			return fmt.Errorf("sets: write entry: %w", err)
 		}
 	}
@@ -225,7 +248,7 @@ func (s *Store) Create(ctx context.Context, name, description string, entries []
 	if err := writeEntries(ctx, tx, set.ID, entries); err != nil {
 		return nil, err
 	}
-	set.Entries = entries
+	set.Entries = withKinds(entries)
 	if err := audit.Record(ctx, tx, actor, "set.create", "set:"+name, map[string]any{"entries": entries}); err != nil {
 		return nil, err
 	}
@@ -260,7 +283,7 @@ func (s *Store) Update(ctx context.Context, name, description string, entries []
 	if err := writeEntries(ctx, tx, set.ID, entries); err != nil {
 		return nil, err
 	}
-	set.Description, set.Entries = description, entries
+	set.Description, set.Entries = description, withKinds(entries)
 	if err := audit.Record(ctx, tx, actor, "set.update", "set:"+name, map[string]any{"old": old, "new": entries}); err != nil {
 		return nil, err
 	}
@@ -295,25 +318,110 @@ func (s *Store) Delete(ctx context.Context, name, actor string) (bool, error) {
 	return true, tx.Commit(ctx)
 }
 
+func withKinds(entries []SetEntry) []SetEntry {
+	out := make([]SetEntry, len(entries))
+	for i, e := range entries {
+		e.Kind = KindOf(e.Name)
+		out[i] = e
+	}
+	return out
+}
+
 // Resolve computes the set's current resolution through q. It stores nothing,
 // so a caller can compare it inside a transaction.
+//
+// Exact names resolve as before: one that cannot be served makes the set
+// incomplete. Patterns add every skill whose latest released version they
+// match; a matched skill with nothing released is skipped, so a new skill
+// never breaks a set. Exclusions apply last.
 func Resolve(ctx context.Context, q Querier, set *Set) (*Resolution, error) {
 	res := &Resolution{Set: set.Name, Complete: true, Entries: []ResolvedEntry{}}
+	var includes, excludes []string
+	named := map[string]bool{}
 	for _, e := range set.Entries {
-		entry, reason, err := resolveEntry(ctx, q, e)
+		switch KindOf(e.Name) {
+		case KindPattern:
+			includes = append(includes, e.Name)
+		case KindExclusion:
+			excludes = append(excludes, strings.TrimPrefix(e.Name, "!"))
+		default:
+			entry, reason, err := resolveEntry(ctx, q, e)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				res.Complete = false
+				res.Excluded = append(res.Excluded, ExcludedEntry{Name: e.Name, Requested: requested(e), Reason: reason})
+				continue
+			}
+			named[entry.Name] = true
+			res.Entries = append(res.Entries, *entry)
+		}
+	}
+	if len(includes) > 0 {
+		released, err := releasedLatest(ctx, q)
 		if err != nil {
 			return nil, err
 		}
-		if reason != "" {
-			res.Complete = false
-			res.Excluded = append(res.Excluded, ExcludedEntry{Name: e.Name, Requested: requested(e), Reason: reason})
-			continue
+		for _, entry := range released {
+			if named[entry.Name] || !matchesAny(includes, entry.Name) {
+				continue
+			}
+			named[entry.Name] = true
+			res.Entries = append(res.Entries, entry)
 		}
-		res.Entries = append(res.Entries, *entry)
+	}
+	if len(excludes) > 0 {
+		kept := res.Entries[:0]
+		for _, e := range res.Entries {
+			if !matchesAny(excludes, e.Name) {
+				kept = append(kept, e)
+			}
+		}
+		res.Entries = kept
 	}
 	slices.SortFunc(res.Entries, func(a, b ResolvedEntry) int { return strings.Compare(a.Name, b.Name) })
 	res.ID = ResolutionID(res.Entries)
 	return res, nil
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if pattern.Matches(p, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// releasedLatest is every skill whose latest version is released, in one
+// query: a "*" set covers the whole registry.
+func releasedLatest(ctx context.Context, q Querier) ([]ResolvedEntry, error) {
+	rows, err := q.Query(ctx, `
+		SELECT s.name, s.latest_version, s.removed_from_git_at IS NOT NULL, v.checksum, v.scan_result,
+		       EXISTS (SELECT 1 FROM version_approvals a WHERE a.version_id = v.id AND a.decision = 'approved')
+		FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.version = s.latest_version
+		WHERE s.latest_version > 0 AND v.gate_state = 'released'
+		ORDER BY s.name`)
+	if err != nil {
+		return nil, fmt.Errorf("sets: released skills: %w", err)
+	}
+	defer rows.Close()
+	var out []ResolvedEntry
+	for rows.Next() {
+		var e ResolvedEntry
+		var scanResult []byte
+		var approved bool
+		if err := rows.Scan(&e.Name, &e.Version, &e.RemovedFromGit, &e.SHA256, &scanResult, &approved); err != nil {
+			return nil, fmt.Errorf("sets: released skills: %w", err)
+		}
+		e.ScanVerdict, e.ApprovalState = scanVerdict(scanResult), "released"
+		if approved {
+			e.ApprovalState = "approved"
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func requested(e SetEntry) string {

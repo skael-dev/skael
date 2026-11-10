@@ -10,6 +10,62 @@ import { throwOnApiError } from "@/lib/api-error";
 
 const SET_NAME_RE = /^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$/;
 
+// An entry is a skill name, a pattern ("payments:*" or "*") or an exclusion
+// ("!payments:legacy"), the same grammar the server checks.
+export function entryKind(name: string): "name" | "pattern" | "exclusion" {
+  if (name.startsWith("!")) return "exclusion";
+  if (name.includes("*")) return "pattern";
+  return "name";
+}
+
+function validPattern(p: string): boolean {
+  if (p === "*") return true;
+  if ((p.match(/\*/g) ?? []).length > 1 || (p.includes("*") && !p.endsWith("*"))) return false;
+  const base = p.replace(/\*$/, "").replace(/:$/, "");
+  return base !== "" && SET_NAME_RE.test(base);
+}
+
+export function matches(p: string, name: string): boolean {
+  return p.endsWith("*") ? name.startsWith(p.slice(0, -1)) : p === name;
+}
+
+function PatternRow({
+  entry,
+  skillNames,
+  onRemove,
+}: {
+  entry: SetEntry;
+  skillNames: string[];
+  onRemove: () => void;
+}) {
+  const exclusion = entryKind(entry.name) === "exclusion";
+  const body = exclusion ? entry.name.slice(1) : entry.name;
+  const hits = skillNames.filter((n) => matches(body, n));
+  return (
+    <div className="flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0">
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <span className="truncate font-mono text-[13px] text-text-primary">{entry.name}</span>
+        <span className="text-[11px] text-text-tertiary truncate" title={hits.join(", ")}>
+          {exclusion ? "leaves out" : "follows"} {hits.length}{" "}
+          {hits.length === 1 ? "skill" : "skills"} today
+          {hits.length > 0 && `: ${hits.slice(0, 4).join(", ")}${hits.length > 4 ? ", …" : ""}`}
+        </span>
+      </div>
+      <span className="h-8 w-[104px] shrink-0 flex items-center justify-center text-[11px] text-text-tertiary">
+        {exclusion ? "exclusion" : "latest"}
+      </span>
+      <button
+        type="button"
+        aria-label={`Remove ${entry.name}`}
+        onClick={onRemove}
+        className="flex items-center justify-center size-8 shrink-0 text-text-tertiary hover:text-destructive cursor-pointer bg-transparent border-none"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 const fieldClass =
   "w-full h-9 px-3 bg-bg-primary border border-border rounded-[5px] text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-border-active transition-colors";
 const labelClass = "text-[11px] font-medium text-text-secondary uppercase tracking-wider";
@@ -95,6 +151,16 @@ export function SetEditor({
       setFieldError(`${skill} is already in this set. Change its version in the list below.`);
       return;
     }
+    if (entryKind(skill) !== "name") {
+      if (!validPattern(skill.replace(/^!/, ""))) {
+        setFieldError(`${skill} is not a valid pattern. Write a name, payments:*, * or !name.`);
+        return;
+      }
+      setEntries((list) => [...list, { name: skill }]);
+      setAdding("");
+      setFieldError(null);
+      return;
+    }
     if (skillNames && !skillNames.includes(skill)) {
       setFieldError(`No skill is named ${skill}. Pick a name from the list.`);
       return;
@@ -108,7 +174,9 @@ export function SetEditor({
     mutationFn: async () => {
       const body = {
         description: description.trim() || undefined,
-        entries: entries.map((e) => (e.version ? e : { name: e.name })),
+        entries: entries.map((e) =>
+          e.version ? { name: e.name, version: e.version } : { name: e.name }
+        ),
       };
       if (initial) {
         const res = await updateSet({ path: { name: initial.name }, body });
@@ -131,7 +199,7 @@ export function SetEditor({
     e.preventDefault();
     if (!initial && !SET_NAME_RE.test(name)) {
       setFieldError(
-        "A set name uses lowercase letters, digits, colons, dots and hyphens. Correct the name.",
+        "A set name uses lowercase letters, digits, colons, dots and hyphens. Correct the name."
       );
       return;
     }
@@ -191,7 +259,7 @@ export function SetEditor({
                 addEntry();
               }
             }}
-            placeholder="Skill name"
+            placeholder="Skill name, payments:*, * or !name"
             className={`${fieldClass} font-mono min-w-0`}
           />
           <datalist id="set-skill-names">
@@ -213,24 +281,32 @@ export function SetEditor({
         </div>
         {entries.length > 0 ? (
           <div className="border border-border rounded-[5px] bg-bg-primary mt-1">
-            {entries.map((entry) => (
-              <EntryRow
-                key={entry.name}
-                entry={entry}
-                onChange={(version) =>
-                  setEntries((list) =>
-                    list.map((e) => (e.name === entry.name ? { name: e.name, version } : e)),
-                  )
-                }
-                onRemove={() =>
-                  setEntries((list) => list.filter((e) => e.name !== entry.name))
-                }
-              />
-            ))}
+            {entries.map((entry) =>
+              entryKind(entry.name) !== "name" ? (
+                <PatternRow
+                  key={entry.name}
+                  entry={entry}
+                  skillNames={skillNames ?? []}
+                  onRemove={() => setEntries((list) => list.filter((e) => e.name !== entry.name))}
+                />
+              ) : (
+                <EntryRow
+                  key={entry.name}
+                  entry={entry}
+                  onChange={(version) =>
+                    setEntries((list) =>
+                      list.map((e) => (e.name === entry.name ? { name: e.name, version } : e))
+                    )
+                  }
+                  onRemove={() => setEntries((list) => list.filter((e) => e.name !== entry.name))}
+                />
+              )
+            )}
           </div>
         ) : (
           <p className="text-[11px] text-text-tertiary m-0">
-            No skills yet. Add a skill by name. A new entry follows the latest released version.
+            No skills yet. Add a skill by name, a pattern such as payments:* or * that follows every
+            released skill under it, or an exclusion such as !payments:legacy that leaves one out.
           </p>
         )}
       </div>

@@ -67,9 +67,11 @@ This validates the connection, saves config, and installs activation tracking an
 ## What it does
 
 ```bash
-skael add my-skill               # install a skill from the registry
+skael add my-skill               # follow and install a skill
+skael add 'payments:*'           # follow every released skill under payments:
+skael add --set payments         # follow a set
 skael add my-skill --scope user  # install to user scope only
-skael remove my-skill            # uninstall a skill
+skael remove my-skill            # stop following; removes what nothing else wants
 skael sync                       # update installed skills to latest versions
 skael list                       # see everything published on the registry
 skael list --installed           # see what you have installed locally
@@ -89,7 +91,7 @@ skael hook install               # set up activation tracking + auto-sync
 skael version                    # version, commit, build date
 ```
 
-Skills are installed explicitly — `skael add` picks what you want, `skael sync` keeps them up to date. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
+Skills are installed explicitly — `skael add` follows a skill, a pattern or a set, and `skael sync` keeps everything followed up to date, including new skills released under a followed pattern. There's no "sync everything" default; your `~/.skael/config.json` tracks exactly which skills you've chosen to install (like `package.json`). Auto-sync hooks run `skael sync` in the background with 30-minute debouncing so your agents always have the latest versions without manual intervention.
 
 ### User scope vs. project scope
 
@@ -97,16 +99,14 @@ Every install lands in one of two places: **user scope** puts a skill in your ho
 
 The default is `project`. Run `skael setup --scope user` to change your default, or override per skill with `skael add my-skill --scope user`. `skael sync --scope user` overrides for that run, but any skill with its own recorded scope (set via `skael add --scope`) keeps it regardless. Project root is the nearest ancestor directory containing `.git`, falling back to the current directory if there isn't one.
 
-Where each agent looks:
+Skael writes to two folders at each scope:
 
-| Agent | user scope | project scope |
-|---|---|---|
-| Claude Code | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` |
-| Cursor | `~/.cursor/skills/<name>` | `<project>/.cursor/skills/<name>` |
-| Codex | `~/.codex/skills/<name>` | `<project>/.agents/skills/<name>` |
-| OpenCode | `~/.config/opencode/skills/<name>` | `<project>/.opencode/skills/<name>` |
+| Folder | user scope | project scope | Read by |
+|---|---|---|---|
+| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode |
+| Claude Code, when detected | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` | Claude Code |
 
-Codex is the odd one out — project scope goes to `.agents/skills/`, not `.codex/skills/`. Don't assume it follows the same pattern as the others.
+Claude Code reads only `.claude/skills`, so Skael writes a second copy there when it detects Claude Code. A skill that an older version placed in `.cursor/skills`, `.opencode/skills` or `.codex/skills` moves on the next `skael sync`.
 
 Every `skael publish` runs a security scan that checks for hardcoded secrets, prompt injection, data exfiltration patterns, dangerous shell commands, and obfuscated payloads. Critical and high-severity findings don't all mean the same thing, so they don't all get the same treatment.
 

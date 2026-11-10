@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"os"
-	"path/filepath"
+	"slices"
+	"strings"
 
-	"github.com/skael-dev/skael/cli/agents"
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
 	"github.com/skael-dev/skael/internal/ui"
@@ -14,176 +12,148 @@ import (
 )
 
 var addCmd = &cobra.Command{
-	Use:   "add <skill-name>",
-	Short: "Install a skill from the registry",
-	Long: `Install the latest version of a skill for every detected agent, and record it
-in ~/.skael/config.json so "skael sync" keeps it up to date.
+	Use:   "add <skill | pattern> | --set <name>",
+	Short: "Follow a skill, a pattern or a set, and install it",
+	Long: `Follow a skill, every released skill under a pattern, or a set, and install
+what it resolves to. "skael sync" and the auto-sync hook keep everything you
+follow current, so a new skill released under a followed pattern or added to a
+followed set arrives with no command.
 
---scope decides where the files go:
-  project  <repo>/.claude/skills/<name> (and the matching folder for each
-           other agent). The repo is the nearest ancestor with .git, or the
-           current directory. This is the default.
-  user     ~/.claude/skills/<name> (and the matching folder for each other
-           agent), available in every project.
+Skills go to .agents/skills, which Codex, Cursor and OpenCode read, and also
+to .claude/skills when Claude Code is detected.
 
-The default comes from "skael setup --scope". Run "skael doctor" to see which
-agents are detected.`,
+--scope decides where:
+  project  <repo>/.agents/skills/<name>, and <repo>/.claude/skills/<name>.
+           The repo is the nearest ancestor with .git, or the current
+           directory. This is the default.
+  user     ~/.agents/skills/<name>, and ~/.claude/skills/<name>, available in
+           every project.
+
+The default comes from "skael setup --scope". When two followed sources want
+different versions of one skill, add refuses and names both.`,
 	Example: `  skael add code-review
+  skael add 'payments:*'
+  skael add --set payments
   skael add code-review --scope user`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: runAdd,
 }
 
-var addScope string
+var (
+	addScope string
+	addSet   string
+)
 
 func init() {
 	addCmd.Flags().StringVar(&addScope, "scope", "", "Skill placement scope: project|user (overrides default)")
+	addCmd.Flags().StringVar(&addSet, "set", "", "Follow a set by name")
 	rootCmd.AddCommand(addCmd)
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	name := args[0]
-
 	if addScope != "" && !validScope(addScope) {
 		return usageError("invalid_scope", fmt.Sprintf("invalid --scope %q: must be \"project\" or \"user\"", addScope), "")
 	}
+	arg := ""
+	if len(args) == 1 {
+		arg = args[0]
+	}
+	src, err := sourceOf(arg, addSet, addScope)
+	if err != nil {
+		return usageError("invalid_source", err.Error(), "skael add --help")
+	}
 
-	// 1. Load config with migration support.
 	dir := config.DefaultDir()
 	cfg, _, err := config.EnsureSkillsKey(dir)
 	if err != nil {
 		return notConfigured(err)
 	}
-
-	// 2. Resolve the effective scope for this skill.
-	effectiveScope := resolveScope(addScope, cfg.Scope)
-
-	// 3. Check if already installed with the same scope.
-	if existing, idx := cfg.FindSkill(name); idx >= 0 {
-		existingScope := existing.Scope
-		if existingScope == "" {
-			existingScope = string(resolveScope("", cfg.Scope))
+	label := sourceLabel(src)
+	if existing, idx := cfg.FindSource(src.Kind, src.Name); idx >= 0 && (src.Scope == "" || existing.Scope == src.Scope) {
+		if ui.JSONMode {
+			return ui.PrintJSON(map[string]string{"status": "already_following", "source": label})
 		}
-		if addScope == "" || addScope == existingScope {
-			if ui.JSONMode {
-				return ui.PrintJSON(map[string]string{"status": "already_installed", "name": name, "scope": existingScope})
-			}
-			ui.Info("Skill %q is already installed (%s scope).", name, existingScope)
-			return nil
-		}
+		ui.Info("Already following %s.", label)
+		return nil
+	} else if idx >= 0 {
+		cfg.Skills = append(cfg.Skills[:idx], cfg.Skills[idx+1:]...)
 	}
 
-	// 4. Validate skill exists on the registry.
-	sp := StartSpinner("Checking registry...")
 	c := client.New(cfg.Endpoint, cfg.APIKey)
-	manifest, err := c.GetManifest()
+	sp := StartSpinner("Checking registry...")
+	if err := checkSource(c, src); err != nil {
+		sp.Stop()
+		return err
+	}
+
+	// Refuse before anything is recorded when the new source asks for a
+	// version another followed source already pins differently.
+	cfg.Skills = append(cfg.Skills, src)
+	exp, err := expand(c, cfg, "")
 	if err != nil {
 		sp.Stop()
-		return apiFailure(fmt.Errorf("fetch manifest: %w", err))
+		return apiFailure(err)
 	}
-
-	var found *client.ManifestEntry
-	for i, entry := range manifest {
-		if entry.Name == name {
-			found = &manifest[i]
-			break
+	var conflicts []string
+	for _, cf := range exp.Conflicts {
+		if strings.Contains(cf, label) {
+			conflicts = append(conflicts, cf)
 		}
 	}
-	if found == nil {
+	if len(conflicts) > 0 {
 		sp.Stop()
-		return failure("not_found", fmt.Sprintf("skill %q not found on registry", name), "skael search <term>")
+		return &exitError{exit: exitUsage, code: "version_conflict",
+			msg:     fmt.Sprintf("not following %s: another followed source wants a different version", label),
+			context: strings.Join(conflicts, "\n    ")}
 	}
-
-	// 5. Add to config.
-	cfg.AddSkill(name, string(effectiveScope))
 	if err := config.WriteConfig(dir, cfg); err != nil {
 		sp.Stop()
 		return failure("config_error", fmt.Sprintf("write config: %s", err), "")
 	}
-
-	// 6. Download and extract.
-	sp.Update(fmt.Sprintf("Downloading %s v%d...", name, found.Version))
-	archive, err := c.DownloadVersion(name, found.Version)
-	if err != nil {
-		sp.Stop()
-		return apiFailure(fmt.Errorf("download %s: %w", name, err))
-	}
-
-	actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
-	if found.Checksum != "" && actualChecksum != found.Checksum {
-		sp.Stop()
-		return &exitError{
-			exit: exitDigestMismatch, code: "digest_mismatch",
-			msg: fmt.Sprintf("checksum mismatch for %s (expected %s, got %s)", name, found.Checksum, actualChecksum),
-		}
-	}
-
-	// 7. Detect agents and extract.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		sp.Stop()
-		return failure("home_error", fmt.Sprintf("cannot determine home directory: %s", err), "")
-	}
-
-	var projectRoot string
-	if effectiveScope == ScopeProject {
-		wd, wdErr := os.Getwd()
-		if wdErr != nil {
-			sp.Stop()
-			return failure("cwd_error", fmt.Sprintf("cannot determine working directory: %s", wdErr), "")
-		}
-		projectRoot = gitRoot(wd)
-	}
-
-	detectedAgents := agents.DetectIn(home)
-	var placements []config.Placement
-	extractFailed := 0
-	for _, agent := range detectedAgents {
-		destDir := filepath.Join(agentSkillsBase(agent, effectiveScope, home, projectRoot), name)
-		if err := extractSkillAtomically(archive, destDir); err != nil {
-			ui.Errorf("extract %s to %s: %s", name, agent.Name(), err)
-			extractFailed++
-		} else {
-			placements = append(placements, config.Placement{
-				Agent: agent.Name(),
-				Path:  destDir,
-				Scope: string(effectiveScope),
-			})
-		}
-	}
-
-	// 8. Update state.
-	state, _ := config.ReadState(dir)
-	var updatedSkills []config.SyncedSkill
-	for _, s := range state.Skills {
-		if s.Name != name {
-			updatedSkills = append(updatedSkills, s)
-		}
-	}
-	updatedSkills = append(updatedSkills, config.SyncedSkill{
-		Name:       name,
-		Version:    found.Version,
-		Checksum:   found.Checksum,
-		Placements: placements,
-	})
-	state.Skills = updatedSkills
-	if err := config.WriteState(dir, state); err != nil {
-		sp.Stop()
-		return failure("state_error", fmt.Sprintf("write state: %s", err), "")
-	}
-
+	sp.Update("Installing...")
+	res, err := reconcile(c, cfg, dir, reconcileOptions{Quiet: ui.JSONMode})
 	sp.Stop()
-	if extractFailed > 0 {
-		return failure("extract_error", fmt.Sprintf("%s: extraction failed for %d agent(s)", name, extractFailed), "")
+	if err != nil {
+		return apiFailure(err)
+	}
+	matched := 0
+	for _, w := range exp.Skills {
+		if slices.Contains(w.Sources, label) {
+			matched++
+		}
 	}
 	if ui.JSONMode {
-		return ui.PrintJSON(map[string]interface{}{
-			"status":  "added",
-			"name":    name,
-			"version": found.Version,
-			"scope":   string(effectiveScope),
-		})
+		return ui.PrintJSON(map[string]any{"status": "following", "source": label, "skills": matched, "synced": res.Synced, "failed": res.Failed})
 	}
-	ui.Success("Added %s v%d (%s scope)", name, found.Version, effectiveScope)
+	if src.Kind == sourcePattern && matched == 0 {
+		ui.Info("Following %s. No released skill matches it yet; sync installs one when it does.", label)
+	} else {
+		ui.Success("Following %s: %d %s (%s scope)", label, matched, plural(matched, "skill", "skills"), resolveScope(src.Scope, cfg.Scope))
+	}
+	if res.Failed > 0 {
+		return syncFailed(res.Failed, nil)
+	}
+	return nil
+}
+
+// checkSource refuses a skill or a set the registry does not have. A pattern
+// needs no check: it may match skills released later.
+func checkSource(c *client.Client, src config.SkillEntry) error {
+	switch src.Kind {
+	case sourcePattern:
+		return nil
+	case sourceSet:
+		if _, err := c.ResolveSet(src.Name); err != nil {
+			return failure("not_found", fmt.Sprintf("set %q: %s", src.Name, err), "skael sets list")
+		}
+		return nil
+	}
+	manifest, err := c.GetManifest()
+	if err != nil {
+		return apiFailure(fmt.Errorf("fetch manifest: %w", err))
+	}
+	if !slices.ContainsFunc(manifest, func(m client.ManifestEntry) bool { return m.Name == src.Name }) {
+		return failure("not_found", fmt.Sprintf("skill %q not found on registry", src.Name), "skael search <term>")
+	}
 	return nil
 }

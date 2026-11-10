@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/pattern"
 	"github.com/skael-dev/skael/internal/platform"
 )
 
@@ -43,13 +45,32 @@ func requirePrivileged(ctx context.Context) (*auth.User, error) {
 
 func validateEntries(ctx context.Context, store *Store, entries []SetEntry) error {
 	seen := map[string]bool{}
+	var excludes []string
+	for _, e := range entries {
+		if KindOf(e.Name) == KindExclusion {
+			excludes = append(excludes, strings.TrimPrefix(e.Name, "!"))
+		}
+	}
 	for _, e := range entries {
 		if seen[e.Name] {
-			return huma.Error422UnprocessableEntity(fmt.Sprintf("skill %q appears twice", e.Name))
+			return huma.Error422UnprocessableEntity(fmt.Sprintf("entry %q appears twice", e.Name))
 		}
 		seen[e.Name] = true
 		if e.Version < 0 {
 			return huma.Error422UnprocessableEntity(fmt.Sprintf("skill %q has a negative version", e.Name))
+		}
+		switch KindOf(e.Name) {
+		case KindPattern, KindExclusion:
+			if e.Version != 0 {
+				return huma.Error422UnprocessableEntity(fmt.Sprintf("%q is a pattern; only a skill name takes a version", e.Name))
+			}
+			if err := pattern.Validate(strings.TrimPrefix(e.Name, "!")); err != nil {
+				return huma.Error422UnprocessableEntity(err.Error())
+			}
+			continue
+		}
+		if matchesAny(excludes, e.Name) {
+			return huma.Error422UnprocessableEntity(fmt.Sprintf("skill %q is both included and excluded; remove one of the two entries", e.Name))
 		}
 		ok, err := store.SkillVersionExists(ctx, e.Name, e.Version)
 		if err != nil {
