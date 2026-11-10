@@ -39,7 +39,7 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - A commit message is a subject and a short paragraph of why. Detail goes in the PR body.
 
 ## Domain words
-- lift: the primary member's effectiveness minus that member's baseline, on one agent, model and task set.
+- lift: the primary member's effectiveness minus that member's baseline, on one harness, model and task set.
 - headline: the published 0-100 score, the minimum effectiveness across healthy panel members, and the only gating number.
 - baseline: a session with no skill installed.
 - primary member: the first entry in the model panel, and the only member a lift is computed on.
@@ -66,3 +66,6 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - claim code: the one-time code the server logs at first start, which the first owner must enter. Avoid: setup token, bootstrap password.
 - check-in: a worker's report on each poll, idle or not, of its version, driver, credential names, verify results and image digest. A heartbeat extends a job lease and is a different thing. Avoid: registration.
 - sample data: rows marked as sample that "Load sample data" adds and one click removes. Avoid: demo data, seed data.
+- harness: the agent CLI that runs one panel session in the sandbox, OpenCode only. Avoid: agent CLI.
+- job event: one progress record a worker posts for an eval job: phase, session start or end, judge call, or cancelled. A check-in and a heartbeat are different things. Avoid: log line, progress update.
+- stalled: a running job with no job event for 3 minutes, whatever its lease. Avoid: stuck, hung, dead.
