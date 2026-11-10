@@ -102,6 +102,14 @@ jobs:
         run: |
           kubectl get events -n skael-sandbox --sort-by=.lastTimestamp | tail -40 || true
           sudo dmesg | grep -i apparmor | tail -40 || true
+          kubectl version || true
+          kubectl -n skael-sandbox create configmap dbg-proxy --from-literal=tinyproxy.conf="$(printf 'Port 8888\nListen 0.0.0.0\n')" || true
+          for sc in '{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["SETUID","SETGID"]}}' '{}'; do
+            name=dbg-$(echo "$sc" | md5sum | cut -c1-6)
+            kubectl -n skael-sandbox run "$name" --image=whetstone-base-ci:2 --restart=Never --overrides="{\"spec\":{\"containers\":[{\"name\":\"p\",\"image\":\"whetstone-base-ci:2\",\"imagePullPolicy\":\"Never\",\"command\":[\"sh\",\"-c\",\"uname -m; id; tinyproxy -v; ls -laL /etc/tinyproxy; cat /etc/tinyproxy/tinyproxy.conf; timeout 3 tinyproxy -d -c /etc/tinyproxy/tinyproxy.conf; echo exit=\$?\"],\"volumeMounts\":[{\"name\":\"c\",\"mountPath\":\"/etc/tinyproxy\"}],\"securityContext\":$sc}],\"volumes\":[{\"name\":\"c\",\"configMap\":{\"name\":\"dbg-proxy\"}}]}}" || true
+            sleep 20
+            echo "=== $sc"; kubectl -n skael-sandbox logs "$name" || true
+          done
 
   lint:
     runs-on: ubuntu-latest
