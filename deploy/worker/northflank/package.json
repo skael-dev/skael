@@ -1,0 +1,8 @@
+{
+  "name": "skael-worker-northflank-cli",
+  "private": true,
+  "description": "The Northflank CLI the worker image installs. The lockfile pins every dependency, so a newly published package cannot break the image build.",
+  "dependencies": {
+    "@northflank/cli": "0.12.2"
+  }
+}
