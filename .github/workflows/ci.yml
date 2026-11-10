@@ -95,6 +95,14 @@ jobs:
         # not installed on the runner and no step here installs it either.
         run: go test -count=1 -tags=kubernetes ./internal/eval/sandbox/kubernetes/ -v
 
+      # A sandbox pod that fails is deleted by the driver, so its events and
+      # any kernel denial are all that is left to explain it.
+      - name: Show the sandbox namespace's events and AppArmor denials
+        if: failure()
+        run: |
+          kubectl get events -n skael-sandbox --sort-by=.lastTimestamp | tail -40 || true
+          sudo dmesg | grep -i apparmor | tail -40 || true
+
   lint:
     runs-on: ubuntu-latest
     steps:
