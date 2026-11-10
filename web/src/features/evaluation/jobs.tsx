@@ -43,15 +43,20 @@ function StatusBadge({ j }: { j: EvalJobSummary }) {
 }
 
 function Progress({ j }: { j: EvalJobSummary }) {
-  if (!j.sessions_total) return <span className="text-xs text-text-tertiary">{j.phase || (j.status === "queued" ? "waiting for a worker" : "—")}</span>;
+  const live = active(j);
+  if (!j.sessions_total) {
+    const text = live ? j.phase || (j.status === "queued" ? "waiting for a worker" : "starting") : j.status === "failed" ? j.last_error.split("\n")[0] : "—";
+    return <span className={cn("text-xs line-clamp-2 max-w-[320px]", j.status === "failed" ? "text-danger" : "text-text-tertiary")}>{text}</span>;
+  }
   const pct = Math.min(100, Math.round((j.sessions_done / j.sessions_total) * 100));
   return (
     <div className="flex flex-col gap-1 min-w-[140px]">
       <div className="h-1.5 bg-bg-tertiary rounded-full overflow-hidden" aria-hidden>
-        <div className={cn("h-full", j.sessions_failed ? "bg-warning" : "bg-accent")} style={{ width: `${pct}%` }} />
+        <div className={cn("h-full", j.sessions_failed ? "bg-warning" : live ? "bg-accent" : "bg-text-tertiary")} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-[11px] text-text-tertiary tabular-nums">
-        {j.phase} · {j.sessions_done}/{j.sessions_total} sessions
+        {live && `${j.phase} · `}
+        {j.sessions_done}/{j.sessions_total} sessions
         {j.sessions_failed > 0 && <span className="text-warning"> · {j.sessions_failed} failed</span>}
       </span>
     </div>
@@ -231,7 +236,7 @@ function EventRow({ e }: { e: EvalJobEvent }) {
       detail = `${e.total} sessions to run`;
       break;
     case "health":
-      detail = e.model;
+      detail = `${e.model} · ${e.ok ? "ok" : "failed"}`;
       break;
     case "cancelled":
       detail = e.actor ? `by ${e.actor}` : "";

@@ -17,7 +17,7 @@ DELETE FROM providers WHERE adapter = 'subscription';
 -- An Anthropic-format gateway on OpenRouter becomes the openrouter type on its
 -- default endpoint. Any other gateway keeps its URL as an Anthropic endpoint.
 UPDATE providers SET type = 'openrouter', base_url = '' WHERE adapter = 'gateway' AND base_url LIKE '%openrouter.ai%';
-UPDATE providers SET type = 'anthropic' WHERE adapter = 'gateway' AND base_url NOT LIKE '%openrouter.ai%';
+UPDATE providers SET type = 'anthropic' WHERE adapter = 'gateway' AND type <> 'openrouter';
 
 ALTER TABLE providers DROP COLUMN adapter;
 ALTER TABLE providers DROP COLUMN auth_style;

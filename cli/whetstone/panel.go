@@ -30,13 +30,13 @@ func checkPanelHealth(health []runner.Health, baseURL string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "whetstone eval: every panel member failed its health probe, so this run can measure nothing")
 	if baseURL != "" {
-		fmt.Fprintf(&b, " (gateway %s=%s)", provider.BaseURLEnv, baseURL)
+		fmt.Fprintf(&b, " (endpoint %s)", baseURL)
 	}
 	b.WriteString(":")
 	for _, h := range health {
 		fmt.Fprintf(&b, "\n  %s/%s: %s", h.Member.Agent, h.Member.Model, h.Detail)
 	}
-	fmt.Fprintf(&b, "\nIf that gateway namespaces its model identifiers, set %s to names it serves.",
+	fmt.Fprintf(&b, "\nCheck each model id against what its provider serves: on a worker in Settings → Evaluation, for whetstone in %s.",
 		provider.ModelEnv)
 	return fmt.Errorf("%s", b.String())
 }

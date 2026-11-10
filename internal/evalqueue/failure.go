@@ -23,7 +23,7 @@ var explanations = []struct {
 		"Could not generate an evaluation suite for this skill."},
 	{"recover spec",
 		"Could not work out what this skill does from its SKILL.md, so no evaluation suite could be built."},
-	{"panel health",
+	{"failed its health probe",
 		"The evaluation panel could not start. Check the panel's models and provider keys in Settings → Evaluation; the job's events name the provider's error."},
 }
 

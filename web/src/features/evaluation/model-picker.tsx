@@ -81,6 +81,8 @@ export function ModelPicker({
 
   const typed = query.trim();
   const exact = groups.some((g) => g.models.some((m) => m.id === typed));
+  // A model id has no spaces; text with one is a search, never an id.
+  const offerTyped = typed !== "" && !exact && !/\s/.test(typed);
   const typedProvider = providerId ?? providers[0]?.id ?? "";
 
   const pick = (model: string, pid: string) => {
@@ -113,14 +115,6 @@ export function ModelPicker({
           >
             <CommandInput placeholder="Search models, or type an id" value={query} onValueChange={setQuery} />
             <CommandList className="max-h-[420px]">
-              {typed && !exact && (
-                <CommandGroup heading="Typed id">
-                  <CommandItem value={`typed:${typed}`} onSelect={() => pick(typed, typedProvider)}>
-                    <span className="font-mono text-sm">Use “{typed}”</span>
-                    {hint && <span className="ml-auto text-[11px] text-text-tertiary">{hint}</span>}
-                  </CommandItem>
-                </CommandGroup>
-              )}
               {groups.map((g) => (
                 <CommandGroup
                   key={g.provider.id}
@@ -147,6 +141,14 @@ export function ModelPicker({
                   {g.hidden > 0 && <div className="px-2 py-1.5 text-[11px] text-text-tertiary">{g.hidden} more; refine the search</div>}
                 </CommandGroup>
               ))}
+              {offerTyped && (
+                <CommandGroup heading="Typed id">
+                  <CommandItem value={`typed:${typed}`} onSelect={() => pick(typed, typedProvider)}>
+                    <span className="font-mono text-sm">Use “{typed}”</span>
+                    {hint && <span className="ml-auto text-[11px] text-text-tertiary">{hint}</span>}
+                  </CommandItem>
+                </CommandGroup>
+              )}
               <CommandEmpty>No model matches. Type the full id and choose “Use”.</CommandEmpty>
             </CommandList>
             <p className="text-[11px] text-text-tertiary m-0 px-3 py-2 border-t border-border">
