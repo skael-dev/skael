@@ -16,6 +16,8 @@ type ProvidersBody struct {
 	Providers []Provider `json:"providers"`
 	Panel     *Panel     `json:"panel"`
 	Presets   []Preset   `json:"presets"`
+	// Problems are why the panel cannot run, such as a provider with no key.
+	Problems []string `json:"problems"`
 }
 
 type providersOutput struct {
@@ -23,11 +25,13 @@ type providersOutput struct {
 }
 
 type ProvidersSaveBody struct {
-	Name          string `json:"name" minLength:"1" maxLength:"64"`
-	Adapter       string `json:"adapter" enum:"anthropic,gateway,subscription"`
-	BaseURL       string `json:"base_url,omitempty"`
-	AuthStyle     string `json:"auth_style,omitempty" enum:"x-api-key,bearer"`
-	CredentialEnv string `json:"credential_env" minLength:"1"`
+	Name       string `json:"name" minLength:"1" maxLength:"64"`
+	Type       string `json:"type" enum:"anthropic,openai,openrouter,openai-compatible"`
+	BaseURL    string `json:"base_url,omitempty"`
+	AuthHeader string `json:"auth_header,omitempty"`
+	// Key is a new API key, or an env:NAME or file:/path reference. Empty
+	// keeps the stored key.
+	Key string `json:"key,omitempty" maxLength:"4096"`
 }
 
 type providersCreateInput struct {
@@ -48,7 +52,23 @@ type providersPanelInput struct {
 }
 
 type ProvidersPresetBody struct {
-	BaseURL string `json:"base_url,omitempty"`
+	BaseURL    string `json:"base_url,omitempty"`
+	AuthHeader string `json:"auth_header,omitempty"`
+	Key        string `json:"key" minLength:"1" maxLength:"4096"`
+}
+
+type providersModelsInput struct {
+	ID string `path:"id"`
+}
+
+type ProvidersModelsBody struct {
+	Models []Model `json:"models"`
+	// Problem says why the list is empty or partial; a typed id still works.
+	Problem string `json:"problem,omitempty"`
+}
+
+type providersModelsOutput struct {
+	Body ProvidersModelsBody
 }
 
 type providersPresetInput struct {
@@ -79,7 +99,14 @@ func (s *Store) body(ctx context.Context) (*providersOutput, error) {
 	if list == nil {
 		list = []Provider{}
 	}
-	return &providersOutput{Body: ProvidersBody{Providers: list, Panel: panel, Presets: Presets}}, nil
+	problems, err := s.Problems(ctx)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("providers: internal error", err)
+	}
+	if problems == nil {
+		problems = []string{}
+	}
+	return &providersOutput{Body: ProvidersBody{Providers: list, Panel: panel, Presets: Presets, Problems: problems}}, nil
 }
 
 func refusal(action string, err error) error {
@@ -110,8 +137,8 @@ func RegisterRoutes(api huma.API, s *Store) {
 		if err != nil {
 			return nil, err
 		}
-		p := Provider{Name: in.Body.Name, Adapter: in.Body.Adapter, BaseURL: in.Body.BaseURL, AuthStyle: in.Body.AuthStyle, CredentialEnv: in.Body.CredentialEnv}
-		if err := s.Save(ctx, &p, u.Email); err != nil {
+		p := Provider{Name: in.Body.Name, Type: in.Body.Type, BaseURL: in.Body.BaseURL, AuthHeader: in.Body.AuthHeader}
+		if err := s.Save(ctx, &p, in.Body.Key, u.Email); err != nil {
 			return nil, refusal("add provider", err)
 		}
 		return s.body(ctx)
@@ -125,8 +152,8 @@ func RegisterRoutes(api huma.API, s *Store) {
 		if err != nil {
 			return nil, err
 		}
-		p := Provider{ID: in.ID, Name: in.Body.Name, Adapter: in.Body.Adapter, BaseURL: in.Body.BaseURL, AuthStyle: in.Body.AuthStyle, CredentialEnv: in.Body.CredentialEnv}
-		if err := s.Save(ctx, &p, u.Email); err != nil {
+		p := Provider{ID: in.ID, Name: in.Body.Name, Type: in.Body.Type, BaseURL: in.Body.BaseURL, AuthHeader: in.Body.AuthHeader}
+		if err := s.Save(ctx, &p, in.Body.Key, u.Email); err != nil {
 			return nil, refusal("change provider", err)
 		}
 		return s.body(ctx)
@@ -162,15 +189,29 @@ func RegisterRoutes(api huma.API, s *Store) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "apply-provider-preset", Method: http.MethodPost, Path: "/api/admin/providers/presets/{id}",
-		Summary: "Set up the providers, judge and panel of a common combination",
+		Summary: "Add a common provider with its key, and fill an empty panel with its default models",
 	}, func(ctx context.Context, in *providersPresetInput) (*providersOutput, error) {
 		u, err := requirePrivileged(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.ApplyPreset(ctx, in.ID, in.Body.BaseURL, u.Email); err != nil {
-			return nil, refusal("apply the preset", err)
+		if _, err := s.ApplyPreset(ctx, in.ID, in.Body.BaseURL, in.Body.AuthHeader, in.Body.Key, u.Email); err != nil {
+			return nil, refusal("add the provider", err)
 		}
 		return s.body(ctx)
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-provider-models", Method: http.MethodGet, Path: "/api/admin/providers/{id}/models",
+		Summary: "List the models a provider offers, for the model picker",
+	}, func(ctx context.Context, in *providersModelsInput) (*providersModelsOutput, error) {
+		if _, err := requirePrivileged(ctx); err != nil {
+			return nil, err
+		}
+		models, problem, err := s.Models(ctx, in.ID)
+		if err != nil {
+			return nil, refusal("list models", err)
+		}
+		return &providersModelsOutput{Body: ProvidersModelsBody{Models: models, Problem: problem}}, nil
 	})
 }

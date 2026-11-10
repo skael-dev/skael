@@ -81,7 +81,7 @@ func SessionPod(rs sandbox.RunSpec, o Options, n names) (*corev1.Pod, error) {
 		return nil, err
 	}
 	if len(rs.Mounts) > 0 {
-		return nil, fmt.Errorf("kubernetes: run declares %d host mounts, and a pod has no host to mount from. Supply agent credentials as environment variables instead (CLAUDE_CODE_OAUTH_TOKEN)", len(rs.Mounts))
+		return nil, fmt.Errorf("kubernetes: run declares %d host mounts, and a pod has no host to mount from. A session receives its provider key as an environment variable", len(rs.Mounts))
 	}
 	if err := o.CheckNetwork(rs.Network); err != nil {
 		return nil, err

@@ -31,6 +31,7 @@ import (
 	"github.com/skael-dev/skael/internal/gitsync"
 	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/providers"
 	"github.com/skael-dev/skael/internal/settings"
 	"github.com/skael-dev/skael/internal/skill"
 	skweb "github.com/skael-dev/skael/web"
@@ -312,7 +313,8 @@ func (b *Builder) Build() (*Server, error) {
 	if mk == nil {
 		mk = &settings.MasterKey{Keys: cfg.MasterKeys, Source: settings.KeySourceEnv}
 	}
-	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()})
+	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()},
+		providers.NewStore(b.pool, cfg.MasterKeys, nil))
 	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, b.caps.Response().Version)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)

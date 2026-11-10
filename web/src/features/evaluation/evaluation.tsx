@@ -1,34 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Plus, Server, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, KeyRound, Plus, Server, Trash2 } from "lucide-react";
+import { NavLink } from "react-router-dom";
 import { toast } from "sonner";
-import {
-  applyProviderPreset,
-  createProvider,
-  createWorkerKey,
-  deleteProvider,
-  listProviders,
-  listWorkers,
-  setEvalPanel,
-  updateProvider,
-} from "@/api/sdk.gen";
+import { applyProviderPreset, createProvider, createWorkerKey, deleteProvider, listProviders, listWorkers, setEvalPanel, updateProvider } from "@/api/sdk.gen";
 import type { Preset, Provider, ProvidersBody, Slot, Worker, WorkersKeyReply } from "@/api/types.gen";
 import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RowsSkeleton } from "@/components/ui/rows-skeleton";
 import { throwOnApiError } from "@/lib/api-error";
 import { relativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { ModelPicker } from "./model-picker";
 
 const PROVIDERS_KEY = ["providers"];
 const WORKERS_KEY = ["workers"];
@@ -37,21 +23,80 @@ const fieldClass =
   "w-full h-9 px-3 bg-bg-primary border border-border rounded-[5px] text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-border-active transition-colors";
 const labelClass = "text-[11px] font-medium text-text-secondary uppercase tracking-wider";
 
-const SUBSCRIPTION_WARNING =
-  "Anthropic's terms limit a Claude subscription to ordinary individual use, and headless Claude Code draws from a separate usage pool. A team worker on one person's subscription is outside those terms. Use a subscription panel only on your own worker.";
-
-const ADAPTER_LABEL: Record<Provider["adapter"], string> = {
-  anthropic: "Anthropic API",
-  gateway: "Compatible gateway",
-  subscription: "Claude subscription",
+const TYPE_LABEL: Record<Provider["type"], string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+  "openai-compatible": "OpenAI-compatible",
 };
 
-// Common model ids per adapter, for a provider no worker has listed yet.
-const KNOWN_MODELS: Record<Provider["adapter"], string[]> = {
-  anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "opus", "sonnet", "haiku"],
-  gateway: ["anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "anthropic/claude-haiku-4.5"],
-  subscription: ["opus", "sonnet", "haiku"],
+const BASE_URL_HINT: Record<Provider["type"], string> = {
+  anthropic: "Leave empty for api.anthropic.com. For Claude in Azure Foundry: https://<resource>.services.ai.azure.com/anthropic",
+  openai: "Leave empty for api.openai.com.",
+  openrouter: "Leave empty for openrouter.ai.",
+  "openai-compatible": "The URL /chat/completions is under, such as https://<resource>.openai.azure.com/openai/v1",
 };
+
+const KEY_HINT =
+  "Paste the key, or enter env:NAME or file:/path to read it on the server. The server seals a pasted key and sends it to a worker only for a job.";
+
+/** EvaluationTabs switches between the setup and the jobs. */
+export function EvaluationTabs() {
+  const tab = (to: string, label: string, end?: boolean) => (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        cn("px-3 py-1.5 text-sm rounded-md transition-colors", isActive ? "bg-bg-tertiary text-text-primary" : "text-text-tertiary hover:text-text-primary")
+      }
+    >
+      {label}
+    </NavLink>
+  );
+  return (
+    <nav className="flex gap-1" aria-label="Evaluation">
+      {tab("/settings/evaluation", "Setup", true)}
+      {tab("/settings/evaluation/jobs", "Jobs")}
+    </nav>
+  );
+}
+
+function KeyField({ value, onChange, stored }: { value: string; onChange: (v: string) => void; stored?: string }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className={labelClass}>API key</span>
+      <input
+        className={cn(fieldClass, "font-mono")}
+        type="password"
+        autoComplete="off"
+        placeholder={stored ? `${stored}; leave empty to keep it` : "sk-…, env:NAME or file:/path"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <span className="text-[11px] text-text-tertiary">{KEY_HINT}</span>
+    </label>
+  );
+}
+
+function AuthHeaderField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className={labelClass}>Key header</span>
+      <select
+        className={fieldClass}
+        value={value === "" ? "" : value === "api-key" ? "api-key" : "custom"}
+        onChange={(e) => onChange(e.target.value === "custom" ? "x-api-key" : e.target.value)}
+      >
+        <option value="">Authorization: Bearer (OpenAI, Azure v1, LiteLLM, vLLM)</option>
+        <option value="api-key">api-key (Azure's own header)</option>
+        <option value="custom">Another header</option>
+      </select>
+      {value !== "" && value !== "api-key" && (
+        <input className={cn(fieldClass, "font-mono")} aria-label="Header name" value={value} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </label>
+  );
+}
 
 function Section({ title, desc, action, children }: { title: string; desc: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -68,20 +113,33 @@ function Section({ title, desc, action, children }: { title: string; desc: strin
   );
 }
 
-function PresetDialog({ preset, onClose }: { preset: Preset | null; onClose: () => void }) {
+function PresetDialog({ preset, hasPanel, onClose }: { preset: Preset | null; hasPanel: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const [baseURL, setBaseURL] = useState("");
-  useEffect(() => setBaseURL(preset?.default_base_url ?? ""), [preset]);
+  const [authHeader, setAuthHeader] = useState("");
+  const [key, setKey] = useState("");
+  useEffect(() => {
+    setBaseURL(preset?.default_base_url ?? "");
+    setAuthHeader("");
+    setKey("");
+  }, [preset]);
+  const fills = !hasPanel && !!preset?.judge_model && (preset?.member_models?.length ?? 0) > 0;
   const apply = useMutation({
     mutationFn: async () => {
-      const res = await applyProviderPreset({ path: { id: preset!.id }, body: preset!.needs_base_url ? { base_url: baseURL } : {} });
-      throwOnApiError(`set up ${preset!.title}`, res);
+      const res = await applyProviderPreset({
+        path: { id: preset!.id },
+        body: {
+          key,
+          ...(preset!.needs_base_url ? { base_url: baseURL } : {}),
+          ...(preset!.type === "openai-compatible" ? { auth_header: authHeader } : {}),
+        },
+      });
+      throwOnApiError(`add ${preset!.title}`, res);
       return res.data!;
     },
     onSuccess: (data) => {
       qc.setQueryData(PROVIDERS_KEY, data);
-      qc.invalidateQueries({ queryKey: WORKERS_KEY });
-      toast.success(`${preset!.title} is set up. Workers pick it up on their next job.`);
+      toast.success(fills ? `${preset!.title} is added, and the panel uses its default models.` : `${preset!.title} is added.`);
       onClose();
     },
     onError: (err) => toast.error(err.message),
@@ -95,34 +153,30 @@ function PresetDialog({ preset, onClose }: { preset: Preset | null; onClose: () 
         </DialogHeader>
         {preset?.needs_base_url && (
           <label className="flex flex-col gap-1.5">
-            <span className={labelClass}>Gateway base URL</span>
-            <input className={cn(fieldClass, "font-mono")} value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://" />
-            <span className="text-[11px] text-text-tertiary">Without /v1. skael posts to the base URL plus /v1/messages.</span>
+            <span className={labelClass}>Base URL</span>
+            <input
+              className={cn(fieldClass, "font-mono")}
+              value={baseURL}
+              onChange={(e) => setBaseURL(e.target.value)}
+              placeholder={preset.base_url_hint ?? "https://"}
+            />
           </label>
         )}
-        <div className="flex flex-col gap-1.5">
-          <span className={labelClass}>Each worker needs</span>
-          {(preset?.worker_env ?? []).map((n) => (
-            <code key={n} className="font-mono text-xs text-text-primary">
-              {n}
-            </code>
-          ))}
-        </div>
-        {preset?.subscription && (
-          <p className="text-xs text-warning flex gap-2 m-0">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-            {SUBSCRIPTION_WARNING}
+        {preset?.type === "openai-compatible" && <AuthHeaderField value={authHeader} onChange={setAuthHeader} />}
+        <KeyField value={key} onChange={setKey} />
+        {preset?.model_hint && <p className="text-xs text-text-secondary m-0">{preset.model_hint}</p>}
+        {fills && (
+          <p className="text-xs text-text-tertiary m-0">
+            The panel starts as judge <code className="font-mono">{preset!.judge_model}</code> and members{" "}
+            <code className="font-mono">{(preset!.member_models ?? []).join(", ")}</code>. You can change it afterwards.
           </p>
         )}
-        <p className="text-xs text-text-tertiary m-0">
-          This replaces the judge and the panel. A changed panel starts a new score trend for every skill.
-        </p>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={apply.isPending} onClick={() => apply.mutate()}>
-            {apply.isPending ? "Setting up…" : "Set up"}
+          <Button disabled={apply.isPending || !key.trim()} onClick={() => apply.mutate()}>
+            {apply.isPending ? "Adding…" : "Add"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -130,7 +184,7 @@ function PresetDialog({ preset, onClose }: { preset: Preset | null; onClose: () 
   );
 }
 
-function Presets({ presets, compact }: { presets: Preset[]; compact: boolean }) {
+function Presets({ presets, compact, hasPanel }: { presets: Preset[]; compact: boolean; hasPanel: boolean }) {
   const [chosen, setChosen] = useState<Preset | null>(null);
   return (
     <>
@@ -144,25 +198,10 @@ function Presets({ presets, compact }: { presets: Preset[]; compact: boolean }) 
           >
             <span className="text-sm text-text-primary">{p.title}</span>
             <span className="text-xs text-text-tertiary leading-relaxed">{p.description}</span>
-            <span className="text-[11px] font-mono text-text-secondary mt-1">{(p.worker_env ?? []).join(" + ")}</span>
           </button>
         ))}
       </div>
-      <PresetDialog preset={chosen} onClose={() => setChosen(null)} />
-    </>
-  );
-}
-
-function ModelInput({ value, onChange, options, label }: { value: string; onChange: (v: string) => void; options: string[]; label: string }) {
-  const id = useMemo(() => `models-${Math.random().toString(36).slice(2)}`, []);
-  return (
-    <>
-      <input className={cn(fieldClass, "font-mono")} aria-label={label} list={id} value={value} onChange={(e) => onChange(e.target.value)} />
-      <datalist id={id}>
-        {options.map((m) => (
-          <option key={m} value={m} />
-        ))}
-      </datalist>
+      <PresetDialog preset={chosen} hasPanel={hasPanel} onClose={() => setChosen(null)} />
     </>
   );
 }
@@ -171,21 +210,16 @@ function SlotRow({
   label,
   slot,
   providers,
-  models,
   onChange,
   onRemove,
-  judge,
 }: {
   label: string;
   slot: Slot;
   providers: Provider[];
-  models: Record<string, string[]>;
   onChange: (s: Slot) => void;
   onRemove?: () => void;
-  judge?: boolean;
 }) {
   const provider = providers.find((p) => p.id === slot.provider_id);
-  const options = provider ? (models[provider.name]?.length ? models[provider.name]! : KNOWN_MODELS[provider.adapter]) : [];
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(0,1fr)_minmax(0,1.3fr)_32px] gap-2 items-center px-4 py-3 border-t border-border first:border-t-0">
       <span className="text-sm text-text-primary">{label}</span>
@@ -196,15 +230,20 @@ function SlotRow({
         onChange={(e) => onChange({ ...slot, provider_id: e.target.value })}
       >
         <option value="">Choose a provider</option>
-        {providers
-          .filter((p) => !judge || p.adapter !== "subscription")
-          .map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
+        {providers.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
       </select>
-      <ModelInput label={`${label} model`} value={slot.model} options={options} onChange={(model) => onChange({ ...slot, model })} />
+      <ModelPicker
+        label={`${label} model`}
+        providers={provider ? [provider] : []}
+        providerId={provider?.id}
+        value={slot.model}
+        hint={provider?.type === "openai-compatible" ? "a deployment or model id" : undefined}
+        onPick={(model) => onChange({ ...slot, model })}
+      />
       {onRemove ? (
         <button type="button" aria-label={`Remove ${label}`} onClick={onRemove} className="text-text-tertiary hover:text-text-primary justify-self-center">
           <Trash2 size={14} />
@@ -216,12 +255,15 @@ function SlotRow({
   );
 }
 
-function PanelEditor({ body, models }: { body: ProvidersBody; models: Record<string, string[]> }) {
+function PanelEditor({ body }: { body: ProvidersBody }) {
   const qc = useQueryClient();
   const providers = body.providers ?? [];
   const initial = useMemo(
-    () => ({ judge: body.panel?.judge ?? { provider_id: "", model: "" }, members: body.panel?.members ?? [] }),
-    [body.panel],
+    () => ({
+      judge: body.panel?.judge ?? { provider_id: "", model: "" },
+      members: body.panel?.members ?? [],
+    }),
+    [body.panel]
   );
   const [judge, setJudge] = useState<Slot>(initial.judge);
   const [members, setMembers] = useState<Slot[]>(initial.members);
@@ -230,7 +272,6 @@ function PanelEditor({ body, models }: { body: ProvidersBody; models: Record<str
     setMembers(initial.members);
   }, [initial]);
   const dirty = JSON.stringify({ judge, members }) !== JSON.stringify(initial);
-  const subscription = members.some((m) => providers.find((p) => p.id === m.provider_id)?.adapter === "subscription");
 
   const save = useMutation({
     mutationFn: async () => {
@@ -240,7 +281,6 @@ function PanelEditor({ body, models }: { body: ProvidersBody; models: Record<str
     },
     onSuccess: (data) => {
       qc.setQueryData(PROVIDERS_KEY, data);
-      qc.invalidateQueries({ queryKey: WORKERS_KEY });
       toast.success("Panel saved. Workers use it from their next job.");
     },
     onError: (err) => toast.error(err.message),
@@ -248,14 +288,13 @@ function PanelEditor({ body, models }: { body: ProvidersBody; models: Record<str
 
   return (
     <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">
-      <SlotRow label="Judge" judge slot={judge} providers={providers} models={models} onChange={setJudge} />
+      <SlotRow label="Judge" slot={judge} providers={providers} onChange={setJudge} />
       {members.map((m, i) => (
         <SlotRow
           key={i}
           label={i === 0 ? "Primary member" : `Floor member ${i}`}
           slot={m}
           providers={providers}
-          models={models}
           onChange={(s) => setMembers(members.map((x, j) => (j === i ? s : x)))}
           onRemove={members.length > 1 ? () => setMembers(members.filter((_, j) => j !== i)) : undefined}
         />
@@ -281,35 +320,53 @@ function PanelEditor({ body, models }: { body: ProvidersBody; models: Record<str
           </div>
         )}
       </div>
-      {subscription && (
-        <p className="text-xs text-warning flex gap-2 m-0 px-4 pb-3">
-          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-          {SUBSCRIPTION_WARNING}
-        </p>
-      )}
       <p className="text-[11px] text-text-tertiary m-0 px-4 pb-3">
-        The judge grades every run. The primary member's score is the lift; floor members run only at the deep tier. A change of provider or model starts a new score trend.
+        The judge grades every run. Every member runs in OpenCode. The primary member's score is the lift; floor members run only at the deep tier. A change of
+        provider or model starts a new score trend.
       </p>
     </div>
   );
 }
 
-type ProviderDraft = { id?: string; name: string; adapter: Provider["adapter"]; base_url: string; auth_style: Provider["auth_style"]; credential_env: string };
+type ProviderDraft = {
+  id?: string;
+  name: string;
+  type: Provider["type"];
+  base_url: string;
+  auth_header: string;
+  stored?: string;
+};
+
+function keyStatus(p: Provider) {
+  if (p.key_unreadable) return { text: "key does not open; enter it again", warn: true };
+  if (p.key_ref) return { text: p.key_ref, warn: false };
+  if (p.has_key) return { text: "key stored", warn: false };
+  return { text: "needs a key", warn: true };
+}
 
 function ProviderDialog({ draft, onClose }: { draft: ProviderDraft | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [d, setD] = useState<ProviderDraft | null>(draft);
-  useEffect(() => setD(draft), [draft]);
+  const [key, setKey] = useState("");
+  useEffect(() => {
+    setD(draft);
+    setKey("");
+  }, [draft]);
   const save = useMutation({
     mutationFn: async () => {
-      const body = { name: d!.name, adapter: d!.adapter, base_url: d!.base_url, auth_style: d!.auth_style, credential_env: d!.credential_env };
+      const body = {
+        name: d!.name,
+        type: d!.type,
+        base_url: d!.base_url,
+        auth_header: d!.type === "openai-compatible" ? d!.auth_header : "",
+        ...(key ? { key } : {}),
+      };
       const res = d!.id ? await updateProvider({ path: { id: d!.id }, body }) : await createProvider({ body });
       throwOnApiError("save the provider", res);
       return res.data!;
     },
     onSuccess: (data) => {
       qc.setQueryData(PROVIDERS_KEY, data);
-      qc.invalidateQueries({ queryKey: WORKERS_KEY });
       onClose();
     },
     onError: (err) => toast.error(err.message),
@@ -320,7 +377,7 @@ function ProviderDialog({ draft, onClose }: { draft: ProviderDraft | null; onClo
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{d.id ? `Edit ${d.name}` : "Add a provider"}</DialogTitle>
-          <DialogDescription>A provider names a backend and the worker variable that holds its key. The key stays on each worker.</DialogDescription>
+          <DialogDescription>A provider is one LLM endpoint and its key. The judge and each panel member choose a provider and a model.</DialogDescription>
         </DialogHeader>
         <label className="flex flex-col gap-1.5">
           <span className={labelClass}>Name</span>
@@ -328,43 +385,26 @@ function ProviderDialog({ draft, onClose }: { draft: ProviderDraft | null; onClo
         </label>
         <label className="flex flex-col gap-1.5">
           <span className={labelClass}>Type</span>
-          <select className={fieldClass} value={d.adapter} onChange={(e) => setD({ ...d, adapter: e.target.value as Provider["adapter"] })}>
-            {(Object.keys(ADAPTER_LABEL) as Provider["adapter"][]).map((a) => (
-              <option key={a} value={a}>
-                {ADAPTER_LABEL[a]}
+          <select className={fieldClass} value={d.type} onChange={(e) => setD({ ...d, type: e.target.value as Provider["type"] })}>
+            {(Object.keys(TYPE_LABEL) as Provider["type"][]).map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABEL[t]}
               </option>
             ))}
           </select>
         </label>
-        {d.adapter === "gateway" && (
-          <>
-            <label className="flex flex-col gap-1.5">
-              <span className={labelClass}>Base URL</span>
-              <input className={cn(fieldClass, "font-mono")} placeholder="https://openrouter.ai/api" value={d.base_url} onChange={(e) => setD({ ...d, base_url: e.target.value })} />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className={labelClass}>Key header</span>
-              <select className={fieldClass} value={d.auth_style} onChange={(e) => setD({ ...d, auth_style: e.target.value as Provider["auth_style"] })}>
-                <option value="bearer">Authorization: Bearer (OpenRouter, LiteLLM, most gateways)</option>
-                <option value="x-api-key">x-api-key (Anthropic-style proxies)</option>
-              </select>
-            </label>
-          </>
-        )}
         <label className="flex flex-col gap-1.5">
-          <span className={labelClass}>Worker variable with the key</span>
-          <input className={cn(fieldClass, "font-mono")} placeholder="OPENROUTER_API_KEY" value={d.credential_env} onChange={(e) => setD({ ...d, credential_env: e.target.value.toUpperCase() })} />
+          <span className={labelClass}>Base URL</span>
+          <input className={cn(fieldClass, "font-mono")} placeholder="https://" value={d.base_url} onChange={(e) => setD({ ...d, base_url: e.target.value })} />
+          <span className="text-[11px] text-text-tertiary">{BASE_URL_HINT[d.type]}</span>
         </label>
-        {d.adapter === "subscription" && (
-          <p className="text-xs text-warning flex gap-2 m-0">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5" />A subscription serves panel members only. {SUBSCRIPTION_WARNING}
-          </p>
-        )}
+        {d.type === "openai-compatible" && <AuthHeaderField value={d.auth_header} onChange={(v) => setD({ ...d, auth_header: v })} />}
+        <KeyField value={key} onChange={setKey} stored={d.stored} />
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+          <Button disabled={save.isPending || !d.name.trim() || (!d.id && !key.trim())} onClick={() => save.mutate()}>
             Save
           </Button>
         </DialogFooter>
@@ -391,10 +431,27 @@ function ProvidersTable({ providers }: { providers: Provider[] }) {
         {providers.map((p) => (
           <div key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 border-t border-border first:border-t-0">
             <span className="text-sm text-text-primary min-w-[140px]">{p.name}</span>
-            <span className="text-xs text-text-secondary">{ADAPTER_LABEL[p.adapter]}</span>
-            {p.base_url && <span className="text-xs font-mono text-text-tertiary">{p.base_url}</span>}
-            <span className="text-xs font-mono text-text-secondary ml-auto">{p.credential_env}</span>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setDraft({ ...p })}>
+            <span className="text-xs text-text-secondary">{TYPE_LABEL[p.type]}</span>
+            {p.base_url && <span className="text-xs font-mono text-text-tertiary break-all">{p.base_url}</span>}
+            <span className={cn("text-xs ml-auto inline-flex items-center gap-1.5", keyStatus(p).warn ? "text-warning" : "text-text-secondary")}>
+              <KeyRound size={12} />
+              {keyStatus(p).text}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setDraft({
+                  id: p.id,
+                  name: p.name,
+                  type: p.type,
+                  base_url: p.base_url,
+                  auth_header: p.auth_header,
+                  stored: p.has_key ? p.key_ref || "a key is stored" : undefined,
+                })
+              }
+            >
               Edit
             </Button>
             <button type="button" aria-label={`Remove ${p.name}`} onClick={() => remove.mutate(p.id)} className="text-text-tertiary hover:text-text-primary">
@@ -407,7 +464,14 @@ function ProvidersTable({ providers }: { providers: Provider[] }) {
             type="button"
             variant="ghost"
             size="sm"
-            onClick={() => setDraft({ name: "", adapter: "gateway", base_url: "", auth_style: "bearer", credential_env: "" })}
+            onClick={() =>
+              setDraft({
+                name: "",
+                type: "openai-compatible",
+                base_url: "",
+                auth_header: "",
+              })
+            }
           >
             <Plus size={14} /> Add a provider
           </Button>
@@ -419,7 +483,10 @@ function ProvidersTable({ providers }: { providers: Provider[] }) {
 }
 
 function snippets(reply: WorkersKeyReply, workerID: string) {
-  const env = (reply.env ?? []).map((e) => ({ ...e, value: e.name === "SKAEL_ENDPOINT" && !e.value ? window.location.origin : e.value }));
+  const env = (reply.env ?? []).map((e) => ({
+    ...e,
+    value: e.name === "SKAEL_ENDPOINT" && !e.value ? window.location.origin : e.value,
+  }));
   const val = (e: { name: string; value: string }) => e.value || `<your ${e.name}>`;
   const compose = [
     "services:",
@@ -450,8 +517,7 @@ function snippets(reply: WorkersKeyReply, workerID: string) {
     "worker:",
     "  enabled: true",
     `  endpoint: ${val(env.find((e) => e.name === "SKAEL_ENDPOINT")!)}`,
-    "  # kubectl create secret generic skael-worker \\",
-    ...env.filter((e) => e.secret).map((e) => `  #   --from-literal=${e.name}=${val(e)} \\`),
+    `  # kubectl create secret generic skael-worker --from-literal=SKAEL_API_KEY=${val(env.find((e) => e.name === "SKAEL_API_KEY")!)}`,
     "  existingSecret: skael-worker",
   ].join("\n");
   return { compose, run, helm };
@@ -481,7 +547,7 @@ function AddWorkerDialog({ open, onClose }: { open: boolean; onClose: () => void
         <DialogHeader>
           <DialogTitle>Add a worker</DialogTitle>
           <DialogDescription>
-            The key can only claim and run eval jobs. Fill in each provider key on the worker's host; the server never sees them.
+            The key can only claim and run eval jobs. A worker needs nothing else: provider keys stay on the server and reach the worker with each job.
           </DialogDescription>
         </DialogHeader>
         {!reply ? (
@@ -539,21 +605,13 @@ function WorkerRow({ w }: { w: Worker }) {
         <span className="text-sm text-text-primary font-mono">{w.worker_id}</span>
         <span className="text-xs text-text-tertiary">{w.version}</span>
         <span className="text-xs text-text-secondary">{w.driver}</span>
-        {w.pinned && <span className="text-[11px] px-1.5 py-0.5 rounded border border-border text-text-secondary">pinned by env</span>}
+        {w.harness && <span className="text-xs text-text-tertiary">{w.harness}</span>}
         <span className="text-xs text-text-tertiary ml-auto">seen {relativeTime(w.last_seen)}</span>
       </div>
-      <div className="text-[11px] text-text-tertiary font-mono break-all">
-        {w.sandbox_image} · keys: {(w.credentials ?? []).join(", ") || "none"}
-      </div>
-      {w.pinned && <div className="text-[11px] text-text-tertiary">{w.pinned}</div>}
+      <div className="text-[11px] text-text-tertiary font-mono break-all">{w.sandbox_image}</div>
       {problems.map((p) => (
         <div key={p} className="text-xs text-warning">
           {p}
-        </div>
-      ))}
-      {(w.verifications ?? []).filter((v) => v.ok).map((v) => (
-        <div key={v.provider} className="text-[11px] text-text-tertiary">
-          {v.provider}: {v.detail}
         </div>
       ))}
     </div>
@@ -594,22 +652,35 @@ export function Evaluation() {
   }
   const body = providers.data;
   const configured = !!body?.panel;
-  const models = (workers.data?.models ?? {}) as Record<string, string[]>;
   const list = workers.data?.workers ?? [];
+  const problems = body?.problems ?? [];
 
   return (
     <div className="px-5 md:px-10 py-8 max-w-[1000px] w-full mx-auto flex flex-col gap-10">
-      <div>
-        <h1 className="text-2xl font-medium tracking-tight text-text-primary m-0 mb-1">Evaluation</h1>
-        <p className="text-sm text-text-secondary m-0">
-          The server chooses the judge and the panel. Workers hold the keys and run the sessions.
-        </p>
+      <div className="flex flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-medium tracking-tight text-text-primary m-0 mb-1">Evaluation</h1>
+          <p className="text-sm text-text-secondary m-0">
+            Add a provider and its key here. The server hands the judge, the panel and the keys to a worker with each job, and every session runs in OpenCode.
+          </p>
+        </div>
+        <EvaluationTabs />
       </div>
+      {problems.length > 0 && (
+        <div className="flex flex-col gap-1 border border-warning/40 bg-warning/5 rounded-lg px-4 py-3">
+          {problems.map((p) => (
+            <p key={p} className="text-xs text-warning m-0 flex gap-2">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              {p}
+            </p>
+          ))}
+        </div>
+      )}
       {providers.isLoading && <RowsSkeleton rows={4} />}
       {body && (!configured || showPresets) && (
         <Section
-          title={configured ? "Change the setup" : "Choose a setup"}
-          desc="Each setup creates its providers, judge and panel in one step. You can change any part afterwards."
+          title={configured ? "Add a provider" : "Choose a provider"}
+          desc="Paste one key to start. A provider with default models fills an empty panel, so an evaluation can run right away."
           action={
             configured && (
               <Button variant="ghost" size="sm" onClick={() => setShowPresets(false)}>
@@ -618,32 +689,32 @@ export function Evaluation() {
             )
           }
         >
-          <Presets presets={body.presets ?? []} compact={configured} />
+          <Presets presets={body.presets ?? []} compact={configured} hasPanel={configured} />
         </Section>
       )}
       {body && configured && (
         <Section
           title="Judge and panel"
-          desc="Model names come from what your workers' providers list. A name a worker has not listed still works if the provider serves it."
+          desc="Each list comes from the provider's catalog. Any typed id works too, such as a new model or an Azure deployment name."
           action={
             !showPresets && (
               <Button variant="ghost" size="sm" onClick={() => setShowPresets(true)}>
-                Use a preset
+                Add a provider
               </Button>
             )
           }
         >
-          <PanelEditor body={body} models={models} />
+          <PanelEditor body={body} />
         </Section>
       )}
       {body && (
-        <Section title="Providers" desc="A provider names a backend and the variable on each worker that holds its key.">
+        <Section title="Providers" desc="Each provider is one endpoint and its key, sealed on the server.">
           <ProvidersTable providers={body.providers ?? []} />
         </Section>
       )}
       <Section
         title="Workers"
-        desc="Each worker checks in while it runs. A worker shows what it lacks for the judge and panel above."
+        desc="Each worker checks in while it runs. A worker needs only its endpoint and its worker key."
         action={
           <Button size="sm" onClick={() => setAdding(true)}>
             <Server size={14} /> Add a worker

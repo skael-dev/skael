@@ -40,7 +40,7 @@ SANDBOX_NF_PROJECT=skael-sandboxes
 ```
 
 Everything else has a default. The worker pulls the published base image,
-`ghcr.io/skael-dev/whetstone-base:1`, which carries the Claude Code CLI, Python,
+`ghcr.io/skael-dev/whetstone-base:2`, which carries the OpenCode harness, Python,
 Node, pandoc, LibreOffice, poppler and ffmpeg.
 
 This configuration runs sessions **with unrestricted network access**. Read the
@@ -105,7 +105,7 @@ Set this only if you have satisfied yourself that the claim holds for your plan.
 | `SANDBOX_DRIVER` | yes | `docker` | Set to `northflank` |
 | `SANDBOX_NF_TOKEN` | yes | — | Northflank API token |
 | `SANDBOX_NF_PROJECT` | yes | — | Project sandboxes run in. Give it a project of its own |
-| `SANDBOX_NF_IMAGE` | no | `ghcr.io/skael-dev/whetstone-base:1` | Base image a session runs |
+| `SANDBOX_NF_IMAGE` | no | `ghcr.io/skael-dev/whetstone-base:2` | Base image a session runs |
 | `SANDBOX_NF_REGISTRY_CREDENTIAL` | no | — | Saved credential name, for a private registry. Not needed for the default image |
 | `SANDBOX_NF_PLAN` | no | `nf-compute-20` | Resource plan for each sandbox |
 | `SANDBOX_NF_ALLOWED_DOMAINS` | for restricted runs | — | Domains your project's egress policy permits, comma separated |

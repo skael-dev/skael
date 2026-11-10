@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,16 +66,6 @@ type fakeAdapter struct {
 	stream    string
 	meta      agent.Meta
 	invokeErr error
-	// rateLimitFirst makes the first invocation report a rate limit, so the
-	// backoff path is exercised without a real 429.
-	rateLimitFirst atomic.Bool
-	// alwaysRateLimited makes every invocation report a rate limit, so the
-	// retry-exhaustion path is exercised without a real 429 that never lets up.
-	alwaysRateLimited atomic.Bool
-	// authEnv, when set, is returned from Caps().AuthEnv so a test can
-	// exercise env-based credential forwarding without changing every other
-	// fixture's Caps().
-	authEnv []string
 	// failOnce, when true, makes exactly the next Invoke call fail and then
 	// clears itself atomically — CompareAndSwap rather than a plain bool field
 	// so concurrent workers racing to invoke never see (or write) it
@@ -83,9 +74,9 @@ type fakeAdapter struct {
 	failOnce atomic.Bool
 }
 
-func (f *fakeAdapter) Name() string { return "claude-code" }
+func (f *fakeAdapter) Name() string { return "opencode" }
 func (f *fakeAdapter) Caps() agent.Caps {
-	return agent.Caps{EventTier: "A", ModelFlag: "--model", SkillDir: ".claude/skills", AuthEnv: f.authEnv, SupportsSkillInvocation: true}
+	return agent.Caps{EventTier: "A", ModelFlag: "-m", SkillDir: ".claude/skills", SupportsSkillInvocation: true}
 }
 func (f *fakeAdapter) InstallSkill(ws, bundle string) error {
 	f.mu.Lock()
@@ -133,9 +124,6 @@ func (f *fakeAdapter) Invoke(ctx context.Context, s agent.InvokeSpec) (agent.Raw
 }
 func (f *fakeAdapter) Parse(agent.RawStream) (*agent.Result, error) {
 	m := f.meta
-	if f.alwaysRateLimited.Load() || f.rateLimitFirst.CompareAndSwap(true, false) {
-		m.RateLimited = true
-	}
 	return &agent.Result{
 		Events: []agent.Event{{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{"SKILL.md"}}},
 		Meta:   m,
@@ -276,7 +264,7 @@ func newHarness(t *testing.T) *harness {
 	adapter := &fakeAdapter{stream: "raw-stream"}
 	driver := &recordingDriver{isolated: false}
 	adapters := func(name string) (agent.Adapter, bool) {
-		if name == "claude-code" {
+		if name == "opencode" {
 			return adapter, true
 		}
 		return nil, false
@@ -296,6 +284,9 @@ func newHarness(t *testing.T) *harness {
 		image: sandbox.ImageRef{Tag: "demo:latest"}, evalID: id, skill: "demo",
 	}
 	h.opts = runner.Options{
+		MemberAuth: func(_, model string) ([]string, bool) {
+			return []string{"SKAEL_PROVIDER_KEY=k-" + model, "SKAEL_PROVIDER_BASE_URL=https://llm.example.com/v1"}, true
+		},
 		Store: st, Driver: driver, Adapters: adapters,
 		Concurrency: 4, SessionTimeout: time.Minute,
 		// No-op by default so tests that never touch rate limiting run at
@@ -426,93 +417,38 @@ func TestExecute_BaselineNeverInstallsTheSkill(t *testing.T) {
 // AuthDirs' host directories, so ANTHROPIC_API_KEY set in the worker's own
 // environment must reach the sandbox's RunSpec.Env, not just get logged as a
 // skipped mount.
-func TestExecute_ForwardsAuthEnvIntoTheSandboxRunSpec(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-value")
-
+func TestExecute_GivesEachSessionItsMembersEnvironment(t *testing.T) {
 	h := newHarness(t)
-	h.adapter.authEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
-
 	if _, err := h.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-
 	snapshots := h.adapter.invokeSnapshots()
 	if len(snapshots) == 0 {
 		t.Fatal("no sessions invoked")
 	}
 	for _, s := range snapshots {
-		found := false
-		for _, e := range s.env {
-			if e == "CLAUDE_CODE_OAUTH_TOKEN=" || strings.HasPrefix(e, "CLAUDE_CODE_OAUTH_TOKEN=") {
-				t.Errorf("unset CLAUDE_CODE_OAUTH_TOKEN was forwarded: %q", e)
-			}
-			if e == "ANTHROPIC_API_KEY=sk-ant-test-value" {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("session env = %v, want ANTHROPIC_API_KEY forwarded", s.env)
+		if !slices.ContainsFunc(s.env, func(e string) bool { return strings.HasPrefix(e, "SKAEL_PROVIDER_KEY=k-") }) {
+			t.Errorf("session env = %v, want the member's provider key", s.env)
 		}
 	}
 }
 
-func TestExecute_RetriesARateLimitedSessionAfterBackingOff(t *testing.T) {
+// The sandbox inherits nothing from the worker. A member with no provider
+// cannot run, and its sessions are errors, not measurements.
+func TestExecute_AMemberWithNoProviderIsNotPerformed(t *testing.T) {
 	h := newHarness(t)
-	h.adapter.rateLimitFirst.Store(true)
-	var slept []time.Duration
-	h.opts.Sleep = func(d time.Duration) { slept = append(slept, d) }
-
+	h.opts.MemberAuth = nil
 	res, err := h.run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(slept) == 0 {
-		t.Error("a rate-limited session was not backed off")
+	if h.adapter.invokeCount() != 0 {
+		t.Errorf("%d sessions ran with no provider", h.adapter.invokeCount())
 	}
-	// A plan rate limit is a property of the account, not of the skill. Scoring
-	// it as a failed session hands the skill a penalty it did not earn.
 	for _, o := range res.Outcomes {
-		if o.Status == "error" && strings.Contains(o.Err.Error(), "rate") {
-			t.Errorf("rate-limited run recorded as an error: %+v", o)
+		if o.Status != store.StatusError || !strings.Contains(o.Err.Error(), "no provider") {
+			t.Errorf("outcome = %+v, want an error naming the missing provider", o)
 		}
-	}
-}
-
-func TestExecute_ExhaustingRateLimitRetriesIsRecordedAsAnErrorNotAResult(t *testing.T) {
-	h := newHarness(t)
-	h.adapter.alwaysRateLimited.Store(true)
-	h.opts.MaxRateLimitRetries = 2
-
-	res, err := h.run(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var sawError bool
-	for _, o := range res.Outcomes {
-		// A rate-limit artifact that exhausted its retries must not be scored
-		// via the verifier at all — once StatusFailed is written, ClaimRun
-		// treats it as a completed measurement and it is never retried.
-		if o.Status == store.StatusOK || o.Status == store.StatusFailed {
-			t.Errorf("a permanently rate-limited session was scored as a completed measurement: %+v", o)
-		}
-		if o.Status == store.StatusError {
-			sawError = true
-		}
-	}
-	if !sawError {
-		t.Fatal("no outcome recorded as an error for a permanently rate-limited session")
-	}
-
-	// Once the account stops rate-limiting, a resumed Execute must retry the
-	// run rather than treating the earlier error as a completed measurement.
-	h.adapter.alwaysRateLimited.Store(false)
-	before := h.adapter.invokeCount()
-	if _, err := h.run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if after := h.adapter.invokeCount(); after == before {
-		t.Error("resume did not retry a run recorded as an error")
 	}
 }
 
@@ -527,7 +463,7 @@ func TestExecute_AgentInternalErrorIsRecordedAsNotPerformed(t *testing.T) {
 
 	var sawError bool
 	for _, o := range res.Outcomes {
-		// Meta.IsError means the CLI reported an internal error even though the
+		// Meta.IsError means the harness reported an error even though the
 		// transport succeeded — the session was not performed, and scoring it
 		// via the verifier's exit code would read that as a skill failure.
 		if o.Status == store.StatusOK || o.Status == store.StatusFailed {
@@ -647,7 +583,7 @@ func TestExecute_NeverExceedsItsConcurrency(t *testing.T) {
 func TestProbePanel_AnUnhealthyMemberMakesThePanelIncompleteRatherThanZero(t *testing.T) {
 	h := newHarness(t)
 	h.adapters = func(name string) (agent.Adapter, bool) {
-		if name == "claude-code" {
+		if name == "opencode" {
 			return h.adapter, true
 		}
 		return nil, false

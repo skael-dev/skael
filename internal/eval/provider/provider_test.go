@@ -1,83 +1,22 @@
 package provider_test
 
 import (
-	"errors"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
 	"github.com/skael-dev/skael/internal/eval/provider"
+	"github.com/skael-dev/skael/internal/evalqueue"
 )
 
 // envOf turns a map into a Getenv, so a case names only what it sets.
 func envOf(m map[string]string) provider.Getenv {
 	return func(k string) string { return m[k] }
-}
-
-func noCLI() (string, error) { return "", errors.New("no agent CLI") }
-
-func haveCLI() (string, error) { return "/usr/local/bin/claude", nil }
-
-func TestResolve_Precedence(t *testing.T) {
-	tests := []struct {
-		name    string
-		env     map[string]string
-		detect  provider.Detector
-		want    provider.Kind
-		wantKey string
-	}{
-		{
-			name:   "nothing set and no CLI",
-			env:    nil,
-			detect: noCLI,
-			want:   provider.KindNone,
-		},
-		{
-			// The developer machine that has both. Metering someone who never
-			// asked for it is the mistake this ordering exists to avoid.
-			name:   "a CLI outranks a bare API key",
-			env:    map[string]string{provider.APIKeyEnv: "sk-x"},
-			detect: haveCLI,
-			want:   provider.KindSubscription,
-		},
-		{
-			// Naming a gateway is unambiguous. A CLI on PATH must not win it.
-			name:    "an explicit gateway outranks a CLI",
-			env:     map[string]string{provider.BaseURLEnv: "https://openrouter.ai/api", provider.APIKeyEnv: "sk-x"},
-			detect:  haveCLI,
-			want:    provider.KindAPI,
-			wantKey: "sk-x",
-		},
-		{
-			name:    "a bearer token outranks a CLI",
-			env:     map[string]string{provider.AuthTokenEnv: "tok"},
-			detect:  haveCLI,
-			want:    provider.KindAPI,
-			wantKey: "tok",
-		},
-		{
-			name:    "an API key with no CLI",
-			env:     map[string]string{provider.APIKeyEnv: "sk-x"},
-			detect:  noCLI,
-			want:    provider.KindAPI,
-			wantKey: "sk-x",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := provider.Resolve(envOf(tc.env), tc.detect)
-			if got.Kind != tc.want {
-				t.Errorf("Kind = %q, want %q", got.Kind, tc.want)
-			}
-			if got.Key != tc.wantKey {
-				t.Errorf("Key = %q, want %q", got.Key, tc.wantKey)
-			}
-			if got.Detail == "" {
-				t.Error("every choice must explain itself, including none")
-			}
-		})
-	}
 }
 
 // The asymmetry this replaced: the worker read no bearer token at all, so a
@@ -110,7 +49,7 @@ func TestResolve_InfersTheAuthStyleFromTheCredential(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := provider.Resolve(envOf(tc.env), noCLI)
+			got := provider.Resolve(envOf(tc.env))
 			if got.AuthStyle != tc.want {
 				t.Errorf("AuthStyle = %q, want %q", got.AuthStyle, tc.want)
 			}
@@ -122,7 +61,7 @@ func TestResolve_Models(t *testing.T) {
 	cfg := provider.Resolve(envOf(map[string]string{
 		provider.APIKeyEnv: "sk-x",
 		provider.ModelEnv:  " anthropic/claude-opus-4 , ,anthropic/claude-3.5-haiku ",
-	}), noCLI)
+	}))
 
 	want := []string{"anthropic/claude-opus-4", "anthropic/claude-3.5-haiku"}
 	if len(cfg.Models) != len(want) {
@@ -165,7 +104,7 @@ func TestPanelModels(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := provider.Resolve(envOf(tc.env), noCLI).PanelModels()
+			got := provider.Resolve(envOf(tc.env)).PanelModels()
 			if len(got) != len(tc.want) {
 				t.Fatalf("PanelModels() = %v, want %v", got, tc.want)
 			}
@@ -186,7 +125,7 @@ func TestWarnings(t *testing.T) {
 			{provider.APIKeyEnv: "sk-x", provider.ModelEnv: "claude-opus-5"},
 			{provider.BaseURLEnv: "https://g", provider.APIKeyEnv: "sk-x", provider.ModelEnv: "m"},
 		} {
-			if got := provider.Resolve(envOf(env), noCLI).Warnings(); len(got) != 0 {
+			if got := provider.Resolve(envOf(env)).Warnings(); len(got) != 0 {
 				t.Errorf("%v: warned when it should not have: %v", env, got)
 			}
 		}
@@ -197,7 +136,7 @@ func TestWarnings(t *testing.T) {
 		got := provider.Resolve(envOf(map[string]string{
 			provider.BaseURLEnv: "https://openrouter.ai/api",
 			provider.APIKeyEnv:  "sk-x",
-		}), noCLI).Warnings()
+		})).Warnings()
 		if len(got) != 1 {
 			t.Fatalf("Warnings() = %v, want one warning", got)
 		}
@@ -211,7 +150,7 @@ func TestWarnings(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	t.Run("a gateway with no credential cannot serve a call", func(t *testing.T) {
-		cfg := provider.Resolve(envOf(map[string]string{provider.BaseURLEnv: "https://g"}), noCLI)
+		cfg := provider.Resolve(envOf(map[string]string{provider.BaseURLEnv: "https://g"}))
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("accepted a gateway with neither a key nor a token")
@@ -224,40 +163,16 @@ func TestValidate(t *testing.T) {
 	})
 
 	t.Run("no provider at all is an error", func(t *testing.T) {
-		if err := provider.Resolve(envOf(nil), noCLI).Validate(); err == nil {
+		if err := provider.Resolve(envOf(nil)).Validate(); err == nil {
 			t.Fatal("KindNone validated")
 		}
 	})
 
 	t.Run("a usable provider validates", func(t *testing.T) {
-		if err := provider.Resolve(envOf(map[string]string{provider.APIKeyEnv: "sk-x"}), noCLI).Validate(); err != nil {
+		if err := provider.Resolve(envOf(map[string]string{provider.APIKeyEnv: "sk-x"})).Validate(); err != nil {
 			t.Errorf("a plain API key was refused: %v", err)
 		}
 	})
-}
-
-// A verified score must come from a metered, reproducible backend. The worker
-// resolves with no detector, so a CLI on its host is not a provider it has to
-// refuse — an operator with both a key and a CLI installed is served by the
-// key, which is what the worker did before this package existed.
-func TestResolve_WithoutADetectorNeverPicksASubscription(t *testing.T) {
-	cfg := provider.Resolve(envOf(map[string]string{provider.APIKeyEnv: "sk-x"}), nil)
-	if cfg.Kind != provider.KindAPI {
-		t.Fatalf("Kind = %q, want %q with a key and no detector", cfg.Kind, provider.KindAPI)
-	}
-
-	none := provider.Resolve(envOf(nil), nil)
-	if none.Kind != provider.KindNone {
-		t.Fatalf("Kind = %q, want %q with nothing set", none.Kind, provider.KindNone)
-	}
-	// Naming a CLI that would not have been used either way sends an operator
-	// looking in the wrong place.
-	if strings.Contains(none.Detail, "PATH") {
-		t.Errorf("detail names a subscription CLI the caller never offered: %s", none.Detail)
-	}
-	if !strings.Contains(none.Detail, provider.APIKeyEnv) {
-		t.Errorf("detail does not name the variable to set: %s", none.Detail)
-	}
 }
 
 // The gateway must carry the resolved credential and models, or resolution is
@@ -267,7 +182,7 @@ func TestGateway_CarriesTheResolvedConfiguration(t *testing.T) {
 		provider.BaseURLEnv:   "https://openrouter.ai/api",
 		provider.AuthTokenEnv: "tok",
 		provider.ModelEnv:     "anthropic/claude-opus-4,anthropic/claude-3.5-haiku",
-	}), noCLI)
+	}))
 
 	gw, err := cfg.Gateway(provider.Options{})
 	if err != nil {
@@ -287,7 +202,7 @@ func TestGateway_OneModelServesBothClasses(t *testing.T) {
 	cfg := provider.Resolve(envOf(map[string]string{
 		provider.APIKeyEnv: "sk-x",
 		provider.ModelEnv:  "claude-opus-5",
-	}), noCLI)
+	}))
 
 	gw, err := cfg.Gateway(provider.Options{})
 	if err != nil {
@@ -299,7 +214,32 @@ func TestGateway_OneModelServesBothClasses(t *testing.T) {
 }
 
 func TestGateway_RefusesAnUnusableProvider(t *testing.T) {
-	if _, err := provider.Resolve(envOf(nil), noCLI).Gateway(provider.Options{}); err == nil {
+	if _, err := provider.Resolve(envOf(nil)).Gateway(provider.Options{}); err == nil {
 		t.Fatal("built a gateway with no provider at all")
+	}
+}
+
+// A judge on any non-Anthropic provider speaks Chat Completions at that
+// provider's endpoint, with the key the claim carried.
+func TestJudge_UsesTheProvidersFormatAndKey(t *testing.T) {
+	var path, auth string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth = r.URL.Path, r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer s.Close()
+	gw, err := provider.Judge(evalqueue.EvalBackend{Provider: "Proxy", Type: evalqueue.ProviderOpenAICompatible,
+		BaseURL: s.URL + "/v1", Credential: "sk-1", Model: "m"}, provider.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gw.Complete(context.Background(), llm.Req{Role: "r", Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/v1/chat/completions" || auth != "Bearer sk-1" {
+		t.Errorf("path %q auth %q", path, auth)
+	}
+	if _, err := provider.Judge(evalqueue.EvalBackend{Provider: "OpenRouter", Type: evalqueue.ProviderOpenRouter, Model: "m"}, provider.Options{}); err == nil {
+		t.Error("a provider with no key must not build a judge")
 	}
 }

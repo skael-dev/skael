@@ -48,8 +48,8 @@ worker:
     tag: ""
   # The server's URL as the worker reaches it. Empty uses the in-cluster service.
   endpoint: ""
-  # A Secret with SKAEL_API_KEY (from Evaluation → Add a worker) and every
-  # provider credential the Evaluation page lists, such as ANTHROPIC_API_KEY.
+  # A Secret with SKAEL_API_KEY from Evaluation → Add a worker. Provider keys
+  # stay on the server.
   existingSecret: ""
   # Session pods run in this namespace through the kubernetes sandbox driver.
   # It must hold nothing but session pods.

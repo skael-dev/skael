@@ -1,5 +1,5 @@
-// Package api implements the LLM gateway against a direct Anthropic-compatible
-// HTTP endpoint.
+// Package api implements the LLM gateway against an HTTP endpoint that speaks
+// either Anthropic's Messages API or OpenAI's Chat Completions API.
 package api
 
 import (
@@ -39,6 +39,16 @@ const (
 	AuthStyleBearer    AuthStyle = "bearer"
 )
 
+// Format is the request shape an endpoint speaks.
+type Format string
+
+const (
+	// FormatAnthropic posts to {base}/v1/messages.
+	FormatAnthropic Format = "anthropic"
+	// FormatOpenAI posts to {base}/chat/completions; base includes /v1.
+	FormatOpenAI Format = "openai"
+)
+
 // Options configures the gateway.
 type Options struct {
 	BaseURL     string
@@ -46,10 +56,15 @@ type Options struct {
 	StrongModel string
 	FastModel   string
 	AuthStyle   AuthStyle
-	Cache       llm.Cache
-	HTTPClient  *http.Client
-	MaxRetries  int
-	Sleep       func(time.Duration)
+	// Format defaults to FormatAnthropic.
+	Format Format
+	// AuthHeader, when set, carries the key in that header instead of the
+	// Authorization or x-api-key header. Azure and some proxies want one.
+	AuthHeader string
+	Cache      llm.Cache
+	HTTPClient *http.Client
+	MaxRetries int
+	Sleep      func(time.Duration)
 }
 
 // Gateway is a direct-API LLM gateway.
@@ -60,7 +75,13 @@ func New(o Options) (*Gateway, error) {
 	if o.APIKey == "" {
 		return nil, ErrNoAPIKey
 	}
+	if o.Format == "" {
+		o.Format = FormatAnthropic
+	}
 	if o.BaseURL == "" {
+		if o.Format == FormatOpenAI {
+			return nil, errors.New("api: an OpenAI-format endpoint needs a base URL")
+		}
 		o.BaseURL = defaultBaseURL
 	}
 	if o.StrongModel == "" {
@@ -176,30 +197,41 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, time.Dura
 	if len(r.Schema) > 0 {
 		prompt += "\n\nReply with JSON only, validating against this schema:\n" + string(r.Schema)
 	}
-
-	body, err := json.Marshal(request{
-		Model:     g.modelFor(r.ModelClass),
-		MaxTokens: defaultMaxTok,
-		Messages:  []message{{Role: "user", Content: prompt}},
-	})
+	model := g.modelFor(r.ModelClass)
+	var (
+		body []byte
+		err  error
+		url  string
+	)
+	base := strings.TrimRight(g.opts.BaseURL, "/")
+	if g.opts.Format == FormatOpenAI {
+		url = base + "/chat/completions"
+		body, err = json.Marshal(chatRequest{Model: model, Messages: []message{{Role: "user", Content: prompt}}})
+	} else {
+		url = base + "/v1/messages"
+		body, err = json.Marshal(request{Model: model, MaxTokens: defaultMaxTok, Messages: []message{{Role: "user", Content: prompt}}})
+	}
 	if err != nil {
 		return llm.Res{}, false, 0, fmt.Errorf("api: marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(g.opts.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return llm.Res{}, false, 0, fmt.Errorf("api: request: %w", err)
 	}
 	req.Header.Set("content-type", "application/json")
-	// anthropic-version is sent regardless of auth style: compatible gateways
-	// accept it and Anthropic requires it.
-	req.Header.Set("anthropic-version", apiVersion)
-	switch g.opts.AuthStyle {
-	case AuthStyleBearer:
+	switch {
+	case g.opts.AuthHeader != "":
+		req.Header.Set(g.opts.AuthHeader, g.opts.APIKey)
+	case g.opts.Format == FormatOpenAI || g.opts.AuthStyle == AuthStyleBearer:
 		req.Header.Set("Authorization", "Bearer "+g.opts.APIKey)
 	default:
 		req.Header.Set("x-api-key", g.opts.APIKey)
+	}
+	if g.opts.Format != FormatOpenAI {
+		// anthropic-version is sent regardless of auth style: compatible
+		// gateways accept it and Anthropic requires it.
+		req.Header.Set("anthropic-version", apiVersion)
 	}
 
 	resp, err := g.opts.HTTPClient.Do(req)
@@ -217,7 +249,11 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, time.Dura
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var parsed response
+		var parsed struct {
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
 		_ = json.Unmarshal(raw, &parsed)
 		msg := strings.TrimSpace(string(raw))
 		if parsed.Error != nil && parsed.Error.Message != "" {
@@ -228,24 +264,58 @@ func (g *Gateway) post(ctx context.Context, r llm.Req) (llm.Res, bool, time.Dura
 			fmt.Errorf("api: %d: %s", resp.StatusCode, msg)
 	}
 
-	var parsed response
-	if uerr := json.Unmarshal(raw, &parsed); uerr != nil {
-		return llm.Res{}, true, 0, fmt.Errorf("api: malformed response body: %w (body: %.200s)", uerr, raw)
+	text, answered, truncated, err := g.decode(raw)
+	if err != nil {
+		return llm.Res{}, true, 0, fmt.Errorf("api: malformed response body: %w (body: %.200s)", err, raw)
 	}
+	if truncated {
+		return llm.Res{}, false, 0, errors.New("api: response truncated at the token limit; raise the cap or shorten the request")
+	}
+	if text == "" {
+		return llm.Res{}, false, 0, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
+	}
+	return llm.Res{Text: text, Model: answered}, false, 0, nil
+}
 
+type chatRequest struct {
+	Model    string    `json:"model"`
+	Messages []message `json:"messages"`
+}
+
+type chatResponse struct {
+	Model   string `json:"model"`
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+}
+
+// decode reads the text, the model that answered and whether the answer was
+// cut off, in the endpoint's own format.
+func (g *Gateway) decode(raw []byte) (text, model string, truncated bool, err error) {
+	if g.opts.Format == FormatOpenAI {
+		var c chatResponse
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return "", "", false, err
+		}
+		if len(c.Choices) == 0 {
+			return "", c.Model, false, nil
+		}
+		return c.Choices[0].Message.Content, c.Model, c.Choices[0].FinishReason == "length", nil
+	}
+	var parsed response
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", "", false, err
+	}
 	var sb strings.Builder
 	for _, b := range parsed.Content {
 		if b.Type == "text" {
 			sb.WriteString(b.Text)
 		}
 	}
-	if parsed.StopReason == "max_tokens" {
-		return llm.Res{}, false, 0, fmt.Errorf("api: response truncated at max_tokens (%d); raise the cap or shorten the request", defaultMaxTok)
-	}
-	if sb.Len() == 0 {
-		return llm.Res{}, false, 0, fmt.Errorf("api: response contained no text content blocks (body: %.200s)", raw)
-	}
-	return llm.Res{Text: sb.String(), Model: parsed.Model}, false, 0, nil
+	return sb.String(), parsed.Model, parsed.StopReason == "max_tokens", nil
 }
 
 func (g *Gateway) modelFor(c llm.ModelClass) string {

@@ -19,13 +19,21 @@ type ReadyChecks struct {
 	// MasterKey is "degraded" when a key is lost or a secret does not open.
 	// The server stays ready, so an owner can reach the recovery page.
 	MasterKey string `json:"master_key"`
+	// Evaluation is "degraded" when no judge and panel are set, or a
+	// provider they use has no readable key. The server stays ready.
+	Evaluation string `json:"evaluation"`
+}
+
+// evalProblems reports why evaluation cannot run.
+type evalProblems interface {
+	Problems(ctx context.Context) ([]string, error)
 }
 
 // readinessChecks pings both dependencies and returns the per-check status
 // ("ok" or "unavailable") plus overall readiness. Real errors are logged,
 // not returned, so internal connection details are never exposed to callers.
-func readinessChecks(ctx context.Context, pool *pgxpool.Pool, storage platform.Storage, keys *settings.KeyService) (ReadyChecks, bool) {
-	checks := ReadyChecks{Database: "ok", Storage: "ok", MasterKey: "ok"}
+func readinessChecks(ctx context.Context, pool *pgxpool.Pool, storage platform.Storage, keys *settings.KeyService, eval evalProblems) (ReadyChecks, bool) {
+	checks := ReadyChecks{Database: "ok", Storage: "ok", MasterKey: "ok", Evaluation: "ok"}
 	ready := true
 
 	if err := pool.Ping(ctx); err != nil {
@@ -47,6 +55,16 @@ func readinessChecks(ctx context.Context, pool *pgxpool.Pool, storage platform.S
 			checks.MasterKey = "unknown"
 		} else if st.Degraded() {
 			checks.MasterKey = "degraded"
+		}
+	}
+	if eval != nil && ready {
+		problems, err := eval.Problems(ctx)
+		switch {
+		case err != nil:
+			log.Error().Err(err).Msg("readiness: evaluation check failed")
+			checks.Evaluation = "unknown"
+		case len(problems) > 0:
+			checks.Evaluation = "degraded"
 		}
 	}
 	return checks, ready

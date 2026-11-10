@@ -106,3 +106,13 @@ func resolveReference(ref string, env EnvFunc) (string, error) {
 	}
 	return "", fmt.Errorf("unknown reference %q", ref)
 }
+
+// ResolveReference reads the secret an env:NAME or file:/path reference names,
+// from this process's environment and filesystem.
+func ResolveReference(ref string) (string, error) {
+	return resolveReference(ref, os.LookupEnv)
+}
+
+// IsReference reports whether v is an env: or file: reference rather than a
+// secret value.
+func IsReference(v string) bool { return ValidReference(v) == nil }

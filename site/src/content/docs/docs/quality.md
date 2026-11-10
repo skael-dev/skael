@@ -17,26 +17,27 @@ All of that rolls up into a single headline score from 0 to 100.
 
 Two things, run separately:
 
-1. **The server.** It queues evaluation jobs but does not run them — no Docker socket and no LLM key live there.
+1. **The server.** It queues evaluation jobs and holds the provider keys, but calls no LLM and runs no session — no Docker socket lives there.
 2. **A `skael-worker` process, with a sandbox it can run sessions in.** The worker claims jobs from the server, runs the evaluation in a sandboxed session, and posts the score back. By default that sandbox is a Docker daemon the worker can reach; `SANDBOX_DRIVER` selects a Kubernetes cluster or a Northflank sandbox instead, for a worker with no Docker daemon — see [Self-hosting](/docs/self-hosting#choosing-a-sandbox-driver).
 
 Without a worker running, jobs just sit in the queue — nothing gets scored.
 
 ### Choosing the judge and the panel
 
-An owner sets both on the **Evaluation** page. The server never holds an LLM key: a **provider** names a backend and the variable on each worker that holds its key.
+An owner sets both on the **Evaluation** page. A **provider** is one LLM endpoint and its key: Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible endpoint such as Azure AI Foundry or LiteLLM. The server seals each key and sends it to a worker only inside a job claim.
 
-- **The judge** grades every run. It must be a metered API, the Anthropic API or a compatible gateway, because a score that releases a version must come from a backend pinned to a model. A Claude subscription can never judge.
-- **The panel** runs the tasks. The first member is the primary member, whose score is the lift. Later members are floor members, which only the `deep` tier runs. Each member chooses its own provider and model, so one panel can mix a gateway and a subscription.
-- **A Claude subscription** serves panel members through `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. Anthropic's terms limit a subscription to ordinary individual use, so use it only on your own worker.
+- **The judge** grades every run. It calls the provider's Messages API for an Anthropic provider, and its Chat Completions API for every other type.
+- **The panel** runs the tasks. Every member runs in OpenCode, the one harness, inside the sandbox. The first member is the primary member, whose score is the lift. Later members are floor members, which only the `deep` tier runs. Each member chooses its own provider and model.
 
-The presets set up the common combinations in one step: an Anthropic API key, OpenRouter, LiteLLM or another gateway, and an Anthropic or gateway judge with a subscription panel. Model fields offer the models each worker's providers list.
+Paste one key to start: OpenRouter, Anthropic and OpenAI each fill an empty panel with default models. The model picker lists each provider's tool-capable models from the models.dev catalog, with price and context size, and accepts any typed id, such as an Azure deployment name. A run on the skill page can pin one panel member, or any model through **Other model…**; that run charts as its own series.
 
 `model_panel` records each member's model and provider. A change of either starts a new score trend, because two panels are not the same measurement. The report also records the sandbox image, and the Evaluation page flags a worker whose image differs from the others.
 
 Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line. The judge's agreement with human labels (κ) was measured for one judge model; swap the judge and that calibration no longer describes the judge in use.
 
-A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration from the environment, as before this release, and the Evaluation page marks it as pinned by env. `whetstone` on a developer machine reads the same variables; `whetstone doctor` shows what resolved. [Configuration](/docs/configuration#worker-llm-credentials) lists them.
+`model_panel` also records the harness and its version. A score from OpenCode never shares a trend with one from Claude Code, which ran the panel before 0.20.
+
+**Evaluation → Jobs** shows each job's phase, sessions done, failures and cost while it runs, and its events after. A failed session names the provider's error, such as an unknown model id or a rejected key.
 
 ## A skill needs a suite first
 
@@ -51,7 +52,7 @@ A skill with no suite gets no score, permanently — there's nothing to run. Thi
 
 ## How long it takes
 
-Roughly 45 to 90 minutes per evaluation. It's running real tasks against real models, twice, plus a judge pass — not a quick lint.
+Roughly 45 to 90 minutes per evaluation, depending on the models and the worker's concurrency. It's running real tasks against real models, twice, plus a judge pass — not a quick lint.
 
 ## Reading a score
 

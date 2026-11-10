@@ -106,8 +106,8 @@ func TestSessionPod_RefusesHostMounts(t *testing.T) {
 	rs := baseSpec()
 	rs.Mounts = []sandbox.Mount{{HostPath: "/home/u/.claude", ContainerPath: "/home/runner/.claude", ReadOnly: true}}
 	_, err := SessionPod(rs, validOptions().withDefaults(), testNames(t))
-	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
-		t.Fatalf("SessionPod = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
+	if err == nil || !strings.Contains(err.Error(), "host mounts") {
+		t.Fatalf("SessionPod = %v, want a refusal of host mounts", err)
 	}
 }
 

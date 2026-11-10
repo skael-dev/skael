@@ -15,27 +15,29 @@ import { rerunEval } from "@/api/sdk.gen";
 // rather than defaulted here: the server defaults the tier to "full" and the
 // worker defaults the panel, and sending a default from the client would mean
 // two places decide the same thing.
-type RunOptions = { tier?: string; models?: string[] };
+// providers names each model's provider, by id, in the same order; a model
+// without one runs on the panel's primary provider.
+type RunOptions = { tier?: string; models?: string[]; providers?: string[] };
 
 export function useRunEval(skillName: string, version?: number) {
   const qc = useQueryClient();
   const mutation = useMutation({
-    mutationFn: async ({ tier, models }: RunOptions = {}) => {
+    mutationFn: async ({ tier, models, providers }: RunOptions = {}) => {
       // A held version never advances latest_version, so omitting version
       // here would either 404 (first publish held, latest_version === 0)
       // or evaluate the wrong (previous released) version. When the caller
       // knows the specific version to evaluate — e.g. a held version in the
       // review queue — pass it explicitly. Other call sites intentionally
       // omit it to let the server default to the current latest.
-      // Models go without agents: there is one agent adapter, and
-      // runner.ParsePanel fills it in. Sending models alone used to fall back
-      // to the shipped panel with no error anywhere.
+      // Models go without agents: there is one harness, and runner.ParsePanel
+      // fills it in.
       const res = await rerunEval({
         path: { name: skillName },
         body: {
           ...(version ? { version } : {}),
           ...(tier ? { tier } : {}),
           ...(models?.length ? { models } : {}),
+          ...(providers?.length ? { providers } : {}),
         },
       });
       if (res.error) throw new Error(res.error.detail ?? "Failed to queue eval");

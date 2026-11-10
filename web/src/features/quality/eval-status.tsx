@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
-import { listSkillEvals } from "@/api/sdk.gen";
+import { Link } from "react-router-dom";
+import { listProviders, listSkillEvals } from "@/api/sdk.gen";
+import { ModelPicker } from "@/features/evaluation/model-picker";
 import type { QualitySummary } from "@/api/types.gen";
 import { useAuth } from "@/app/auth-provider";
 import { useRunEval } from "./use-run-eval";
@@ -16,14 +18,9 @@ const RUN_EVAL_ROLES = new Set(["owner", "admin"]);
 const RUN_EVAL_DISABLED_REASON = "Only an owner or admin can queue an evaluation.";
 const REVIEW_SUITE_DISABLED_REASON = "Only an owner or admin can review an eval set.";
 
-// The models the panel may be pinned to. These are the Claude Code CLI's own
-// aliases, which is what the panel runs — the same vocabulary
-// runner.DefaultPanel() uses, not API model ids. A worker pointed at a gateway
-// that namespaces its identifiers serves none of them, and says so: every
-// panel member fails its health probe and the job fails with the model named.
-// Empty value means "whatever the worker's default panel is", which is the
-// only choice that stays comparable with a skill's existing score history.
-const PANEL_MODELS = ["opus", "sonnet", "haiku"];
+// A run may pin one model: a panel member, or any model on any provider
+// through the picker. Empty means the configured panel, the only choice that
+// stays comparable with a skill's existing score history.
 
 // A held-for-review score that came from a machine-derived suite (no
 // authored SKILL.md suite existed) cannot clear a scan hold — see
@@ -102,9 +99,20 @@ export function EvalStatus({
   const { user } = useAuth();
   const canRun = user != null && RUN_EVAL_ROLES.has(user.role);
   const { run, isPending, isError, error } = useRunEval(skillName);
-  const [model, setModel] = useState("");
+  const [choice, setChoice] = useState("");
+  const [other, setOther] = useState<{ model: string; providerId: string }>({ model: "", providerId: "" });
   const [reviewing, setReviewing] = useState(false);
-  const models = model ? [model] : undefined;
+  const setup = useQuery({
+    queryKey: ["providers"],
+    enabled: canRun,
+    queryFn: async () => (await listProviders()).data,
+  });
+  const providers = setup.data?.providers ?? [];
+  const members = setup.data?.panel?.members ?? [];
+  const nameOf = (id: string) => providers.find((p) => p.id === id)?.name ?? "provider";
+  const pinned = choice.startsWith("m:") ? members[Number(choice.slice(2))] : choice === "other" && other.model ? { model: other.model, provider_id: other.providerId } : undefined;
+  const models = pinned ? [pinned.model] : undefined;
+  const pinnedProviders = pinned ? [pinned.provider_id] : undefined;
   const evalsQuery = useQuery({
     queryKey: ["skill-evals", skillName],
     queryFn: async () => (await listSkillEvals({ path: { name: skillName } })).data,
@@ -134,6 +142,14 @@ export function EvalStatus({
     return (
       <span className="text-[11px] text-text-secondary">
         Running · {active.started_at ? elapsed(active.started_at) : "starting"}
+        {canRun && (
+          <>
+            {" · "}
+            <Link to={`/settings/evaluation/jobs/${active.id}`} className="text-accent hover:underline">
+              View progress
+            </Link>
+          </>
+        )}
       </span>
     );
   }
@@ -172,20 +188,32 @@ export function EvalStatus({
           <select
             aria-label="Panel model"
             title="Which model attempts the tasks. A score against a different model is charted as its own series, not appended to the existing trend."
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
             disabled={!canRun || isPending}
-            className="bg-transparent border border-border rounded px-1 py-0.5 text-[11px] disabled:opacity-50"
+            className="bg-transparent border border-border rounded px-1 py-0.5 text-[11px] disabled:opacity-50 max-w-[260px]"
           >
-            <option value="">Default model</option>
-            {PANEL_MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            <option value="">Default panel</option>
+            {members.map((m, i) => (
+              <option key={`${m.provider_id}:${m.model}`} value={`m:${i}`}>
+                {i === 0 ? "Primary" : "Floor"} · {nameOf(m.provider_id)} · {m.model}
               </option>
             ))}
+            <option value="other">Other model…</option>
           </select>
+          {choice === "other" && (
+            <span className="w-[220px]">
+              <ModelPicker
+                label="Model for this run"
+                providers={providers}
+                providerId={other.providerId || members[0]?.provider_id}
+                value={other.model}
+                onPick={(model, providerId) => setOther({ model, providerId })}
+              />
+            </span>
+          )}
           <button
-            onClick={() => run({ tier: "smoke", models })}
+            onClick={() => run({ tier: "smoke", models, providers: pinnedProviders })}
             disabled={!canRun || isPending}
             title={!canRun ? RUN_EVAL_DISABLED_REASON : "5 tasks on one model"}
             className="text-accent hover:underline disabled:opacity-50"
@@ -194,7 +222,7 @@ export function EvalStatus({
           </button>
           <span className="text-text-tertiary">·</span>
           <button
-            onClick={() => run({ models })}
+            onClick={() => run({ models, providers: pinnedProviders })}
             disabled={!canRun || isPending}
             title={!canRun ? RUN_EVAL_DISABLED_REASON : "the releasable score"}
             className="text-accent hover:underline disabled:opacity-50"

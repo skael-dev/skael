@@ -24,7 +24,7 @@ var baseFS embed.FS
 // DefaultBaseTag is the image every per-skill layer is built over. The version
 // suffix is bumped whenever base/Dockerfile changes: a score is attributed to
 // an environment, so a silently-changed base makes two scores incomparable.
-const DefaultBaseTag = "whetstone-base:1"
+const DefaultBaseTag = "whetstone-base:2"
 
 // PublishedBaseImage is where the release publishes DefaultBaseTag, and the
 // default for a driver that resolves an image rather than building one. Derived
@@ -33,7 +33,7 @@ const DefaultBaseTag = "whetstone-base:1"
 const PublishedBaseImage = "ghcr.io/skael-dev/" + DefaultBaseTag
 
 // SlimBaseTag is the base the docker-tagged test job builds.
-const SlimBaseTag = "whetstone-base-ci:1"
+const SlimBaseTag = "whetstone-base-ci:2"
 
 // ContainerHome is the home of the "runner" user every run executes as. A host
 // path an adapter declares under "~" is rewritten against this, never against

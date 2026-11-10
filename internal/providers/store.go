@@ -1,5 +1,6 @@
 // Package providers holds the LLM backends the server names for its workers,
-// and the judge and panel every worker runs. No credential is stored here.
+// their keys, and the judge and panel every worker runs. The server calls no
+// LLM: it seals each key and hands it to a worker only inside a job claim.
 package providers
 
 import (
@@ -7,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,18 +20,27 @@ import (
 
 	"github.com/skael-dev/skael/internal/audit"
 	"github.com/skael-dev/skael/internal/evalqueue"
+	"github.com/skael-dev/skael/internal/platform"
+	"github.com/skael-dev/skael/internal/settings"
 )
 
-// Provider is one backend.
+// Provider is one backend, as the owner sees it. The key itself is never
+// returned: HasKey says whether one is stored, and KeyRef shows a reference.
 type Provider struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
-	Adapter       string    `json:"adapter" enum:"anthropic,gateway,subscription"`
+	Type          string    `json:"type" enum:"anthropic,openai,openrouter,openai-compatible"`
 	BaseURL       string    `json:"base_url"`
-	AuthStyle     string    `json:"auth_style" enum:"x-api-key,bearer"`
-	CredentialEnv string    `json:"credential_env"`
+	AuthHeader    string    `json:"auth_header"`
+	HasKey        bool      `json:"has_key"`
+	KeyRef        string    `json:"key_ref"`
+	KeyUnreadable bool      `json:"key_unreadable"`
 	UpdatedBy     string    `json:"updated_by"`
 	UpdatedAt     time.Time `json:"updated_at"`
+
+	// key is the new value or reference to store; empty keeps the old one.
+	key    string
+	sealed string
 }
 
 // Slot is one provider and model.
@@ -52,7 +64,7 @@ func (e *ErrInvalid) Error() string { return e.Msg }
 
 func invalid(format string, a ...any) error { return &ErrInvalid{Msg: fmt.Sprintf(format, a...)} }
 
-var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+var headerName = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 // Validate checks one provider.
 func (p *Provider) Validate() error {
@@ -60,47 +72,91 @@ func (p *Provider) Validate() error {
 	if p.Name == "" || len(p.Name) > 64 {
 		return invalid("a provider needs a name of at most 64 characters")
 	}
-	if !envName.MatchString(p.CredentialEnv) {
-		return invalid("the credential variable must be an env var name such as OPENROUTER_API_KEY")
+	if !slices.Contains(evalqueue.ProviderTypes, p.Type) {
+		return invalid("the type must be one of %s", strings.Join(evalqueue.ProviderTypes, ", "))
 	}
-	if p.AuthStyle == "" {
-		p.AuthStyle = "x-api-key"
-	}
-	switch p.Adapter {
-	case evalqueue.AdapterGateway:
+	p.BaseURL = strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+	if p.BaseURL != "" {
 		u, err := url.Parse(p.BaseURL)
 		if err != nil || u.Scheme != "https" && u.Scheme != "http" || u.Host == "" {
-			return invalid("a gateway needs a base URL such as https://openrouter.ai/api")
+			return invalid("the base URL must be an http or https URL")
 		}
-		if strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/v1") {
-			return invalid("leave /v1 off the base URL; skael posts to {base}/v1/messages")
+	}
+	switch p.Type {
+	case evalqueue.ProviderOpenAICompatible:
+		if p.BaseURL == "" {
+			return invalid("an OpenAI-compatible provider needs the base URL its /chat/completions path is under, such as https://my-resource.openai.azure.com/openai/v1")
 		}
-		p.BaseURL = strings.TrimSuffix(p.BaseURL, "/")
-	case evalqueue.AdapterAnthropic, evalqueue.AdapterSubscription:
-		p.BaseURL, p.AuthStyle = "", "x-api-key"
-	default:
-		return invalid("the adapter must be anthropic, gateway or subscription")
+	case evalqueue.ProviderAnthropic:
+		if strings.HasSuffix(p.BaseURL, "/v1") {
+			return invalid("leave /v1 off an Anthropic base URL; skael posts to {base}/v1/messages")
+		}
+	}
+	p.AuthHeader = strings.TrimSpace(p.AuthHeader)
+	if p.AuthHeader != "" {
+		if p.Type != evalqueue.ProviderOpenAICompatible {
+			return invalid("only an OpenAI-compatible provider takes a custom auth header")
+		}
+		if !headerName.MatchString(p.AuthHeader) {
+			return invalid("the auth header must be a header name such as api-key")
+		}
 	}
 	return nil
 }
 
 // Store reads and writes providers and the panel.
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool    *pgxpool.Pool
+	keys    *platform.Keyring
+	catalog *Catalog
+	client  *http.Client
+}
 
-// NewStore returns a store on pool.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+// NewStore returns a store on pool. keys seals provider keys; catalog prices
+// models and lists them.
+func NewStore(pool *pgxpool.Pool, keys *platform.Keyring, catalog *Catalog) *Store {
+	return &Store{pool: pool, keys: keys, catalog: catalog, client: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func aad(id string) string { return "provider:" + id }
 
 // List returns every provider by name.
 func (s *Store) List(ctx context.Context) ([]Provider, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, name, adapter, base_url, auth_style, credential_env, updated_by, updated_at FROM providers ORDER BY name`)
+	rows, err := s.pool.Query(ctx, `SELECT id, name, type, base_url, auth_header, credential_sealed, credential_ref, updated_by, updated_at FROM providers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("providers: list: %w", err)
 	}
-	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Provider])
-	if err != nil {
-		return nil, fmt.Errorf("providers: list: %w", err)
+	defer rows.Close()
+	var out []Provider
+	for rows.Next() {
+		var p Provider
+		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.AuthHeader, &p.sealed, &p.KeyRef, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("providers: list: %w", err)
+		}
+		p.HasKey = p.sealed != "" || p.KeyRef != ""
+		if p.sealed != "" {
+			if _, err := s.keys.Open(p.sealed, aad(p.ID)); err != nil {
+				p.KeyUnreadable = true
+			}
+		}
+		out = append(out, p)
 	}
-	return out, nil
+	return out, rows.Err()
+}
+
+// credential returns a provider's key: opened, or read from its reference.
+func (s *Store) credential(p Provider) (string, error) {
+	switch {
+	case p.KeyRef != "":
+		return settings.ResolveReference(p.KeyRef)
+	case p.sealed != "":
+		b, err := s.keys.Open(p.sealed, aad(p.ID))
+		if err != nil {
+			return "", fmt.Errorf("its key does not open with the current master key; enter it again")
+		}
+		return string(b), nil
+	}
+	return "", errors.New("it has no key")
 }
 
 // Panel returns the configured panel, or nil.
@@ -121,23 +177,20 @@ func (s *Store) Panel(ctx context.Context) (*Panel, error) {
 	return &p, nil
 }
 
-func upsertProvider(ctx context.Context, tx pgx.Tx, p *Provider, actor string) error {
+func (s *Store) upsertProvider(ctx context.Context, tx pgx.Tx, p *Provider, actor string) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
 	var err error
 	if p.ID == "" {
 		err = tx.QueryRow(ctx, `
-			INSERT INTO providers (name, adapter, base_url, auth_style, credential_env, updated_by) VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (name) DO UPDATE SET adapter = EXCLUDED.adapter, base_url = EXCLUDED.base_url,
-				auth_style = EXCLUDED.auth_style, credential_env = EXCLUDED.credential_env,
-				updated_by = EXCLUDED.updated_by, updated_at = now()
-			RETURNING id`, p.Name, p.Adapter, p.BaseURL, p.AuthStyle, p.CredentialEnv, actor).Scan(&p.ID)
+			INSERT INTO providers (name, type, base_url, auth_header, updated_by) VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`, p.Name, p.Type, p.BaseURL, p.AuthHeader, actor).Scan(&p.ID)
 	} else {
 		var tag interface{ RowsAffected() int64 }
-		tag, err = tx.Exec(ctx, `UPDATE providers SET name = $2, adapter = $3, base_url = $4, auth_style = $5,
-			credential_env = $6, updated_by = $7, updated_at = now() WHERE id = $1`,
-			p.ID, p.Name, p.Adapter, p.BaseURL, p.AuthStyle, p.CredentialEnv, actor)
+		tag, err = tx.Exec(ctx, `UPDATE providers SET name = $2, type = $3, base_url = $4, auth_header = $5,
+			updated_by = $6, updated_at = now() WHERE id = $1`,
+			p.ID, p.Name, p.Type, p.BaseURL, p.AuthHeader, actor)
 		if err == nil && tag.RowsAffected() == 0 {
 			return invalid("no provider has that id")
 		}
@@ -148,19 +201,36 @@ func upsertProvider(ctx context.Context, tx pgx.Tx, p *Provider, actor string) e
 		}
 		return fmt.Errorf("providers: save: %w", err)
 	}
+	if k := strings.TrimSpace(p.key); k != "" {
+		sealed, ref := "", ""
+		if settings.IsReference(k) {
+			ref = k
+		} else if strings.HasPrefix(k, "env:") || strings.HasPrefix(k, "file:") {
+			return invalid("a reference is env:NAME or file:/absolute/path")
+		} else {
+			if !s.keys.Enabled() {
+				return invalid("no master key can seal a key; use an env: or file: reference")
+			}
+			if sealed, err = s.keys.Seal([]byte(k), aad(p.ID)); err != nil {
+				return fmt.Errorf("providers: seal: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE providers SET credential_sealed = $2, credential_ref = $3 WHERE id = $1`, p.ID, sealed, ref); err != nil {
+			return fmt.Errorf("providers: save key: %w", err)
+		}
+	}
 	if err := audit.Record(ctx, tx, actor, "provider.save", "provider:"+p.Name,
-		map[string]any{"adapter": p.Adapter, "base_url": p.BaseURL, "credential_env": p.CredentialEnv}); err != nil {
+		map[string]any{"type": p.Type, "base_url": p.BaseURL, "key_changed": p.key != ""}); err != nil {
 		return err
 	}
-	if err := checkPanel(ctx, tx); err != nil {
-		return err
-	}
-	return nil
+	return checkPanel(ctx, tx)
 }
 
-// Save creates or updates one provider.
-func (s *Store) Save(ctx context.Context, p *Provider, actor string) error {
-	return s.tx(ctx, func(tx pgx.Tx) error { return upsertProvider(ctx, tx, p, actor) })
+// Save creates or updates one provider. key is a new key or reference; empty
+// keeps the stored one.
+func (s *Store) Save(ctx context.Context, p *Provider, key, actor string) error {
+	p.key = key
+	return s.tx(ctx, func(tx pgx.Tx) error { return s.upsertProvider(ctx, tx, p, actor) })
 }
 
 // Delete removes a provider the panel does not use.
@@ -227,20 +297,15 @@ func setPanel(ctx context.Context, tx pgx.Tx, p Panel, actor string) error {
 	return audit.Record(ctx, tx, actor, "eval_panel.update", "eval_panel", p)
 }
 
-// checkPanel enforces the rules that span providers and the panel: every
-// member names a provider, and a subscription never judges.
+// checkPanel enforces that every member names a provider.
 func checkPanel(ctx context.Context, tx pgx.Tx) error {
-	var judgeAdapter string
 	var members []byte
-	err := tx.QueryRow(ctx, `SELECT p.adapter, e.members FROM eval_panel e JOIN providers p ON p.id = e.judge_provider WHERE e.id = 1`).Scan(&judgeAdapter, &members)
+	err := tx.QueryRow(ctx, `SELECT members FROM eval_panel WHERE id = 1`).Scan(&members)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("providers: check panel: %w", err)
-	}
-	if judgeAdapter == evalqueue.AdapterSubscription {
-		return invalid("a Claude subscription cannot judge: a score that releases a version must come from a metered API pinned to a model")
 	}
 	var slots []Slot
 	if err := json.Unmarshal(members, &slots); err != nil {
@@ -270,8 +335,9 @@ func (s *Store) tx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return tx.Commit(ctx)
 }
 
-// EvalConfig resolves the panel into what a worker needs, or nil when no panel
-// is configured.
+// EvalConfig resolves the panel into what a worker needs for one job, keys
+// included, or nil when no panel is configured. A provider whose key is
+// missing travels without one, and the worker fails the job naming it.
 func (s *Store) EvalConfig(ctx context.Context) (*evalqueue.EvalConfig, error) {
 	panel, err := s.Panel(ctx)
 	if err != nil || panel == nil {
@@ -290,8 +356,13 @@ func (s *Store) EvalConfig(ctx context.Context) (*evalqueue.EvalConfig, error) {
 		if !ok {
 			return evalqueue.EvalBackend{}, fmt.Errorf("providers: the panel names a missing provider %s", sl.ProviderID)
 		}
-		return evalqueue.EvalBackend{Provider: p.Name, Adapter: p.Adapter, BaseURL: p.BaseURL,
-			AuthStyle: p.AuthStyle, CredentialEnv: p.CredentialEnv, Model: sl.Model}, nil
+		key, _ := s.credential(p)
+		b := evalqueue.EvalBackend{Provider: p.Name, Type: p.Type, BaseURL: p.BaseURL, AuthHeader: p.AuthHeader,
+			Credential: key, Model: sl.Model}
+		if s.catalog != nil {
+			b.Cost = s.catalog.Cost(ctx, p.Type, sl.Model)
+		}
+		return b, nil
 	}
 	cfg := &evalqueue.EvalConfig{}
 	if cfg.Judge, err = backend(panel.Judge); err != nil {
@@ -307,16 +378,143 @@ func (s *Store) EvalConfig(ctx context.Context) (*evalqueue.EvalConfig, error) {
 	return cfg, nil
 }
 
-// Backends returns every provider as a worker sees it, with no model.
-func (s *Store) Backends(ctx context.Context) ([]evalqueue.EvalBackend, error) {
+// EvalConfigFor is EvalConfig for a job that may name its own models. Each
+// requested model runs on its named provider, or on the primary member's when
+// it names none; the judge stays the configured one.
+func (s *Store) EvalConfigFor(ctx context.Context, requested evalqueue.Panel) (*evalqueue.EvalConfig, error) {
+	cfg, err := s.EvalConfig(ctx)
+	if err != nil || cfg == nil || len(requested.Models) == 0 {
+		return cfg, err
+	}
+	panel, err := s.Panel(ctx)
+	if err != nil || panel == nil {
+		return cfg, err
+	}
 	list, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]evalqueue.EvalBackend, 0, len(list))
+	byID := map[string]Provider{}
 	for _, p := range list {
-		out = append(out, evalqueue.EvalBackend{Provider: p.Name, Adapter: p.Adapter, BaseURL: p.BaseURL,
-			AuthStyle: p.AuthStyle, CredentialEnv: p.CredentialEnv})
+		byID[p.ID] = p
+	}
+	members := make([]evalqueue.EvalBackend, 0, len(requested.Models))
+	for i, model := range requested.Models {
+		id := panel.Members[0].ProviderID
+		if i < len(requested.Providers) && requested.Providers[i] != "" {
+			id = requested.Providers[i]
+		}
+		p, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("providers: the job names a missing provider %s for %s", id, model)
+		}
+		key, _ := s.credential(p)
+		b := evalqueue.EvalBackend{Provider: p.Name, Type: p.Type, BaseURL: p.BaseURL, AuthHeader: p.AuthHeader, Credential: key, Model: model}
+		if s.catalog != nil {
+			b.Cost = s.catalog.Cost(ctx, p.Type, model)
+		}
+		members = append(members, b)
+	}
+	cfg.Members = members
+	return cfg, nil
+}
+
+// Problems lists why the configured panel cannot run, in words for the owner:
+// no panel, or a provider it uses without a readable key.
+func (s *Store) Problems(ctx context.Context) ([]string, error) {
+	panel, err := s.Panel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if panel == nil {
+		return []string{"no judge and panel are set: add a provider in Settings → Evaluation"}, nil
+	}
+	list, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	used := map[string]bool{panel.Judge.ProviderID: true}
+	for _, m := range panel.Members {
+		used[m.ProviderID] = true
+	}
+	var out []string
+	for _, p := range list {
+		if !used[p.ID] {
+			continue
+		}
+		if _, err := s.credential(p); err != nil {
+			out = append(out, fmt.Sprintf("the provider %s needs a key: %s", p.Name, err))
+		}
 	}
 	return out, nil
+}
+
+// Models lists the models a provider offers: the catalog for a named type, the
+// endpoint's own list for an openai-compatible one.
+func (s *Store) Models(ctx context.Context, id string) ([]Model, string, error) {
+	list, err := s.List(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, p := range list {
+		if p.ID != id {
+			continue
+		}
+		if p.Type == evalqueue.ProviderOpenAICompatible {
+			key, _ := s.credential(p)
+			models, err := endpointModels(ctx, s.client, p.BaseURL, p.AuthHeader, key)
+			if err != nil {
+				return []Model{}, err.Error(), nil
+			}
+			return models, "", nil
+		}
+		if s.catalog == nil {
+			return []Model{}, "", nil
+		}
+		models, err := s.catalog.Models(ctx, p.Type)
+		if err != nil {
+			return []Model{}, "the model catalog is unavailable: " + err.Error(), nil
+		}
+		if models == nil {
+			models = []Model{}
+		}
+		return models, "", nil
+	}
+	return nil, "", invalid("no provider has that id")
+}
+
+// Unreadable implements settings.SealedSource: provider keys that no longer
+// open with any master key.
+func (s *Store) Unreadable(ctx context.Context) ([]settings.Unreadable, error) {
+	list, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []settings.Unreadable
+	for _, p := range list {
+		if p.KeyUnreadable {
+			out = append(out, settings.Unreadable{Name: "Key of the provider " + p.Name, Where: "Settings → Evaluation: enter the key again"})
+		}
+	}
+	return out, nil
+}
+
+// Discard implements settings.SealedSource: it drops keys that no longer open.
+func (s *Store) Discard(ctx context.Context, actor string) error {
+	list, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range list {
+		if !p.KeyUnreadable {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx, `UPDATE providers SET credential_sealed = '' WHERE id = $1`, p.ID); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, s.pool, actor, "provider.key_discard", "provider:"+p.Name, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

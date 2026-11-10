@@ -114,6 +114,18 @@ func (c *Client) FailEvalJob(id, token, cause string) error {
 	return nil
 }
 
+// PostEvalJobEvents calls POST /api/eval/jobs/{id}/events with a batch of job
+// events, already JSON-encoded as {"events": [...]}.
+func (c *Client) PostEvalJobEvents(id, token string, body []byte) error {
+	resp, err := c.doHeaders(http.MethodPost, "/api/eval/jobs/"+url.PathEscape(id)+"/events",
+		bytes.NewReader(body), "application/json", map[string]string{"X-Claim-Token": token})
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // PostEvalReport calls POST /api/eval/jobs/{id}/report with body, the JSON
 // bytes of a completed eval report (see internal/eval/report.Report.Save).
 func (c *Client) PostEvalReport(id, token string, body []byte) error {

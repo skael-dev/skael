@@ -196,7 +196,7 @@ func TestParsePanel_RejectsAnUnknownAgent(t *testing.T) {
 }
 
 func TestParsePanel_FirstModelIsStrongAndTheRestAreFloor(t *testing.T) {
-	p, err := runner.ParsePanel([]string{"claude-code"}, []string{"sonnet", "haiku"})
+	p, err := runner.ParsePanel([]string{"opencode"}, []string{"sonnet", "haiku"})
 	if err != nil {
 		t.Fatalf("ParsePanel: %v", err)
 	}

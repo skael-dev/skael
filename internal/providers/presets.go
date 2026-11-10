@@ -5,122 +5,62 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/skael-dev/skael/internal/evalqueue"
 )
 
-// Preset is one common judge and panel combination, set up in one step.
+// Preset is one common provider, set up with its key in one step. A preset
+// with default models fills an empty panel, so an eval runs right after one
+// key.
 type Preset struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	// NeedsBaseURL asks the owner for a gateway's address.
-	NeedsBaseURL   bool     `json:"needs_base_url"`
-	DefaultBaseURL string   `json:"default_base_url,omitempty"`
-	WorkerEnv      []string `json:"worker_env"`
-	// Subscription marks a preset whose panel bills a Claude subscription.
-	Subscription bool `json:"subscription"`
-
-	build func(baseURL string) ([]Provider, func(ids map[string]string) Panel)
+	Type        string `json:"type"`
+	// NeedsBaseURL asks the owner for the endpoint.
+	NeedsBaseURL   bool   `json:"needs_base_url"`
+	DefaultBaseURL string `json:"default_base_url,omitempty"`
+	BaseURLHint    string `json:"base_url_hint,omitempty"`
+	// ModelHint says what a model id means for this provider.
+	ModelHint    string   `json:"model_hint,omitempty"`
+	JudgeModel   string   `json:"judge_model,omitempty"`
+	MemberModels []string `json:"member_models"`
+	name         string
 }
 
-const (
-	anthropicName    = "Anthropic"
-	subscriptionName = "Claude subscription"
-	openRouterURL    = "https://openrouter.ai/api"
-	judgeModel       = "claude-opus-5"
-	gatewayJudge     = "anthropic/claude-opus-5"
-)
-
-func anthropicProvider() Provider {
-	return Provider{Name: anthropicName, Adapter: "anthropic", CredentialEnv: "ANTHROPIC_API_KEY"}
-}
-
-func subscriptionProvider() Provider {
-	return Provider{Name: subscriptionName, Adapter: "subscription", CredentialEnv: "CLAUDE_CODE_OAUTH_TOKEN"}
-}
-
-func gatewayProvider(name, baseURL, env string) Provider {
-	return Provider{Name: name, Adapter: "gateway", BaseURL: baseURL, AuthStyle: "bearer", CredentialEnv: env}
-}
-
-func gatewayName(baseURL string) (name, env string) {
-	switch {
-	case strings.Contains(baseURL, "openrouter.ai"):
-		return "OpenRouter", "OPENROUTER_API_KEY"
-	default:
-		return "Gateway", "GATEWAY_API_KEY"
-	}
-}
-
-func members(id string, models ...string) []Slot {
-	out := make([]Slot, len(models))
-	for i, m := range models {
-		out[i] = Slot{ProviderID: id, Model: m}
-	}
-	return out
-}
-
-// Presets in the order the setup shows them.
+// Presets in the order the setup shows them. The default models are the
+// newest of each vendor's tiers in the models.dev catalog on 2026-11-10.
 var Presets = []Preset{
 	{
-		ID: "anthropic", Title: "Anthropic API key",
-		Description: "The judge and the panel run on Anthropic's API, billed per token.",
-		WorkerEnv:   []string{"ANTHROPIC_API_KEY"},
-		build: func(string) ([]Provider, func(map[string]string) Panel) {
-			return []Provider{anthropicProvider()}, func(ids map[string]string) Panel {
-				return Panel{Judge: Slot{ids[anthropicName], judgeModel}, Members: members(ids[anthropicName], "sonnet", "haiku")}
-			}
-		},
+		ID: "openrouter", Title: "OpenRouter", name: "OpenRouter", Type: evalqueue.ProviderOpenRouter,
+		Description:  "The judge and the panel run through OpenRouter with one key, on any model it serves.",
+		JudgeModel:   "anthropic/claude-opus-5.5",
+		MemberModels: []string{"anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5"},
 	},
 	{
-		ID: "openrouter", Title: "OpenRouter",
-		Description:  "The judge and the panel run through OpenRouter with one key.",
-		NeedsBaseURL: false, DefaultBaseURL: openRouterURL,
-		WorkerEnv: []string{"OPENROUTER_API_KEY"},
-		build: func(string) ([]Provider, func(map[string]string) Panel) {
-			return []Provider{gatewayProvider("OpenRouter", openRouterURL, "OPENROUTER_API_KEY")}, func(ids map[string]string) Panel {
-				return Panel{Judge: Slot{ids["OpenRouter"], gatewayJudge},
-					Members: members(ids["OpenRouter"], "anthropic/claude-sonnet-5", "anthropic/claude-haiku-4.5")}
-			}
-		},
+		ID: "anthropic", Title: "Anthropic", name: "Anthropic", Type: evalqueue.ProviderAnthropic,
+		Description:  "The judge and the panel run on Anthropic's API.",
+		JudgeModel:   "claude-opus-5-5",
+		MemberModels: []string{"claude-sonnet-5-5", "claude-haiku-5-5"},
 	},
 	{
-		ID: "litellm", Title: "LiteLLM or another gateway",
-		Description:  "The judge and the panel run through your own Anthropic-compatible gateway. Check the model names it serves after setup.",
-		NeedsBaseURL: true, DefaultBaseURL: "http://litellm:4000",
-		WorkerEnv: []string{"LITELLM_API_KEY"},
-		build: func(baseURL string) ([]Provider, func(map[string]string) Panel) {
-			return []Provider{gatewayProvider("LiteLLM", baseURL, "LITELLM_API_KEY")}, func(ids map[string]string) Panel {
-				return Panel{Judge: Slot{ids["LiteLLM"], judgeModel}, Members: members(ids["LiteLLM"], "claude-sonnet-5", "claude-haiku-4-5")}
-			}
-		},
+		ID: "openai", Title: "OpenAI", name: "OpenAI", Type: evalqueue.ProviderOpenAI,
+		Description:  "The judge and the panel run on OpenAI's API.",
+		JudgeModel:   "gpt-6.1-sol",
+		MemberModels: []string{"gpt-6.1-sol", "gpt-6-luna"},
 	},
 	{
-		ID: "anthropic-subscription", Title: "Anthropic judge, Claude subscription panel",
-		Description:  "The judge runs on Anthropic's API. The panel runs Claude Code on a subscription token from claude setup-token.",
-		WorkerEnv:    []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-		Subscription: true,
-		build: func(string) ([]Provider, func(map[string]string) Panel) {
-			return []Provider{anthropicProvider(), subscriptionProvider()}, func(ids map[string]string) Panel {
-				return Panel{Judge: Slot{ids[anthropicName], judgeModel}, Members: members(ids[subscriptionName], "sonnet", "haiku")}
-			}
-		},
+		ID: "azure", Title: "Azure AI Foundry", name: "Azure AI Foundry", Type: evalqueue.ProviderOpenAICompatible,
+		Description:  "An Azure OpenAI or Foundry resource through its v1 endpoint. Choose the judge and panel after setup.",
+		NeedsBaseURL: true, BaseURLHint: "https://<resource>.openai.azure.com/openai/v1",
+		ModelHint:    "Each model id is a deployment name in your resource.",
+		MemberModels: []string{},
 	},
 	{
-		ID: "gateway-subscription", Title: "Gateway judge, Claude subscription panel",
-		Description:  "The judge runs through a gateway such as OpenRouter. The panel runs Claude Code on a subscription token.",
-		NeedsBaseURL: true, DefaultBaseURL: openRouterURL,
-		WorkerEnv:    []string{"OPENROUTER_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-		Subscription: true,
-		build: func(baseURL string) ([]Provider, func(map[string]string) Panel) {
-			name, env := gatewayName(baseURL)
-			model := judgeModel
-			if name == "OpenRouter" {
-				model = gatewayJudge
-			}
-			return []Provider{gatewayProvider(name, baseURL, env), subscriptionProvider()}, func(ids map[string]string) Panel {
-				return Panel{Judge: Slot{ids[name], model}, Members: members(ids[subscriptionName], "sonnet", "haiku")}
-			}
-		},
+		ID: "openai-compatible", Title: "Another OpenAI-compatible endpoint", name: "OpenAI-compatible", Type: evalqueue.ProviderOpenAICompatible,
+		Description:  "LiteLLM, vLLM or any endpoint that serves /chat/completions. Choose the judge and panel after setup.",
+		NeedsBaseURL: true, BaseURLHint: "http://litellm:4000/v1",
+		MemberModels: []string{},
 	},
 }
 
@@ -133,28 +73,47 @@ func presetByID(id string) *Preset {
 	return nil
 }
 
-// ApplyPreset creates the preset's providers, or updates ones with the same
-// name, and sets its judge and panel.
-func (s *Store) ApplyPreset(ctx context.Context, id, baseURL, actor string) error {
+// ApplyPreset creates the preset's provider with its key, or updates the one
+// with the same name. When no panel is set and the preset has default models,
+// it sets them.
+func (s *Store) ApplyPreset(ctx context.Context, id, baseURL, authHeader, key, actor string) (*Provider, error) {
 	p := presetByID(id)
 	if p == nil {
-		return invalid("unknown preset %q", id)
+		return nil, invalid("unknown preset %q", id)
+	}
+	if strings.TrimSpace(key) == "" {
+		return nil, invalid("enter the provider's API key, or an env: or file: reference to it")
 	}
 	if baseURL == "" {
 		baseURL = p.DefaultBaseURL
 	}
-	provs, panel := p.build(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"))
-	return s.tx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM eval_panel WHERE id = 1`); err != nil {
+	if p.NeedsBaseURL && strings.TrimSpace(baseURL) == "" {
+		return nil, invalid("this provider needs its base URL, such as %s", p.BaseURLHint)
+	}
+	prov := Provider{Name: p.name, Type: p.Type, BaseURL: baseURL, AuthHeader: authHeader}
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT id FROM providers WHERE name = $1`, prov.Name).Scan(&prov.ID); err != nil && err != pgx.ErrNoRows {
 			return err
 		}
-		ids := map[string]string{}
-		for i := range provs {
-			if err := upsertProvider(ctx, tx, &provs[i], actor); err != nil {
-				return err
-			}
-			ids[provs[i].Name] = provs[i].ID
+		prov.key = key
+		if err := s.upsertProvider(ctx, tx, &prov, actor); err != nil {
+			return err
 		}
-		return setPanel(ctx, tx, panel(ids), actor)
+		var hasPanel bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM eval_panel WHERE id = 1)`).Scan(&hasPanel); err != nil {
+			return err
+		}
+		if hasPanel || p.JudgeModel == "" || len(p.MemberModels) == 0 {
+			return nil
+		}
+		members := make([]Slot, len(p.MemberModels))
+		for i, m := range p.MemberModels {
+			members[i] = Slot{ProviderID: prov.ID, Model: m}
+		}
+		return setPanel(ctx, tx, Panel{Judge: Slot{ProviderID: prov.ID, Model: p.JudgeModel}, Members: members}, actor)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &prov, nil
 }

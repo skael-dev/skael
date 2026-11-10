@@ -13,7 +13,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/llm"
-	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
 	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
@@ -37,8 +36,6 @@ func resolveTimeout() (time.Duration, error) {
 	}
 	return d, nil
 }
-
-const versionProbeTimeout = 10 * time.Second
 
 // DoctorReport is the environment health check.
 type DoctorReport struct {
@@ -188,12 +185,9 @@ func RunDoctor(ctx context.Context) (*DoctorReport, error) {
 	}
 	rep.LLMTimeout = timeout.String()
 
-	if bin, err := agentcli.Detect(); err == nil {
-		rep.AgentCLI = bin
-		rep.AgentCLIVersion = probeVersion(bin)
-	} else {
-		rep.AgentCLIError = err.Error()
-	}
+	// The harness runs inside the sandbox image, never on this machine.
+	rep.AgentCLI = agent.New().Name() + " (in the sandbox image)"
+	rep.AgentCLIVersion = agent.OpenCodeVersion
 
 	p := provider.FromEnv()
 	rep.Gateway = string(p.Kind)
@@ -214,18 +208,6 @@ func RunDoctor(ctx context.Context) (*DoctorReport, error) {
 	}
 
 	return rep, nil
-}
-
-// probeVersion asks a CLI for its version, returning "" on failure.
-func probeVersion(bin string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, bin, "--version").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func (r *DoctorReport) render() {

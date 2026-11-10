@@ -198,21 +198,19 @@ Global, on every command:
 
 Ctrl-C is handled properly: `SIGINT` and `SIGTERM` cancel the command's context, the Docker driver tears down its own containers and networks, and then the process exits. Killing whetstone harder than that skips the cleanup and leaves the leftovers for the next run's sweep.
 
-`WHETSTONE_BASE_TAG` overrides the sandbox base image tag (default `whetstone-base:1`). You rarely want this.
+`WHETSTONE_BASE_TAG` overrides the sandbox base image tag (default `whetstone-base:2`). You rarely want this.
 
 ### An LLM gateway
 
 Anything that calls a model needs one: `new`, `gen`, and `suite gen`. `eval` needs one too — the score is an expectation pass rate, and a model grades every expectation, so a run without a gateway refuses rather than reporting a partial number.
 
-whetstone picks a gateway in this order:
+whetstone reads one Anthropic-format endpoint from its environment, for the judge and for the panel:
 
-1. `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` set — direct API, configured explicitly. An explicit gateway beats autodetection, because silently preferring a CLI that happens to be on PATH bills the wrong account and evaluates against a different model than the one you configured.
-2. A supported agent CLI on PATH — billed to a subscription you already have.
-3. `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY` — direct API.
+- `ANTHROPIC_API_KEY`, sent as `x-api-key`, or `ANTHROPIC_AUTH_TOKEN`, sent as a bearer token.
+- `ANTHROPIC_BASE_URL`, optional, for a compatible endpoint such as OpenRouter at `https://openrouter.ai/api`. Without it, whetstone calls Anthropic's API.
+- `LLM_MODEL`, comma-separated, most capable first. You need it with a base URL: OpenRouter namespaces its identifiers (`anthropic/claude-sonnet-5`), so asking it for Anthropic's bare names fails with "no endpoints found".
 
-`ANTHROPIC_API_KEY` sits *below* the CLI on purpose. It's present on plenty of machines that also have the CLI installed.
-
-`LLM_MODEL` overrides the model names — comma-separated, most capable first. It is the same variable the worker reads, resolved by the same code, so one environment configures both. You need it if you point `ANTHROPIC_BASE_URL` at a non-Anthropic gateway: OpenRouter namespaces its identifiers (`anthropic/claude-sonnet-5`), so asking it for Anthropic's bare names 404s and authoring fails with a confusing "no endpoints found". [Configuration](/docs/configuration#worker-llm-credentials) lists every variable.
+Every panel session runs in OpenCode inside the sandbox image, on the same endpoint and key. A Skael worker does not read these variables: it receives the server's providers with each job.
 
 `whetstone doctor` tells you which of these it found and why:
 
@@ -220,7 +218,7 @@ whetstone picks a gateway in this order:
 whetstone doctor
 ```
 
-It reports the agent CLI and its version, the selected gateway and the reason, the Docker binary, and every registered agent adapter. That last one matters: an adapter is only reachable once its package is linked in, and a forgotten import compiles clean and silently thins the panel. `doctor` never errors on a broken environment — it's the command you run *because* something is already wrong, so it diagnoses instead.
+It reports the harness and its version, the selected gateway and the reason, the Docker binary, and every registered agent adapter. That last one matters: an adapter is only reachable once its package is linked in, and a forgotten import compiles clean and silently thins the panel. `doctor` never errors on a broken environment — it's the command you run *because* something is already wrong, so it diagnoses instead.
 
 ### A registry, for `suite push` only
 

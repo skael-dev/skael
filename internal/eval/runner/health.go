@@ -52,7 +52,7 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 	// with environment credentials failed every probe — marking every panel
 	// member unhealthy and turning every evaluation into an incomplete panel,
 	// with no indication that authentication was the cause.
-	mounts, authVars, err := r.authFor(a, m.Agent, m.Model)
+	authVars, err := r.authFor(m.Agent, m.Model)
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: err.Error()}
 	}
@@ -60,7 +60,6 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     image,
 		Workspace: ws,
-		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
@@ -75,8 +74,12 @@ func (r *Runner) probeMember(ctx context.Context, m Member, image sandbox.ImageR
 	if err != nil {
 		return Health{Member: m, OK: false, Detail: fmt.Sprintf("invoke: %v", err)}
 	}
-	if _, err := a.Parse(stream); err != nil {
+	res, err := a.Parse(stream)
+	if err != nil {
 		return Health{Member: m, OK: false, Detail: fmt.Sprintf("parse: %v", err)}
+	}
+	if res.Meta.IsError {
+		return Health{Member: m, OK: false, Detail: res.Meta.Error}
 	}
 	return Health{Member: m, OK: true}
 }

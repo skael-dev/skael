@@ -24,14 +24,9 @@ type Options struct {
 	Untrusted      bool
 	AllowDomains   []string
 
-	// PanelExcludeEnv withholds credential variables from the sandbox. Comes
-	// from provider.Config.PanelExcludeEnv — this package cannot import
-	// provider (circular), so it receives the names as data.
-	PanelExcludeEnv []string
-
-	// MemberAuth, when it returns ok, gives one member its own credential
-	// variables in place of the process environment. A panel whose members
-	// use different providers needs it.
+	// MemberAuth gives one member the environment its session needs: the
+	// harness config and the provider key. A member it does not know cannot
+	// run, because the sandbox inherits nothing from this process.
 	MemberAuth func(agent, model string) (env []string, ok bool)
 
 	// WorkspaceRoot overrides os.TempDir() for a containerized runner whose
@@ -48,7 +43,10 @@ type Options struct {
 	// else. It is never called for a probe.
 	OnComplete func(Outcome)
 
-	MaxRateLimitRetries int
+	// OnStart, when set, is called as each planned session or probe starts,
+	// and OnFinish as each one ends, with its status and error.
+	OnStart  func(store.RunKey)
+	OnFinish func(k store.RunKey, m agent.Meta, status string, err error)
 }
 
 // Outcome is what one planned session (skill or baseline) reported.
@@ -114,11 +112,6 @@ type ExecuteResult struct {
 // Runner executes a plan.
 type Runner struct {
 	o Options
-	// quotaWarned keeps the approaching-quota notice to one line per run
-	// rather than one per session, across concurrent sessions.
-	quotaWarned sync.Once
-	// gate holds new session starts while the account is near its window.
-	gate *quotaGate
 }
 
 // New validates options and applies defaults.
@@ -132,19 +125,10 @@ func New(o Options) (*Runner, error) {
 	}
 	o.Driver = gd
 	if o.Concurrency <= 0 {
-		// Six rather than four: the quota gate is what holds new starts when
-		// the account nears its window, so the extra slots cost retries only
-		// when there is headroom for them.
 		o.Concurrency = 6
 	}
 	if o.SessionTimeout <= 0 {
 		o.SessionTimeout = 20 * time.Minute
-	}
-	if o.MaxRateLimitRetries == 0 {
-		o.MaxRateLimitRetries = 3
-	}
-	if len(o.AllowDomains) == 0 {
-		o.AllowDomains = DefaultAllowDomains
 	}
 	if o.Sleep == nil {
 		o.Sleep = time.Sleep
@@ -152,7 +136,7 @@ func New(o Options) (*Runner, error) {
 	if o.Logger == nil {
 		o.Logger = func(string, ...any) {}
 	}
-	return &Runner{o: o, gate: newQuotaGate(time.Now, o.Sleep)}, nil
+	return &Runner{o: o}, nil
 }
 
 // SetOnComplete installs the per-session callback after construction. The
@@ -161,7 +145,17 @@ func New(o Options) (*Runner, error) {
 // known at New time.
 func (r *Runner) SetOnComplete(fn func(Outcome)) { r.o.OnComplete = fn }
 
-var DefaultAllowDomains = []string{"api.anthropic.com", "statsig.anthropic.com", "sentry.io"}
+// SetOnSession installs the per-session start and end callbacks after
+// construction.
+func (r *Runner) SetOnSession(start func(store.RunKey), finish func(store.RunKey, agent.Meta, string, error)) {
+	r.o.OnStart, r.o.OnFinish = start, finish
+}
+
+func (r *Runner) started(k store.RunKey) {
+	if r.o.OnStart != nil {
+		r.o.OnStart(k)
+	}
+}
 
 // Execute runs in.Plan, skipping sessions already recorded.
 func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*ExecuteResult, error) {
@@ -203,10 +197,14 @@ func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*E
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			// Only a start waits. A session already in flight is never
-			// interrupted by the gate.
-			r.gate.Wait(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			r.started(k)
 			o := r.executeRun(ctx, evalID, in, byKey, k)
+			if r.o.OnFinish != nil {
+				r.o.OnFinish(k, o.Meta, o.Status, o.Err)
+			}
 			mu.Lock()
 			outcomes = append(outcomes, o)
 			mu.Unlock()
@@ -230,8 +228,18 @@ func (r *Runner) Execute(ctx context.Context, evalID int64, in ExecuteInput) (*E
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			r.gate.Wait(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			r.started(probeKey(p))
 			po := r.executeProbe(ctx, evalID, in, byKey, p)
+			if r.o.OnFinish != nil {
+				status := store.StatusOK
+				if po.Err != nil {
+					status = store.StatusError
+				}
+				r.o.OnFinish(probeKey(p), po.Meta, status, po.Err)
+			}
 			mu.Lock()
 			probes = append(probes, po)
 			mu.Unlock()

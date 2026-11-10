@@ -1,8 +1,7 @@
 // Command skael-worker runs the eval queue's claim/materialise/evaluate/report
-// loop against real infrastructure: a Docker sandbox, the direct Anthropic
-// API gateway, and the linked-in agent adapter registry. It is the
-// server-side counterpart to `whetstone eval`, which runs the same engine
-// locally against a personal subscription CLI.
+// loop against real infrastructure: a sandbox driver, the judge and panel the
+// server's providers name, and the OpenCode harness. It is the server-side
+// counterpart to `whetstone eval`, which runs the same engine locally.
 package main
 
 import (
@@ -59,11 +58,6 @@ type workerConfig struct {
 	worker.Config
 	Concurrency      int
 	GradeConcurrency int
-	// Provider is the resolved LLM backend: the endpoint, the credential, the
-	// auth header, and the model ids. It serves the judge in this process and
-	// decides the panel's models inside the sandbox — one gateway, resolved
-	// once, by the same package `whetstone doctor` reports.
-	Provider provider.Config
 	// RunRoot is where per-session sandbox workspaces are created; empty means
 	// os.TempDir(). Only needs setting in a container — see
 	// requireHostSharedRoots.
@@ -96,14 +90,8 @@ func main() {
 }
 
 // configFromEnv resolves and validates the worker's configuration from the
-// environment. The LLM judge is always the metered API backend — hence
-// provider.APIFromEnv, which does not consider a subscription CLI on PATH at
-// all. That does not make panel execution metered too: the claude-code agent
-// adapter declares AuthDirs (~/.claude, ~/.config/claude — see
-// internal/eval/agent) which internal/eval/runner/session.go mounts into the
-// sandbox, so a panel member run through that adapter authenticates with
-// whatever host credentials it finds there — subscription-backed wherever
-// those directories exist on the host running this worker.
+// environment. It reads no LLM settings: every job's claim carries the
+// server's providers, keys included.
 func configFromEnv() (workerConfig, error) {
 	endpoint := os.Getenv("SKAEL_ENDPOINT")
 	apiKey := os.Getenv("SKAEL_API_KEY")
@@ -118,16 +106,6 @@ func configFromEnv() (workerConfig, error) {
 	if len(missing) > 0 {
 		return workerConfig{}, fmt.Errorf(
 			"skael-worker: missing required environment variable(s): %s", joinComma(missing))
-	}
-
-	// A worker that pins its own gateway or panel must be able to judge at
-	// start. Otherwise the server's providers choose per job, and the
-	// credentials they name are checked when a job needs them.
-	prov := provider.APIFromEnv()
-	if err := prov.Validate(); err != nil && provider.PinnedByEnv(os.Getenv) {
-		return workerConfig{}, fmt.Errorf(
-			"skael-worker: no LLM gateway for the judge: %w. A subscription CLI on PATH is never used here, "+
-				"because a published score must come from a metered, reproducible backend", err)
 	}
 
 	workerID := os.Getenv("WORKER_ID")
@@ -205,7 +183,6 @@ func configFromEnv() (workerConfig, error) {
 		},
 		Concurrency:      concurrency,
 		GradeConcurrency: gradeConcurrency,
-		Provider:         prov,
 		RunRoot:          runRoot,
 		SandboxCfg:       sandboxCfg,
 	}, nil
@@ -308,25 +285,15 @@ func run(cfg workerConfig) error {
 	// something stronger than its own context can leave resources behind.
 	resolve.Sweep(context.Background(), drv)
 
-	b := newBackends(cfg.Provider)
-	if b.pinned {
-		log.Info().Str("provider", cfg.Provider.Detail).Msg("skael-worker: pinned by env; the server's providers do not apply")
-	}
-
 	httpAPI := worker.NewHTTPAPI(cfg.Endpoint, cfg.APIKey)
 
-	// The same warnings `whetstone doctor` prints, from the same place.
-	for _, w := range cfg.Provider.Warnings() {
-		log.Warn().Msgf("skael-worker: %s", w)
-	}
-
 	r := &realRunner{
-		driver: drv, backends: b, concurrency: cfg.Concurrency,
+		driver: drv, concurrency: cfg.Concurrency,
 		gradeConcurrency: cfg.GradeConcurrency, runRoot: cfg.RunRoot,
 		image: cfg.SandboxCfg.ImageIdentity(),
 	}
 
-	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{backends: b})
+	w, err := worker.New(cfg.Config, httpAPI, r, &realDeriver{})
 	if err != nil {
 		return fmt.Errorf("skael-worker: %w", err)
 	}
@@ -384,7 +351,6 @@ func pollLoop(ctx context.Context, w *worker.Worker, pollInterval time.Duration)
 // reason to have one anywhere near the workspace it was just handed.
 type realRunner struct {
 	driver           sandbox.Driver
-	backends         *backends
 	concurrency      int
 	gradeConcurrency int
 	runRoot          string
@@ -395,22 +361,41 @@ type realRunner struct {
 // It is a separate function for the same reason evalRequestFrom is: this hop
 // carries panel configuration that nothing downstream can reconstruct, and a
 // field dropped here is not an error but a run against a panel nobody chose.
-func evalDepsFrom(r *realRunner, jb jobBackends, st *store.Store) whetstone.EvalDeps {
+func evalDepsFrom(r *realRunner, jb jobBackends, st *store.Store, events func(evalqueue.EvalJobEvent)) whetstone.EvalDeps {
 	return whetstone.EvalDeps{
-		Store:           st,
-		Driver:          r.driver,
-		Gateway:         jb.gateway,
-		Adapters:        agent.Get,
-		Now:             time.Now,
-		Sleep:           time.Sleep,
-		EngineVersion:   version,
-		WorkspaceRoot:   r.runRoot,
-		PanelModels:     jb.panelModels,
-		PanelBaseURL:    jb.panelBase,
-		PanelExcludeEnv: jb.panelExcludeEnv,
-		MemberAuth:      jb.memberAuth,
-		MemberProvider:  jb.memberProvider,
+		Store:          st,
+		Driver:         r.driver,
+		Gateway:        jb.gateway,
+		Adapters:       agent.Get,
+		Now:            time.Now,
+		Sleep:          time.Sleep,
+		EngineVersion:  version,
+		WorkspaceRoot:  r.runRoot,
+		PanelModels:    jb.panelModels,
+		PanelBaseURL:   jb.panelBase,
+		MemberAuth:     jb.memberAuth,
+		MemberProvider: jb.memberProvider,
+		Progress:       func(p whetstone.Progress) { events(jobEvent(p)) },
 	}
+}
+
+// jobEvent maps one step of an evaluation onto the job event the server
+// stores.
+func jobEvent(p whetstone.Progress) evalqueue.EvalJobEvent {
+	e := evalqueue.EvalJobEvent{
+		Kind: p.Kind, Phase: p.Phase, Total: p.Total, Task: p.Task, Condition: p.Condition, Model: p.Model,
+		Attempt: p.Attempt, Status: p.Status, DurationMS: p.Duration.Milliseconds(),
+		InputTokens: p.InputTok, OutputTokens: p.OutputTok, CostUSD: p.CostUSD, Error: p.Error,
+	}
+	switch p.Kind {
+	case evalqueue.EventSessionEnd, evalqueue.EventGrade, evalqueue.EventHealth:
+		ok := p.OK
+		e.OK = &ok
+	}
+	if len(e.Error) > 4000 {
+		e.Error = e.Error[:4000]
+	}
+	return e
 }
 
 func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Report, error) {
@@ -428,11 +413,15 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 		Str("tier", in.Tier).
 		Msg("skael-worker: claimed job")
 
-	jb, err := r.backends.forJob(in.Eval)
+	jb, err := forJob(in.Eval)
 	if err != nil {
 		return nil, err
 	}
-	deps := evalDepsFrom(r, jb, st)
+	events := in.Events
+	if events == nil {
+		events = func(evalqueue.EvalJobEvent) {}
+	}
+	deps := evalDepsFrom(r, jb, st, events)
 
 	req := evalRequestFrom(in, r.concurrency, r.gradeConcurrency)
 
@@ -465,10 +454,10 @@ func (r *realRunner) Run(ctx context.Context, in worker.RunInput) (*report.Repor
 // realDeriver adapts derive.Deriver to worker.Deriver. The two Input types are
 // separate because internal/worker must not import internal/eval/derive —
 // that is what keeps the run loop testable with no LLM and no Docker.
-type realDeriver struct{ backends *backends }
+type realDeriver struct{}
 
 func (r *realDeriver) deriver(eval *evalqueue.EvalConfig) (*derive.Deriver, error) {
-	jb, err := r.backends.forJob(eval)
+	jb, err := forJob(eval)
 	if err != nil {
 		return nil, err
 	}

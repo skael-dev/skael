@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/spec"
@@ -46,7 +47,7 @@ func TestDepsDigest_ChangesWithTheBaseTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := imagespec.DepsDigest(env(func(e *sandbox.EnvSpec) { e.BaseTag = "whetstone-base:2" }))
+	b, err := imagespec.DepsDigest(env(func(e *sandbox.EnvSpec) { e.BaseTag = "whetstone-base:3" }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestValidateDeps_AcceptsOrdinaryPackages(t *testing.T) {
 	d := spec.DepsDecl{
 		Apt: []string{"poppler-utils", "libreoffice-calc"},
 		Pip: []string{"pandas==2.2.0", "python-docx", "ruamel.yaml"},
-		Npm: []string{"prettier", "@anthropic-ai/claude-code@2.1.220"},
+		Npm: []string{"prettier", "opencode-ai@1.19.5"},
 	}
 	if err := imagespec.ValidateDeps(d); err != nil {
 		t.Errorf("ValidateDeps rejected ordinary packages: %v", err)
@@ -188,5 +189,20 @@ func TestProxyConfig_EmitsOneFilterEntryPerDomain(t *testing.T) {
 	}
 	if _, err := imagespec.ProxyConfig(nil); err == nil {
 		t.Error("ProxyConfig accepted an empty allowlist")
+	}
+}
+
+// A run records agent.OpenCodeVersion as its harness version. An image that
+// installs another release would mislabel every score made on it.
+func TestBaseDockerfiles_InstallTheHarnessVersionRunsRecord(t *testing.T) {
+	want := "opencode-ai@" + agent.OpenCodeVersion
+	for _, slim := range []bool{false, true} {
+		df := imagespec.BaseDockerfile(slim)
+		if !strings.Contains(df, want) {
+			t.Errorf("slim=%v: the base image does not install %s", slim, want)
+		}
+		if strings.Contains(df, "claude-code") {
+			t.Errorf("slim=%v: the base image still installs Claude Code", slim)
+		}
 	}
 }

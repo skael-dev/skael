@@ -136,17 +136,54 @@ type cancelJobInput struct {
 	ID string `path:"id"`
 }
 
+// EvalJobEventsBody is a batch of job events a worker posts.
+type EvalJobEventsBody struct {
+	Events []EvalJobEvent `json:"events" maxItems:"500"`
+}
+
+type postEventsInput struct {
+	ID         string `path:"id"`
+	ClaimToken string `header:"X-Claim-Token"`
+	Body       EvalJobEventsBody
+}
+
+type listEventsInput struct {
+	ID    string `path:"id"`
+	After int64  `query:"after"`
+}
+
+// EvalJobEventsOutputBody is one job and its events.
+type EvalJobEventsOutputBody struct {
+	Job    *EvalJobSummary `json:"job"`
+	Events []EvalJobEvent  `json:"events"`
+}
+
+type listEventsOutput struct {
+	Body EvalJobEventsOutputBody
+}
+
+// EvalJobsBody is the Jobs page.
+type EvalJobsBody struct {
+	Jobs []EvalJobSummary `json:"jobs"`
+}
+
+type listJobsOutput struct {
+	Body EvalJobsBody
+}
+
 // rerunBody is the request to re-run an evaluation for a skill. Every field
 // is optional: omitting version re-runs the latest, omitting suite_ref uses
 // the skill's stored suite (never a freshly generated one — that would be a
 // different measurement), omitting tier defaults to "full", and omitting
 // agents/models keeps the worker's default panel.
 type rerunBody struct {
-	Version  int      `json:"version,omitempty"`
-	Tier     string   `json:"tier,omitempty"`
-	Agents   []string `json:"agents,omitempty"`
-	Models   []string `json:"models,omitempty"`
-	SuiteRef string   `json:"suite_ref,omitempty"`
+	Version int      `json:"version,omitempty"`
+	Tier    string   `json:"tier,omitempty"`
+	Agents  []string `json:"agents,omitempty"`
+	Models  []string `json:"models,omitempty"`
+	// Providers is the provider id of each model, in the same order.
+	Providers []string `json:"providers,omitempty"`
+	SuiteRef  string   `json:"suite_ref,omitempty"`
 }
 
 type rerunInput struct {
@@ -182,8 +219,9 @@ type RouteOptions struct {
 	// Contests supplies a contest job's candidates at claim time. A local
 	// interface, because internal/contest imports this package's Job type.
 	Contests ContestLookup
-	// EvalConfig returns the configured judge and panel, or nil.
-	EvalConfig func(ctx context.Context) (*EvalConfig, error)
+	// EvalConfig returns the judge and panel for a job's requested panel, keys
+	// included, or nil when none is configured.
+	EvalConfig func(ctx context.Context, requested Panel) (*EvalConfig, error)
 }
 
 // ContestLookup returns the candidates a contest job must run, in order, with
@@ -241,7 +279,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		var eval *EvalConfig
 		if opts.EvalConfig != nil {
-			if eval, err = opts.EvalConfig(ctx); err != nil {
+			if eval, err = opts.EvalConfig(ctx, j.Panel); err != nil {
 				log.Error().Err(err).Msg("evalqueue: eval config lookup failed")
 				return nil, huma.Error500InternalServerError("claim eval job: internal error")
 			}
@@ -337,6 +375,9 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: fail failed")
 			return nil, huma.Error500InternalServerError("fail eval job: internal error")
 		}
+		if err := q.AppendEvents(ctx, j.ID, []EvalJobEvent{{Kind: EventFailed, Error: cause}}); err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: recording the failure failed")
+		}
 		return &emptyOutput{Status: http.StatusOK}, nil
 	})
 
@@ -412,6 +453,74 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID:   "post-eval-job-events",
+		Method:        http.MethodPost,
+		Path:          "/api/eval/jobs/{id}/events",
+		Summary:       "Record a running job's progress",
+		DefaultStatus: http.StatusOK,
+	}, func(ctx context.Context, input *postEventsInput) (*emptyOutput, error) {
+		j, ok, err := q.VerifyClaim(ctx, JobID(input.ID), input.ClaimToken)
+		if err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: verify claim failed")
+			return nil, huma.Error500InternalServerError("post job events: internal error")
+		}
+		if !ok {
+			return nil, huma.Error409Conflict("post job events: the job is no longer held by this claim")
+		}
+		if err := q.AppendEvents(ctx, j.ID, input.Body.Events); err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: append events failed")
+			return nil, huma.Error500InternalServerError("post job events: internal error")
+		}
+		return &emptyOutput{Status: http.StatusOK}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-eval-jobs",
+		Method:      http.MethodGet,
+		Path:        "/api/eval/jobs",
+		Summary:     "List queued, running and recent eval jobs across all skills, with progress",
+	}, func(ctx context.Context, _ *struct{}) (*listJobsOutput, error) {
+		if !auth.UserFromContext(ctx).IsPrivileged() {
+			return nil, huma.Error403Forbidden("list eval jobs: owner or admin role required")
+		}
+		jobs, err := q.JobSummaries(ctx, time.Now())
+		if err != nil {
+			log.Error().Err(err).Msg("evalqueue: job summaries failed")
+			return nil, huma.Error500InternalServerError("list eval jobs: internal error")
+		}
+		return &listJobsOutput{Body: EvalJobsBody{Jobs: jobs}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-eval-job-events",
+		Method:      http.MethodGet,
+		Path:        "/api/eval/jobs/{id}/events",
+		Summary:     "One eval job's progress and events",
+	}, func(ctx context.Context, input *listEventsInput) (*listEventsOutput, error) {
+		if !auth.UserFromContext(ctx).IsPrivileged() {
+			return nil, huma.Error403Forbidden("eval job events: owner or admin role required")
+		}
+		jobs, err := q.JobSummaries(ctx, time.Now())
+		if err != nil {
+			return nil, huma.Error500InternalServerError("eval job events: internal error", err)
+		}
+		var job *EvalJobSummary
+		for i := range jobs {
+			if jobs[i].ID == input.ID {
+				job = &jobs[i]
+			}
+		}
+		if job == nil {
+			return nil, huma.Error404NotFound("eval job events: no recent job has that id")
+		}
+		events, err := q.Events(ctx, JobID(input.ID), input.After)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("eval job events: internal error", err)
+		}
+		return &listEventsOutput{Body: EvalJobEventsOutputBody{Job: job, Events: events}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID:   "cancel-eval-job",
 		Method:        http.MethodPost,
 		Path:          "/api/eval/jobs/{id}/cancel",
@@ -429,6 +538,11 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			}
 			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: cancel failed")
 			return nil, huma.Error500InternalServerError("cancel eval job: internal error")
+		}
+		// The worker holds no claim after this, so the server records the
+		// event itself; the worker stops on its next heartbeat.
+		if err := q.AppendEvents(ctx, JobID(input.ID), []EvalJobEvent{{Kind: EventCancelled, Actor: u.Email}}); err != nil {
+			log.Error().Err(err).Str("job_id", input.ID).Msg("evalqueue: recording the cancel failed")
 		}
 		return &emptyOutput{Status: http.StatusOK}, nil
 	})
@@ -741,7 +855,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			Version:     version,
 			SuiteRef:    suiteRef,
 			Tier:        tier,
-			Panel:       Panel{Agents: input.Body.Agents, Models: input.Body.Models},
+			Panel:       Panel{Agents: input.Body.Agents, Models: input.Body.Models, Providers: input.Body.Providers},
 			RequestedBy: requestedBy,
 		})
 		if err != nil {

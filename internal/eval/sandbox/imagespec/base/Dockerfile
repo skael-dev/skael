@@ -10,7 +10,9 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
-    NODE_MAJOR=22
+    NODE_MAJOR=22 \
+    OPENCODE_DISABLE_MODELS_FETCH=true \
+    OPENCODE_DISABLE_AUTOUPDATE=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates python3 python3-pip python3-venv \
@@ -18,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg jq ripgrep git make unzip tinyproxy curl gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code@2.1.220 \
+    && npm install -g opencode-ai@1.19.5 \
     && apt-get purge -y gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
