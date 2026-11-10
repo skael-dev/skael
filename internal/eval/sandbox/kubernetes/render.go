@@ -184,6 +184,8 @@ func applySharedPodSettings(s *corev1.PodSpec, o Options) {
 	if o.PullSecret != "" {
 		s.ImagePullSecrets = []corev1.LocalObjectReference{{Name: o.PullSecret}}
 	}
+	// Validate has already refused malformed placement.
+	s.Tolerations, s.NodeSelector, _ = o.scheduling()
 }
 
 // ProxyConfigMap splits imagespec's rendered proxy configuration into the two

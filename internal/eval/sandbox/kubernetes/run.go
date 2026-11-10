@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,6 +52,12 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return sandbox.RunResult{}, err
 	}
 	defer cleanup()
+
+	if rs.Network == sandbox.NetAllowlist {
+		if err := d.pointAtProxy(ctx, pod, n.Proxy); err != nil {
+			return sandbox.RunResult{}, err
+		}
+	}
 
 	if _, err := d.cs.CoreV1().Pods(d.o.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return sandbox.RunResult{}, fmt.Errorf("kubernetes: creating the session pod: %w", err)
@@ -101,6 +109,30 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return res, err
 	}
 	return res, nil
+}
+
+// pointAtProxy aims the session's proxy variables at the running proxy pod's
+// IP. SessionPod names the proxy by its pod name, which cluster DNS does not
+// resolve: it serves Services, not bare pods.
+func (d *Driver) pointAtProxy(ctx context.Context, pod *corev1.Pod, proxyName string) error {
+	p, err := d.cs.CoreV1().Pods(d.o.Namespace).Get(ctx, proxyName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("kubernetes: reading the proxy pod: %w", err)
+	}
+	if p.Status.PodIP == "" {
+		return fmt.Errorf("kubernetes: the proxy pod %s is running but has no IP", proxyName)
+	}
+	url := "http://" + net.JoinHostPort(p.Status.PodIP, strconv.Itoa(proxyPort))
+	for i := range pod.Spec.Containers {
+		env := pod.Spec.Containers[i].Env
+		for j := range env {
+			switch env[j].Name {
+			case "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy":
+				env[j].Value = url
+			}
+		}
+	}
+	return nil
 }
 
 // prepareNetwork creates the policy and, for an allowlist, the proxy. The

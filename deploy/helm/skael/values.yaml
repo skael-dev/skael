@@ -21,6 +21,9 @@ server:
   # Any other server variable from the configuration docs. A variable here wins
   # over the Settings page and locks its field.
   env: {}
+  # Placement for the server pod.
+  tolerations: []
+  nodeSelector: {}
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {memory: 512Mi}
@@ -56,6 +59,13 @@ worker:
   hardwareIsolated: false
   networkPolicy: false
   runtimeClass: ""
+  # Placement for the session and proxy pods the driver creates, in the
+  # Kubernetes shape. Needed when every node pool is tainted.
+  sandboxTolerations: []
+  sandboxNodeSelector: {}
+  # Placement for the worker pod itself.
+  tolerations: []
+  nodeSelector: {}
   env: {}
   resources:
     requests: {cpu: 100m, memory: 256Mi}

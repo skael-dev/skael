@@ -123,6 +123,42 @@ func TestSessionPod_AppliesTheRuntimeClassWhenConfigured(t *testing.T) {
 	}
 }
 
+// On a cluster whose every node is tainted, a pod without the toleration never
+// schedules, so the session and its proxy must both carry it.
+func TestSessionAndProxyPods_CarryTheConfiguredPlacement(t *testing.T) {
+	o := enforcedOptions()
+	o.Tolerations = `[{"key":"CriticalAddonsOnly","operator":"Equal","value":"linuxapps","effect":"NoSchedule"}]`
+	o.NodeSelector = `{"agentpool":"evals"}`
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	o = o.withDefaults()
+	n := testNames(t)
+	session, err := SessionPod(baseSpec(), o, n)
+	if err != nil {
+		t.Fatalf("SessionPod: %v", err)
+	}
+	for _, p := range []*corev1.Pod{session, ProxyPod(o, n)} {
+		if len(p.Spec.Tolerations) != 1 || p.Spec.Tolerations[0].Key != "CriticalAddonsOnly" ||
+			p.Spec.Tolerations[0].Value != "linuxapps" || p.Spec.Tolerations[0].Effect != corev1.TaintEffectNoSchedule {
+			t.Errorf("%s: Tolerations = %+v, want the CriticalAddonsOnly=linuxapps:NoSchedule toleration", p.Name, p.Spec.Tolerations)
+		}
+		if p.Spec.NodeSelector["agentpool"] != "evals" {
+			t.Errorf("%s: NodeSelector = %v, want agentpool=evals", p.Name, p.Spec.NodeSelector)
+		}
+	}
+}
+
+func TestSessionPod_SetsNoPlacementByDefault(t *testing.T) {
+	p, err := SessionPod(baseSpec(), enforcedOptions().withDefaults(), testNames(t))
+	if err != nil {
+		t.Fatalf("SessionPod: %v", err)
+	}
+	if p.Spec.Tolerations != nil || p.Spec.NodeSelector != nil {
+		t.Errorf("Tolerations = %v, NodeSelector = %v, want neither", p.Spec.Tolerations, p.Spec.NodeSelector)
+	}
+}
+
 func TestSessionPod_PointsTheAllowlistRunAtTheProxyPod(t *testing.T) {
 	rs := baseSpec()
 	rs.Network = sandbox.NetAllowlist

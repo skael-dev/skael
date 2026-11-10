@@ -290,6 +290,8 @@ The driver uses a published image and builds none. The default is the image the 
 | `SANDBOX_K8S_IMAGE` | env only | `the published whetstone base image` | The image a session pod runs. It must already be in a registry. |
 | `SANDBOX_K8S_PULL_SECRET` | env only | — | An image pull secret in the namespace, for a private registry. |
 | `SANDBOX_K8S_RUNTIME_CLASS` | env only | — | runtimeClassName for a hardware-isolated runtime, for example kata. |
+| `SANDBOX_K8S_TOLERATIONS` | env only | — | Tolerations for session and proxy pods, as a JSON list in the Kubernetes shape, for example [{"key":"dedicated","operator":"Equal","value":"evals","effect":"NoSchedule"}]. |
+| `SANDBOX_K8S_NODE_SELECTOR` | env only | — | Node labels session and proxy pods must match, as a JSON object, for example {"agentpool":"evals"}. |
 | `SANDBOX_K8S_HARDWARE_ISOLATED` | env only | — | Asserts the runtime is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
 | `SANDBOX_K8S_NETWORK_POLICY` | env only | — | Asserts the cluster's CNI enforces NetworkPolicy. Check it with whetstone doctor --check-egress. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
 

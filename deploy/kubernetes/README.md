@@ -46,6 +46,8 @@ driver has no build step to install it into.
 | `SANDBOX_K8S_IMAGE` | no | the published whetstone base image | Image a session pod runs. Must already be in a registry — this driver resolves an image, it does not build one |
 | `SANDBOX_K8S_PULL_SECRET` | no | — | Name of an image pull secret in `SANDBOX_K8S_NAMESPACE`, for a private registry |
 | `SANDBOX_K8S_RUNTIME_CLASS` | no | — | `runtimeClassName` set on session pods, for example `kata`, for a hardware-isolated runtime |
+| `SANDBOX_K8S_TOLERATIONS` | no | — | Tolerations for session and proxy pods, as a JSON list in the Kubernetes shape, for example `[{"key":"dedicated","operator":"Equal","value":"evals","effect":"NoSchedule"}]`. Needed when every node pool is tainted. Malformed JSON stops the worker at start |
+| `SANDBOX_K8S_NODE_SELECTOR` | no | — | Node labels session and proxy pods must match, as a JSON object, for example `{"agentpool":"evals"}`. Malformed JSON stops the worker at start |
 | `SANDBOX_K8S_HARDWARE_ISOLATED` | no | unset | Asserts the runtime is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted, and the driver refuses a run that needs isolation |
 | `SANDBOX_K8S_NETWORK_POLICY` | no | unset | Asserts the cluster's CNI enforces `NetworkPolicy`. Accepted only as the exact lowercase string `true`; any other value reads as unasserted, and the driver refuses a run that restricts the network |
 
