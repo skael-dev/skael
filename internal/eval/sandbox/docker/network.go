@@ -44,11 +44,11 @@ const proxyReadyFile = "/tmp/proxy-ready"
 // proxyConfPath and proxyFilterPath are where prepareAllowlist writes the
 // rendered configuration inside the container. They are the base image's own
 // tinyproxy paths, deliberately: imagespec.ProxyConfig's rendered config
-// already says `Filter "/etc/tinyproxy/filter"`, so writing the filter there
+// already says `Filter "/usr/share/tinyproxy/filter"`, so writing the filter there
 // needs no path rewriting inside the container.
 const (
 	proxyConfPath   = "etc/tinyproxy/tinyproxy.conf"
-	proxyFilterPath = "etc/tinyproxy/filter"
+	proxyFilterPath = "usr/share/tinyproxy/filter"
 )
 
 const proxyEntrypoint = `while [ ! -e ` + proxyReadyFile + ` ]; do sleep 0.1; done

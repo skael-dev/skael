@@ -1,4 +1,7 @@
-# Rendered per run. The filter is default-deny: a domain absent from the
+# Rendered per run. The filter lives under /usr/share/tinyproxy because the
+# AppArmor profile Ubuntu ships for tinyproxy allows reading only
+# /etc/tinyproxy/tinyproxy.conf and /usr/share/tinyproxy/*.
+# The filter is default-deny: a domain absent from the
 # allowlist is refused, so a skill's outbound attempt is a refusal to observe
 # rather than a connection to discover afterwards.
 User nobody
@@ -8,7 +11,7 @@ Listen 0.0.0.0
 Timeout 600
 LogLevel Warning
 MaxClients 32
-Filter "/etc/tinyproxy/filter"
+Filter "/usr/share/tinyproxy/filter"
 FilterDefaultDeny Yes
 # The filter entries are extended regexps (they use "(", ")" and "|" for
 # grouping and alternation); under basic regex those are literal characters

@@ -270,7 +270,7 @@ func TestProxyPod_MountsEachConfigFileBySubPath(t *testing.T) {
 	for _, m := range p.Spec.Containers[0].VolumeMounts {
 		got[m.MountPath] = m.SubPath
 	}
-	if got["/etc/tinyproxy/tinyproxy.conf"] != "tinyproxy.conf" || got["/etc/tinyproxy/filter"] != "filter" || len(got) != 2 {
+	if got["/etc/tinyproxy/tinyproxy.conf"] != "tinyproxy.conf" || got["/usr/share/tinyproxy/filter"] != "filter" || len(got) != 2 {
 		t.Fatalf("proxy mounts = %v, want each file by subPath", got)
 	}
 }
