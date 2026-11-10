@@ -74,23 +74,28 @@ var budgets = map[Tier]tierBudget{
 	TierDeep:  {Evals: 16, Runs: 3, BaselineRuns: 1, Probes: 16, PrimaryOnly: false},
 }
 
-// DefaultPanel is the shipped panel: one member.
+// DefaultPanel is the panel when nobody named one: Anthropic's ids, for a
+// local whetstone run on ANTHROPIC_API_KEY. A worker always receives its panel
+// from the server.
 //
-// Sonnet rather than Opus, because it is what most people running claude-code
-// actually run — so it is a truer measurement, not merely a cheaper one. The
-// floor member joins only at TierDeep: "works on the weakest model" is worth
-// measuring, and it is not worth doubling every score's cost to measure.
+// Sonnet rather than Opus, because it is what most people run — so it is a
+// truer measurement, not merely a cheaper one. The floor member joins only at
+// TierDeep: "works on the weakest model" is worth measuring, and it is not
+// worth doubling every score's cost to measure.
 func DefaultPanel() Panel {
-	return Panel{{Agent: "claude-code", Model: "sonnet", Class: spec.TierStrong}}
+	return Panel{{Agent: Harness, Model: "claude-sonnet-5", Class: spec.TierStrong}}
 }
 
 // DeepPanel adds the floor member.
 func DeepPanel() Panel {
 	return Panel{
-		{Agent: "claude-code", Model: "sonnet", Class: spec.TierStrong},
-		{Agent: "claude-code", Model: "haiku", Class: spec.TierFloor},
+		{Agent: Harness, Model: "claude-sonnet-5", Class: spec.TierStrong},
+		{Agent: Harness, Model: "claude-haiku-4-5", Class: spec.TierFloor},
 	}
 }
+
+// Harness is the one agent every panel member runs in.
+const Harness = "opencode"
 
 // PanelFor returns the shipped panel for a tier.
 func PanelFor(t Tier) Panel {

@@ -61,7 +61,7 @@ func TestCheckPanelHealth(t *testing.T) {
 		if err == nil {
 			t.Fatal("an all-unhealthy panel was allowed to run")
 		}
-		if strings.Contains(err.Error(), provider.BaseURLEnv) {
+		if strings.Contains(err.Error(), "endpoint") {
 			t.Errorf("named a gateway that was never configured: %v", err)
 		}
 	})

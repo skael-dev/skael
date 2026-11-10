@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +96,51 @@ func TestRunEvalWith_ScoresThePassRate(t *testing.T) {
 	}
 	if len(r.Members) == 0 || r.Members[0].Effectiveness != 100 {
 		t.Errorf("members = %+v, want the one member scored 100", r.Members)
+	}
+}
+
+// The Jobs page reads a run's progress from these events: the phases in
+// order, the planned total, and one end per started session.
+func TestRunEvalWith_ReportsItsProgress(t *testing.T) {
+	d, req := evalHarnessFull(t)
+	var mu sync.Mutex
+	var got []whetstone.Progress
+	d.Progress = func(p whetstone.Progress) {
+		mu.Lock()
+		got = append(got, p)
+		mu.Unlock()
+	}
+	if _, err := whetstone.RunEvalWith(context.Background(), d, req); err != nil {
+		t.Fatalf("RunEvalWith: %v", err)
+	}
+	var phases []string
+	total, starts, ends, grades := 0, 0, 0, 0
+	for _, p := range got {
+		switch p.Kind {
+		case "phase":
+			phases = append(phases, p.Phase)
+		case "plan":
+			total = p.Total
+		case "session_start":
+			starts++
+		case "session_end":
+			ends++
+			if !p.OK || p.Model == "" || p.Task == "" {
+				t.Errorf("session end = %+v", p)
+			}
+		case "grade":
+			grades++
+		}
+	}
+	want := []string{whetstone.PhasePreparing, whetstone.PhaseHealth, whetstone.PhaseSessions, whetstone.PhaseGrading}
+	if !slices.Equal(phases, want) {
+		t.Errorf("phases = %v, want %v", phases, want)
+	}
+	if total == 0 || starts != total || ends != total {
+		t.Errorf("plan %d, starts %d, ends %d: every planned session must start and end once", total, starts, ends)
+	}
+	if grades == 0 {
+		t.Error("no grade events")
 	}
 }
 
@@ -267,7 +314,7 @@ func newEvalHarness(t *testing.T, tier runner.Tier, evalCount int, void map[int]
 	seedSkill(t, st, "demo", evalCount, void)
 
 	adapters := func(name string) (agent.Adapter, bool) {
-		if name == "claude-code" {
+		if name == "opencode" {
 			return fakeAdapter{}, true
 		}
 		return nil, false
@@ -278,6 +325,7 @@ func newEvalHarness(t *testing.T, tier runner.Tier, evalCount int, void map[int]
 		Driver:        fakeDriver{},
 		Gateway:       scriptedGateway{},
 		Adapters:      adapters,
+		MemberAuth:    func(_, _ string) ([]string, bool) { return []string{"SKAEL_PROVIDER_KEY=k"}, true },
 		Now:           func() time.Time { return time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC) },
 		Sleep:         func(time.Duration) {},
 		EngineVersion: "test-engine",
@@ -369,7 +417,7 @@ func (fakeDriver) Run(context.Context, sandbox.RunSpec) (sandbox.RunResult, erro
 
 type fakeAdapter struct{}
 
-func (fakeAdapter) Name() string { return "claude-code" }
+func (fakeAdapter) Name() string { return "opencode" }
 func (fakeAdapter) Caps() agent.Caps {
 	return agent.Caps{EventTier: "A", ModelFlag: "--model", SkillDir: ".claude/skills", SupportsSkillInvocation: true}
 }

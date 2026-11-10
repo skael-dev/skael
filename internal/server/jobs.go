@@ -39,6 +39,28 @@ type evalLeaseReapArgs struct{}
 
 func (evalLeaseReapArgs) Kind() string { return "eval_lease_reap" }
 
+type evalEventPruneArgs struct{}
+
+func (evalEventPruneArgs) Kind() string { return "eval_event_prune" }
+
+// evalEventPruneWorker drops the job events of jobs that finished more than
+// evalqueue.EventRetention ago. The job rows stay.
+type evalEventPruneWorker struct {
+	river.WorkerDefaults[evalEventPruneArgs]
+	queue *evalqueue.PoolExecutor
+}
+
+func (w *evalEventPruneWorker) Work(ctx context.Context, _ *river.Job[evalEventPruneArgs]) error {
+	n, err := w.queue.PruneEvents(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		log.Info().Int64("deleted", n).Msg("eval queue: pruned the events of old finished jobs")
+	}
+	return nil
+}
+
 type eventRetentionArgs struct{}
 
 func (eventRetentionArgs) Kind() string { return "event_retention" }
@@ -88,6 +110,7 @@ func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *ana
 	workers := river.NewWorkers()
 	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), func() bool { return live.Get().Bool("webhooks.allow_private") }))
 	river.AddWorker(workers, &evalLeaseReapWorker{queue: evalqueue.NewPool(pool)})
+	river.AddWorker(workers, &evalEventPruneWorker{queue: evalqueue.NewPool(pool)})
 	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: func() int { return live.Get().Int("event_retention_days") }})
 	river.AddWorker(workers, &gitsync.SyncWorker{Syncer: syncer})
 	river.AddWorker(workers, &gitsync.SyncAllWorker{Store: syncer.Store()})
@@ -100,6 +123,9 @@ func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *ana
 			func() (river.JobArgs, *river.InsertOpts) { return gitsync.SyncAllArgs{}, nil }, nil),
 		river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return eventRetentionArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true}),
+		river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return evalEventPruneArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true}),
 		river.NewPeriodicJob(river.PeriodicInterval(onboarding.PingInterval),
 			func() (river.JobArgs, *river.InsertOpts) { return pingArgs{}, nil },

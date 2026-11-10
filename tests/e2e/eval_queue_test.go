@@ -647,7 +647,7 @@ func TestEvalQueue_APanelModelChosenInTheUIReachesTheWorkerAndTheRecord(t *testi
 	if rec.ModelPanel[0].Model != "haiku" {
 		t.Errorf("stored model = %q, want haiku: the score is attributed to a model nobody chose", rec.ModelPanel[0].Model)
 	}
-	if rec.ModelPanel[0].Agent != "claude-code" {
+	if rec.ModelPanel[0].Agent != "opencode" {
 		t.Errorf("stored agent = %q, want the default adapter filled in", rec.ModelPanel[0].Agent)
 	}
 }

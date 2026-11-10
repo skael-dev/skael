@@ -40,7 +40,7 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 	}
 	if len(rs.Mounts) > 0 {
 		return sandbox.RunResult{}, fmt.Errorf(
-			"northflank: run declares %d host mounts, and a remote sandbox has no host to mount from. Supply agent credentials as environment variables instead (CLAUDE_CODE_OAUTH_TOKEN)", len(rs.Mounts))
+			"northflank: run declares %d host mounts, and a remote sandbox has no host to mount from. A session receives its provider key as an environment variable", len(rs.Mounts))
 	}
 	// createSandbox always uses the driver's own configured image; it never
 	// looks at rs.Image. That is correct only because Prepare returns

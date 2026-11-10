@@ -702,3 +702,41 @@ func TestComplete_CancelledContextEndsTheLoopWithoutSleeping(t *testing.T) {
 		t.Errorf("slept %d times after a cancellation, want 0", sleeps)
 	}
 }
+
+// A judge on OpenAI, OpenRouter or Azure speaks Chat Completions: the path,
+// the auth header and the response shape all differ from Anthropic's.
+func TestComplete_OpenAIFormat(t *testing.T) {
+	var path, auth, apiKey string
+	var body map[string]any
+	s := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		path, auth, apiKey = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("api-key")
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = io.WriteString(w, `{"model":"gpt-x","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}]}`)
+	})
+	g := gateway(t, s.URL+"/v1", func(o *api.Options) { o.Format = api.FormatOpenAI; o.StrongModel = "gpt-x" })
+	res, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if path != "/v1/chat/completions" || auth != "Bearer sk-test" || res.Text != `{"ok":true}` || res.Model != "gpt-x" || body["model"] != "gpt-x" {
+		t.Errorf("path %q auth %q text %q model %q body %v", path, auth, res.Text, res.Model, body)
+	}
+
+	g = gateway(t, s.URL+"/openai/v1", func(o *api.Options) { o.Format = api.FormatOpenAI; o.AuthHeader = "api-key" })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "z"}); err != nil {
+		t.Fatal(err)
+	}
+	if apiKey != "sk-test" || auth != "" {
+		t.Errorf("a named header must carry the key alone: api-key %q Authorization %q", apiKey, auth)
+	}
+}
+
+func TestComplete_OpenAIFormatReportsTruncation(t *testing.T) {
+	s := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"a\":"},"finish_reason":"length"}]}`)
+	})
+	g := gateway(t, s.URL, func(o *api.Options) { o.Format = api.FormatOpenAI })
+	if _, err := g.Complete(context.Background(), llm.Req{Role: "x", Prompt: "y"}); err == nil || !strings.Contains(err.Error(), "truncat") {
+		t.Fatalf("err = %v, want truncation", err)
+	}
+}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,6 +53,12 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return sandbox.RunResult{}, err
 	}
 	defer cleanup()
+
+	if rs.Network == sandbox.NetAllowlist {
+		if err := d.pointAtProxy(ctx, pod, n.Proxy); err != nil {
+			return sandbox.RunResult{}, err
+		}
+	}
 
 	if _, err := d.cs.CoreV1().Pods(d.o.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return sandbox.RunResult{}, fmt.Errorf("kubernetes: creating the session pod: %w", err)
@@ -101,6 +110,30 @@ func (d *Driver) Run(ctx context.Context, rs sandbox.RunSpec) (sandbox.RunResult
 		return res, err
 	}
 	return res, nil
+}
+
+// pointAtProxy aims the session's proxy variables at the running proxy pod's
+// IP. SessionPod names the proxy by its pod name, which cluster DNS does not
+// resolve: it serves Services, not bare pods.
+func (d *Driver) pointAtProxy(ctx context.Context, pod *corev1.Pod, proxyName string) error {
+	p, err := d.cs.CoreV1().Pods(d.o.Namespace).Get(ctx, proxyName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("kubernetes: reading the proxy pod: %w", err)
+	}
+	if p.Status.PodIP == "" {
+		return fmt.Errorf("kubernetes: the proxy pod %s is running but has no IP", proxyName)
+	}
+	url := "http://" + net.JoinHostPort(p.Status.PodIP, strconv.Itoa(proxyPort))
+	for i := range pod.Spec.Containers {
+		env := pod.Spec.Containers[i].Env
+		for j := range env {
+			switch env[j].Name {
+			case "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy":
+				env[j].Value = url
+			}
+		}
+	}
+	return nil
 }
 
 // prepareNetwork creates the policy and, for an allowlist, the proxy. The
@@ -163,7 +196,7 @@ func (d *Driver) waitRunning(ctx context.Context, name string, timeout time.Dura
 		case corev1.PodRunning:
 			return nil
 		case corev1.PodFailed, corev1.PodSucceeded:
-			return fmt.Errorf("kubernetes: pod %s reached %s before it could be used: %s", name, pod.Status.Phase, pod.Status.Reason)
+			return fmt.Errorf("kubernetes: pod %s reached %s before it could be used: %s", name, pod.Status.Phase, failureDetail(pod))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("kubernetes: pod %s was still %s after %s", name, pod.Status.Phase, timeout)
@@ -174,6 +207,25 @@ func (d *Driver) waitRunning(ctx context.Context, name string, timeout time.Dura
 		case <-time.After(d.waitInterval):
 		}
 	}
+}
+
+// failureDetail says why a pod stopped: the pod's own reason and each
+// container's exit, with the log tail the kubelet keeps for a failed
+// container (TerminationMessageFallbackToLogsOnError).
+func failureDetail(pod *corev1.Pod) string {
+	var parts []string
+	if pod.Status.Reason != "" || pod.Status.Message != "" {
+		parts = append(parts, strings.TrimSpace(pod.Status.Reason+" "+pod.Status.Message))
+	}
+	for _, c := range pod.Status.ContainerStatuses {
+		if t := c.State.Terminated; t != nil {
+			parts = append(parts, fmt.Sprintf("container %s exited %d (%s): %s", c.Name, t.ExitCode, t.Reason, strings.TrimSpace(t.Message)))
+		}
+	}
+	if len(parts) == 0 {
+		return "no reason reported"
+	}
+	return strings.Join(parts, "; ")
 }
 
 // classify turns a setup failure into the right RunResult. A cancelled run

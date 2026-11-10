@@ -20,6 +20,14 @@ Within 0.x minor releases, skael keeps these promises:
 - **API paths keep working.** A path that changes gets a deprecation note first. A new request field is optional, so an older CLI or worker keeps working against a newer server.
 - **Archives stay where they are.** An install that started with archives on the filesystem keeps them there, even though a new install now stores them in Postgres.
 
+### Upgrading to 0.20
+
+- Provider keys move from workers to the server. After the upgrade, **Evaluation** marks each provider "needs a key", and readiness reports `evaluation: degraded`, until you enter its key once.
+- A Claude subscription is no longer a provider. A subscription provider is removed, with any panel that used it; choose a new panel on **Evaluation**.
+- An Anthropic-format gateway on OpenRouter becomes the OpenRouter type. Any other gateway becomes an Anthropic provider at its old URL.
+- Workers stop reading `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `LLM_MODEL` and `CLAUDE_CODE_OAUTH_TOKEN`. Remove them from worker Secrets. A worker needs only `SKAEL_ENDPOINT` and `SKAEL_API_KEY`.
+- The panel runs in OpenCode on the new sandbox image `whetstone-base:2`. Every skill's first score after the upgrade starts a new trend.
+
 ### Upgrading to 0.19
 
 - The first start generates a master key file unless `SKAEL_MASTER_KEYS` is set. Back it up with Postgres; see [Backup & restore](/docs/backup-restore).

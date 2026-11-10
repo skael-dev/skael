@@ -1,65 +1,16 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/skael-dev/skael/internal/eval/llm/api"
+	"github.com/skael-dev/skael/cli/whetstone"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/worker"
 )
-
-func writeFakeExecutable(t *testing.T, path string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho fake\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// With no provider on the server and no key on the worker, a job fails and
-// names the variable to set. The worker still starts: the server's providers
-// may name another credential.
-func TestBackends_AJobWithNoProviderNamesTheMissingKey(t *testing.T) {
-	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
-	t.Setenv("SKAEL_API_KEY", "k")
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("ANTHROPIC_BASE_URL", "")
-	t.Setenv("LLM_MODEL", "")
-
-	cfg, err := configFromEnv()
-	if err != nil {
-		t.Fatalf("the worker refused to start: %v", err)
-	}
-	_, err = newBackends(cfg.Provider).forJob(nil)
-	if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
-		t.Fatalf("the job error does not name the missing variable: %v", err)
-	}
-}
-
-// A subscription gateway is whetstone's affordance, not the worker's: a
-// verified score must come from a metered, reproducible backend.
-func TestBackends_DoNotFallBackToAnAgentCLI(t *testing.T) {
-	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
-	t.Setenv("SKAEL_API_KEY", "k")
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("ANTHROPIC_BASE_URL", "")
-	t.Setenv("LLM_MODEL", "")
-	dir := t.TempDir()
-	writeFakeExecutable(t, filepath.Join(dir, "claude"))
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	cfg, err := configFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := newBackends(cfg.Provider).forJob(nil); err == nil {
-		t.Fatal("the worker accepted a subscription CLI in place of an API key")
-	}
-}
 
 func TestConfigFromEnv_RequiresAnEndpointAndKey(t *testing.T) {
 	t.Setenv("SKAEL_ENDPOINT", "")
@@ -96,44 +47,6 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	}
 	if cfg.WorkerID == "" {
 		t.Fatal("worker id defaulted to empty; two anonymous workers cannot be told apart in the lease column")
-	}
-	if cfg.Provider.BaseURL != "" || cfg.Provider.AuthStyle != api.AuthStyleAnthropic || len(cfg.Provider.Models) != 0 {
-		t.Fatalf("gateway overrides = %+v, want all empty/default when unset", cfg.Provider)
-	}
-}
-
-// TestConfigFromEnv_GatewayOverrides pins that ANTHROPIC_BASE_URL,
-// ANTHROPIC_AUTH_TOKEN and LLM_MODEL resolve onto the worker's provider, so an
-// operator can point the judge at an Anthropic-compatible gateway such as
-// OpenRouter and name the models it serves.
-//
-// The bearer header is inferred from the token rather than configured. The
-// worker used to read no token at all, so the documented OpenRouter setup
-// authenticated with the wrong header — that asymmetry is what this covers.
-func TestConfigFromEnv_GatewayOverrides(t *testing.T) {
-	t.Setenv("SKAEL_ENDPOINT", "http://localhost:8080")
-	t.Setenv("SKAEL_API_KEY", "k")
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-or-test")
-	t.Setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api/v1")
-	t.Setenv("LLM_MODEL", "anthropic/claude-opus-4,anthropic/claude-3.5-haiku")
-
-	cfg, err := configFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Provider.BaseURL != "https://openrouter.ai/api/v1" {
-		t.Errorf("BaseURL = %q", cfg.Provider.BaseURL)
-	}
-	if cfg.Provider.AuthStyle != api.AuthStyleBearer {
-		t.Errorf("AuthStyle = %q, want bearer for a token", cfg.Provider.AuthStyle)
-	}
-	if cfg.Provider.Key != "sk-or-test" {
-		t.Errorf("Key = %q, want the token", cfg.Provider.Key)
-	}
-	want := []string{"anthropic/claude-opus-4", "anthropic/claude-3.5-haiku"}
-	if !reflect.DeepEqual(cfg.Provider.Models, want) {
-		t.Errorf("Models = %v, want %v", cfg.Provider.Models, want)
 	}
 }
 
@@ -197,74 +110,6 @@ func TestEvalRequestFrom_DefaultsConcurrencyToOne(t *testing.T) {
 	}
 }
 
-// TestEvalDepsFrom_CarriesThePanelSplit guards the realRunner -> EvalDeps hop,
-// the sibling of the RunInput -> EvalRequest hop above and the same failure
-// mode: a field dropped here is not an error but a scored run whose panel
-// nobody chose. PanelExcludeEnv is the one that matters most — lose it and the
-// sandbox is handed the judge's gateway, so a panel meant to run on a
-// subscription silently runs on the gateway instead.
-func TestEvalDepsFrom_CarriesThePanelSplit(t *testing.T) {
-	r := &realRunner{runRoot: "/var/lib/skael/run"}
-	jb := jobBackends{
-		panelModels:     []string{"anthropic/claude-sonnet-5"},
-		panelBase:       "https://openrouter.ai/api",
-		panelExcludeEnv: []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"},
-		memberAuth:      func(_, _ string) ([]string, bool) { return []string{"X=1"}, true },
-		memberProvider:  func(_, _ string) string { return "subscription" },
-	}
-
-	deps := evalDepsFrom(r, jb, nil)
-
-	if !reflect.DeepEqual(deps.PanelExcludeEnv, jb.panelExcludeEnv) {
-		t.Fatalf("PanelExcludeEnv = %v, want %v", deps.PanelExcludeEnv, jb.panelExcludeEnv)
-	}
-	if !reflect.DeepEqual(deps.PanelModels, jb.panelModels) {
-		t.Fatalf("PanelModels = %v, want %v", deps.PanelModels, jb.panelModels)
-	}
-	if deps.PanelBaseURL != jb.panelBase {
-		t.Fatalf("PanelBaseURL = %q, want %q", deps.PanelBaseURL, jb.panelBase)
-	}
-	if deps.WorkspaceRoot != r.runRoot {
-		t.Fatalf("WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, r.runRoot)
-	}
-	if deps.MemberAuth == nil || deps.MemberProvider == nil {
-		t.Fatal("MemberAuth and MemberProvider must reach EvalDeps, or every member runs on the process env")
-	}
-}
-
-// TestBackendsForJob_MapsEachMemberToItsOwnCredential guards the hop from the
-// server's providers to a sandbox's env: a subscription member gets only the
-// OAuth token, and a gateway member gets the gateway and its bearer token.
-func TestBackendsForJob_MapsEachMemberToItsOwnCredential(t *testing.T) {
-	env := map[string]string{"ANTHROPIC_API_KEY": "sk-judge", "CLAUDE_CODE_OAUTH_TOKEN": "oat", "OPENROUTER_API_KEY": "or"}
-	b := &backends{env: func(k string) string { return env[k] }}
-	eval := &evalqueue.EvalConfig{
-		Judge: evalqueue.EvalBackend{Provider: "Anthropic", Adapter: "anthropic", CredentialEnv: "ANTHROPIC_API_KEY", Model: "claude-opus-5"},
-		Members: []evalqueue.EvalBackend{
-			{Provider: "Claude subscription", Adapter: "subscription", CredentialEnv: "CLAUDE_CODE_OAUTH_TOKEN", Model: "sonnet"},
-			{Provider: "OpenRouter", Adapter: "gateway", BaseURL: "https://openrouter.ai/api", AuthStyle: "bearer", CredentialEnv: "OPENROUTER_API_KEY", Model: "anthropic/claude-haiku-4.5"},
-		},
-	}
-	jb, err := b.forJob(eval)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := jb.memberAuth("claude-code", "sonnet"); !reflect.DeepEqual(got, []string{"CLAUDE_CODE_OAUTH_TOKEN=oat"}) {
-		t.Fatalf("subscription member env = %v", got)
-	}
-	if got, _ := jb.memberAuth("claude-code", "anthropic/claude-haiku-4.5"); !reflect.DeepEqual(got, []string{"ANTHROPIC_BASE_URL=https://openrouter.ai/api", "ANTHROPIC_AUTH_TOKEN=or"}) {
-		t.Fatalf("gateway member env = %v", got)
-	}
-	if got := jb.memberProvider("claude-code", "anthropic/claude-haiku-4.5"); got != "gateway:openrouter.ai" {
-		t.Fatalf("gateway member label = %q", got)
-	}
-
-	delete(env, "OPENROUTER_API_KEY")
-	if _, err := b.forJob(eval); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
-		t.Fatalf("a missing credential must name its variable, got %v", err)
-	}
-}
-
 // TestJudgeGatewayOptions_RetriesAreSet guards the defect where the worker's
 // judge made exactly one attempt, so one 429 threw away a whole panel run.
 func TestJudgeGatewayOptions_RetriesAreSet(t *testing.T) {
@@ -274,5 +119,56 @@ func TestJudgeGatewayOptions_RetriesAreSet(t *testing.T) {
 	}
 	if o.Timeout != judgeTimeout {
 		t.Errorf("Timeout = %s, want %s", o.Timeout, judgeTimeout)
+	}
+}
+
+// A job claimed while the server has no panel fails naming where to fix it.
+func TestForJob_WithNoPanelNamesSettings(t *testing.T) {
+	if _, err := forJob(nil); err == nil || !strings.Contains(err.Error(), "Settings → Evaluation") {
+		t.Fatalf("forJob(nil) = %v, want it to name Settings → Evaluation", err)
+	}
+}
+
+// The claim carries each provider's key. Each member's session gets its own
+// provider's config and key, and a member whose provider has no key fails the
+// job naming that provider.
+func TestForJob_GivesEachMemberItsOwnProvider(t *testing.T) {
+	eval := &evalqueue.EvalConfig{
+		Judge: evalqueue.EvalBackend{Provider: "Anthropic", Type: "anthropic", Credential: "sk-judge", Model: "claude-opus-5-5"},
+		Members: []evalqueue.EvalBackend{
+			{Provider: "Anthropic", Type: "anthropic", Credential: "sk-judge", Model: "claude-sonnet-5-5"},
+			{Provider: "OpenRouter", Type: "openrouter", Credential: "or", Model: "deepseek/deepseek-v4.1-flash"},
+		},
+	}
+	jb, err := forJob(eval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, ok := jb.memberAuth("opencode", "deepseek/deepseek-v4.1-flash")
+	if !ok || !slices.Contains(env, "SKAEL_PROVIDER_KEY=or") || !slices.Contains(env, "SKAEL_PROVIDER_BASE_URL=https://openrouter.ai/api/v1") {
+		t.Fatalf("OpenRouter member env = %v", env)
+	}
+	if env, _ := jb.memberAuth("opencode", "claude-sonnet-5-5"); !slices.Contains(env, "SKAEL_PROVIDER_KEY=sk-judge") {
+		t.Fatalf("Anthropic member env = %v", env)
+	}
+	if got := jb.memberProvider("opencode", "deepseek/deepseek-v4.1-flash"); got != "openrouter" {
+		t.Fatalf("OpenRouter member label = %q", got)
+	}
+
+	eval.Members[1].Credential = ""
+	if _, err := forJob(eval); err == nil || !strings.Contains(err.Error(), "OpenRouter has no key") {
+		t.Fatalf("a member without a key must name its provider, got %v", err)
+	}
+}
+
+// Every evaluation step reaches the server as a job event, with ok set where
+// the step can fail.
+func TestJobEvent_CarriesTheOutcome(t *testing.T) {
+	e := jobEvent(whetstone.Progress{Kind: "session_end", Task: "3", Model: "m", OK: false, Error: "boom", CostUSD: 0.5, Duration: 2 * time.Second})
+	if e.OK == nil || *e.OK || e.Error != "boom" || e.CostUSD != 0.5 || e.DurationMS != 2000 {
+		t.Fatalf("event = %+v", e)
+	}
+	if e := jobEvent(whetstone.Progress{Kind: "phase", Phase: "grading"}); e.OK != nil || e.Phase != "grading" {
+		t.Fatalf("phase event = %+v", e)
 	}
 }

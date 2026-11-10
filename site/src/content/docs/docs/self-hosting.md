@@ -55,12 +55,11 @@ Run it on the host, alongside Compose rather than inside it:
 
 ```bash
 export SKAEL_ENDPOINT=http://localhost:8080
-export SKAEL_API_KEY=<a service account key with the eval:work scope>
-export ANTHROPIC_API_KEY=<your direct Anthropic API key>
+export SKAEL_API_KEY=<a key from Evaluation → Add a worker>
 skael-worker
 ```
 
-This is enough for a VPS: no interactive login step, no credential directory to provision. `ANTHROPIC_API_KEY` covers both the judge and the claude-code panel agent, since the worker forwards it into the sandbox as an environment variable.
+The worker needs nothing else. Provider keys stay on the server, and each job claim carries the keys its judge and panel use.
 
 ### In a container
 
@@ -69,8 +68,7 @@ The worker also ships as an image, published with every release:
 ```bash
 docker run -d \
   -e SKAEL_ENDPOINT=http://localhost:8080 \
-  -e SKAEL_API_KEY=<a service account key with the eval:work scope> \
-  -e ANTHROPIC_API_KEY=<your direct Anthropic API key> \
+  -e SKAEL_API_KEY=<a key from Evaluation → Add a worker> \
   -e WORKER_RUN_ROOT=/var/lib/skael/run \
   -e WORKER_WORK_ROOT=/var/lib/skael/work \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -81,17 +79,15 @@ docker run -d \
 
 `docker compose --profile worker up` runs the same thing from source.
 
-Two rules govern the container, and both are load-bearing. The worker starts sandbox containers as *siblings* through the mounted socket, so the host daemon resolves every bind source. `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must therefore be bound at the **same path on both sides** — never a named volume. Docker creates a missing bind source as an empty directory instead of failing, so a container-local path yields a sandbox with no task and no verifier, which scores as a skill that did nothing. The worker refuses to start containerized unless both are set.
-
-Auth must also arrive as environment variables rather than as a mounted `~/.claude`. A subscription-billed panel works in a container through `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`), which is a token rather than a directory.
+One rule governs the container, and it is load-bearing. The worker starts sandbox containers as *siblings* through the mounted socket, so the host daemon resolves every bind source. `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must therefore be bound at the **same path on both sides** — never a named volume. Docker creates a missing bind source as an empty directory instead of failing, so a container-local path yields a sandbox with no task and no verifier, which scores as a skill that did nothing. The worker refuses to start containerized unless both are set.
 
 ### Worker configuration
 
-The server chooses the judge and the panel on the **Evaluation** page. Pick one of the presets (Anthropic API key, OpenRouter, LiteLLM, or an Anthropic or gateway judge with a Claude subscription panel), then **Add a worker**: it creates a key that can only run eval jobs and shows a Compose, `docker run` or Helm snippet with every variable the worker needs.
+On the **Evaluation** page, choose a provider (OpenRouter, Anthropic, OpenAI, Azure AI Foundry, or another OpenAI-compatible endpoint) and paste its key. The server seals the key under the master key; an `env:NAME` or `file:/path` reference works too. A provider with default models fills an empty panel. Then **Add a worker**: it creates a key that can only run eval jobs and shows a Compose, `docker run` or Helm snippet.
 
-Each worker checks in while it runs. The Evaluation page shows what each worker lacks, such as a missing credential or a sandbox image that differs from the other workers.
+Every panel session runs in OpenCode inside the sandbox, on any provider. Each worker checks in while it runs, and the Evaluation page shows a worker that is offline or on a sandbox image the others do not run.
 
-A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration, and the page marks it as pinned by env. [Configuration](/docs/configuration#worker) lists every worker variable.
+**Evaluation → Jobs** lists every queued, running and recent job with its phase, sessions done, cost and the time since its last event. A running job with no event for 3 minutes shows as stalled. A job's page lists its events, with the provider's own error for each failed session, and a **Stop** button. The worker writes the same events to its log. [Configuration](/docs/configuration#worker) lists every worker variable.
 
 ## Storage
 
@@ -109,7 +105,7 @@ helm upgrade --install skael deploy/helm/skael \
   --set ingress.enabled=true --set ingress.host=skael.example.com --set ingress.tls=true
 ```
 
-The chart generates the master key into a Secret on install, keeps it on upgrade and on uninstall, and runs the server with a read-only root file system. To add workers, create a Secret with `SKAEL_API_KEY` from **Evaluation → Add a worker** and each provider credential, then set `worker.enabled=true` and `worker.existingSecret`.
+The chart generates the master key into a Secret on install, keeps it on upgrade and on uninstall, and runs the server with a read-only root file system. To add workers, create a Secret with `SKAEL_API_KEY` from **Evaluation → Add a worker**, then set `worker.enabled=true` and `worker.existingSecret`. On a cluster whose node pools are tainted, set `worker.sandboxTolerations` and `worker.sandboxNodeSelector` for the session pods, and `tolerations` and `nodeSelector` under `server` and `worker` for their own pods.
 
 ## Object storage (S3-compatible)
 

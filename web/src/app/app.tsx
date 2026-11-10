@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { InstanceSettings } from "@/features/instance-settings/instance-settings";
 import { Evaluation } from "@/features/evaluation/evaluation";
+import { EvalJob, EvalJobs } from "@/features/evaluation/jobs";
 import { ContestPage } from "@/features/contest/contest-page";
 import { ErrorBoundary } from "react-error-boundary";
 import { AuthProvider, useAuth } from "@/app/auth-provider";
@@ -83,6 +84,8 @@ export function App() {
             <Route path="/settings/github" element={<GitHubSettings />} />
             <Route path="/settings/instance" element={<InstanceSettings />} />
             <Route path="/settings/evaluation" element={<Evaluation />} />
+            <Route path="/settings/evaluation/jobs" element={<EvalJobs />} />
+            <Route path="/settings/evaluation/jobs/:id" element={<EvalJob />} />
             <Route path="/git/connections" element={<GitConnections />} />
             <Route path="/git/connections/new" element={<NewGitConnection />} />
             <Route path="/git/connections/:id" element={<GitConnectionPage />} />

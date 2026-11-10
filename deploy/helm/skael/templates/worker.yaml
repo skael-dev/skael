@@ -72,6 +72,12 @@ spec:
         app.kubernetes.io/component: worker
     spec:
       serviceAccountName: {{ include "skael.fullname" . }}-worker
+      {{- with .Values.worker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: worker
           image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
@@ -97,6 +103,14 @@ spec:
             {{- if .Values.worker.runtimeClass }}
             - name: SANDBOX_K8S_RUNTIME_CLASS
               value: {{ .Values.worker.runtimeClass | quote }}
+            {{- end }}
+            {{- with .Values.worker.sandboxTolerations }}
+            - name: SANDBOX_K8S_TOLERATIONS
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.worker.sandboxNodeSelector }}
+            - name: SANDBOX_K8S_NODE_SELECTOR
+              value: {{ toJson . | quote }}
             {{- end }}
             {{- range $k, $v := .Values.worker.env }}
             - name: {{ $k }}

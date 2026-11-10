@@ -9,7 +9,11 @@ var explanations = []struct {
 	match string
 	say   string
 }{
-	{"response truncated at max_tokens",
+	{"has no key; add one in Settings",
+		"A provider the judge or the panel uses has no key. Add it in Settings → Evaluation."},
+	{"no judge and panel are configured",
+		"No judge and panel are set. Add a provider in Settings → Evaluation."},
+	{"response truncated",
 		"The model's reply was too long to complete. This usually clears on a re-run; if it repeats, the skill's description may be too broad to evaluate."},
 	{"too thin to evaluate",
 		"This skill's evaluation suite had too few usable tasks to score. See the suite's checks for which tasks were void and why."},
@@ -19,8 +23,8 @@ var explanations = []struct {
 		"Could not generate an evaluation suite for this skill."},
 	{"recover spec",
 		"Could not work out what this skill does from its SKILL.md, so no evaluation suite could be built."},
-	{"panel health",
-		"The evaluation panel could not start. Check the worker's model configuration."},
+	{"failed its health probe",
+		"The evaluation panel could not start. Check the panel's models and provider keys in Settings → Evaluation; the job's events name the provider's error."},
 }
 
 // Explain reduces a worker's error chain to one sentence. The raw chain is

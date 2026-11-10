@@ -232,16 +232,13 @@ The server writes JSON logs by default. `LOG_FORMAT=pretty` writes colored lines
 
 ### Worker
 
-A worker runs evaluations. The server holds no Docker socket and no LLM key, so evaluations run only on workers. Settings → Workers → Add a worker creates a key and shows the command to start one.
+A worker runs evaluations. The server calls no LLM and holds no Docker socket, so evaluations run only on workers. Evaluation → Add a worker creates a key and shows the command to start one. A worker needs only `SKAEL_ENDPOINT` and `SKAEL_API_KEY`: provider keys stay on the server and reach the worker with each job.
 
 Invalid durations and numbers stop the worker at start with the variable named.
 
 #### Running the worker in a container
 
-With the docker driver, the worker starts sandbox containers as siblings through a mounted `/var/run/docker.sock`. Two rules follow, and both apply to the docker driver only:
-
-- Bind-mount `WORKER_RUN_ROOT` at the same path on both sides, for example `-v /var/lib/skael/run:/var/lib/skael/run`. Session workspaces are bind-mounted into each sandbox, and the host daemon resolves that path. The worker refuses to start in a container without it.
-- Give credentials as environment variables, not as a mounted directory. A Claude subscription works in a container through `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+With the docker driver, the worker starts sandbox containers as siblings through a mounted `/var/run/docker.sock`. Bind-mount `WORKER_RUN_ROOT` at the same path on both sides, for example `-v /var/lib/skael/run:/var/lib/skael/run`. Session workspaces are bind-mounted into each sandbox, and the host daemon resolves that path. The worker refuses to start in a container without it.
 
 | Variable | Where | Default | Description |
 |---|---|---|---|
@@ -255,20 +252,6 @@ With the docker driver, the worker starts sandbox containers as siblings through
 | `WORKER_CONCURRENCY` | env only | `1` | Sandbox sessions at once within one eval. |
 | `WORKER_GRADE_CONCURRENCY` | env only | `8` | Judge calls at once. A judge call is bound by the account's rate limit, not by the host. |
 | `WORKER_CONTEST_PARALLEL` | env only | `2` | Each candidate runs its own sessions, so this multiplies the sandbox load. |
-
-### Worker LLM credentials
-
-The server chooses the judge and the panel. A worker holds only the credentials that the server's providers name, and reports which ones it has.
-
-A worker that sets `ANTHROPIC_BASE_URL` or `LLM_MODEL` keeps its own configuration, and the Workers page marks it as pinned by env.
-
-| Variable | Where | Default | Description |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | env only | — | The credential of the Anthropic API preset, sent as x-api-key. |
-| `ANTHROPIC_AUTH_TOKEN` | env only | — | A gateway credential sent as a bearer token, such as an OpenRouter key. |
-| `ANTHROPIC_BASE_URL` | env only | — | Set on a worker, it pins that worker to its own gateway and the server's providers do not apply to it. |
-| `LLM_MODEL` | env only | — | Set on a worker, it pins that worker's panel, most capable first, and the server's panel does not apply to it. |
-| `CLAUDE_CODE_OAUTH_TOKEN` | env only | — | From claude setup-token. The credential of the Claude subscription provider, for panel members only. |
 
 ### Sandbox driver
 
@@ -290,6 +273,8 @@ The driver uses a published image and builds none. The default is the image the 
 | `SANDBOX_K8S_IMAGE` | env only | `the published whetstone base image` | The image a session pod runs. It must already be in a registry. |
 | `SANDBOX_K8S_PULL_SECRET` | env only | — | An image pull secret in the namespace, for a private registry. |
 | `SANDBOX_K8S_RUNTIME_CLASS` | env only | — | runtimeClassName for a hardware-isolated runtime, for example kata. |
+| `SANDBOX_K8S_TOLERATIONS` | env only | — | Tolerations for session and proxy pods, as a JSON list in the Kubernetes shape, for example [{"key":"dedicated","operator":"Equal","value":"evals","effect":"NoSchedule"}]. |
+| `SANDBOX_K8S_NODE_SELECTOR` | env only | — | Node labels session and proxy pods must match, as a JSON object, for example {"agentpool":"evals"}. |
 | `SANDBOX_K8S_HARDWARE_ISOLATED` | env only | — | Asserts the runtime is hardware-isolated. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
 | `SANDBOX_K8S_NETWORK_POLICY` | env only | — | Asserts the cluster's CNI enforces NetworkPolicy. Check it with whetstone doctor --check-egress. Accepted only as the exact lowercase string `true`; any other value reads as unasserted and the driver refuses a run that needs it. |
 

@@ -1,11 +1,10 @@
 # Recorded fixture provenance
 
-Re-record with `./record.sh`. Never hand-edit the .jsonl files.
-
 | Fixture | CLI | Version | Recorded |
 |---|---|---|---|
-| basic-tools.jsonl | claude | 2.1.220 (Claude Code) | 2026-07-30 |
-| skill-invocation.jsonl | claude | 2.1.220 (Claude Code) | 2026-07-30 |
+| opencode-session.jsonl | opencode | 1.19.5 | 2026-11-10 |
 
-A parser test failing after a CLI upgrade is the intended signal, not a
-flake: re-record, diff the fixture, and fix the mapping.
+Recorded with `opencode run --format json --auto` against OpenRouter, with a
+skill installed. Never hand-edit it. A parser test failing after an OpenCode
+upgrade is the intended signal: record a new session, diff it, and fix the
+mapping.

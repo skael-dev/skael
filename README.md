@@ -212,53 +212,34 @@ whetstone suite push my-skill     # register it with the server as the skill's c
 
 From then on, every `skael publish` for that skill looks up its registered suite and enqueues an evaluation job automatically — publishing never fails because the queue is down or a suite lookup errors; the version is already durable, and an unscored version is a state the product already models.
 
-Jobs sit on the server; nothing evaluates them until a worker is running to claim, execute, and report them back:
+Jobs sit on the server; nothing evaluates them until a worker is running to claim, execute, and report them back. First, on **Evaluation**, choose a provider and paste its key: OpenRouter, Anthropic, OpenAI, Azure AI Foundry, or any OpenAI-compatible endpoint. Then **Add a worker** creates the worker's key:
 
 ```bash
 export SKAEL_ENDPOINT=http://localhost:8080
-export SKAEL_API_KEY=<your-api-key>
-export ANTHROPIC_API_KEY=<your-anthropic-key>   # direct API gateway — never a subscription CLI on PATH
+export SKAEL_API_KEY=<the key from Evaluation → Add a worker>
 skael-worker
 ```
 
-`SKAEL_ENDPOINT`, `SKAEL_API_KEY`, and a credential for the LLM provider are the only strictly required variables — the worker exits at startup naming whichever is missing. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [Configuration](site/src/content/docs/docs/configuration.md#worker-env-vars). The worker also needs a running Docker daemon — it sandboxes every eval run.
+`SKAEL_ENDPOINT` and `SKAEL_API_KEY` are the only required variables — the worker exits at startup naming whichever is missing. Provider keys stay on the server, sealed under the master key, and each job claim carries the keys its judge and panel use. Everything else (`WORKER_ID`, `WORKER_LEASE`, `WORKER_POLL`, `WORKER_WORK_ROOT`, `WORKER_CONCURRENCY`) has a working default; see [Configuration](site/src/content/docs/docs/configuration.md#worker). The worker also needs a sandbox: a Docker daemon by default, or a Kubernetes cluster.
 
 To run the worker in a container instead (Kubernetes, Coolify, or just keeping everything in Compose):
 
 ```bash
-export SKAEL_API_KEY=<your-api-key>
-export ANTHROPIC_API_KEY=<your-anthropic-key>
+export SKAEL_API_KEY=<the key from Evaluation → Add a worker>
 docker compose --profile worker up
 ```
 
-It starts sandbox containers as *siblings* through the host's Docker socket rather than running a daemon of its own. That imposes two requirements, both already wired into `docker-compose.yml`:
-
-- `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume. Session workspaces and the suite's verifier are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
-- Auth must arrive as environment variables rather than a mounted `~/.claude`. All four setups work in a container — Anthropic API key, a Claude subscription for the panel via `CLAUDE_CODE_OAUTH_TOKEN`, OpenRouter for both judge and panel, or OpenRouter for the judge with the subscription for the panel. `docker-compose.yml` carries them all, with the inactive ones commented out.
+It starts sandbox containers as *siblings* through the host's Docker socket rather than running a daemon of its own. So `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume, and `docker-compose.yml` already does it. Session workspaces and the suite's verifier are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
 
 See [Running the worker in a container](site/src/content/docs/docs/configuration.md#running-the-worker-in-a-container).
 
-### The LLM provider
+### The judge, the panel and the harness
 
-Four variables configure every model call, and `skael-worker` and `whetstone` read the same four. The judge that scores a run and the panel agents that attempt the tasks use one gateway; the worker forwards these into the sandbox for the panel.
+The judge grades every run; the panel members attempt the tasks. Each picks a provider and a model on **Evaluation**, with a picker that lists the provider's tool-capable models and accepts any typed id. Every panel session runs in [OpenCode](https://opencode.ai) inside the sandbox, so any provider works for the panel, and the report records the harness version beside each member.
 
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | one of the two | Sent as `x-api-key`. On its own, that is Anthropic's own API |
-| `ANTHROPIC_AUTH_TOKEN` | one of the two | Sent as `Authorization: Bearer`. What OpenRouter and most compatible gateways issue |
-| `ANTHROPIC_BASE_URL` | no | An Anthropic-compatible gateway. It posts to `{base}/v1/messages`, so the base carries no `/v1` |
-| `LLM_MODEL` | with a gateway | Comma-separated model ids, most capable first. The first judges every run and leads the panel; later entries are the panel's floor members, which only the deep tier runs |
+**Evaluation → Jobs** shows each job's phase, sessions done, failures, cost, and the time since its last event; a running job with no event for 3 minutes shows as stalled. A job's page lists its events, including the provider's own error for a failed session, and a **Stop** button. The worker logs the same events.
 
-Four modes follow from those:
-
-1. **Anthropic direct** — set `ANTHROPIC_API_KEY` and nothing else.
-2. **A compatible gateway** — set `ANTHROPIC_BASE_URL`, a credential, and `LLM_MODEL`. `LLM_MODEL` is not optional here: a gateway that namespaces its identifiers (`anthropic/claude-sonnet-5`) answers Anthropic's own names with a 404, and every panel member then fails its health probe.
-3. **Your Claude subscription** — set nothing and let `whetstone` use the `claude` CLI on your PATH. `skael-worker` never does this: a published score must come from a metered, reproducible backend.
-4. **Split** — mode 2, plus `CLAUDE_CODE_OAUTH_TOKEN`. The judge keeps the gateway and the panel runs on the subscription.
-
-The auth header is inferred from which credential you set, so there is nothing to keep in sync. `whetstone doctor` prints what resolved, and the worker logs the same words at startup.
-
-`CLAUDE_CODE_OAUTH_TOKEN` (generate it with `claude setup-token`) bills the panel agents to a Claude subscription rather than per call. The judge still needs one of the two credentials above, in every mode. Beside a gateway it also selects mode 4: the worker withholds the gateway variables from the sandbox, so the panel cannot follow the judge onto it, and the panel asks for the shipped alias rather than the gateway's namespaced ids. That is a local and small-team setup — the panel is recorded in `model_panel`, so turning it on splits a skill's score trend. See [Quality scoring](https://skael.dev/docs/quality) for what changing the judge or the panel does to score comparability.
+`whetstone` on a developer machine reads `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, an optional `ANTHROPIC_BASE_URL`, and `LLM_MODEL` instead; see [whetstone](https://skael.dev/docs/whetstone). See [Quality scoring](https://skael.dev/docs/quality) for what changing the judge or the panel does to score comparability.
 
 Once a job completes, `GET /api/skills/{name}/quality` returns the most recent score; `.../quality/history` returns the full history, newest first. Until then, that endpoint 404s — there's no "pending" score record, just none yet (the publish response does carry a `quality.state` of `"pending"` with the job's ID while it's in flight, versus `"none"` when no suite is registered at all).
 

@@ -2,7 +2,7 @@ package agent
 
 // Get returns the adapter named name.
 func Get(name string) (Adapter, bool) {
-	if name == (&ClaudeCode{}).Name() {
+	if name == (&OpenCode{}).Name() {
 		return New(), true
 	}
 	return nil, false

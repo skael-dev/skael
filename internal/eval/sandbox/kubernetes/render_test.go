@@ -106,8 +106,8 @@ func TestSessionPod_RefusesHostMounts(t *testing.T) {
 	rs := baseSpec()
 	rs.Mounts = []sandbox.Mount{{HostPath: "/home/u/.claude", ContainerPath: "/home/runner/.claude", ReadOnly: true}}
 	_, err := SessionPod(rs, validOptions().withDefaults(), testNames(t))
-	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
-		t.Fatalf("SessionPod = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
+	if err == nil || !strings.Contains(err.Error(), "host mounts") {
+		t.Fatalf("SessionPod = %v, want a refusal of host mounts", err)
 	}
 }
 
@@ -120,6 +120,42 @@ func TestSessionPod_AppliesTheRuntimeClassWhenConfigured(t *testing.T) {
 	}
 	if p.Spec.RuntimeClassName == nil || *p.Spec.RuntimeClassName != "kata" {
 		t.Errorf("RuntimeClassName = %v, want kata", p.Spec.RuntimeClassName)
+	}
+}
+
+// On a cluster whose every node is tainted, a pod without the toleration never
+// schedules, so the session and its proxy must both carry it.
+func TestSessionAndProxyPods_CarryTheConfiguredPlacement(t *testing.T) {
+	o := enforcedOptions()
+	o.Tolerations = `[{"key":"CriticalAddonsOnly","operator":"Equal","value":"linuxapps","effect":"NoSchedule"}]`
+	o.NodeSelector = `{"agentpool":"evals"}`
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	o = o.withDefaults()
+	n := testNames(t)
+	session, err := SessionPod(baseSpec(), o, n)
+	if err != nil {
+		t.Fatalf("SessionPod: %v", err)
+	}
+	for _, p := range []*corev1.Pod{session, ProxyPod(o, n)} {
+		if len(p.Spec.Tolerations) != 1 || p.Spec.Tolerations[0].Key != "CriticalAddonsOnly" ||
+			p.Spec.Tolerations[0].Value != "linuxapps" || p.Spec.Tolerations[0].Effect != corev1.TaintEffectNoSchedule {
+			t.Errorf("%s: Tolerations = %+v, want the CriticalAddonsOnly=linuxapps:NoSchedule toleration", p.Name, p.Spec.Tolerations)
+		}
+		if p.Spec.NodeSelector["agentpool"] != "evals" {
+			t.Errorf("%s: NodeSelector = %v, want agentpool=evals", p.Name, p.Spec.NodeSelector)
+		}
+	}
+}
+
+func TestSessionPod_SetsNoPlacementByDefault(t *testing.T) {
+	p, err := SessionPod(baseSpec(), enforcedOptions().withDefaults(), testNames(t))
+	if err != nil {
+		t.Fatalf("SessionPod: %v", err)
+	}
+	if p.Spec.Tolerations != nil || p.Spec.NodeSelector != nil {
+		t.Errorf("Tolerations = %v, NodeSelector = %v, want neither", p.Spec.Tolerations, p.Spec.NodeSelector)
 	}
 }
 
@@ -222,5 +258,19 @@ func TestProxyConfigMap_CarriesBothRenderedHalves(t *testing.T) {
 	}
 	if !matched {
 		t.Errorf("filter does not carry the allowed domain: %q", filter)
+	}
+}
+
+// An Ubuntu host's AppArmor profile for tinyproxy denies reading through a
+// ConfigMap directory's "..<date>" symlink target, so the proxy must mount
+// each file by subPath at the exact path its config names.
+func TestProxyPod_MountsEachConfigFileBySubPath(t *testing.T) {
+	p := ProxyPod(enforcedOptions().withDefaults(), testNames(t))
+	got := map[string]string{}
+	for _, m := range p.Spec.Containers[0].VolumeMounts {
+		got[m.MountPath] = m.SubPath
+	}
+	if got["/etc/tinyproxy/tinyproxy.conf"] != "tinyproxy.conf" || got["/usr/share/tinyproxy/filter"] != "filter" || len(got) != 2 {
+		t.Fatalf("proxy mounts = %v, want each file by subPath", got)
 	}
 }

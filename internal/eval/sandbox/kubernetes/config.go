@@ -8,8 +8,11 @@
 package kubernetes
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 )
@@ -25,6 +28,11 @@ type Options struct {
 	Image        string
 	PullSecret   string
 	RuntimeClass string
+
+	// Tolerations and NodeSelector are JSON in the Kubernetes shape, kept raw
+	// so the resolve package does not import k8s.io/*. Validate parses them.
+	Tolerations  string
+	NodeSelector string
 
 	HardwareIsolated      bool
 	NetworkPolicyEnforced bool
@@ -46,7 +54,27 @@ func (o Options) Validate() error {
 	if o.HardwareIsolated && o.RuntimeClass == "" {
 		return errors.New("kubernetes: SANDBOX_K8S_HARDWARE_ISOLATED is set without SANDBOX_K8S_RUNTIME_CLASS; the driver cannot tell an isolated runtime from a shared-kernel one by name alone")
 	}
+	if _, _, err := o.scheduling(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// scheduling parses the placement both pods share.
+func (o Options) scheduling() ([]corev1.Toleration, map[string]string, error) {
+	var tolerations []corev1.Toleration
+	if o.Tolerations != "" {
+		if err := json.Unmarshal([]byte(o.Tolerations), &tolerations); err != nil {
+			return nil, nil, fmt.Errorf(`kubernetes: SANDBOX_K8S_TOLERATIONS is not a JSON list of tolerations, such as [{"key":"dedicated","operator":"Equal","value":"evals","effect":"NoSchedule"}]: %w`, err)
+		}
+	}
+	var nodeSelector map[string]string
+	if o.NodeSelector != "" {
+		if err := json.Unmarshal([]byte(o.NodeSelector), &nodeSelector); err != nil {
+			return nil, nil, fmt.Errorf(`kubernetes: SANDBOX_K8S_NODE_SELECTOR is not a JSON object of labels, such as {"agentpool":"evals"}: %w`, err)
+		}
+	}
+	return tolerations, nodeSelector, nil
 }
 
 // CheckNetwork refuses a policy this cluster cannot be shown to enforce.

@@ -24,16 +24,9 @@ type RawStream = io.Reader
 
 // Caps describes what an adapter can do.
 type Caps struct {
-	EventTier string
-	ModelFlag string
-	SkillDir  string
-	// AuthDirs are host paths the sandbox mounts read-only for subscription
-	// auth. Local-development convenience only — does not work on headless
-	// workers, and carries nothing on macOS where the CLI uses the Keychain.
-	AuthDirs []string
-	// AuthEnv is preferred over AuthDirs: it works on a headless host with no
-	// interactive login. The runner forwards any of these that are set.
-	AuthEnv                 []string
+	EventTier               string
+	ModelFlag               string
+	SkillDir                string
 	SupportsSkillInvocation bool
 }
 
@@ -54,12 +47,12 @@ type Meta struct {
 	NumTurns          int
 	VisibleSkills     []string
 	PermissionDenials []string
-	RateLimited       bool
-	// RateLimitUtilization is the highest window utilization seen, 0 when never
-	// reported, so an approaching limit is visible before it fails sessions.
-	RateLimitUtilization float64
-	RateLimitWindow      string
-	IsError              bool
+	// CostUSD is what the provider charged, as the harness priced it. Zero
+	// when the model had no price in the session config.
+	CostUSD float64
+	IsError bool
+	// Error is the harness's own message for the first error it reported.
+	Error string
 }
 
 // Result is a parsed session.

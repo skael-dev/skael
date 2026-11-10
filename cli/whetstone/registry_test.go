@@ -16,8 +16,8 @@ func TestAdapterRegistry_IsCompleteAtTheCLIEntrypoint(t *testing.T) {
 	if len(all) != 1 {
 		t.Fatalf("%d adapters registered, want 1: %v", len(all), names(all))
 	}
-	if _, ok := agent.Get("claude-code"); !ok {
-		t.Error("adapter \"claude-code\" does not resolve; its blank import is missing from cli/whetstone")
+	if _, ok := agent.Get("opencode"); !ok {
+		t.Error("adapter \"opencode\" does not resolve; its blank import is missing from cli/whetstone")
 	}
 }
 

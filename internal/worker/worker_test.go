@@ -107,6 +107,7 @@ type fakeAPI struct {
 	t *testing.T
 
 	mu              sync.Mutex
+	events          []evalqueue.EvalJobEvent
 	queue           []evalqueue.Job
 	reported        *report.Report
 	contestReports  map[string]*report.Report
@@ -196,6 +197,13 @@ func (f *fakeAPI) FailJob(_ context.Context, _ evalqueue.JobID, _, cause string)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failCause = cause
+	return nil
+}
+
+func (f *fakeAPI) PostEvents(_ context.Context, _ evalqueue.JobID, _ string, events []evalqueue.EvalJobEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, events...)
 	return nil
 }
 

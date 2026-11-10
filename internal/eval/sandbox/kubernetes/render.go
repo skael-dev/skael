@@ -81,7 +81,7 @@ func SessionPod(rs sandbox.RunSpec, o Options, n names) (*corev1.Pod, error) {
 		return nil, err
 	}
 	if len(rs.Mounts) > 0 {
-		return nil, fmt.Errorf("kubernetes: run declares %d host mounts, and a pod has no host to mount from. Supply agent credentials as environment variables instead (CLAUDE_CODE_OAUTH_TOKEN)", len(rs.Mounts))
+		return nil, fmt.Errorf("kubernetes: run declares %d host mounts, and a pod has no host to mount from. A session receives its provider key as an environment variable", len(rs.Mounts))
 	}
 	if err := o.CheckNetwork(rs.Network); err != nil {
 		return nil, err
@@ -149,11 +149,20 @@ func ProxyPod(o Options, n names) *corev1.Pod {
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			Containers: []corev1.Container{{
-				Name:         "proxy",
-				Image:        o.Image,
-				Command:      []string{"tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"},
-				Ports:        []corev1.ContainerPort{{ContainerPort: proxyPort}},
-				VolumeMounts: []corev1.VolumeMount{{Name: "config", MountPath: "/etc/tinyproxy"}},
+				Name:    "proxy",
+				Image:   o.Image,
+				Command: []string{"tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"},
+				// A failed proxy's last log lines become its termination
+				// message, which the driver reports.
+				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				Ports:                    []corev1.ContainerPort{{ContainerPort: proxyPort}},
+				// Each file by subPath, at the two paths Ubuntu's AppArmor profile
+				// for tinyproxy lets it read. A ConfigMap directory reaches its
+				// files through a "..<date>" directory the profile denies.
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "config", MountPath: "/etc/tinyproxy/tinyproxy.conf", SubPath: "tinyproxy.conf", ReadOnly: true},
+					{Name: "config", MountPath: "/usr/share/tinyproxy/filter", SubPath: "filter", ReadOnly: true},
+				},
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: boolPtr(false),
 					Capabilities: &corev1.Capabilities{
@@ -184,6 +193,8 @@ func applySharedPodSettings(s *corev1.PodSpec, o Options) {
 	if o.PullSecret != "" {
 		s.ImagePullSecrets = []corev1.LocalObjectReference{{Name: o.PullSecret}}
 	}
+	// Validate has already refused malformed placement.
+	s.Tolerations, s.NodeSelector, _ = o.scheduling()
 }
 
 // ProxyConfigMap splits imagespec's rendered proxy configuration into the two

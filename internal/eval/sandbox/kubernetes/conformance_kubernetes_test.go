@@ -77,3 +77,38 @@ func TestKubernetesDriver_ActuallyBlocksEgressUnderNetNone(t *testing.T) {
 		t.Fatal("the run reached the network under NetNone: this cluster's CNI does not enforce NetworkPolicy, and every restricted session here is unrestricted")
 	}
 }
+
+// Real sessions run under NetAllowlist, through a proxy pod. The session must
+// reach an allowed domain through it and nothing else. Before the proxy was
+// addressed by pod IP, the session could not resolve the proxy at all, and
+// every real evaluation on Kubernetes failed while NetFull and NetNone passed.
+func TestKubernetesDriver_AllowlistReachesOnlyTheAllowedDomain(t *testing.T) {
+	d := clusterDriver(t)
+	img, err := d.Prepare(context.Background(), sandbox.EnvSpec{Skill: "allowlist"})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	run := func(url string) (int, string) {
+		t.Helper()
+		var stderr strings.Builder
+		res, err := d.Run(context.Background(), sandbox.RunSpec{
+			Image:     img,
+			Workspace: t.TempDir(),
+			Argv:      []string{"sh", "-c", "curl -sS -m 20 -o /dev/null " + url},
+			Network:   sandbox.NetAllowlist,
+			Allow:     []string{"example.com"},
+			Timeout:   3 * time.Minute,
+			Stderr:    &stderr,
+		})
+		if err != nil {
+			t.Fatalf("Run %s: %v", url, err)
+		}
+		return res.ExitCode, stderr.String()
+	}
+	if code, stderr := run("https://example.com"); code != 0 {
+		t.Fatalf("an allowed domain was unreachable through the proxy: exit %d: %s", code, stderr)
+	}
+	if code, _ := run("https://example.org"); code == 0 {
+		t.Fatal("a domain outside the allowlist was reachable")
+	}
+}

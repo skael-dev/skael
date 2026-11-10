@@ -30,6 +30,10 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	events := newEventSink(w.api, job.ID, token)
+	defer events.Close()
+	runCtx = withEvents(runCtx, events.Add)
+	events.Add(phase("fetching"))
 
 	leaseLost := make(chan struct{})
 	var hbWG sync.WaitGroup
@@ -124,6 +128,8 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 
 	// Only what this claim measured. The server keeps each reused report it
 	// offered for a candidate missing here.
+	events.Add(phase("reporting"))
+	events.Close()
 	if err := w.api.PostContestReport(ctx, job.ContestID, job.ID, token, reports); err != nil {
 		return fmt.Errorf("worker: post contest report: %w", err)
 	}
@@ -232,11 +238,14 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 	}
 	defer st.Close()
 
+	events := eventsFrom(ctx)
+	events(phase("candidate " + cand.Label))
 	rep, err := w.runner.Run(ctx, RunInput{
 		JobID: job.ID,
 		Skill: cand.SkillName, Version: cand.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
 		AllowVoid: allowVoid, Contest: true, Attempts: job.ContestAttempts,
+		Events: events,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("worker: run %s: %w", cand.Label, err)

@@ -24,7 +24,7 @@ type Grade struct {
 	// Model is the model that produced this grade, as the gateway named it in
 	// the answer. It is empty when the gateway names none. A gateway that can
 	// name its model in advance is read through ModelFor instead, so this
-	// field carries the subscription case, where nothing else records a judge.
+	// field carries the case where nothing else records a judge.
 	Model string `json:"model,omitempty"`
 }
 

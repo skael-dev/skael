@@ -175,7 +175,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage, d.Keys)
+		checks, ready := readinessChecks(checkCtx, d.Pool, d.Storage, d.Keys, providers.NewStore(d.Pool, cfg.MasterKeys, nil))
 		if !ready {
 			detail, _ := json.Marshal(checks)
 			return nil, huma.NewError(http.StatusServiceUnavailable, "not ready", fmt.Errorf("%s", detail))
@@ -347,14 +347,14 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 			signIn := s.String("oidc.issuer") != "" || s.String("google.client_id") != "" || s.String("github.client_id") != ""
 			return onboarding.SetupFacts{PublicURL: s.String("public_url"), SMTPHost: s.String("smtp.host"), SignIn: signIn}
 		})
-	providerStore := providers.NewStore(d.Pool)
+	providerStore := providers.NewStore(d.Pool, cfg.MasterKeys, providers.NewCatalog(d.Pool, providers.CatalogURL))
 	providers.RegisterRoutes(api, providerStore)
-	workers.RegisterRoutes(api, workers.NewStore(d.Pool), providerStore, d.KeyStore, publicURL)
+	workers.RegisterRoutes(api, workers.NewStore(d.Pool), d.KeyStore, publicURL)
 	evalqueue.RegisterRoutes(api, evalPool, qualityStore, skillStore, suiteRegistry, evalqueue.RouteOptions{
 		Releaser:     skill.NewReleaser(skillStore),
 		QualityFloor: floor,
 		Contests:     contestStore,
-		EvalConfig:   providerStore.EvalConfig,
+		EvalConfig:   providerStore.EvalConfigFor,
 	})
 
 	// Contests advise and never gate: nothing registered here releases a

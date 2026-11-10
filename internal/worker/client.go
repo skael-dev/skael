@@ -87,6 +87,15 @@ func (h *HTTPAPI) FailJob(_ context.Context, id evalqueue.JobID, token, cause st
 	return asLeaseLost(h.c.FailEvalJob(string(id), token, cause))
 }
 
+// PostEvents calls POST /api/eval/jobs/{id}/events.
+func (h *HTTPAPI) PostEvents(_ context.Context, id evalqueue.JobID, token string, events []evalqueue.EvalJobEvent) error {
+	body, err := json.Marshal(evalqueue.EvalJobEventsBody{Events: events})
+	if err != nil {
+		return fmt.Errorf("worker: encode events: %w", err)
+	}
+	return asLeaseLost(h.c.PostEvalJobEvents(string(id), token, body))
+}
+
 // PostReport calls POST /api/eval/jobs/{id}/report with r's JSON encoding.
 func (h *HTTPAPI) PostReport(_ context.Context, id evalqueue.JobID, token string, r *report.Report) error {
 	var buf bytes.Buffer

@@ -21,7 +21,6 @@ import (
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/llm"
-	"github.com/skael-dev/skael/internal/eval/llm/agentcli"
 	"github.com/skael-dev/skael/internal/eval/provider"
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/eval/runner"
@@ -36,7 +35,7 @@ import (
 
 // EvalDeps is everything RunEvalWith needs, injected so a test can supply a
 // fake driver, adapter registry, and gateway with no Docker, no network, and
-// no LLM subscription. RunEval (below) resolves these from the environment
+// no LLM account. RunEval (below) resolves these from the environment
 // the same way `whetstone doctor` does.
 type EvalDeps struct {
 	Store  *store.Store
@@ -63,16 +62,14 @@ type EvalDeps struct {
 	// PanelBaseURL is carried for diagnostics only, so an all-unhealthy panel
 	// can name the endpoint that rejected its models.
 	PanelBaseURL string
-	// PanelExcludeEnv names credential variables the panel's sandboxes must
-	// not be given — see provider.Config.PanelExcludeEnv and
-	// runner.Options.PanelExcludeEnv. Resolved values rather than env
-	// lookups, for the same reason PanelModels is.
-	PanelExcludeEnv []string
 	// MemberAuth gives a member its own credentials; see
 	// runner.Options.MemberAuth. MemberProvider labels the member's backend
 	// in the report. Both are nil outside a server-configured worker.
 	MemberAuth     func(agent, model string) ([]string, bool)
 	MemberProvider func(agent, model string) string
+	// Progress, when set, receives each phase change, session start and end,
+	// and grade, as it happens. The worker posts them as job events.
+	Progress func(Progress)
 }
 
 // EvalRequest is one `whetstone eval` invocation.
@@ -99,6 +96,32 @@ type EvalRequest struct {
 	Attempts int
 }
 
+// Progress is one step of a running evaluation.
+type Progress struct {
+	Kind      string // phase, health, plan, session_start, session_end, grade
+	Phase     string
+	Total     int
+	Task      string
+	Condition string
+	Model     string
+	Attempt   int
+	Status    string
+	OK        bool
+	Duration  time.Duration
+	InputTok  int64
+	OutputTok int64
+	CostUSD   float64
+	Error     string
+}
+
+// Phases of an evaluation, in order.
+const (
+	PhasePreparing = "preparing"
+	PhaseHealth    = "health check"
+	PhaseSessions  = "sessions"
+	PhaseGrading   = "grading"
+)
+
 // RunEvalWith runs one evaluation end to end: load the approved spec and eval
 // set, refuse an eval against void evals, plan and execute the panel, grade
 // every session as it finishes, and persist and write the report.
@@ -120,6 +143,11 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if sleepFn == nil {
 		sleepFn = time.Sleep
 	}
+	progress := d.Progress
+	if progress == nil {
+		progress = func(Progress) {}
+	}
+	progress(Progress{Kind: "phase", Phase: PhasePreparing})
 
 	// 1. Approved spec, the eval set, and its content ref.
 	sp, specVersion, err := d.Store.LoadSpec(req.Skill)
@@ -167,9 +195,9 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 
 	// 3. The model panel. A caller that named one always wins; this only fills
-	// the default. The shipped default names bare Claude Code aliases, which
-	// mean nothing to a gateway that namespaces its identifiers — so when the
-	// boundary resolved model ids for a custom gateway, build the default out
+	// the default. The shipped default names Anthropic's own ids, which mean
+	// nothing to an endpoint that namespaces its identifiers — so when the
+	// boundary resolved model ids for a custom endpoint, build the default out
 	// of those instead.
 	agents, models := req.Agents, req.Models
 	if len(agents) == 0 && len(models) == 0 && len(d.PanelModels) > 0 {
@@ -213,18 +241,21 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		Store: d.Store, Driver: d.Driver, Adapters: d.Adapters,
 		Concurrency: req.Concurrency, Untrusted: req.Untrusted,
 		Sleep: sleepFn, Logger: ui.Info,
-		WorkspaceRoot:   d.WorkspaceRoot,
-		PanelExcludeEnv: d.PanelExcludeEnv,
-		MemberAuth:      d.MemberAuth,
+		WorkspaceRoot: d.WorkspaceRoot,
+		MemberAuth:    d.MemberAuth,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// 6. Health-probe the panel before spending any session on it.
+	progress(Progress{Kind: "phase", Phase: PhaseHealth})
 	health, err := rn.ProbePanel(ctx, panel, image)
 	if err != nil {
 		return nil, err
+	}
+	for _, h := range health {
+		progress(Progress{Kind: "health", Model: h.Member.Model, OK: h.OK, Error: h.Detail})
 	}
 	healthy := map[runner.Member]bool{}
 	healthDetail := map[runner.Member]string{}
@@ -319,16 +350,31 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	}
 	gradeDone := make(chan gradeResult, 1)
 	go func() {
-		gr, dr, gerr := gradeOutcomes(ctx, grader, plan, finished, req.GradeConcurrency)
+		gr, dr, gerr := gradeOutcomes(ctx, grader, plan, finished, req.GradeConcurrency, progress)
 		gradeDone <- gradeResult{gr, dr, gerr}
 	}()
 	rn.SetOnComplete(func(o runner.Outcome) { finished <- o })
+	rn.SetOnSession(func(k store.RunKey) {
+		progress(Progress{Kind: "session_start", Task: k.TaskID, Condition: string(k.Condition), Model: k.Model, Attempt: k.Attempt})
+	}, func(k store.RunKey, m agent.Meta, status string, serr error) {
+		ev := Progress{Kind: "session_end", Task: k.TaskID, Condition: string(k.Condition), Model: k.Model, Attempt: k.Attempt,
+			Status: status, OK: serr == nil, Duration: time.Duration(m.DurationMS) * time.Millisecond,
+			InputTok: m.InputTokens, OutputTok: m.OutputTokens, CostUSD: m.CostUSD}
+		if serr != nil {
+			ev.Error = serr.Error()
+		}
+		progress(ev)
+	})
+	pending := len(plan.Runs) + len(plan.Probes) - len(reused)
+	progress(Progress{Kind: "plan", Total: pending})
+	progress(Progress{Kind: "phase", Phase: PhaseSessions})
 
 	execRes, err := rn.Execute(ctx, evalID, runner.ExecuteInput{
 		Skill: req.Skill, BundleDir: bundleDir, SuiteDir: suiteDir, Image: image,
 		Plan: plan, Healthy: healthy, Distractors: distractors,
 	})
 	close(finished)
+	progress(Progress{Kind: "phase", Phase: PhaseGrading})
 	gres := <-gradeDone
 	if err != nil {
 		return nil, err
@@ -551,7 +597,7 @@ type droppedGrade struct {
 	Reason string
 }
 
-func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs <-chan runner.Outcome, concurrency int) (map[store.RunKey]score.Grade, []droppedGrade, error) {
+func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs <-chan runner.Outcome, concurrency int, progress func(Progress)) (map[store.RunKey]score.Grade, []droppedGrade, error) {
 	if concurrency <= 0 {
 		concurrency = defaultGradeConcurrency
 	}
@@ -571,12 +617,19 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 			if !ok || len(ev.Expectations) == 0 {
 				return
 			}
+			began := time.Now()
 			grade, err := g.Grade(ctx, ev.Expectations, score.Run{
 				Prompt:         ev.Prompt,
 				ExpectedOutput: ev.ExpectedOutput,
 				Transcript:     loadTranscript(o.ArtifactDir),
 				Outputs:        renderOutputs(o.ArtifactDir),
 			})
+			gp := Progress{Kind: "grade", Task: o.Key.TaskID, Condition: string(o.Key.Condition), Model: o.Key.Model,
+				Attempt: o.Key.Attempt, OK: err == nil, Duration: time.Since(began)}
+			if err != nil {
+				gp.Error = err.Error()
+			}
+			progress(gp)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -614,8 +667,8 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 // graderModel names the judge for a report.
 //
 // A gateway that knows its model in advance is the authority, because it names
-// what every call asked for. A subscription CLI knows nothing in advance, so
-// its answers are the only record of what judged.
+// what every call asked for. A gateway that knows nothing in advance leaves
+// its answers as the only record of what judged.
 //
 // The declared name wins deliberately. An API gateway resolves an alias such
 // as "sonnet" to a dated id, and a switch to that id makes every new score
@@ -821,16 +874,10 @@ func (t *taskAgg) slice() []report.TaskInput {
 	return out
 }
 
-// agentCLIVersion is the version of the agent CLI on this host's PATH,
-// recorded on every panel member so Report.Comparable can tell a CLI upgrade
-// between two runs from a change in the skill.
-func agentCLIVersion() string {
-	bin, err := agentcli.Detect()
-	if err != nil {
-		return ""
-	}
-	return probeVersion(bin)
-}
+// agentCLIVersion is the harness version the sandbox image pins, recorded on
+// every panel member so Report.Comparable can tell a harness upgrade between
+// two runs from a change in the skill.
+func agentCLIVersion() string { return agent.OpenCodeVersion }
 
 // Caps on what reaches the judge. transcript.raw is the agent's native stream
 // with every tool result inside it, and nothing bounded its size: grade cost
@@ -976,7 +1023,10 @@ func RunEval(ctx context.Context, req EvalRequest) error {
 		Store: st, Driver: drv, Gateway: gw, Adapters: agent.Get,
 		Now: time.Now, Sleep: time.Sleep, EngineVersion: buildVersion,
 		PanelModels: p.PanelModels(), PanelBaseURL: p.BaseURL,
-		PanelExcludeEnv: p.PanelExcludeEnv(),
+		MemberAuth: func(_, model string) ([]string, bool) {
+			env, err := agent.SessionEnv(p.Member(model))
+			return env, err == nil
+		},
 	}
 	_, err = RunEvalWith(ctx, d, req)
 	return err

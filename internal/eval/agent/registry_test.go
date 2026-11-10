@@ -6,13 +6,13 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 )
 
-func TestRegistry_ClaudeCodeIsRegistered(t *testing.T) {
-	a, ok := agent.Get("claude-code")
+func TestRegistry_OpenCodeIsRegistered(t *testing.T) {
+	a, ok := agent.Get("opencode")
 	if !ok {
-		t.Fatal("adapter \"claude-code\" not registered")
+		t.Fatal("adapter \"opencode\" not registered")
 	}
-	if a.Name() != "claude-code" {
-		t.Errorf("adapter registered as \"claude-code\" reports Name() = %q", a.Name())
+	if a.Name() != "opencode" {
+		t.Errorf("adapter registered as \"opencode\" reports Name() = %q", a.Name())
 	}
 }
 

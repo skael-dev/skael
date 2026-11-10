@@ -66,3 +66,24 @@ func TestValidate_RefusesAnIsolationClaimWithoutARuntimeClass(t *testing.T) {
 		t.Fatalf("Validate() = %v, want an error naming SANDBOX_K8S_RUNTIME_CLASS", err)
 	}
 }
+
+// Malformed placement fails at start, not as a pod that never schedules.
+func TestValidate_RefusesMalformedPlacement(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  func(*Options)
+		want string
+	}{
+		{"tolerations", func(o *Options) { o.Tolerations = `{"key":"a"}` }, "SANDBOX_K8S_TOLERATIONS"},
+		{"node selector", func(o *Options) { o.NodeSelector = `["agentpool"]` }, "SANDBOX_K8S_NODE_SELECTOR"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := validOptions()
+			c.set(&o)
+			err := o.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Validate() = %v, want an error naming %s", err, c.want)
+			}
+		})
+	}
+}

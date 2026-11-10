@@ -47,6 +47,8 @@ func FromEnv(look func(string) string) Config {
 			Image:                 orDefault(look("SANDBOX_K8S_IMAGE"), imagespec.PublishedBaseImage),
 			PullSecret:            look("SANDBOX_K8S_PULL_SECRET"),
 			RuntimeClass:          look("SANDBOX_K8S_RUNTIME_CLASS"),
+			Tolerations:           look("SANDBOX_K8S_TOLERATIONS"),
+			NodeSelector:          look("SANDBOX_K8S_NODE_SELECTOR"),
 			HardwareIsolated:      look("SANDBOX_K8S_HARDWARE_ISOLATED") == "true",
 			NetworkPolicyEnforced: look("SANDBOX_K8S_NETWORK_POLICY") == "true",
 		},

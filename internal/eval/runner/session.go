@@ -10,13 +10,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
-	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/store"
 )
 
@@ -78,7 +76,6 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 			OutputTokens: out.Meta.OutputTokens,
 			DurationMS:   out.Meta.DurationMS,
 			AgentVersion: out.Meta.AgentVersion,
-			RateLimited:  out.Meta.RateLimited,
 			Status:       status,
 			Error:        errStr,
 			ArtifactDir:  artifactDir,
@@ -119,15 +116,13 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		skipDirs = []string{a.Caps().SkillDir}
 	}
 
-	mounts, authVars, err := r.authFor(a, k.Agent, k.Model)
+	authVars, err := r.authFor(k.Agent, k.Model)
 	if err != nil {
 		return finish(store.StatusError, err)
 	}
-	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
-		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
@@ -206,7 +201,6 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 			OutputTokens: po.Meta.OutputTokens,
 			DurationMS:   po.Meta.DurationMS,
 			AgentVersion: po.Meta.AgentVersion,
-			RateLimited:  po.Meta.RateLimited,
 			Status:       status,
 			Error:        errStr,
 			ArtifactDir:  artifactDir,
@@ -248,15 +242,13 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
-	mounts, authVars, err := r.authFor(a, p.Member.Agent, p.Member.Model)
+	authVars, err := r.authFor(p.Member.Agent, p.Member.Model)
 	if err != nil {
 		return finish(err)
 	}
-	warnIfNoAuth(a, mounts, r.o.Logger)
 	exec := sandbox.NewExec(r.o.Driver, sandbox.RunSpec{
 		Image:     in.Image,
 		Workspace: ws,
-		Mounts:    mounts,
 		Env:       authVars,
 		Network:   sandbox.NetAllowlist,
 		Allow:     allowWith(r.o.AllowDomains, gatewayHosts(authVars)),
@@ -333,7 +325,6 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 		OutputTokens: rec.Outcome.OutputTokens,
 		DurationMS:   rec.Outcome.DurationMS,
 		AgentVersion: rec.Outcome.AgentVersion,
-		RateLimited:  rec.Outcome.RateLimited,
 	}
 	out.MetaPartial = true
 	out.MetaPartialReason = fmt.Sprintf("resumed run: recovering full meta from %q failed; only store columns are available", rec.Outcome.ArtifactDir)
@@ -366,7 +357,6 @@ func resumeProbeOutcome(adapters func(string) (agent.Adapter, bool), p Probe, re
 			OutputTokens: rec.Outcome.OutputTokens,
 			DurationMS:   rec.Outcome.DurationMS,
 			AgentVersion: rec.Outcome.AgentVersion,
-			RateLimited:  rec.Outcome.RateLimited,
 		}
 		po.MetaPartial = true
 		po.MetaPartialReason = fmt.Sprintf("resumed probe: recovering full meta from %q failed; only store columns are available", rec.Outcome.ArtifactDir)
@@ -409,117 +399,47 @@ func loadProbeEvents(artifactDir string) ([]agent.Event, error) {
 	return events, nil
 }
 
-// invoke runs one agent session, retrying a rate-limited response after a
-// backoff rather than recording it as a failure — a plan rate limit is a
-// property of the account, not of the skill. Once the retry budget is
-// exhausted while still rate-limited, or the agent itself reports an
-// internal error (Meta.IsError), the session could not be performed at all:
-// it is reported as a hard failure so ClaimRun retries it on the next
-// Execute, rather than permanently recording a rate-limit artifact as if it
-// were a skill failure. The returned status is empty on success.
-// invoke returns the parsed result alongside the raw bytes of the native
-// stream that produced it (for the attempt actually returned — a discarded,
-// rate-limited attempt's bytes are not kept), so a caller can record both.
+// invoke runs one agent session. A session the harness reports as an error
+// (Meta.IsError) could not be performed at all: it is a hard failure that
+// carries the provider's own message, so ClaimRun retries it on the next
+// Execute instead of recording it as evidence about the skill. The returned
+// status is empty on success, and the raw bytes are the native stream.
 func (r *Runner) invoke(ctx context.Context, a agent.Adapter, spec agent.InvokeSpec, k store.RunKey) (*agent.Result, []byte, string, error) {
-	for attempt := 0; ; attempt++ {
-		stream, err := a.Invoke(ctx, spec)
-		if err != nil {
-			status := store.StatusError
-			if errors.Is(err, context.DeadlineExceeded) {
-				status = store.StatusTimeout
-			}
-			return nil, nil, status, err
+	stream, err := a.Invoke(ctx, spec)
+	if err != nil {
+		status := store.StatusError
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = store.StatusTimeout
 		}
-		raw, err := io.ReadAll(stream)
-		if err != nil {
-			return nil, nil, store.StatusError, fmt.Errorf("runner: reading session stream: %w", err)
-		}
-		result, err := a.Parse(bytes.NewReader(raw))
-		if err != nil {
-			return nil, raw, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
-		}
-
-		r.warnOnQuota(result.Meta)
-
-		if result.Meta.RateLimited {
-			if attempt+1 < r.o.MaxRateLimitRetries {
-				d := backoff(attempt)
-				// Hold new starts for the same window this session waits out,
-				// so the other slots stop feeding the limit that threw it.
-				r.gate.Report(result.Meta.RateLimitUtilization, d)
-				r.o.Logger("runner: %+v rate limited, retrying in %s (attempt %d)", k, d, attempt+1)
-				r.o.Sleep(d)
-				continue
-			}
-			return nil, raw, store.StatusError, fmt.Errorf("runner: %+v still rate limited after %d attempts", k, r.o.MaxRateLimitRetries)
-		}
-		if result.Meta.IsError {
-			return nil, raw, store.StatusError, fmt.Errorf("runner: %+v agent reported an internal error", k)
-		}
-		return result, raw, "", nil
+		return nil, nil, status, err
 	}
+	raw, err := io.ReadAll(stream)
+	if err != nil {
+		return nil, nil, store.StatusError, fmt.Errorf("runner: reading session stream: %w", err)
+	}
+	result, err := a.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return nil, raw, store.StatusError, fmt.Errorf("runner: parsing session: %w", err)
+	}
+	if result.Meta.IsError {
+		msg := result.Meta.Error
+		if msg == "" {
+			msg = "the harness reported an error"
+		}
+		return result, raw, store.StatusError, fmt.Errorf("runner: %s on %s: %s", k.TaskID, k.Model, msg)
+	}
+	return result, raw, "", nil
 }
 
-// quotaWarnThreshold is the utilization above which a run says so. The agent
-// itself starts reporting at 0.75, which is early enough to be noise across a
-// whole tier; by 0.9 the window is close enough that the operator wants to
-// know before the sessions that fail.
-const quotaWarnThreshold = 0.9
-
-// warnOnQuota reports an approaching subscription window once per run. A
-// subscription announces its utilization long before it refuses anything, and
-// without this the first sign of an exhausted window is a tier of sessions
-// that retried themselves to death — which reads like a broken worker rather
-// than a spent quota.
-func (r *Runner) warnOnQuota(m agent.Meta) {
-	if m.RateLimitUtilization < quotaWarnThreshold {
-		return
-	}
-	r.quotaWarned.Do(func() {
-		window := m.RateLimitWindow
-		if window == "" {
-			window = "current"
-		}
-		r.o.Logger("runner: the agent's %s quota is %.0f%% used; sessions will start failing when it is spent",
-			window, m.RateLimitUtilization*100)
-	})
-}
-
-// backoff doubles from 30s, capped at 5 minutes.
-func backoff(attempt int) time.Duration {
-	d := time.Duration(1<<attempt) * 30 * time.Second
-	const maxBackoff = 5 * time.Minute
-	if d > maxBackoff {
-		d = maxBackoff
-	}
-	return d
-}
-
-// resolveAuth picks env-var forwarding over credential-directory mounts.
-// Env vars win because a stale host login otherwise defeats a correctly
-// configured gateway. exclude withholds names the panel must not see (the
-// judge's gateway in split mode).
-// authFor resolves one member's credentials: its own when MemberAuth names
-// them, else the process environment and the adapter's auth directories.
-func (r *Runner) authFor(a agent.Adapter, agentName, model string) ([]sandbox.Mount, []string, error) {
+// authFor is one member's session environment. The sandbox inherits nothing
+// from this process, so a member MemberAuth does not know cannot run.
+func (r *Runner) authFor(agentName, model string) ([]string, error) {
 	if r.o.MemberAuth != nil {
 		if env, ok := r.o.MemberAuth(agentName, model); ok {
-			return nil, env, nil
+			return env, nil
 		}
 	}
-	return resolveAuth(a, r.o.PanelExcludeEnv, r.o.Logger)
-}
-
-func resolveAuth(a agent.Adapter, exclude []string, logf func(string, ...any)) ([]sandbox.Mount, []string, error) {
-	env := authEnv(a.Caps().AuthEnv, exclude)
-	if len(env) > 0 {
-		return nil, env, nil
-	}
-	mounts, err := authMounts(a.Caps().AuthDirs, logf)
-	if err != nil {
-		return nil, nil, err
-	}
-	return mounts, nil, nil
+	return nil, fmt.Errorf("runner: no provider is configured for %s on %s", model, agentName)
 }
 
 // gatewayHosts extracts hostnames from *_BASE_URL variables so the sandbox's
@@ -554,86 +474,4 @@ func allowWith(base, extra []string) []string {
 		out = append(out, d)
 	}
 	return out
-}
-
-// authMounts expands auth dirs to host and container paths. "~/" resolves to
-// the host home for the source and imagespec.ContainerHome for the target,
-// because the container's uid is not the host's. Missing dirs are skipped.
-func authMounts(dirs []string, logf func(string, ...any)) ([]sandbox.Mount, error) {
-	if len(dirs) == 0 {
-		return nil, nil
-	}
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("runner: resolving home directory for auth mounts: %w", err)
-	}
-	mounts := make([]sandbox.Mount, 0, len(dirs))
-	for _, d := range dirs {
-		var hostPath, containerPath string
-		switch {
-		case strings.HasPrefix(d, "~/"):
-			rel := d[2:]
-			hostPath = filepath.Join(home, rel)
-			containerPath = filepath.Join(imagespec.ContainerHome, rel)
-		case !filepath.IsAbs(d):
-			hostPath = filepath.Join(home, d)
-			containerPath = filepath.Join(imagespec.ContainerHome, d)
-		default:
-			hostPath, containerPath = d, d
-		}
-
-		if _, err := os.Stat(hostPath); err != nil {
-			logf("runner: skipping auth mount %s: %v", hostPath, err)
-			continue
-		}
-		mounts = append(mounts, sandbox.Mount{HostPath: hostPath, ContainerPath: containerPath, ReadOnly: true})
-	}
-	return mounts, nil
-}
-
-// authEnv forwards set, non-empty env vars into the sandbox. Names in
-// exclude are withheld (split mode). Never log the values.
-func authEnv(names, exclude []string) []string {
-	if len(names) == 0 {
-		return nil
-	}
-	env := make([]string, 0, len(names))
-	for _, name := range names {
-		if slices.Contains(exclude, name) {
-			continue
-		}
-		if v := os.Getenv(name); v != "" {
-			env = append(env, name+"="+v)
-		}
-	}
-	return env
-}
-
-// warnIfNoAuth logs a clear, actionable warning when an adapter declares
-// credentials of either kind but neither is actually available: no auth dir
-// exists on the host (mounts is empty) and no auth env var is set in the
-// worker's own environment. Left unwarned, this surfaces later only as a
-// confusing "incomplete panel" with no indication of why. It stays a warning,
-// not a hard failure, since the sandbox may be pre-provisioned another way
-// (e.g. credentials baked into the image).
-func warnIfNoAuth(a agent.Adapter, mounts []sandbox.Mount, logf func(string, ...any)) {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	caps := a.Caps()
-	if len(caps.AuthEnv) == 0 && len(caps.AuthDirs) == 0 {
-		return
-	}
-	if len(mounts) > 0 {
-		return
-	}
-	for _, name := range caps.AuthEnv {
-		if os.Getenv(name) != "" {
-			return
-		}
-	}
-	logf("runner: %s has no available credentials — no auth dir found on the host and none of %v are set; set one of them or pre-provision the sandbox image", a.Name(), caps.AuthEnv)
 }

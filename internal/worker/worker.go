@@ -81,6 +81,9 @@ type RunInput struct {
 	// baseline and no probe.
 	Contest  bool
 	Attempts int
+
+	// Events records one job event. Never nil when the worker calls Run.
+	Events func(evalqueue.EvalJobEvent)
 }
 
 // Runner is the eval half, injected so the loop is testable with no Docker.
@@ -104,6 +107,8 @@ type API interface {
 	// server decides the verdict: a worker sends measurements, never a result.
 	PostContestReport(ctx context.Context, contestID string, jobID evalqueue.JobID, token string, reports map[string]*report.Report) error
 	FailJob(ctx context.Context, id evalqueue.JobID, token, cause string) error
+	// PostEvents records job events: the progress the Jobs page shows.
+	PostEvents(ctx context.Context, id evalqueue.JobID, token string, events []evalqueue.EvalJobEvent) error
 	FetchSuite(ctx context.Context, ref string) ([]byte, error)
 	FetchBundle(ctx context.Context, skill string, version int) ([]byte, error)
 	// FetchPRHead returns a stored PR head's archive, for a contest candidate
@@ -206,6 +211,10 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	// Heartbeat starts before fetching: derivation can take minutes.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	events := newEventSink(w.api, job.ID, token)
+	defer events.Close()
+	runCtx = withEvents(runCtx, events.Add)
+	events.Add(phase("fetching"))
 
 	leaseLost := make(chan struct{})
 	var hbWG sync.WaitGroup
@@ -225,6 +234,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		if w.deriver == nil {
 			return fmt.Errorf("worker: job %s has no suite_ref and this worker has no deriver configured", job.ID)
 		}
+		events.Add(phase("deriving an eval suite"))
 		res, err := w.deriver.Derive(runCtx, DeriveInput{
 			Skill: job.SkillName, Bundle: bundle, Tier: job.Tier, Panel: job.Panel, Eval: job.Eval,
 		})
@@ -273,7 +283,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
-		AllowVoid: meta.MachineGenerated,
+		AllowVoid: meta.MachineGenerated, Events: events.Add,
 	})
 
 	cancel()
@@ -295,6 +305,8 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		return fmt.Errorf("worker: report suite_ref %q does not match job suite_ref %q", rep.SuiteRef, suiteRef)
 	}
 
+	events.Add(phase("reporting"))
+	events.Close()
 	if err := w.api.PostReport(ctx, job.ID, token, rep); err != nil {
 		return fmt.Errorf("worker: post report: %w", err)
 	}

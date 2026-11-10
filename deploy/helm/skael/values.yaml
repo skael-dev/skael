@@ -21,6 +21,9 @@ server:
   # Any other server variable from the configuration docs. A variable here wins
   # over the Settings page and locks its field.
   env: {}
+  # Placement for the server pod.
+  tolerations: []
+  nodeSelector: {}
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {memory: 512Mi}
@@ -45,8 +48,8 @@ worker:
     tag: ""
   # The server's URL as the worker reaches it. Empty uses the in-cluster service.
   endpoint: ""
-  # A Secret with SKAEL_API_KEY (from Evaluation → Add a worker) and every
-  # provider credential the Evaluation page lists, such as ANTHROPIC_API_KEY.
+  # A Secret with SKAEL_API_KEY from Evaluation → Add a worker. Provider keys
+  # stay on the server.
   existingSecret: ""
   # Session pods run in this namespace through the kubernetes sandbox driver.
   # It must hold nothing but session pods.
@@ -56,6 +59,13 @@ worker:
   hardwareIsolated: false
   networkPolicy: false
   runtimeClass: ""
+  # Placement for the session and proxy pods the driver creates, in the
+  # Kubernetes shape. Needed when every node pool is tainted.
+  sandboxTolerations: []
+  sandboxNodeSelector: {}
+  # Placement for the worker pod itself.
+  tolerations: []
+  nodeSelector: {}
   env: {}
   resources:
     requests: {cpu: 100m, memory: 256Mi}

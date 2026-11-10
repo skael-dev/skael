@@ -26,8 +26,9 @@ type PanelMember struct {
 	Class      string `json:"class"`
 	CLIVersion string `json:"cli_version"`
 	// Provider names the backend that served the member: empty for
-	// Anthropic's own API, "subscription" for a Claude subscription, or
-	// "gateway:<host>". A changed provider splits the trend like a changed model.
+	// Anthropic's own API, otherwise the provider type and the endpoint's
+	// host, such as "openrouter" or "openai-compatible:r.openai.azure.com".
+	// A changed provider splits the trend like a changed model.
 	Provider string `json:"provider,omitempty"`
 }
 

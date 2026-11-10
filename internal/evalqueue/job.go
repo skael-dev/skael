@@ -27,6 +27,9 @@ const (
 type Panel struct {
 	Agents []string `json:"agents,omitempty"`
 	Models []string `json:"models,omitempty"`
+	// Providers names the provider of each model, by id, in the same order.
+	// A model without one runs on the configured primary member's provider.
+	Providers []string `json:"providers,omitempty"`
 }
 
 // Job is a unit of eval work against a specific skill version.

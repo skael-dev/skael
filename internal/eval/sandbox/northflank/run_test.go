@@ -159,8 +159,8 @@ func TestRun_RefusesAHostMountWithAMessageNamingTheAlternative(t *testing.T) {
 	rs.Mounts = []sandbox.Mount{{HostPath: "/home/u/.claude", ContainerPath: "/home/runner/.claude", ReadOnly: true}}
 
 	_, err := d.Run(context.Background(), rs)
-	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
-		t.Fatalf("Run = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
+	if err == nil || !strings.Contains(err.Error(), "host mounts") {
+		t.Fatalf("Run = %v, want a refusal of host mounts", err)
 	}
 }
 

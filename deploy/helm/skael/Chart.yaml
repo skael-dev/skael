@@ -2,8 +2,8 @@ apiVersion: v2
 name: skael
 description: The skael skill registry server, and optionally its eval workers.
 type: application
-version: 0.19.1
-appVersion: "0.19.1"
+version: 0.20.0
+appVersion: "0.20.0"
 home: https://skael.dev
 sources:
   - https://github.com/skael-dev/skael

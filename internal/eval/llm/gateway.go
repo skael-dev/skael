@@ -44,7 +44,7 @@ type Res struct {
 type Gateway interface {
 	Complete(ctx context.Context, r Req) (Res, error)
 	// ModelFor names the concrete model for a class without making a call.
-	// Returns "" when unknown (e.g. a subscription CLI).
+	// Returns "" when unknown.
 	ModelFor(class ModelClass) string
 }
 

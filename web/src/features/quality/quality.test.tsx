@@ -92,6 +92,23 @@ function mockEvals(jobs: Partial<JobOutput>[]) {
     http.get("/api/skills/:name/evals", () => {
       return HttpResponse.json({ jobs });
     }),
+    http.get("/api/admin/providers", () =>
+      HttpResponse.json({
+        providers: [
+          { id: "p-ant", name: "Anthropic", type: "anthropic", base_url: "", auth_header: "", has_key: true, key_ref: "", key_unreadable: false, updated_by: "", updated_at: "2026-11-01T00:00:00Z" },
+          { id: "p-or", name: "OpenRouter", type: "openrouter", base_url: "", auth_header: "", has_key: true, key_ref: "", key_unreadable: false, updated_by: "", updated_at: "2026-11-01T00:00:00Z" },
+        ],
+        panel: {
+          judge: { provider_id: "p-ant", model: "claude-opus-5-5" },
+          members: [
+            { provider_id: "p-ant", model: "claude-sonnet-5-5" },
+            { provider_id: "p-or", model: "deepseek/deepseek-v4.1-flash" },
+          ],
+        },
+        presets: [],
+        problems: [],
+      }),
+    ),
   );
 }
 
@@ -133,15 +150,19 @@ describe("EvalStatus", () => {
   // half — the same body arriving on a claimed job and landing in model_panel
   // — is tests/e2e/eval_queue_test.go's
   // TestEvalQueue_APanelModelChosenInTheUIReachesTheWorkerAndTheRecord.
-  it("sends the chosen panel model with the run request", async () => {
+  // A pinned model carries its provider: the claim gives that member the
+  // provider's key, and a model without one would run nowhere.
+  it("sends the chosen panel member's model and provider with the run request", async () => {
     mockEvals([]);
     const bodies = mockRerun();
     render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
 
-    await userEvent.selectOptions(await screen.findByLabelText(/panel model/i), "haiku");
+    const select = await screen.findByLabelText(/panel model/i);
+    await screen.findByRole("option", { name: /floor · openrouter · deepseek/i });
+    await userEvent.selectOptions(select, "m:1");
     await userEvent.click(screen.getByRole("button", { name: /full evaluation/i }));
 
-    await waitFor(() => expect(bodies).toEqual([{ models: ["haiku"] }]));
+    await waitFor(() => expect(bodies).toEqual([{ models: ["deepseek/deepseek-v4.1-flash"], providers: ["p-or"] }]));
   });
 
   // Agents are deliberately absent: one adapter exists and the runner fills it
@@ -168,6 +189,16 @@ describe("EvalStatus", () => {
     expect(await screen.findByText(/scored on v3 · current v7/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /re-run quick check/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /re-run full evaluation/i })).toBeInTheDocument();
+  });
+
+  it("hides an old failure once a later run succeeds", async () => {
+    mockEvals([
+      { id: "j2", status: "done", queue_position: 0, last_error: "", enqueued_at: "2026-08-02T00:00:00Z" },
+      { id: "j1", status: "failed", queue_position: 0, last_error: "sandbox image missing", enqueued_at: "2026-08-01T00:00:00Z" },
+    ]);
+    render(withQuery(<EvalStatus skillName="s" quality={null} latestVersion={1} />));
+    expect(await screen.findByRole("button", { name: /full evaluation/i })).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox image missing/i)).not.toBeInTheDocument();
   });
 
   it("surfaces a failed job's error", async () => {

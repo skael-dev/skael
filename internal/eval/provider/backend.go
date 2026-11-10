@@ -2,79 +2,39 @@ package provider
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/skael-dev/skael/internal/eval/agent"
+	"github.com/skael-dev/skael/internal/eval/llm"
 	"github.com/skael-dev/skael/internal/eval/llm/api"
+	"github.com/skael-dev/skael/internal/evalqueue"
 )
 
-// Backend adapters the server's providers use.
-const (
-	AdapterAnthropic    = "anthropic"
-	AdapterGateway      = "gateway"
-	AdapterSubscription = "subscription"
-)
-
-// Backend is one provider and model chosen on the server. The credential is
-// never sent: CredentialEnv names the worker's own variable that holds it.
-type Backend struct {
-	Adapter       string
-	BaseURL       string
-	AuthStyle     string
-	CredentialEnv string
-	Model         string
+// Session maps one of the server's providers and a model onto what a panel
+// session needs.
+func Session(b evalqueue.EvalBackend) agent.Backend {
+	out := agent.Backend{Type: b.Type, BaseURL: b.BaseURL, Key: b.Credential, AuthHeader: b.AuthHeader, Model: b.Model}
+	if b.Cost != nil {
+		out.Cost = &agent.Cost{Input: b.Cost.Input, Output: b.Cost.Output, CacheRead: b.Cost.CacheRead, CacheWrite: b.Cost.CacheWrite}
+	}
+	return out
 }
 
-func (b Backend) credential(env Getenv) (string, error) {
-	v := env(b.CredentialEnv)
-	if v == "" {
-		return "", fmt.Errorf("this worker has no %s, which the provider needs", b.CredentialEnv)
+// Judge builds the judge's gateway from one of the server's providers. An
+// Anthropic provider speaks Messages; every other type speaks Chat
+// Completions.
+func Judge(b evalqueue.EvalBackend, o Options) (llm.Gateway, error) {
+	if b.Credential == "" {
+		return nil, fmt.Errorf("the provider %s has no key; add one in Settings → Evaluation", b.Provider)
 	}
-	return v, nil
-}
-
-// Judge resolves the judge's backend. A subscription never judges: a released
-// version's score must come from a metered backend pinned to a model.
-func Judge(env Getenv, b Backend) (Config, error) {
-	if b.Adapter == AdapterSubscription {
-		return Config{}, fmt.Errorf("a Claude subscription cannot judge; choose an API or gateway provider")
+	ab := Session(b)
+	opts := api.Options{
+		BaseURL: b.BaseURL, APIKey: b.Credential, AuthHeader: b.AuthHeader,
+		StrongModel: b.Model, FastModel: b.Model,
+		Cache: o.Cache, HTTPClient: &http.Client{Timeout: o.Timeout}, MaxRetries: o.MaxRetries,
 	}
-	key, err := b.credential(env)
-	if err != nil {
-		return Config{}, err
+	if b.Type != evalqueue.ProviderAnthropic {
+		opts.Format, opts.BaseURL = api.FormatOpenAI, ab.Endpoint()
 	}
-	c := Config{Kind: KindAPI, Key: key, AuthStyle: api.AuthStyleAnthropic, Models: []string{b.Model}}
-	if b.Adapter == AdapterGateway {
-		c.BaseURL = b.BaseURL
-		if b.AuthStyle == string(api.AuthStyleBearer) {
-			c.AuthStyle = api.AuthStyleBearer
-		}
-		c.Detail = fmt.Sprintf("compatible gateway %s, authenticated with %s", b.BaseURL, b.CredentialEnv)
-	} else {
-		c.Detail = "Anthropic's API, authenticated with " + b.CredentialEnv
-	}
-	return c, nil
-}
-
-// MemberEnv is the credential variables a panel member's sandbox receives.
-func MemberEnv(env Getenv, b Backend) ([]string, error) {
-	v, err := b.credential(env)
-	if err != nil {
-		return nil, err
-	}
-	switch b.Adapter {
-	case AdapterSubscription:
-		return []string{OAuthTokenEnv + "=" + v}, nil
-	case AdapterGateway:
-		name := APIKeyEnv
-		if b.AuthStyle == string(api.AuthStyleBearer) {
-			name = AuthTokenEnv
-		}
-		return []string{BaseURLEnv + "=" + b.BaseURL, name + "=" + v}, nil
-	}
-	return []string{APIKeyEnv + "=" + v}, nil
-}
-
-// PinnedByEnv reports whether this process's own gateway or model settings
-// override the server's providers.
-func PinnedByEnv(env Getenv) bool {
-	return env(BaseURLEnv) != "" || env(ModelEnv) != ""
+	return api.New(opts)
 }

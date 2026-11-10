@@ -34,8 +34,8 @@ func TestRunDoctor_ReportsAGatewayWithNothingInstalled(t *testing.T) {
 	if rep.GatewayDetail == "" {
 		t.Error("an unusable gateway must be explained, not just named")
 	}
-	if rep.AgentCLI != "" {
-		t.Errorf("agent CLI = %q, want empty with an empty PATH", rep.AgentCLI)
+	if !strings.HasPrefix(rep.AgentCLI, "opencode") {
+		t.Errorf("agent CLI = %q, want the harness the sandbox image runs", rep.AgentCLI)
 	}
 	if rep.Docker {
 		t.Error("docker reported present with an empty PATH")
@@ -65,7 +65,7 @@ func TestRunDoctor_ReportsTheAPIGatewayWhenAKeyIsSet(t *testing.T) {
 func TestRunDoctor_ListsEveryRegisteredAdapter(t *testing.T) {
 	t.Setenv("PATH", "")
 
-	want := []string{"claude-code"}
+	want := []string{"opencode"}
 
 	if got := len(agent.All()); got != len(want) {
 		t.Errorf("registered adapters = %d, want %d: %v", got, len(want), adapterNames())

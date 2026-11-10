@@ -30,7 +30,7 @@ func TestExplain_NamesTheStageThatFailed(t *testing.T) {
 		},
 		{
 			name: "panel unhealthy",
-			raw:  "worker: eval 7: panel health check failed: api: 404: model not found",
+			raw:  "worker: run: whetstone eval: every panel member failed its health probe, so this run can measure nothing:\n  opencode/nope: invoke: opencode: session exited 1: nope is not a valid model ID (HTTP 400)",
 			want: "evaluation panel could not start",
 		},
 	}

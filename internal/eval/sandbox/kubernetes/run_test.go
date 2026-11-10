@@ -45,13 +45,21 @@ func (e *scriptedExecer) Exec(ctx context.Context, r execRequest) (int, error) {
 	}
 }
 
-// readyClientset marks every created pod Running, since nothing in the fake
-// runs a kubelet.
+// testPodIP is the address readyClientset gives every pod.
+const testPodIP = "10.244.0.7"
+
+// readyClientset marks every created pod Running with an IP, since nothing in
+// the fake runs a kubelet.
 func readyClientset() *fake.Clientset {
+	return clientsetWithPodIP(testPodIP)
+}
+
+func clientsetWithPodIP(ip string) *fake.Clientset {
 	cs := fake.NewSimpleClientset()
 	cs.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pod := a.(k8stesting.CreateAction).GetObject().(*corev1.Pod)
 		pod.Status.Phase = corev1.PodRunning
+		pod.Status.PodIP = ip
 		return false, nil, nil
 	})
 	return cs
@@ -59,7 +67,11 @@ func readyClientset() *fake.Clientset {
 
 func runDriver(t *testing.T, o Options, ex execer) (*Driver, *fake.Clientset) {
 	t.Helper()
-	cs := readyClientset()
+	return runDriverOn(t, readyClientset(), o, ex)
+}
+
+func runDriverOn(t *testing.T, cs *fake.Clientset, o Options, ex execer) (*Driver, *fake.Clientset) {
+	t.Helper()
 	d, err := New(o, cs, ex)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -180,6 +192,54 @@ func TestRun_CreatesTheProxyAndThePolicyForAnAllowlistRun(t *testing.T) {
 	}
 }
 
+// Cluster DNS resolves Services, not pod names, so a session told to use
+// http://whetstone-proxy-<id>:8888 cannot reach its proxy at all, and every
+// request it makes fails before leaving the pod.
+func TestRun_PointsTheSessionAtTheProxyPodsIP(t *testing.T) {
+	d, cs := runDriver(t, enforcedOptions(), &scriptedExecer{remote: t.TempDir()})
+	if _, err := d.Run(context.Background(), allowlistSpec(t)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var session *corev1.Pod
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" || a.GetResource().Resource != "pods" {
+			continue
+		}
+		if p := a.(k8stesting.CreateAction).GetObject().(*corev1.Pod); strings.HasPrefix(p.Name, "whetstone-run-") {
+			session = p
+		}
+	}
+	if session == nil {
+		t.Fatal("no session pod was created")
+	}
+	want := "http://" + testPodIP + ":8888"
+	seen := map[string]string{}
+	for _, e := range session.Spec.Containers[0].Env {
+		seen[e.Name] = e.Value
+	}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if seen[k] != want {
+			t.Errorf("%s = %q, want %q", k, seen[k], want)
+		}
+	}
+}
+
+func TestRun_RefusesAProxyWithNoIPAndLeavesNothingBehind(t *testing.T) {
+	d, cs := runDriverOn(t, clientsetWithPodIP(""), enforcedOptions(), &scriptedExecer{remote: t.TempDir()})
+	_, err := d.Run(context.Background(), allowlistSpec(t))
+	if err == nil || !strings.Contains(err.Error(), "has no IP") {
+		t.Fatalf("Run = %v, want a refusal naming the missing proxy IP", err)
+	}
+	ns := validOptions().Namespace
+	pods, _ := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{})
+	cms, _ := cs.CoreV1().ConfigMaps(ns).List(context.Background(), metav1.ListOptions{})
+	policies, _ := cs.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+	if n := len(pods.Items) + len(cms.Items) + len(policies.Items); n != 0 {
+		t.Errorf("%d resources left behind", n)
+	}
+}
+
 func TestRun_RefusesARestrictedRunWithoutTheEnforcementAssertion(t *testing.T) {
 	d, _ := runDriver(t, validOptions(), &scriptedExecer{remote: t.TempDir()})
 	rs := runnableSpec(t)
@@ -208,8 +268,8 @@ func TestRun_RefusesAHostMountWithAMessageNamingTheAlternative(t *testing.T) {
 	rs := runnableSpec(t)
 	rs.Mounts = []sandbox.Mount{{HostPath: "/home/u/.claude", ContainerPath: "/home/runner/.claude", ReadOnly: true}}
 	_, err := d.Run(context.Background(), rs)
-	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
-		t.Fatalf("Run = %v, want a refusal naming CLAUDE_CODE_OAUTH_TOKEN", err)
+	if err == nil || !strings.Contains(err.Error(), "host mounts") {
+		t.Fatalf("Run = %v, want a refusal of host mounts", err)
 	}
 }
 
@@ -222,5 +282,20 @@ func TestCollectOutTimeout_ScalesWithTheRunTimeoutAndFloors(t *testing.T) {
 	}
 	if got := collectOutTimeout(40 * time.Minute); got != 10*time.Minute {
 		t.Errorf("collectOutTimeout(40m) = %v, want 10m", got)
+	}
+}
+
+// A pod that fails before use must say why, or the error ends in nothing.
+func TestFailureDetail_NamesTheContainerExitAndItsLog(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name:  "proxy",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: "Could not bind to port 8888\n"}},
+	}}}}
+	got := failureDetail(pod)
+	if !strings.Contains(got, "container proxy exited 1 (Error): Could not bind to port 8888") {
+		t.Fatalf("failureDetail = %q", got)
+	}
+	if failureDetail(&corev1.Pod{}) != "no reason reported" {
+		t.Fatal("an empty status must still say something")
 	}
 }

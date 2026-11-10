@@ -37,7 +37,7 @@ jobs:
         run: go vet -tags docker ./...
       - name: Sandbox tests
         env:
-          WHETSTONE_BASE_TAG: whetstone-base-ci:1
+          WHETSTONE_BASE_TAG: whetstone-base-ci:2
         run: go test -tags docker ./internal/eval/... ./cli/whetstone/ ./tests/whetstone/... -count=1 -timeout 2400s
 
   kubernetes-sandbox:
@@ -79,8 +79,8 @@ jobs:
       - name: Build and load the slim base image
         run: |
           go run ./cmd/whetstone --print-base-dockerfile --slim > Dockerfile.base
-          docker build -t whetstone-base-ci:1 -f Dockerfile.base .
-          kind load docker-image whetstone-base-ci:1
+          docker build -t whetstone-base-ci:2 -f Dockerfile.base .
+          kind load docker-image whetstone-base-ci:2
 
       - name: Apply the shipped RBAC manifest
         run: kubectl apply -f deploy/kubernetes/worker-rbac.yaml
@@ -89,11 +89,19 @@ jobs:
         env:
           SANDBOX_DRIVER: kubernetes
           SANDBOX_K8S_NAMESPACE: skael-sandbox
-          SANDBOX_K8S_IMAGE: whetstone-base-ci:1
+          SANDBOX_K8S_IMAGE: whetstone-base-ci:2
           SANDBOX_K8S_NETWORK_POLICY: "true"
         # Every other job in this workflow calls go test directly; just is
         # not installed on the runner and no step here installs it either.
         run: go test -count=1 -tags=kubernetes ./internal/eval/sandbox/kubernetes/ -v
+
+      # A sandbox pod that fails is deleted by the driver, so its events and
+      # any kernel denial are all that is left to explain it.
+      - name: Show the sandbox namespace's events and AppArmor denials
+        if: failure()
+        run: |
+          kubectl get events -n skael-sandbox --sort-by=.lastTimestamp | tail -40 || true
+          sudo dmesg | grep -i apparmor | tail -40 || true
 
   lint:
     runs-on: ubuntu-latest
