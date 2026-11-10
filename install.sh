@@ -57,10 +57,13 @@ CHECKSUM_URL="https://github.com/${REPO}/releases/download/v${VERSION}/checksums
 curl -fsSL "$CHECKSUM_URL" -o "${TMPDIR}/checksums.txt"
 
 cd "$TMPDIR"
+# The check list goes in a file, not a pipe: the sha256sum that macOS ships
+# in /sbin rejects a check list on stdin with a usage error.
+grep "  ${FILENAME}\$" checksums.txt > expected.sha256
 if command -v sha256sum >/dev/null 2>&1; then
-  grep "$FILENAME" checksums.txt | sha256sum -c --quiet
+  sha256sum -c expected.sha256 >/dev/null
 elif command -v shasum >/dev/null 2>&1; then
-  grep "$FILENAME" checksums.txt | shasum -a 256 -c --quiet
+  shasum -a 256 -c expected.sha256 >/dev/null
 else
   echo "Warning: no sha256sum or shasum found, skipping checksum verification" >&2
 fi
