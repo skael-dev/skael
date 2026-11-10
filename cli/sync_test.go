@@ -146,3 +146,16 @@ func init() {
 		_ = skill.Unpack(bytes.NewReader(archiveBytes), dst)
 	}
 }
+
+// A repo with no skills yet has no <repo>/.claude/skills directory; add and
+// sync must create it rather than fail with "no such file or directory".
+func TestExtractSkillAtomically_CreatesMissingParent(t *testing.T) {
+	archiveBytes := buildValidArchive(t)
+	destDir := filepath.Join(t.TempDir(), ".claude", "skills", "my-skill")
+
+	err := extractSkillAtomically(archiveBytes, destDir)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(destDir, "SKILL.md"))
+	assert.NoError(t, statErr)
+}

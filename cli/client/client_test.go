@@ -651,3 +651,23 @@ func TestUploadEvalSuite_RespectsClientTimeout(t *testing.T) {
 		t.Fatalf("UploadEvalSuite took %s to fail; the client Timeout did not bound it", elapsed)
 	}
 }
+
+// An endpoint saved with a trailing slash ("https://host/") must not produce
+// "//api/..." paths: the server's SPA fallback answers those with HTML.
+func TestClient_TrailingSlashEndpoint(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"skills":[],"total":0}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL+"/", "test-key")
+	if _, _, err := c.ListSkills(1, 0); err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if gotPath != "/api/skills" {
+		t.Fatalf("path = %q, want /api/skills", gotPath)
+	}
+}

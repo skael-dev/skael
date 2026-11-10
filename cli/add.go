@@ -16,8 +16,22 @@ import (
 var addCmd = &cobra.Command{
 	Use:   "add <skill-name>",
 	Short: "Install a skill from the registry",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runAdd,
+	Long: `Install the latest version of a skill for every detected agent, and record it
+in ~/.skael/config.json so "skael sync" keeps it up to date.
+
+--scope decides where the files go:
+  project  <repo>/.claude/skills/<name> (and the matching folder for each
+           other agent). The repo is the nearest ancestor with .git, or the
+           current directory. This is the default.
+  user     ~/.claude/skills/<name> (and the matching folder for each other
+           agent), available in every project.
+
+The default comes from "skael setup --scope". Run "skael doctor" to see which
+agents are detected.`,
+	Example: `  skael add code-review
+  skael add code-review --scope user`,
+	Args: cobra.ExactArgs(1),
+	RunE: runAdd,
 }
 
 var addScope string

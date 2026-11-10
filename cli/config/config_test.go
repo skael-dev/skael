@@ -429,3 +429,19 @@ func TestEnsureSkillsKey_EmptySkillsNoMigration(t *testing.T) {
 	assert.NotNil(t, cfg.Skills)
 	assert.Len(t, cfg.Skills, 0)
 }
+
+// A config saved by v0.19.0 setup can hold "https://host/". Reading it must
+// drop the slash, because hooks and links append "/api/..." to the endpoint.
+func TestReadConfig_TrimsTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"endpoint":"https://skills.example.net//","api_key":"k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ReadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Endpoint != "https://skills.example.net" {
+		t.Fatalf("endpoint = %q", cfg.Endpoint)
+	}
+}
