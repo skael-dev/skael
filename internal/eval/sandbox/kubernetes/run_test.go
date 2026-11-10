@@ -284,3 +284,18 @@ func TestCollectOutTimeout_ScalesWithTheRunTimeoutAndFloors(t *testing.T) {
 		t.Errorf("collectOutTimeout(40m) = %v, want 10m", got)
 	}
 }
+
+// A pod that fails before use must say why, or the error ends in nothing.
+func TestFailureDetail_NamesTheContainerExitAndItsLog(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name:  "proxy",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: "Could not bind to port 8888\n"}},
+	}}}}
+	got := failureDetail(pod)
+	if !strings.Contains(got, "container proxy exited 1 (Error): Could not bind to port 8888") {
+		t.Fatalf("failureDetail = %q", got)
+	}
+	if failureDetail(&corev1.Pod{}) != "no reason reported" {
+		t.Fatal("an empty status must still say something")
+	}
+}

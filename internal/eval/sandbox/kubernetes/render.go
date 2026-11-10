@@ -149,11 +149,14 @@ func ProxyPod(o Options, n names) *corev1.Pod {
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			Containers: []corev1.Container{{
-				Name:         "proxy",
-				Image:        o.Image,
-				Command:      []string{"tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"},
-				Ports:        []corev1.ContainerPort{{ContainerPort: proxyPort}},
-				VolumeMounts: []corev1.VolumeMount{{Name: "config", MountPath: "/etc/tinyproxy"}},
+				Name:    "proxy",
+				Image:   o.Image,
+				Command: []string{"tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"},
+				// A failed proxy's last log lines become its termination
+				// message, which the driver reports.
+				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				Ports:                    []corev1.ContainerPort{{ContainerPort: proxyPort}},
+				VolumeMounts:             []corev1.VolumeMount{{Name: "config", MountPath: "/etc/tinyproxy"}},
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: boolPtr(false),
 					Capabilities: &corev1.Capabilities{
