@@ -34,6 +34,11 @@ func extractSkillAtomically(archive []byte, destDir string) error {
 	parent := filepath.Dir(destDir)
 	base := filepath.Base(destDir)
 
+	// A repo with no skills yet has no <repo>/.claude/skills; create it.
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("extractSkillAtomically: create parent dir: %w", err)
+	}
+
 	// Create the temp dir in the same parent so the rename stays on-filesystem.
 	tmpDir, err := os.MkdirTemp(parent, base+fmt.Sprintf(".tmp-%d-*", rand.Int63()))
 	if err != nil {

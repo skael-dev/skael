@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // SkillEntry records a skill the user has explicitly installed.
@@ -104,6 +105,7 @@ func WriteConfig(dir string, cfg *Config) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
+	cfg.Endpoint = NormalizeEndpoint(cfg.Endpoint)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -146,7 +148,15 @@ func ReadConfig(dir string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config corrupt at %s (re-run skael setup): %w", path, err)
 	}
+	cfg.Endpoint = NormalizeEndpoint(cfg.Endpoint)
 	return &cfg, nil
+}
+
+// NormalizeEndpoint strips trailing slashes. Callers append paths that start
+// with "/", and the server's SPA fallback answers "//api/..." with HTML, so
+// "https://host/" would break every API call, link and activation hook.
+func NormalizeEndpoint(endpoint string) string {
+	return strings.TrimRight(endpoint, "/")
 }
 
 // WriteState writes state.json atomically (temp file + rename) so a crash or
@@ -261,7 +271,7 @@ func LoadConfig() (*Config, error) {
 	envKey := os.Getenv("SKAEL_KEY")
 
 	if envURL != "" && envKey != "" {
-		return &Config{Endpoint: envURL, APIKey: envKey}, nil
+		return &Config{Endpoint: NormalizeEndpoint(envURL), APIKey: envKey}, nil
 	}
 	if envURL != "" && envKey == "" {
 		return nil, fmt.Errorf("SKAEL_URL is set but SKAEL_KEY is missing")

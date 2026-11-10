@@ -113,7 +113,9 @@ func (e *APIError) Error() string {
 // New creates a Client with a 30-second HTTP timeout.
 func New(endpoint, apiKey string) *Client {
 	return &Client{
-		endpoint: endpoint,
+		// Paths start with "/", so a saved "https://host/" would request
+		// "//api/...", which the server's SPA fallback answers with HTML.
+		endpoint: strings.TrimRight(endpoint, "/"),
 		apiKey:   apiKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
