@@ -22,17 +22,15 @@ func Detect() []Agent {
 	return DetectIn(home)
 }
 
+// Known lists every agent skael supports, in display order.
+func Known() []Agent {
+	return []Agent{&ClaudeCode{}, &Codex{}, &OpenCode{}, &Cursor{}, &Pi{}}
+}
+
 // DetectIn checks all known agents against homeDir and returns the ones detected.
 func DetectIn(homeDir string) []Agent {
-	known := []Agent{
-		&ClaudeCode{},
-		&Codex{},
-		&OpenCode{},
-		&Cursor{},
-	}
-
 	var found []Agent
-	for _, a := range known {
+	for _, a := range Known() {
 		if a.Detected(homeDir) {
 			found = append(found, a)
 		}

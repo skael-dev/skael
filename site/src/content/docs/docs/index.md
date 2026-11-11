@@ -9,7 +9,7 @@ skael is the private control plane for your team's AI agent skills. Your `SKILL.
 - **scans** it for secrets, prompt injection, and exfiltration on publish,
 - **governs** it — holds a change to a namespace until someone who owns it says yes,
 - **measures** whether it actually works, by running it against real tasks,
-- **syncs** it to Claude Code, Cursor, Codex, and OpenCode on every developer's machine,
+- **syncs** it to Claude Code, Cursor, Codex, OpenCode and pi on every developer's machine,
 - and **shows you which skills actually fire** — by which agent, how often.
 
 Self-hosted and open source.

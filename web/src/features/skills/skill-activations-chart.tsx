@@ -15,10 +15,11 @@ const AGENT_COLORS: Record<string, string> = {
   codex: "var(--color-chart-2)",
   cursor: "var(--color-chart-3)",
   opencode: "var(--color-chart-4)",
+  pi: "var(--color-chart-5)",
 };
 
 function getAgentColor(agent: string, index: number): string {
-  return AGENT_COLORS[agent] ?? `var(--color-chart-${(index % 4) + 1})`;
+  return AGENT_COLORS[agent] ?? `var(--color-chart-${(index % 5) + 1})`;
 }
 
 async function fetchSkillTimeSeries(

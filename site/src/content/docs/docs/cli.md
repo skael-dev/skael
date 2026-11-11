@@ -303,6 +303,16 @@ Standalone management of activation-tracking and auto-sync hooks.
 - `uninstall` — remove hook scripts from all detected agents
 - `status` — show which agents have hooks installed
 
+| Agent | Activation tracking | Auto-sync |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json`, on each Skill tool call | on each prompt |
+| Codex | `~/.codex/config.toml`, a PreToolUse hook | before a tool call |
+| Cursor | `~/.cursor/hooks.json`, a transcript scan when a session stops | on session start |
+| OpenCode | `~/.config/opencode/plugins/skael-tracking.ts`, on each `skill` tool call | `skael-autosync.ts`, on each new session |
+| pi | `~/.pi/agent/extensions/skael-tracking.ts`, on each read of `skills/<name>/SKILL.md` and each `/skill:name` | `skael-autosync.ts`, on session start |
+
+Auto-sync runs `skael sync --quiet` in the background, at most once in 30 minutes. `uninstall` removes only the files and entries that Skael wrote.
+
 ## skael import `<url|path>`
 
 Imports skills into the registry from a GitHub repository, a subpath within one (e.g. `.../tree/main/skills/docx`), or a local directory. Each imported skill goes through the same scan and the same [publish gate](/docs/concepts#publish-gate) as `skael publish` — an imported skill can be rejected or held for review exactly like a published one.
@@ -464,7 +474,7 @@ Skael writes to two folders at each scope:
 
 | Folder | user scope | project scope | Read by |
 |---|---|---|---|
-| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode |
+| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode, pi |
 | Claude Code, when detected | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` | Claude Code |
 
 Claude Code reads only `.claude/skills`, so Skael writes a second copy there when it detects Claude Code. A skill that an older version placed in `.cursor/skills`, `.opencode/skills` or `.codex/skills` moves on the next `skael sync`.

@@ -383,7 +383,7 @@ func TestInstallOpenCodeHook_NewFile(t *testing.T) {
 	assert.Contains(t, content, "managed by skael", "plugin must contain managed-by marker")
 	assert.Contains(t, content, "tool.execute.before", "plugin must hook tool.execute.before")
 	assert.Contains(t, content, "/api/events", "plugin must POST to /api/events")
-	assert.Contains(t, content, `agent: "opencode"`, "plugin must identify as opencode agent")
+	assert.Contains(t, content, `report("opencode"`, "plugin must identify as opencode agent")
 }
 
 func TestInstallOpenCodeHook_Idempotent(t *testing.T) {
