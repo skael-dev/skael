@@ -2,7 +2,7 @@
 
 One registry for your team's AI skills — across every agent and every project.
 
-Your team's SKILL.md files live in scattered home directories and half-synced repos, copied by hand into each agent, with no idea which ones are actually used. Skael is the single source of truth: publish once, and it versions every skill, scans it for secrets and prompt injection, syncs it to Claude Code, Cursor, Codex, and OpenCode on every machine, and shows you which skills actually fire — by which agent, how often. Self-hosted and open source.
+Your team's SKILL.md files live in scattered home directories and half-synced repos, copied by hand into each agent, with no idea which ones are actually used. Skael is the single source of truth: publish once, and it versions every skill, scans it for secrets and prompt injection, syncs it to Claude Code, Cursor, Codex, OpenCode and pi on every machine, and shows you which skills actually fire — by which agent, how often. Self-hosted and open source.
 
 ![The skael dashboard — skills registry with versions, security status, and activation counts](site/public/dashboard-skills.png)
 
@@ -103,7 +103,7 @@ Skael writes to two folders at each scope:
 
 | Folder | user scope | project scope | Read by |
 |---|---|---|---|
-| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode |
+| Shared | `~/.agents/skills/<name>` | `<project>/.agents/skills/<name>` | Codex, Cursor, OpenCode, pi |
 | Claude Code, when detected | `~/.claude/skills/<name>` | `<project>/.claude/skills/<name>` | Claude Code |
 
 Claude Code reads only `.claude/skills`, so Skael writes a second copy there when it detects Claude Code. A skill that an older version placed in `.cursor/skills`, `.opencode/skills` or `.codex/skills` moves on the next `skael sync`.
@@ -170,7 +170,7 @@ Every account is `owner` (the first one, singular), `admin`, or `member` — the
 
 Every agent that uses a skill reports activation events back to the platform. `skael doctor` shows you which agents have tracking installed.
 
-Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation; the Cursor hook scans a session transcript afterwards and matches skill files that were referenced. The first misses skills that were read but never invoked, the second may count skills that were only read — so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
+Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation, and pi reports each read of a `SKILL.md` in a skills folder and each `/skill:name`; the Cursor hook scans a session transcript afterwards and matches skill files that were referenced. The first misses skills that were read but never invoked, the second may count skills that were only read — so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
 
 ## whetstone: authoring and linting skills
 
@@ -328,7 +328,7 @@ tests/e2e/        → End-to-end integration tests
 
 Single Go binary embeds the API server and a React dashboard (served from the same process). Backed by Postgres for skill metadata, full-text search, and activation events. Skill archives stored on local filesystem or S3-compatible object storage.
 
-The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, selective sync with checksum verification, and auto-sync via debounced hooks. Supports Claude Code, Codex, OpenCode, and Cursor.
+The CLI is a separate binary that talks to the API. It handles agent detection, file placement, hook installation, selective sync with checksum verification, and auto-sync via debounced hooks. Supports Claude Code, Codex, OpenCode, Cursor and pi.
 
 The server exposes a Prometheus `/metrics` endpoint for monitoring, supports CORS for separate frontend deployments, and includes rate limiting, security headers, and request tracing out of the box.
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -389,28 +388,6 @@ func UninstallCodexAutoSync(configPath string) error {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// OpenCode  (TypeScript plugin file)
-// ────────────────────────────────────────────────────────────────────────────
-
-// installOpenCodeHook writes the skael TypeScript plugin to configPath.
-// Unlike Claude/Codex, this is a standalone file — not an entry in a shared config.
-func installOpenCodeHook(configPath string) error {
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		return err
-	}
-	return atomicWriteFile(configPath, []byte(opencodePlugin), 0o644)
-}
-
-// uninstallOpenCodeHook removes the skael TypeScript plugin file.
-func uninstallOpenCodeHook(configPath string) error {
-	err := os.Remove(configPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
-
-// ────────────────────────────────────────────────────────────────────────────
 // Cursor  (JSON hooks.json)
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -638,7 +615,9 @@ func InstallForAgent(agentName, configPath, endpoint, apiKey, scriptPath string)
 	case "codex":
 		return installCodexHook(configPath, endpoint, apiKey, scriptPath)
 	case "opencode":
-		return installOpenCodeHook(configPath)
+		return writePlugin(configPath, opencodePlugin)
+	case "pi":
+		return writePlugin(configPath, piExtension)
 	case "cursor":
 		return installCursorHook(configPath, scriptPath)
 	default:
@@ -653,8 +632,8 @@ func UninstallForAgent(agentName, configPath string) error {
 		return UninstallClaudeHook(configPath)
 	case "codex":
 		return uninstallCodexHook(configPath)
-	case "opencode":
-		return uninstallOpenCodeHook(configPath)
+	case "opencode", "pi":
+		return removePlugin(configPath)
 	case "cursor":
 		return uninstallCursorHook(configPath)
 	default:
@@ -671,9 +650,8 @@ func InstallAutoSyncForAgent(agentName, configPath, scriptPath string) error {
 		return InstallCodexAutoSync(configPath, scriptPath)
 	case "cursor":
 		return InstallCursorAutoSync(configPath, scriptPath)
-	case "opencode":
-		// OpenCode auto-sync not yet supported (TypeScript plugin would need rework).
-		return nil
+	case "opencode", "pi":
+		return writePlugin(autoSyncPluginPath(configPath), autoSyncTS(agentName, scriptPath))
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}
@@ -688,8 +666,8 @@ func UninstallAutoSyncForAgent(agentName, configPath string) error {
 		return UninstallCodexAutoSync(configPath)
 	case "cursor":
 		return UninstallCursorAutoSync(configPath)
-	case "opencode":
-		return nil
+	case "opencode", "pi":
+		return removePlugin(autoSyncPluginPath(configPath))
 	default:
 		return fmt.Errorf("unsupported agent: %s", agentName)
 	}

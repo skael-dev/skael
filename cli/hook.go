@@ -138,12 +138,7 @@ func runHookStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check all known agents, not just detected ones.
-	knownAgents := []agents.Agent{
-		&agents.ClaudeCode{},
-		&agents.Codex{},
-		&agents.OpenCode{},
-		&agents.Cursor{},
-	}
+	knownAgents := agents.Known()
 
 	type agentLine struct {
 		status hookAgentStatus

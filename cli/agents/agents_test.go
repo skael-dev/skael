@@ -85,6 +85,7 @@ func TestSkillsDirs_UserAndProject(t *testing.T) {
 		{&Codex{}, "/home/u/.codex/skills", "/repo/.agents/skills"},
 		{&OpenCode{}, "/home/u/.config/opencode/skills", "/repo/.opencode/skills"},
 		{&Cursor{}, "/home/u/.cursor/skills", "/repo/.cursor/skills"},
+		{&Pi{}, "/home/u/.pi/agent/skills", "/repo/.pi/skills"},
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.wantUser, c.agent.UserSkillsDir(home), "%s user", c.agent.Name())
