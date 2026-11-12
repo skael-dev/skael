@@ -71,10 +71,10 @@ func RegisterRoutes(api huma.API, store *Store, opts Options) {
 		}
 		source := input.Body.EventSource
 		if source == "" {
-			// Cursor's only reporter is the transcript-scanning stop hook (see
-			// migrate/007_event_source.sql), so an old hook script that predates
-			// this field still gets labelled correctly rather than merging into
-			// tool_invocation until the user re-runs `skael hook install`.
+			// A Cursor script that predates this field is the transcript-scanning
+			// stop hook (see migrate/007_event_source.sql), so it still gets
+			// labelled correctly until the user re-runs `skael hook install`.
+			// The read hook that replaced it sends tool_invocation.
 			if input.Body.Agent == "cursor" {
 				source = "transcript_scan"
 			} else {

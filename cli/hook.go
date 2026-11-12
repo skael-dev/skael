@@ -76,7 +76,7 @@ func installActivationHooks(dir, home, endpoint, apiKey string, detected []agent
 		return 1
 	}
 	failed := 0
-	cursorScriptPath, cursorErr := hooks.WriteCursorStopScript(dir)
+	cursorScriptPath, cursorErr := hooks.WriteCursorScript(dir)
 	if cursorErr != nil {
 		ui.Warn("write cursor hook script: %s", cursorErr)
 		failed++

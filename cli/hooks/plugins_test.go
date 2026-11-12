@@ -73,14 +73,15 @@ await hooks["tool.execute.before"]({ tool: "skill" }, { args: { name: "deploy-he
 	require.EqualValues(t, 3, got[0]["version"])
 }
 
-// pi has no skill tool: a read of a SKILL.md in a skills folder, or
-// /skill:name, is the activation.
+// pi has no skill tool: a read of a SKILL.md in a skills folder pi loads
+// from, or /skill:name, is the activation. A skill repo's working copy is not.
 func TestPiExtensionReportsASkillRead(t *testing.T) {
 	got := runPlugin(t, piExtension, `const on = {}
 plugin({ on: (name, fn) => { on[name] = fn } })
 const ctx = { model: { id: "claude-sonnet-5-5" } }
 await on.tool_call({ toolName: "read", input: { path: "/r/.agents/skills/deploy-helper/SKILL.md" } }, ctx)
 await on.tool_call({ toolName: "read", input: { path: "/r/docs/SKILL.md" } }, ctx)
+await on.tool_call({ toolName: "read", input: { path: "/r/skills/deploy-helper/SKILL.md" } }, ctx)
 await on.tool_call({ toolName: "bash", input: { command: "cat SKILL.md" } }, ctx)
 const res = await on.input({ text: "/skill:release-notes now" }, ctx)
 if (res.action !== "continue") throw new Error("input must continue")
@@ -92,4 +93,21 @@ if (res.action !== "continue") throw new Error("input must continue")
 		require.Equal(t, "pi", ev["agent"])
 		require.Equal(t, "claude-sonnet-5-5", ev["model"])
 	}
+}
+
+// A skill skael did not install is named by its frontmatter, so a connected
+// repo's .agents/skills/deploy reports its canonical name.
+func TestPiExtensionNamesAnUninstalledSkillByFrontmatter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".pi", "skills", "deploy")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	file := filepath.Join(dir, "SKILL.md")
+	require.NoError(t, os.WriteFile(file, []byte("---\r\nname: \"platform:deploy\"\r\n---\r\nbody\r\n"), 0o644))
+	path, _ := json.Marshal(file)
+	got := runPlugin(t, piExtension, `const on = {}
+plugin({ on: (name, fn) => { on[name] = fn } })
+await on.tool_call({ toolName: "read", input: { path: `+string(path)+` } }, {})
+`)
+	require.Len(t, got, 1)
+	require.Equal(t, "platform:deploy", got[0]["skill_name"])
+	require.EqualValues(t, 0, got[0]["version"])
 }

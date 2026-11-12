@@ -410,13 +410,16 @@ func installCursorHook(configPath, scriptPath string) error {
 		hooks["hooks"] = hooksObj
 	}
 
-	// stop hook: activation tracking via transcript parsing.
-	stopCmd := fmt.Sprintf("SKAEL_AGENT=cursor %s", scriptPath)
-	stopEntry := map[string]any{
+	// Cursor loads a skill by reading its SKILL.md. postToolUse observes the
+	// read and cannot block it. The stop hook is the transcript scan skael
+	// used before, which saw no tool results and ran without a transcript in
+	// the CLI.
+	removeCursorHookEntries(hooksObj, "stop")
+	upsertCursorHookEntry(hooksObj, "postToolUse", map[string]any{
 		"_managed_by": managedBy,
-		"command":     stopCmd,
-	}
-	upsertCursorHookEntry(hooksObj, "stop", stopEntry)
+		"command":     scriptPath,
+		"matcher":     "Read",
+	})
 
 	return writeJSONFile(configPath, hooks)
 }
@@ -448,6 +451,30 @@ func upsertCursorHookEntry(hooksObj map[string]any, hookName string, entry map[s
 	hooksObj[hookName] = arr
 }
 
+// removeCursorHookEntries drops the skael-managed entry from each named hook
+// array, and the array when nothing else is left in it.
+func removeCursorHookEntries(hooksObj map[string]any, hookNames ...string) {
+	for _, hookName := range hookNames {
+		arr, ok := hooksObj[hookName].([]any)
+		if !ok {
+			continue
+		}
+		var filtered []any
+		for _, entry := range arr {
+			m, ok := entry.(map[string]any)
+			if ok && m["_managed_by"] == managedBy {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		if len(filtered) == 0 {
+			delete(hooksObj, hookName)
+		} else {
+			hooksObj[hookName] = filtered
+		}
+	}
+}
+
 func uninstallCursorHook(configPath string) error {
 	hooks, err := readJSONFile(configPath)
 	if err != nil {
@@ -462,27 +489,7 @@ func uninstallCursorHook(configPath string) error {
 		return nil
 	}
 
-	for _, hookName := range []string{"stop"} {
-		arr, ok := hooksObj[hookName].([]any)
-		if !ok {
-			continue
-		}
-
-		var filtered []any
-		for _, entry := range arr {
-			m, ok := entry.(map[string]any)
-			if ok && m["_managed_by"] == managedBy {
-				continue
-			}
-			filtered = append(filtered, entry)
-		}
-
-		if len(filtered) == 0 {
-			delete(hooksObj, hookName)
-		} else {
-			hooksObj[hookName] = filtered
-		}
-	}
+	removeCursorHookEntries(hooksObj, "stop", "postToolUse")
 
 	if len(hooksObj) == 0 {
 		delete(hooks, "hooks")
@@ -492,7 +499,7 @@ func uninstallCursorHook(configPath string) error {
 }
 
 // InstallCursorAutoSync adds/updates a sessionStart hook pointing to the auto-sync script.
-// This is separate from the activation tracking hook (stop) — it uses _managed_by: "skael-autosync".
+// This is separate from the activation tracking hook (postToolUse) — it uses _managed_by: "skael-autosync".
 func InstallCursorAutoSync(configPath, scriptPath string) error {
 	hooks, err := readJSONFile(configPath)
 	if err != nil && !os.IsNotExist(err) {

@@ -19,7 +19,7 @@ const STEP_LINK: Record<string, string> = {
   publish: "/",
   sync: "/",
   activate: "/analytics",
-  invite: "/settings",
+  invite: "/settings/instance#section-signin",
   public_url: "/settings/instance#section-general",
   provider: "/settings/evaluation",
   worker: "/settings/evaluation",
@@ -31,7 +31,7 @@ const STEP_HINT: Record<string, string> = {
   publish: "skael publish ./my-skill, or connect a repo on Git sync.",
   sync: "skael sync on a developer machine.",
   activate: "Use the skill in Claude Code, Codex, Cursor, OpenCode or pi after skael hook install.",
-  invite: "Settings → Team.",
+  invite: "Share this server's URL so a teammate can sign up.",
 };
 
 function hidden(): boolean {

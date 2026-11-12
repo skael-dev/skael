@@ -307,9 +307,9 @@ Standalone management of activation-tracking and auto-sync hooks.
 |---|---|---|
 | Claude Code | `~/.claude/settings.json`, on each Skill tool call | on each prompt |
 | Codex | `~/.codex/config.toml`, a PreToolUse hook | before a tool call |
-| Cursor | `~/.cursor/hooks.json`, a transcript scan when a session stops | on session start |
+| Cursor | `~/.cursor/hooks.json`, on each read of a `SKILL.md` in `.agents`, `.cursor`, `.claude` or `.codex` `/skills/<name>/` | on session start |
 | OpenCode | `~/.config/opencode/plugins/skael-tracking.ts`, on each `skill` tool call | `skael-autosync.ts`, on each new session |
-| pi | `~/.pi/agent/extensions/skael-tracking.ts`, on each read of `skills/<name>/SKILL.md` and each `/skill:name` | `skael-autosync.ts`, on session start |
+| pi | `~/.pi/agent/extensions/skael-tracking.ts`, on each read of a `SKILL.md` in `.agents`, `.pi` or `.pi/agent` `/skills/<name>/`, and each `/skill:name` | `skael-autosync.ts`, on session start |
 
 Auto-sync runs `skael sync --quiet` in the background, at most once in 30 minutes. `uninstall` removes only the files and entries that Skael wrote.
 

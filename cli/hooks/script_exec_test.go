@@ -403,49 +403,86 @@ func TestHookScript_ReportsToolInvocationSource(t *testing.T) {
 	assert.Equal(t, "tool_invocation", bodies[0]["event_source"])
 }
 
-func TestCursorStopScript_ReportsTranscriptScanSource(t *testing.T) {
-	requireJQ(t)
-
-	scriptPath, err := hooks.WriteCursorStopScript(t.TempDir())
+// cursorRead runs the Cursor read hook for one Read of file, as Cursor sends it.
+func cursorRead(t *testing.T, env *hookEnv, file string) []map[string]any {
+	t.Helper()
+	scriptPath, err := hooks.WriteCursorScript(t.TempDir())
 	require.NoError(t, err)
-
-	transcript := filepath.Join(t.TempDir(), "transcript.json")
-	require.NoError(t, os.WriteFile(transcript,
-		[]byte(`{"messages":["read skills/brainstorming/SKILL.md for guidance"]}`), 0o644))
-
-	env := newHookEnv(t)
-	payload := `{"transcript_path":` + strconv.Quote(transcript) + `,"cwd":"/tmp/project"}`
-	code, bodies := env.run(t, scriptPath, payload)
-
+	payload, err := json.Marshal(map[string]any{
+		"hook_event_name": "postToolUse",
+		"tool_name":       "Read",
+		"tool_input":      map[string]any{"file_path": file},
+		"model":           "default",
+		"workspace_roots": []string{"/work/repo"},
+		"transcript_path": nil,
+	})
+	require.NoError(t, err)
+	code, bodies := env.run(t, scriptPath, string(payload))
 	require.Equal(t, 0, code)
-	require.Len(t, bodies, 1)
-	assert.Equal(t, "brainstorming", bodies[0]["skill_name"])
-	assert.Equal(t, "cursor", bodies[0]["agent"])
-	assert.Equal(t, "transcript_scan", bodies[0]["event_source"])
+	return bodies
 }
 
-// TestCursorStopScript_IgnoresUnderscoreInSkillName verifies the transcript
-// regex's character class agrees with the canonical skill name rule
-// (^[a-z0-9]([a-z0-9:.-]*[a-z0-9])?$, no underscore). A name containing "_"
-// must never be extracted and POSTed — the ingest validator rejects it
-// anyway, so a mismatch here only wastes a round trip, but the two patterns
-// must not disagree.
-func TestCursorStopScript_IgnoresUnderscoreInSkillName(t *testing.T) {
+func writeSkill(t *testing.T, dir, frontmatterName string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	file := filepath.Join(dir, "SKILL.md")
+	body := "---\nname: " + frontmatterName + "\ndescription: d\n---\nbody\n"
+	require.NoError(t, os.WriteFile(file, []byte(body), 0o644))
+	return file
+}
+
+// Cursor loads a skill by reading its SKILL.md. A skael install is named by
+// its folder and versioned from state.json; the project is the workspace root,
+// because Cursor runs a user hook from ~/.cursor.
+func TestCursorScript_ReportsAnInstalledSkillRead(t *testing.T) {
 	requireJQ(t)
-
-	scriptPath, err := hooks.WriteCursorStopScript(t.TempDir())
-	require.NoError(t, err)
-
-	transcript := filepath.Join(t.TempDir(), "transcript.json")
-	require.NoError(t, os.WriteFile(transcript,
-		[]byte(`{"messages":["read skills/under_score/SKILL.md for guidance"]}`), 0o644))
-
 	env := newHookEnv(t)
-	payload := `{"transcript_path":` + strconv.Quote(transcript) + `,"cwd":"/tmp/project"}`
-	code, bodies := env.run(t, scriptPath, payload)
+	require.NoError(t, os.WriteFile(filepath.Join(env.home, ".skael", "state.json"),
+		[]byte(`{"skills":[{"name":"platform:deploy","version":4}]}`), 0o600))
+	file := writeSkill(t, filepath.Join(t.TempDir(), ".agents", "skills", "platform:deploy"), "deploy")
 
-	require.Equal(t, 0, code)
-	assert.Empty(t, bodies, "a skill name containing an underscore must not be extracted or posted")
+	bodies := cursorRead(t, env, file)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "platform:deploy", bodies[0]["skill_name"])
+	assert.EqualValues(t, 4, bodies[0]["version"])
+	assert.Equal(t, "cursor", bodies[0]["agent"])
+	assert.Equal(t, "tool_invocation", bodies[0]["event_source"])
+	assert.Equal(t, "", bodies[0]["model"], "default is not a model")
+	assert.NotEqual(t, "nohash", bodies[0]["project_hash"])
+
+	other := newHookEnv(t)
+	again := cursorRead(t, other, file)
+	require.Len(t, again, 1)
+	assert.Equal(t, bodies[0]["project_hash"], again[0]["project_hash"], "the project hash must come from the workspace root, not the hook's directory")
+}
+
+// A skill skael did not install is named by its frontmatter, so a connected
+// repo's .agents/skills/deploy reports its canonical name.
+func TestCursorScript_NamesAnUninstalledSkillByFrontmatter(t *testing.T) {
+	requireJQ(t)
+	env := newHookEnv(t)
+	file := writeSkill(t, filepath.Join(t.TempDir(), ".cursor", "skills", "deploy"), "platform:deploy")
+
+	bodies := cursorRead(t, env, file)
+	require.Len(t, bodies, 1)
+	assert.Equal(t, "platform:deploy", bodies[0]["skill_name"])
+	assert.EqualValues(t, 0, bodies[0]["version"])
+}
+
+// A SKILL.md outside a skills folder Cursor loads from is a file read: a skill
+// repo's working copy, docs, or a name the registry would reject.
+func TestCursorScript_IgnoresOtherReads(t *testing.T) {
+	requireJQ(t)
+	env := newHookEnv(t)
+	root := t.TempDir()
+	for _, file := range []string{
+		writeSkill(t, filepath.Join(root, "skills", "deploy"), "deploy"),
+		writeSkill(t, filepath.Join(root, "docs"), "deploy"),
+		writeSkill(t, filepath.Join(root, ".agents", "skills", "under_score"), "under_score"),
+		filepath.Join(root, ".agents", "skills", "deploy", "README.md"),
+	} {
+		assert.Empty(t, cursorRead(t, env, file), file)
+	}
 }
 
 func TestOpenCodePlugin_ReportsToolInvocationSource(t *testing.T) {
