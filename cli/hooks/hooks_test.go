@@ -460,90 +460,75 @@ func TestOpenCodePlugin_FireAndForget(t *testing.T) {
 	assert.Contains(t, string(data), ".catch(() => {})", "plugin must use fire-and-forget fetch pattern")
 }
 
-func TestInstallCursorHook_NewFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "hooks.json")
-
-	err := hooks.InstallForAgent("cursor", configPath, "", "", "/home/user/.skael/hooks/skael-cursor-stop.sh")
-	require.NoError(t, err)
-
+// readCursorHooks returns the hooks object of a Cursor hooks.json.
+func readCursorHooks(t *testing.T, configPath string) map[string]any {
+	t.Helper()
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-
 	var hooksFile map[string]any
 	require.NoError(t, json.Unmarshal(data, &hooksFile))
-
-	// Must have version 1.
 	assert.Equal(t, float64(1), hooksFile["version"])
+	hooksObj, _ := hooksFile["hooks"].(map[string]any)
+	return hooksObj
+}
 
-	hooksObj, ok := hooksFile["hooks"].(map[string]any)
-	require.True(t, ok)
+func TestInstallCursorHook_NewFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "hooks.json")
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/home/user/.skael/hooks/skael-cursor-read.sh"))
 
-	// sessionStart is now managed by auto-sync hooks, not activation tracking.
+	hooksObj := readCursorHooks(t, configPath)
 	_, hasSessionStart := hooksObj["sessionStart"]
 	assert.False(t, hasSessionStart, "sessionStart must NOT be created by activation tracking installer")
 
-	// Must have stop hook.
-	stopArr, ok := hooksObj["stop"].([]any)
-	require.True(t, ok, "stop array must exist")
-	require.Len(t, stopArr, 1)
-
-	stopEntry, ok := stopArr[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "skael", stopEntry["_managed_by"])
-	assert.Contains(t, stopEntry["command"].(string), "skael-cursor-stop.sh")
+	arr, ok := hooksObj["postToolUse"].([]any)
+	require.True(t, ok, "postToolUse array must exist")
+	require.Len(t, arr, 1)
+	entry := arr[0].(map[string]any)
+	assert.Equal(t, "skael", entry["_managed_by"])
+	assert.Equal(t, "Read", entry["matcher"])
+	assert.Equal(t, "/home/user/.skael/hooks/skael-cursor-read.sh", entry["command"])
 }
 
-func TestInstallCursorHook_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "hooks.json")
+// An install over the transcript-scanning stop hook removes it, so one skill
+// load is not counted twice. The user's own stop hook stays.
+func TestInstallCursorHook_ReplacesTheStopHook(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "hooks.json")
+	existing := `{"version":1,"hooks":{"stop":[{"command":"my-custom-hook.sh"},{"_managed_by":"skael","command":"SKAEL_AGENT=cursor /h/.skael/hooks/skael-cursor-stop.sh"}]}}`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
 
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v1/skael-cursor-stop.sh"))
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v2/skael-cursor-stop.sh"))
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/h/.skael/hooks/skael-cursor-read.sh"))
 
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
+	assert.NotContains(t, string(data), "skael-cursor-stop.sh")
+	assert.Contains(t, string(data), "my-custom-hook.sh", "user's existing hook must be preserved")
+	assert.Equal(t, 1, strings.Count(string(data), `"_managed_by"`))
+}
 
-	// Exactly 1 _managed_by entry (stop only; sessionStart moved to auto-sync).
-	count := strings.Count(string(data), `"_managed_by"`)
-	assert.Equal(t, 1, count, "must have exactly 1 skael-managed entry (stop)")
+func TestInstallCursorHook_Idempotent(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "hooks.json")
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v1/skael-cursor-read.sh"))
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v2/skael-cursor-read.sh"))
 
-	// Second install's path must be used.
-	assert.Contains(t, string(data), "/path/v2/skael-cursor-stop.sh")
-	assert.NotContains(t, string(data), "/path/v1/skael-cursor-stop.sh")
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), `"_managed_by"`), "must have exactly 1 skael-managed entry")
+	assert.Contains(t, string(data), "/path/v2/skael-cursor-read.sh")
+	assert.NotContains(t, string(data), "/path/v1/skael-cursor-read.sh")
 }
 
 func TestUninstallCursorHook(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "hooks.json")
-
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-stop.sh"))
-
-	data, _ := os.ReadFile(configPath)
-	require.Contains(t, string(data), "skael")
+	configPath := filepath.Join(t.TempDir(), "hooks.json")
+	existing := `{"version":1,"hooks":{"stop":[{"_managed_by":"skael","command":"old.sh"}],"postToolUse":[{"command":"mine.sh"}]}}`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
+	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-read.sh"))
 
 	require.NoError(t, hooks.UninstallForAgent("cursor", configPath))
 
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "skael")
-}
-
-func TestInstallCursorHook_PreservesExistingHooks(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "hooks.json")
-
-	// Pre-populate with a user-defined stop hook.
-	existing := `{"version":1,"hooks":{"stop":[{"command":"my-custom-hook.sh"}]}}`
-	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
-
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-stop.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	assert.Contains(t, string(data), "my-custom-hook.sh", "user's existing hook must be preserved")
-	assert.Contains(t, string(data), "skael-cursor-stop.sh", "skael hook must be added")
+	assert.Contains(t, string(data), "mine.sh")
 }
 
 func TestOpenCodePlugin_ReadsConfigFile(t *testing.T) {

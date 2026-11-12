@@ -170,7 +170,7 @@ Every account is `owner` (the first one, singular), `admin`, or `member` — the
 
 Every agent that uses a skill reports activation events back to the platform. `skael doctor` shows you which agents have tracking installed.
 
-Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation, and pi reports each read of a `SKILL.md` in a skills folder and each `/skill:name`; the Cursor hook scans a session transcript afterwards and matches skill files that were referenced. The first misses skills that were read but never invoked, the second may count skills that were only read — so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
+Agents don't all measure the same thing, so events record how they were observed. Claude Code and OpenCode report an explicit skill invocation. Cursor and pi have no skill tool, so they report each read of a `SKILL.md` in a skills folder the agent loads from, and pi also reports each `/skill:name`. A read of a skill repo's working copy is not counted. Events from Cursor hooks before this change are labelled transcript scans, so the dashboard shows the split rather than one merged number. Skill names that aren't in the registry are counted separately from activations instead of being mixed in.
 
 ## whetstone: authoring and linting skills
 

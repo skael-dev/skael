@@ -65,25 +65,52 @@ export default async () => ({
 })
 `
 
-// piExtension reports a skill pi loads: the model reads a SKILL.md inside a
-// skills folder, or the user types /skill:name. pi has no skill tool.
+// piExtension reports a skill pi loads: the model reads a SKILL.md directly
+// inside a skills folder pi loads from, or the user types /skill:name. pi has
+// no skill tool. A SKILL.md anywhere else, such as a skill repo's working
+// copy, is a file read.
 const piExtension = `// skael-tracking.ts — managed by skael CLI
-import { basename, dirname } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 ` + reporterTS + `
 let harness = ""
 import("@earendil-works/pi-coding-agent").then((m: any) => { harness = String(m.VERSION ?? "") }).catch(() => {})
+
+const SKILL_ROOTS = ["/.agents/skills", "/.pi/skills", "/.pi/agent/skills"]
 
 function extra(ctx: any) {
   const model = typeof ctx?.model?.id === "string" ? ctx.model.id : undefined
   return { model, harness_version: harness || undefined }
 }
 
+// A skill skael installed sits in a folder named exactly its canonical name.
+// Any other skill is named by its frontmatter, then by its folder.
+function skillName(file: string): string {
+  const folder = basename(dirname(file))
+  const state = readJSON(join(homedir(), ".skael", "state.json"))
+  if (state?.skills?.some((s: { name: string }) => s.name === folder)) return folder
+  try {
+    const lines = readFileSync(file, "utf8").split(/\r?\n/)
+    if (lines[0] === "---") {
+      for (const line of lines.slice(1)) {
+        if (line === "---") break
+        const m = /^name:\s*["']?([^"'\s]+)["']?\s*$/.exec(line)
+        if (m) return m[1]
+      }
+    }
+  } catch {}
+  return folder
+}
+
 export default function (pi: any) {
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (event.toolName !== "read") return
-    const path = String(event.input?.path ?? "")
-    if (basename(path) !== "SKILL.md" || basename(dirname(dirname(path))) !== "skills") return
-    report("pi", basename(dirname(path)), extra(ctx))
+    let path = String(event.input?.path ?? "")
+    if (path.startsWith("~/")) path = join(homedir(), path.slice(2))
+    path = resolve(typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd(), path)
+    if (basename(path) !== "SKILL.md") return
+    const root = dirname(dirname(path))
+    if (!SKILL_ROOTS.some((r) => root.endsWith(r))) return
+    report("pi", skillName(path), extra(ctx))
   })
   pi.on("input", async (event: any, ctx: any) => {
     const m = /^\/skill:(\S+)/.exec(event.text ?? "")

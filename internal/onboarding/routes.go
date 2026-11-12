@@ -55,7 +55,7 @@ func Status(ctx context.Context, pool *pgxpool.Pool, facts SetupFacts) (*Onboard
 			{"publish", "Publish a skill", published},
 			{"sync", "Sync it into an agent", synced},
 			{"activate", "See the first activation", activated},
-			{"invite", "Invite a teammate", people >= 2},
+			{"invite", "Add a teammate", people >= 2},
 		},
 		Setup: []Step{
 			{"public_url", "Confirm the public URL", facts.PublicURL != ""},
