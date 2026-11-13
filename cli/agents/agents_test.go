@@ -81,11 +81,11 @@ func TestSkillsDirs_UserAndProject(t *testing.T) {
 		wantUser    string
 		wantProject string
 	}{
-		{&ClaudeCode{}, "/home/u/.claude/skills", "/repo/.claude/skills"},
-		{&Codex{}, "/home/u/.codex/skills", "/repo/.agents/skills"},
-		{&OpenCode{}, "/home/u/.config/opencode/skills", "/repo/.opencode/skills"},
-		{&Cursor{}, "/home/u/.cursor/skills", "/repo/.cursor/skills"},
-		{&Pi{}, "/home/u/.pi/agent/skills", "/repo/.pi/skills"},
+		{&ClaudeCode{}, filepath.FromSlash("/home/u/.claude/skills"), filepath.FromSlash("/repo/.claude/skills")},
+		{&Codex{}, filepath.FromSlash("/home/u/.codex/skills"), filepath.FromSlash("/repo/.agents/skills")},
+		{&OpenCode{}, filepath.FromSlash("/home/u/.config/opencode/skills"), filepath.FromSlash("/repo/.opencode/skills")},
+		{&Cursor{}, filepath.FromSlash("/home/u/.cursor/skills"), filepath.FromSlash("/repo/.cursor/skills")},
+		{&Pi{}, filepath.FromSlash("/home/u/.pi/agent/skills"), filepath.FromSlash("/repo/.pi/skills")},
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.wantUser, c.agent.UserSkillsDir(home), "%s user", c.agent.Name())

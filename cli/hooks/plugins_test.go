@@ -45,7 +45,7 @@ await new Promise((r) => setTimeout(r, 500))
 
 	cmd := exec.Command("node", "driver.mts")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
 

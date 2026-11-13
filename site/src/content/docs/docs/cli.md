@@ -471,6 +471,8 @@ Every installed skill lives at one of two scopes:
 - **`user`** — installed under your home directory. Follows you across every project.
 - **`project`** — installed inside the repo, under version control alongside your code. Follows the repo — everyone who checks it out gets it too.
 
+Each skill installs into a folder named its canonical name. Windows does not allow `:` in a file name, so on Windows a prefixed skill such as `payments:refunds` installs into `payments_refunds`. The agent still sees the name in the skill's frontmatter, and activations still report `payments:refunds`. A repo that commits a `payments:refunds` folder from macOS or Linux does not check out on Windows. Commit project-scope skills from Windows, or have each developer run `skael sync`.
+
 **The default is `project`.** Scope is resolved with this precedence: a command's `--scope` flag, then the `scope` value saved in `~/.skael/config.json`, then the default.
 
 - `skael setup --scope user` sets the default saved to your config.

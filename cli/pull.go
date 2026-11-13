@@ -264,7 +264,7 @@ func installBundle(target string, res *client.Resolution, manifest []byte, archi
 	}
 
 	for _, e := range res.Entries {
-		dest := filepath.Join(stage, e.Name)
+		dest := filepath.Join(stage, config.SkillFolder(e.Name))
 		if err := os.Mkdir(dest, 0o755); err != nil {
 			return err
 		}
@@ -311,7 +311,7 @@ func keepForeignEntries(target, stage string) error {
 		var m client.BundleManifest
 		if json.Unmarshal(raw, &m) == nil {
 			for _, s := range m.Skills {
-				previous[s.Name] = true
+				previous[config.SkillFolder(s.Name)] = true
 			}
 		}
 	}

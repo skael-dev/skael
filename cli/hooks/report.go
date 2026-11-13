@@ -164,10 +164,15 @@ func cursorReport(p payload, skaelDir string) *Event {
 		return nil
 	}
 
-	// A skill skael installed sits in a folder named exactly its canonical
-	// name. Any other skill is named by its frontmatter, then by its folder.
+	// A skill skael installed sits in a folder named its canonical name, with
+	// ':' as '_' on Windows. Any other skill is named by its frontmatter, then
+	// by its folder.
 	name := path.Base(skillDir)
-	if !inState(skaelDir, name) {
+	switch canonical := strings.ReplaceAll(name, "_", ":"); {
+	case inState(skaelDir, name):
+	case inState(skaelDir, canonical):
+		name = canonical
+	default:
 		if fm := frontmatterName(file); fm != "" {
 			name = fm
 		}

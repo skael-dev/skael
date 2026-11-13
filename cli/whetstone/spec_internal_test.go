@@ -3,6 +3,7 @@ package whetstone
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/skael-dev/skael/internal/eval/spec"
@@ -39,6 +40,10 @@ func TestRunSpecEdit_ApprovesTheVersionItStores(t *testing.T) {
 	// A fake editor that changes one field, so sameSpec sees a real edit.
 	editor := filepath.Join(t.TempDir(), "editor.sh")
 	script := "#!/bin/sh\nsed -i.bak 's/Extract tables from PDFs./Extract tables and charts from PDFs./' \"$1\"\n"
+	if runtime.GOOS == "windows" {
+		editor = filepath.Join(t.TempDir(), "editor.bat")
+		script = "@powershell -NoProfile -Command \"$p='%~1'; (Get-Content -Raw $p).Replace('Extract tables from PDFs.','Extract tables and charts from PDFs.') | Set-Content -NoNewline $p\"\r\n"
+	}
 	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

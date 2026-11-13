@@ -118,7 +118,8 @@ func TestReport_CursorRead(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"skills":[{"name":"platform:deploy","version":4}]}`), 0o600))
 	root := t.TempDir()
 
-	ev := cursorRead(t, dir, writeSkill(t, filepath.Join(root, ".agents", "skills", "platform:deploy"), "deploy"))
+	// Windows installs platform:deploy into platform_deploy.
+	ev := cursorRead(t, dir, writeSkill(t, filepath.Join(root, ".agents", "skills", "platform_deploy"), "deploy"))
 	require.NotNil(t, ev)
 	assert.Equal(t, "platform:deploy", ev.SkillName)
 	assert.Equal(t, 4, ev.Version)

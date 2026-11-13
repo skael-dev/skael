@@ -81,12 +81,15 @@ function extra(ctx: any) {
   return { model, harness_version: harness || undefined }
 }
 
-// A skill skael installed sits in a folder named exactly its canonical name.
+// A skill skael installed sits in a folder named its canonical name, with
+// ':' as '_' on Windows.
 // Any other skill is named by its frontmatter, then by its folder.
 function skillName(file: string): string {
   const folder = basename(dirname(file))
   const state = readJSON(join(homedir(), ".skael", "state.json"))
-  if (state?.skills?.some((s: { name: string }) => s.name === folder)) return folder
+  for (const name of [folder, folder.replace(/_/g, ":")]) {
+    if (state?.skills?.some((s: { name: string }) => s.name === name)) return name
+  }
   try {
     const lines = readFileSync(file, "utf8").split(/\r?\n/)
     if (lines[0] === "---") {
