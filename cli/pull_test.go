@@ -66,7 +66,9 @@ func serveSet(t *testing.T, s stubSet) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("HOME", t.TempDir())
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
 	t.Setenv("SKAEL_URL", srv.URL)
 	t.Setenv("SKAEL_KEY", "k")
 }

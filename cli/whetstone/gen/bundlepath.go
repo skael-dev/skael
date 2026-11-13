@@ -17,7 +17,9 @@ func SafeJoin(dir, rel string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("empty path")
 	}
-	if filepath.IsAbs(rel) {
+	// A rooted path such as /etc/passwd is not absolute on Windows, and a
+	// volume name such as C: is not absolute without a separator.
+	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) || filepath.VolumeName(rel) != "" {
 		return "", fmt.Errorf("absolute path %q", rel)
 	}
 	target := filepath.Join(dir, rel)

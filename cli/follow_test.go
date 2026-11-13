@@ -74,6 +74,7 @@ func machine(t *testing.T) (home, repo, dir string) {
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Chdir(repo)
 	return home, repo, filepath.Join(home, ".skael")
 }
