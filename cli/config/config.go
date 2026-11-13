@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -300,4 +301,15 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return ReadConfig(DefaultDir())
+}
+
+// SkillFolder is the folder a skill installs into. Windows refuses ':' in a
+// file name, so a prefixed skill such as payments:refunds installs into
+// payments_refunds there. A registry name never holds '_', so the two
+// cannot collide.
+func SkillFolder(name string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(name, ":", "_")
+	}
+	return name
 }

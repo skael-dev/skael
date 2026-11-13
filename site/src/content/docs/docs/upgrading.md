@@ -20,6 +20,12 @@ Within 0.x minor releases, skael keeps these promises:
 - **API paths keep working.** A path that changes gets a deprecation note first. A new request field is optional, so an older CLI or worker keeps working against a newer server.
 - **Archives stay where they are.** An install that started with archives on the filesystem keeps them there, even though a new install now stores them in Postgres.
 
+### Upgrading to 0.22
+
+- Hooks run the skael binary instead of the bash scripts in `~/.skael/hooks`. The first skael command after the upgrade rewrites the hooks you installed and deletes the scripts. Nothing to run by hand.
+- The Claude Code auto-sync hook had a shape Claude Code ignored. The rewrite fixes it, so auto-sync starts to run in Claude Code.
+- Developer hashes do not change, so activation history stays attributed to the same developer.
+
 ### Upgrading to 0.20
 
 - Provider keys move from workers to the server. After the upgrade, **Evaluation** marks each provider "needs a key", and readiness reports `evaluation: degraded`, until you enter its key once.
@@ -113,6 +119,14 @@ With the install script:
 curl -fsSL https://skael.dev/install.sh | sh
 ```
 
+On Windows:
+
+```powershell
+scoop update skael
+# or
+irm https://skael.dev/install.ps1 | iex
+```
+
 From source:
 
 ```bash
@@ -130,7 +144,7 @@ skael doctor
 
 ### 6. Install the hooks again
 
-Run `skael hook install` on every machine after a CLI upgrade. A machine keeps running its old hook scripts until you do.
+From 0.22, any skael command rewrites the hooks you installed when they name an old script or another binary. Run `skael hook status` to confirm each agent shows `hook installed`. On an older CLI, run `skael hook install` after the upgrade.
 
 ## Rollback
 

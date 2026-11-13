@@ -74,6 +74,7 @@ func machine(t *testing.T) (home, repo, dir string) {
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Chdir(repo)
 	return home, repo, filepath.Join(home, ".skael")
 }
@@ -94,15 +95,15 @@ func TestReconcile_APatternInstallsEveryMatchIntoBothFolders(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Synced)
 	for _, base := range []string{".agents", ".claude"} {
-		require.True(t, exists(filepath.Join(repo, base, "skills", "payments:refunds", "SKILL.md")), base)
-		require.False(t, exists(filepath.Join(repo, base, "skills", "search:index")), base)
+		require.True(t, exists(filepath.Join(repo, base, "skills", config.SkillFolder("payments:refunds"), "SKILL.md")), base)
+		require.False(t, exists(filepath.Join(repo, base, "skills", config.SkillFolder("search:index"))), base)
 	}
 
 	reg.release(t, "payments:payouts", 1)
 	res, err = reconcile(c, cfg, dir, reconcileOptions{Quiet: true})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Synced, "a new skill under a followed pattern arrives on the next sync")
-	require.True(t, exists(filepath.Join(repo, ".claude", "skills", "payments:payouts", "SKILL.md")))
+	require.True(t, exists(filepath.Join(repo, ".claude", "skills", config.SkillFolder("payments:payouts"), "SKILL.md")))
 }
 
 // Removing a set keeps a skill another source still wants.

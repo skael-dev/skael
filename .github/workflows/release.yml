@@ -70,6 +70,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
   # Every published image is one entry in this matrix. A new binary that ships
   # as a container is added here, not as a copied step — the worker image went

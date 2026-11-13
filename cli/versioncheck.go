@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +19,13 @@ import (
 // versionCheckEvery bounds how often a command asks the server its version.
 const versionCheckEvery = 24 * time.Hour
 
-const updateHint = "Update: curl -fsSL https://skael.dev/install | sh, or brew upgrade --cask skael-dev/skael/skael"
+// updateHint names the update command for this OS.
+func updateHint() string {
+	if runtime.GOOS == "windows" {
+		return "Update: scoop update skael, or irm https://skael.dev/install.ps1 | iex"
+	}
+	return "Update: curl -fsSL https://skael.dev/install | sh, or brew upgrade --cask skael-dev/skael/skael"
+}
 
 // versionCheck is the last answer, kept beside the config.
 type versionCheck struct {
@@ -77,7 +84,7 @@ func versionNotice(cli, server string) string {
 	}
 	switch cmp := slices.Compare(c[:], s[:]); {
 	case cmp < 0:
-		return fmt.Sprintf("skael %s is older than this server (%s). It keeps working, but newer features need an update. %s", cli, server, updateHint)
+		return fmt.Sprintf("skael %s is older than this server (%s). It keeps working, but newer features need an update. %s", cli, server, updateHint())
 	case cmp > 0:
 		return fmt.Sprintf("This server runs %s, older than this CLI (%s). Features of %s need the server upgraded.", server, cli, cli)
 	}
@@ -90,7 +97,7 @@ func maybeNoticeVersion(args []string) {
 	if ui.JSONMode || slices.Contains(args, "--quiet") || slices.Contains(args, "--json") {
 		return
 	}
-	if _, ok := parseVersion(buildVersion); !ok || len(args) == 0 || args[0] == "version" || args[0] == "doctor" {
+	if _, ok := parseVersion(buildVersion); !ok || len(args) == 0 || args[0] == "version" || args[0] == "doctor" || args[0] == "hook" {
 		return
 	}
 	cfg, err := config.LoadConfig()

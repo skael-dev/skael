@@ -31,7 +31,9 @@ func TestMaybeNoticeVersion_OncePerDayOnStderr(t *testing.T) {
 		_, _ = io.WriteString(w, `{"version":"0.22.0"}`)
 	}))
 	defer srv.Close()
-	t.Setenv("HOME", t.TempDir())
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
 	t.Setenv("SKAEL_URL", srv.URL)
 	t.Setenv("SKAEL_KEY", "k")
 	old := buildVersion

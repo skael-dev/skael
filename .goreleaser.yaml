@@ -162,7 +162,12 @@ release:
     # Docker
     docker pull ghcr.io/skael-dev/skael:{{.Version}}
 
-    # Windows: download the .zip for your architecture below
+    # Windows (PowerShell)
+    irm https://skael.dev/install.ps1 | iex
+
+    # Windows (Scoop)
+    scoop bucket add skael https://github.com/skael-dev/scoop-skael
+    scoop install skael
     ```
 
     ## Self-host the platform
@@ -202,6 +207,32 @@ release:
 #
 # {{"{{"}}staged_path{{"}}"}} is Homebrew's own template token, escaped here so
 # GoReleaser's templating leaves it alone.
+# Scoop takes one zip per OS and arch, which the Windows archive override
+# already gives. The bucket is its own repo so a release never waits on a
+# moderator, unlike winget-pkgs.
+scoops:
+  - name: skael
+    ids:
+      - skael
+    repository:
+      owner: skael-dev
+      name: scoop-skael
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: "https://skael.dev"
+    description: "Control plane for AI agent skills"
+    license: Apache-2.0
+
+  - name: whetstone
+    ids:
+      - whetstone
+    repository:
+      owner: skael-dev
+      name: scoop-skael
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: "https://skael.dev"
+    description: "Authoring and evaluation toolkit for AI agent skills"
+    license: Apache-2.0
+
 homebrew_casks:
   - name: skael
     ids:

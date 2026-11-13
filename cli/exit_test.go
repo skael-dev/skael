@@ -28,7 +28,9 @@ func runCLI(t *testing.T, args ...string) (int, string) {
 
 func noConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
 	t.Setenv("SKAEL_URL", "")
 	t.Setenv("SKAEL_KEY", "")
 }

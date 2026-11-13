@@ -13,534 +13,216 @@ import (
 	"github.com/skael-dev/skael/cli/hooks"
 )
 
-// TestWriteHookScript verifies the script is created, executable, and contains the events endpoint.
-func TestWriteHookScript(t *testing.T) {
-	skaalDir := t.TempDir()
+const bin = "/opt/homebrew/bin/skael"
 
-	scriptPath, err := hooks.WriteHookScript(skaalDir)
-	require.NoError(t, err)
-
-	// File must exist.
-	info, err := os.Stat(scriptPath)
-	require.NoError(t, err, "hook script file must exist")
-
-	// Must be executable (at least owner-execute bit).
-	assert.True(t, info.Mode()&0o100 != 0, "hook script must have execute permission")
-
-	// Must contain the events API path.
-	data, err := os.ReadFile(scriptPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "/api/events", "hook script must reference /api/events")
-}
-
-// TestInstallClaudeHook_NewFile installs to a nonexistent settings.json and verifies the structure.
-func TestInstallClaudeHook_NewFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "settings.json")
-
-	err := hooks.InstallClaudeHook(configPath, "https://skael.example.com", "test-api-key", "/home/user/.skael/hooks/skael-hook.sh")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	var settings map[string]any
-	require.NoError(t, json.Unmarshal(data, &settings))
-
-	// Must have hooks.PreToolUse.
-	hooksSection, ok := settings["hooks"].(map[string]any)
-	require.True(t, ok, "hooks key must be a JSON object")
-
-	preToolUse, ok := hooksSection["PreToolUse"].([]any)
-	require.True(t, ok, "PreToolUse must be a JSON array")
-	require.NotEmpty(t, preToolUse, "PreToolUse must contain at least one entry")
-
-	// First entry must have a hooks array with a skael-managed command.
-	entry, ok := preToolUse[0].(map[string]any)
-	require.True(t, ok, "PreToolUse[0] must be a JSON object")
-
-	innerHooks, ok := entry["hooks"].([]any)
-	require.True(t, ok, "entry.hooks must be a JSON array")
-	require.NotEmpty(t, innerHooks)
-
-	hookEntry, ok := innerHooks[0].(map[string]any)
-	require.True(t, ok, "hooks[0] must be a JSON object")
-
-	assert.Equal(t, "skael", hookEntry["_managed_by"], "_managed_by must be 'skael'")
-	assert.Equal(t, "command", hookEntry["type"], "hook type must be 'command'")
-
-	cmd, ok := hookEntry["command"].(string)
-	require.True(t, ok, "command must be a string")
-	assert.Contains(t, cmd, "SKAEL_AGENT=claude-code")
-	assert.Contains(t, cmd, "skael-hook.sh")
-	assert.NotContains(t, cmd, "SKAEL_ENDPOINT=")
-	assert.NotContains(t, cmd, "SKAEL_API_KEY=")
-}
-
-// TestInstallClaudeHook_Idempotent verifies that installing twice results in exactly one skael entry.
-func TestInstallClaudeHook_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "settings.json")
-
-	require.NoError(t, hooks.InstallClaudeHook(configPath, "https://skael.example.com", "key1", "/path/to/skael-hook.sh"))
-	require.NoError(t, hooks.InstallClaudeHook(configPath, "https://skael.example.com", "key2", "/path/to/skael-hook.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	content := string(data)
-
-	// One managed hook per event: PreToolUse, SessionStart and PostModelSwitch.
-	count := strings.Count(content, `"_managed_by"`)
-	assert.Equal(t, 3, count, "must have exactly one skael-managed hook per event after two installs")
-}
-
-// TestUninstallClaudeHook verifies that after uninstall, no skael-managed entries remain.
-func TestUninstallClaudeHook(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "settings.json")
-
-	require.NoError(t, hooks.InstallClaudeHook(configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
-
-	// Confirm skael entry exists.
-	data, _ := os.ReadFile(configPath)
-	require.Contains(t, string(data), "skael", "skael entry must be present after install")
-
-	require.NoError(t, hooks.UninstallClaudeHook(configPath))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "skael", "no skael entries must remain after uninstall")
-}
-
-// TestInstallClaudeHook_NoPlaintextAPIKey verifies that the API key is NOT embedded in settings.json.
-func TestInstallClaudeHook_NoPlaintextAPIKey(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "settings.json")
-
-	const sensitiveKey = "super-secret-api-key-12345"
-
-	err := hooks.InstallClaudeHook(configPath, "https://skael.example.com", sensitiveKey, "/home/user/.skael/hooks/skael-hook.sh")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	assert.NotContains(t, string(data), sensitiveKey, "API key must NOT appear in plaintext in settings.json")
-}
-
-// TestHookScript_ContainsCrossPlatformHash verifies the hook script supports both Linux and macOS hash commands.
-func TestHookScript_ContainsCrossPlatformHash(t *testing.T) {
-	skaalDir := t.TempDir()
-
-	scriptPath, err := hooks.WriteHookScript(skaalDir)
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(scriptPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	assert.Contains(t, content, "sha256sum", "hook script must reference sha256sum (Linux)")
-	assert.Contains(t, content, "shasum", "hook script must reference shasum (macOS)")
-}
-
-// TestInstallCodexHook_NewFile verifies that installing into a nonexistent
-// config.toml creates the file and writes a managed block with the correct
-// marker comment.
-func TestInstallCodexHook_NewFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	err := hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-api-key", "/home/user/.skael/hooks/skael-hook.sh")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	content := string(data)
-	assert.Contains(t, content, "# managed_by = skael", "managed block start marker must be present")
-	assert.Contains(t, content, "# end managed_by = skael", "managed block end marker must be present")
-	assert.Contains(t, content, "[[hooks.PreToolUse]]", "TOML hook section must use the PascalCase event key")
-	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "TOML hook section must not use the stale snake_case event key")
-	assert.Contains(t, content, "SKAEL_AGENT=codex", "agent env var must be set to codex")
-
-	// The handler command must live in a nested [[hooks.PreToolUse.hooks]]
-	// array-of-tables, not as a flat `command` field on [[hooks.PreToolUse]]
-	// itself — Codex's MatcherGroup type parses the flat shape as valid TOML
-	// but registers zero handlers from it. Asserted on the exact expected
-	// block text (rather than pulling in a TOML parser as a test-only
-	// dependency) so a regression back to the flat shape fails this test.
-	expectedBlock := "\n# managed_by = skael\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"SKAEL_AGENT=codex /home/user/.skael/hooks/skael-hook.sh\"\n# end managed_by = skael\n"
-	assert.Contains(t, content, expectedBlock, "hook command must sit in a nested [[hooks.PreToolUse.hooks]] table")
-}
-
-// TestInstallCodexHook_Idempotent verifies that installing twice results in
-// exactly one managed block in the config.toml file.
-func TestInstallCodexHook_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "key1", "/path/to/skael-hook.sh"))
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "key2", "/path/to/skael-hook.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	content := string(data)
-	count := strings.Count(content, "# managed_by = skael")
-	assert.Equal(t, 1, count, "must have exactly one managed block after two installs")
-}
-
-// TestUninstallCodexHook verifies that after uninstalling, the managed block
-// is removed from the config.toml file.
-func TestUninstallCodexHook(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
-
-	// Confirm the managed block is present after install.
-	data, _ := os.ReadFile(configPath)
-	require.Contains(t, string(data), "# managed_by = skael", "managed block must be present after install")
-
-	require.NoError(t, hooks.UninstallForAgent("codex", configPath))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "# managed_by = skael", "managed block must be removed after uninstall")
-	assert.NotContains(t, string(data), "[[hooks.PreToolUse]]", "hook section must be removed after uninstall")
-	assert.NotContains(t, string(data), "[[hooks.pre_tool_use]]", "hook section must be removed after uninstall")
-	assert.NotContains(t, string(data), "[[hooks.PreToolUse.hooks]]", "nested hook handler table must be removed after uninstall")
-}
-
-// TestInstallCodexHook_UpgradesStaleSnakeCaseBlock verifies that a config.toml
-// left behind by an older skael — which wrote the non-firing snake_case
-// [[hooks.pre_tool_use]] key inside the managed markers — ends up with exactly
-// one managed block using the correct PascalCase key after install, not two.
-func TestInstallCodexHook_UpgradesStaleSnakeCaseBlock(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	staleConfig := `model = "gpt-5.5"
-
-# managed_by = skael
-[[hooks.pre_tool_use]]
-command = "SKAEL_AGENT=codex /old/path/skael-hook.sh"
-# end managed_by = skael
-`
-	require.NoError(t, os.WriteFile(configPath, []byte(staleConfig), 0o644))
-
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/new/path/skael-hook.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael"), "must have exactly one managed block start marker")
-	assert.Equal(t, 1, strings.Count(content, "# end managed_by = skael"), "must have exactly one managed block end marker")
-	assert.Equal(t, 1, strings.Count(content, "[[hooks.PreToolUse]]"), "must have exactly one PascalCase hook section")
-	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "stale snake_case hook section must not remain")
-	assert.Contains(t, content, "/new/path/skael-hook.sh", "new script path must be written")
-	assert.NotContains(t, content, "/old/path/skael-hook.sh", "old script path must not remain")
-	assert.Contains(t, content, `model = "gpt-5.5"`, "unrelated user config must be preserved")
-
-	// The upgrade must also fix the flat-vs-nested structure, not just the key casing.
-	expectedBlock := "\n# managed_by = skael\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"SKAEL_AGENT=codex /new/path/skael-hook.sh\"\n# end managed_by = skael\n"
-	assert.Contains(t, content, expectedBlock, "upgraded block must use the nested [[hooks.PreToolUse.hooks]] shape")
-
-	require.NoError(t, hooks.UninstallForAgent("codex", configPath))
-
-	data, err = os.ReadFile(configPath)
-	require.NoError(t, err)
-	content = string(data)
-	assert.NotContains(t, content, "managed_by = skael", "no managed markers must remain after uninstall")
-	assert.NotContains(t, content, "[[hooks.PreToolUse]]", "no hook section must remain after uninstall")
-	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "no stale hook section must remain after uninstall")
-	assert.Contains(t, content, `model = "gpt-5.5"`, "unrelated user config must be preserved after uninstall")
-}
-
-// TestInstallCodexAutoSync_UpgradesStaleSnakeCaseBlock verifies the same
-// upgrade behavior for the separate skael-autosync managed block.
-func TestInstallCodexAutoSync_UpgradesStaleSnakeCaseBlock(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	staleConfig := `# managed_by = skael-autosync
-[[hooks.pre_tool_use]]
-command = "/old/path/skael-autosync.sh"
-# end managed_by = skael-autosync
-`
-	require.NoError(t, os.WriteFile(configPath, []byte(staleConfig), 0o644))
-
-	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/new/path/skael-autosync.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "must have exactly one autosync managed block")
-	assert.Equal(t, 1, strings.Count(content, "[[hooks.PreToolUse]]"), "must have exactly one PascalCase hook section")
-	assert.NotContains(t, content, "[[hooks.pre_tool_use]]", "stale snake_case hook section must not remain")
-	assert.Contains(t, content, "/new/path/skael-autosync.sh")
-	assert.NotContains(t, content, "/old/path/skael-autosync.sh")
-
-	expectedBlock := "\n# managed_by = skael-autosync\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"/new/path/skael-autosync.sh\"\n# end managed_by = skael-autosync\n"
-	assert.Contains(t, content, expectedBlock, "upgraded autosync block must use the nested [[hooks.PreToolUse.hooks]] shape")
-
-	require.NoError(t, hooks.UninstallCodexAutoSync(configPath))
-
-	data, err = os.ReadFile(configPath)
-	require.NoError(t, err)
-	content = string(data)
-	assert.NotContains(t, content, "managed_by = skael-autosync")
-	assert.NotContains(t, content, "[[hooks.PreToolUse]]")
-	assert.NotContains(t, content, "[[hooks.pre_tool_use]]")
-}
-
-// TestInstallCodexHook_AutoSyncBlockPresentFirst is a regression test for a
-// substring bug: codexBlockStart ("# managed_by = skael") is a literal
-// substring of codexAutoSyncBlockStart ("# managed_by = skael-autosync"), so
-// a naive strings.Contains(content, codexBlockStart) check falsely reports
-// the regular hook block as already present when only the autosync block
-// exists — silently no-op'ing the install with no error. This installs
-// autosync first, then the regular hook, and requires both end up present.
-func TestInstallCodexHook_AutoSyncBlockPresentFirst(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/path/to/skael-autosync.sh"))
-
-	// Sanity check: only the autosync block exists so far.
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	require.Contains(t, string(data), "# managed_by = skael-autosync")
-	require.NotContains(t, string(data), "# managed_by = skael\n", "regular hook block must not exist yet")
-
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
-
-	data, err = os.ReadFile(configPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	// Both managed blocks must now be present, each exactly once.
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael\n"), "regular hook block must have been written, not skipped")
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "autosync block must still be present")
-	assert.Contains(t, content, "/path/to/skael-autosync.sh", "autosync command must be preserved")
-	assert.Contains(t, content, "SKAEL_AGENT=codex /path/to/skael-hook.sh", "regular hook command must have been written")
-
-	// Two independent [[hooks.PreToolUse.hooks]] handler tables — one per block.
-	assert.Equal(t, 2, strings.Count(content, "[[hooks.PreToolUse.hooks]]"), "each managed block must contribute its own handler table")
-}
-
-// TestInstallCodexAutoSync_RegularBlockPresentFirst is the mirror-image
-// check: install the regular hook first, then autosync, and confirm autosync
-// is not falsely treated as already-installed (it isn't — codexAutoSyncBlockStart
-// is not a substring of codexBlockStart — but this pins that behavior).
-func TestInstallCodexAutoSync_RegularBlockPresentFirst(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-
-	require.NoError(t, hooks.InstallForAgent("codex", configPath, "https://skael.example.com", "test-key", "/path/to/skael-hook.sh"))
-	require.NoError(t, hooks.InstallCodexAutoSync(configPath, "/path/to/skael-autosync.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael\n"), "regular hook block must still be present")
-	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync"), "autosync block must have been written")
-	assert.Contains(t, content, "SKAEL_AGENT=codex /path/to/skael-hook.sh")
-	assert.Contains(t, content, "/path/to/skael-autosync.sh")
-	assert.Equal(t, 2, strings.Count(content, "[[hooks.PreToolUse.hooks]]"), "each managed block must contribute its own handler table")
-}
-
-// TestHookScript_ReadsConfigFile verifies the hook script reads credentials from config.json.
-func TestHookScript_ReadsConfigFile(t *testing.T) {
-	skaalDir := t.TempDir()
-
-	scriptPath, err := hooks.WriteHookScript(skaalDir)
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(scriptPath)
-	require.NoError(t, err)
-	content := string(data)
-
-	assert.Contains(t, content, "config.json", "hook script must read credentials from config.json")
-}
-
-func TestInstallOpenCodeHook_NewFile(t *testing.T) {
-	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
-
-	err := hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "test-api-key", "/unused")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	content := string(data)
-	assert.Contains(t, content, "managed by skael", "plugin must contain managed-by marker")
-	assert.Contains(t, content, "tool.execute.before", "plugin must hook tool.execute.before")
-	assert.Contains(t, content, "/api/events", "plugin must POST to /api/events")
-	assert.Contains(t, content, `report("opencode"`, "plugin must identify as opencode agent")
-}
-
-func TestInstallOpenCodeHook_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
-
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key1", "/unused"))
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key2", "/unused"))
-
-	data1, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key3", "/unused"))
-
-	data2, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	assert.Equal(t, string(data1), string(data2), "plugin content must be identical after repeated installs")
-}
-
-func TestUninstallOpenCodeHook(t *testing.T) {
-	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
-
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "test-key", "/unused"))
-
-	_, err := os.Stat(configPath)
-	require.NoError(t, err, "plugin file must exist after install")
-
-	require.NoError(t, hooks.UninstallForAgent("opencode", configPath))
-
-	_, err = os.Stat(configPath)
-	assert.True(t, os.IsNotExist(err), "plugin file must be removed after uninstall")
-}
-
-func TestUninstallOpenCodeHook_NotExists(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "nonexistent", "skael-tracking.ts")
-
-	err := hooks.UninstallForAgent("opencode", configPath)
-	assert.NoError(t, err, "uninstalling a nonexistent plugin must not error")
-}
-
-func TestOpenCodePlugin_NoPlaintextCredentials(t *testing.T) {
-	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
-
-	const sensitiveKey = "super-secret-api-key-12345"
-	const sensitiveEndpoint = "https://secret.skael.example.com"
-
-	err := hooks.InstallForAgent("opencode", configPath, sensitiveEndpoint, sensitiveKey, "/unused")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	assert.NotContains(t, string(data), sensitiveKey, "API key must NOT appear in plugin source")
-	assert.NotContains(t, string(data), sensitiveEndpoint, "endpoint must NOT appear in plugin source")
-}
-
-func TestOpenCodePlugin_FireAndForget(t *testing.T) {
-	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
-
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key", "/unused"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-
-	assert.Contains(t, string(data), ".catch(() => {})", "plugin must use fire-and-forget fetch pattern")
-}
-
-// readCursorHooks returns the hooks object of a Cursor hooks.json.
-func readCursorHooks(t *testing.T, configPath string) map[string]any {
+func read(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	var hooksFile map[string]any
-	require.NoError(t, json.Unmarshal(data, &hooksFile))
-	assert.Equal(t, float64(1), hooksFile["version"])
-	hooksObj, _ := hooksFile["hooks"].(map[string]any)
-	return hooksObj
+	return string(data)
 }
 
-func TestInstallCursorHook_NewFile(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "hooks.json")
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/home/user/.skael/hooks/skael-cursor-read.sh"))
+// claudeHandlers returns every handler under event in a Claude settings.json.
+func claudeHandlers(t *testing.T, path, event string) []map[string]any {
+	t.Helper()
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal([]byte(read(t, path)), &settings))
+	hooksSection, _ := settings["hooks"].(map[string]any)
+	list, _ := hooksSection[event].([]any)
+	var out []map[string]any
+	for _, raw := range list {
+		group := raw.(map[string]any)
+		inner, ok := group["hooks"].([]any)
+		require.True(t, ok, "every %s entry must be a matcher group with a hooks array", event)
+		for _, h := range inner {
+			out = append(out, h.(map[string]any))
+		}
+	}
+	return out
+}
 
-	hooksObj := readCursorHooks(t, configPath)
-	_, hasSessionStart := hooksObj["sessionStart"]
-	assert.False(t, hasSessionStart, "sessionStart must NOT be created by activation tracking installer")
+// Claude Code gets exec form: no shell parses the path, so Windows needs no
+// Git Bash and a path with spaces needs no quoting.
+func TestInstallClaude_ExecForm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	require.NoError(t, hooks.InstallForAgent("claude-code", path, bin))
+	require.NoError(t, hooks.InstallForAgent("claude-code", path, bin))
 
-	arr, ok := hooksObj["postToolUse"].([]any)
-	require.True(t, ok, "postToolUse array must exist")
-	require.Len(t, arr, 1)
-	entry := arr[0].(map[string]any)
-	assert.Equal(t, "skael", entry["_managed_by"])
-	assert.Equal(t, "Read", entry["matcher"])
-	assert.Equal(t, "/home/user/.skael/hooks/skael-cursor-read.sh", entry["command"])
+	for _, ev := range []string{"PreToolUse", "SessionStart", "PostModelSwitch"} {
+		hs := claudeHandlers(t, path, ev)
+		require.Len(t, hs, 1, ev)
+		assert.Equal(t, bin, hs[0]["command"])
+		assert.Equal(t, []any{"hook", "report", "--agent", "claude-code"}, hs[0]["args"])
+		assert.Equal(t, "skael", hs[0]["_managed_by"])
+	}
+	assert.Contains(t, read(t, path), `"matcher": "Skill"`)
+
+	require.NoError(t, hooks.UninstallForAgent("claude-code", path))
+	assert.NotContains(t, read(t, path), "skael")
+}
+
+// Older releases wrote the auto-sync handler straight into UserPromptSubmit,
+// outside a matcher group, where Claude Code never ran it.
+func TestInstallClaudeAutoSync_ReplacesTheFlatEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	legacy := `{"hooks":{"UserPromptSubmit":[{"type":"command","command":"/h/.skael/hooks/skael-autosync.sh","_managed_by":"skael-autosync"},{"hooks":[{"type":"command","command":"mine.sh"}]}]}}`
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o644))
+
+	require.NoError(t, hooks.InstallAutoSyncForAgent("claude-code", path, bin))
+
+	hs := claudeHandlers(t, path, "UserPromptSubmit")
+	require.Len(t, hs, 2)
+	assert.Equal(t, "mine.sh", hs[0]["command"])
+	assert.Equal(t, bin, hs[1]["command"])
+	assert.Equal(t, []any{"hook", "autosync"}, hs[1]["args"])
+	assert.NotContains(t, read(t, path), "skael-autosync.sh")
+
+	require.NoError(t, hooks.UninstallAutoSyncForAgent("claude-code", path))
+	assert.NotContains(t, read(t, path), "skael")
+	assert.Contains(t, read(t, path), "mine.sh")
+}
+
+// The handler sits in a nested hooks table: Codex parses a flat command field
+// as TOML and registers nothing. command_windows is what Codex runs in
+// PowerShell, where the POSIX quoting of command fails.
+func TestInstallCodex_Shape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	winBin := `C:\Users\Ada Lovelace\AppData\Local\Programs\skael\bin\skael.exe`
+	require.NoError(t, hooks.InstallForAgent("codex", path, winBin))
+
+	want := "# managed_by = skael\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n" +
+		`command = "'C:\\Users\\Ada Lovelace\\AppData\\Local\\Programs\\skael\\bin\\skael.exe' hook report --agent codex"` + "\n" +
+		`command_windows = "& 'C:\\Users\\Ada Lovelace\\AppData\\Local\\Programs\\skael\\bin\\skael.exe' hook report --agent codex"` + "\n" +
+		"# end managed_by = skael\n"
+	assert.Equal(t, want, read(t, path))
+}
+
+// Reinstalling leaves the file byte for byte the same, so the repair on every
+// command never rewrites a current config.
+func TestInstallCodex_Idempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`model = "gpt-5.5"`), 0o644))
+	require.NoError(t, hooks.InstallForAgent("codex", path, bin))
+	require.NoError(t, hooks.InstallAutoSyncForAgent("codex", path, bin))
+	first := read(t, path)
+	require.NoError(t, hooks.InstallForAgent("codex", path, bin))
+	require.NoError(t, hooks.InstallAutoSyncForAgent("codex", path, bin))
+	assert.Equal(t, first, read(t, path))
+	assert.Equal(t, 2, strings.Count(first, "[[hooks.PreToolUse.hooks]]"))
+	assert.True(t, hooks.State("codex", path, bin).ActivationCurrent)
+	assert.True(t, hooks.State("codex", path, bin).AutoSyncCurrent)
+}
+
+// codexBlockStart is a substring of codexAutoSyncBlockStart, so a substring
+// test would skip the activation install when only auto-sync is present.
+func TestInstallCodex_AutoSyncFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, hooks.InstallAutoSyncForAgent("codex", path, bin))
+	require.NoError(t, hooks.InstallForAgent("codex", path, bin))
+	content := read(t, path)
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael\n"))
+	assert.Equal(t, 1, strings.Count(content, "# managed_by = skael-autosync\n"))
+
+	require.NoError(t, hooks.UninstallForAgent("codex", path))
+	require.NoError(t, hooks.UninstallAutoSyncForAgent("codex", path))
+	assert.NotContains(t, read(t, path), "PreToolUse")
+}
+
+func TestInstallCodex_UpgradesStaleBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	stale := "model = \"gpt-5.5\"\n\n# managed_by = skael\n[[hooks.pre_tool_use]]\ncommand = \"SKAEL_AGENT=codex /old/skael-hook.sh\"\n# end managed_by = skael\n"
+	require.NoError(t, os.WriteFile(path, []byte(stale), 0o644))
+	assert.False(t, hooks.State("codex", path, bin).ActivationCurrent)
+
+	require.NoError(t, hooks.Repair("codex", path, bin))
+	content := read(t, path)
+	assert.NotContains(t, content, "pre_tool_use")
+	assert.NotContains(t, content, "skael-hook.sh")
+	assert.Contains(t, content, `model = "gpt-5.5"`)
+	assert.Equal(t, 1, strings.Count(content, "[[hooks.PreToolUse]]"))
+	assert.NotContains(t, content, "autosync", "repair adds no hook the user did not install")
+}
+
+func cursorEntries(t *testing.T, path, event string) []map[string]any {
+	t.Helper()
+	var file map[string]any
+	require.NoError(t, json.Unmarshal([]byte(read(t, path)), &file))
+	assert.Equal(t, float64(1), file["version"])
+	hooksObj, _ := file["hooks"].(map[string]any)
+	list, _ := hooksObj[event].([]any)
+	var out []map[string]any
+	for _, raw := range list {
+		out = append(out, raw.(map[string]any))
+	}
+	return out
 }
 
 // An install over the transcript-scanning stop hook removes it, so one skill
-// load is not counted twice. The user's own stop hook stays.
-func TestInstallCursorHook_ReplacesTheStopHook(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "hooks.json")
-	existing := `{"version":1,"hooks":{"stop":[{"command":"my-custom-hook.sh"},{"_managed_by":"skael","command":"SKAEL_AGENT=cursor /h/.skael/hooks/skael-cursor-stop.sh"}]}}`
-	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
+// load is not counted twice. The user's own hooks stay.
+func TestInstallCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	existing := `{"version":1,"hooks":{"stop":[{"command":"mine.sh"},{"_managed_by":"skael","command":"SKAEL_AGENT=cursor /h/.skael/hooks/skael-cursor-stop.sh"}]}}`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o644))
 
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/h/.skael/hooks/skael-cursor-read.sh"))
+	require.NoError(t, hooks.InstallForAgent("cursor", path, bin))
+	require.NoError(t, hooks.InstallForAgent("cursor", path, bin))
+	require.NoError(t, hooks.InstallAutoSyncForAgent("cursor", path, bin))
 
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "skael-cursor-stop.sh")
-	assert.Contains(t, string(data), "my-custom-hook.sh", "user's existing hook must be preserved")
-	assert.Equal(t, 1, strings.Count(string(data), `"_managed_by"`))
+	post := cursorEntries(t, path, "postToolUse")
+	require.Len(t, post, 1)
+	assert.Equal(t, "Read", post[0]["matcher"])
+	assert.Contains(t, post[0]["command"], "hook report --agent cursor")
+	assert.Contains(t, post[0]["command"], bin)
+	start := cursorEntries(t, path, "sessionStart")
+	require.Len(t, start, 1)
+	assert.Contains(t, start[0]["command"], "hook autosync")
+	assert.NotContains(t, read(t, path), "skael-cursor-stop.sh")
+	assert.Contains(t, read(t, path), "mine.sh")
+
+	require.NoError(t, hooks.UninstallForAgent("cursor", path))
+	require.NoError(t, hooks.UninstallAutoSyncForAgent("cursor", path))
+	assert.NotContains(t, read(t, path), "skael")
+	assert.Contains(t, read(t, path), "mine.sh")
 }
 
-func TestInstallCursorHook_Idempotent(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "hooks.json")
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v1/skael-cursor-read.sh"))
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/v2/skael-cursor-read.sh"))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(string(data), `"_managed_by"`), "must have exactly 1 skael-managed entry")
-	assert.Contains(t, string(data), "/path/v2/skael-cursor-read.sh")
-	assert.NotContains(t, string(data), "/path/v1/skael-cursor-read.sh")
-}
-
-func TestUninstallCursorHook(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "hooks.json")
-	existing := `{"version":1,"hooks":{"stop":[{"_managed_by":"skael","command":"old.sh"}],"postToolUse":[{"command":"mine.sh"}]}}`
-	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o644))
-	require.NoError(t, hooks.InstallForAgent("cursor", configPath, "", "", "/path/to/skael-cursor-read.sh"))
-
-	require.NoError(t, hooks.UninstallForAgent("cursor", configPath))
-
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "skael")
-	assert.Contains(t, string(data), "mine.sh")
-}
-
-func TestOpenCodePlugin_ReadsConfigFile(t *testing.T) {
+func TestPlugins(t *testing.T) {
 	dir := t.TempDir()
-	pluginsDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(pluginsDir, "skael-tracking.ts")
+	path := filepath.Join(dir, "plugins", "skael-tracking.ts")
+	require.NoError(t, hooks.InstallForAgent("opencode", path, bin))
+	require.NoError(t, hooks.InstallAutoSyncForAgent("opencode", path, bin))
+	assert.NotContains(t, read(t, path), "api_key\":", "no credential is written into a plugin")
+	auto := read(t, filepath.Join(dir, "plugins", "skael-autosync.ts"))
+	assert.Contains(t, auto, `spawn("`+bin+`", ["hook","autosync"]`)
+	assert.NotContains(t, auto, "bash")
+	assert.True(t, hooks.State("opencode", path, bin).ActivationCurrent)
 
-	require.NoError(t, hooks.InstallForAgent("opencode", configPath, "https://skael.example.com", "key", "/unused"))
+	require.NoError(t, hooks.UninstallForAgent("opencode", path))
+	require.NoError(t, hooks.UninstallAutoSyncForAgent("opencode", path))
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err))
+	require.NoError(t, hooks.UninstallForAgent("opencode", path), "a missing plugin is not an error")
+}
 
-	data, err := os.ReadFile(configPath)
-	require.NoError(t, err)
+// A hook that names a deleted script reads as out of date, and repair
+// rewrites it to the binary. A hand-formatted current file stays current.
+func TestState_LegacyAndCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	legacy := `{"hooks":{"PreToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"SKAEL_AGENT=claude-code /h/.skael/hooks/skael-hook.sh","_managed_by":"skael"}]}]}}`
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o644))
 
-	assert.Contains(t, string(data), "config.json", "plugin must read credentials from config.json")
-	assert.Contains(t, string(data), "homedir()", "plugin must use os.homedir() for path resolution")
+	s := hooks.State("claude-code", path, bin)
+	assert.True(t, s.Activation)
+	assert.False(t, s.ActivationCurrent)
+	assert.False(t, s.AutoSync)
+
+	require.NoError(t, hooks.Repair("claude-code", path, bin))
+	assert.NotContains(t, read(t, path), "skael-hook.sh")
+	assert.True(t, hooks.State("claude-code", path, bin).ActivationCurrent)
+	assert.False(t, hooks.State("claude-code", path, "/other/skael").ActivationCurrent)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(read(t, path)), &m))
+	compact, _ := json.Marshal(m)
+	require.NoError(t, os.WriteFile(path, compact, 0o644))
+	assert.True(t, hooks.State("claude-code", path, bin).ActivationCurrent)
 }

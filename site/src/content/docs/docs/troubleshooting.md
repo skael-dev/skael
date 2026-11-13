@@ -183,9 +183,7 @@ Source: `internal/server/server.go` reads `COOKIE_SECURE` and passes it to auth-
 
 **What you see:** `skael hook status` shows hooks installed, but the **Activations** tab in the dashboard stays empty.
 
-**Why:** The hook script reads credentials from `~/.skael/config.json` at runtime — credentials are never embedded in the agent config file. If that config file is missing, moved, or has an empty `api_key` field, the hook exits silently (`exit 0`) without posting any events.
-
-Source: `cli/hooks/script.go` — the hook script checks `[ ! -f "$CONFIG_FILE" ]` and exits if the file is absent.
+**Why:** `skael hook report` reads credentials from `~/.skael/config.json` at runtime — credentials are never embedded in the agent config file. If that config file is missing, moved, or has an empty `api_key` field, the hook exits silently (`exit 0`) without posting any events. `SKAEL_URL` and `SKAEL_KEY` do not reach hooks.
 
 **Fix:**
 1. Check hook installation status:
@@ -206,3 +204,24 @@ Source: `cli/hooks/script.go` — the hook script checks `[ ! -f "$CONFIG_FILE" 
    ```
 
 After re-installing, trigger a skill invocation and check the Activations tab — events appear within a few seconds.
+
+## Windows asks "How do you want to open this file?"
+
+**What you see:** Each time an agent loads a skill, Windows asks which app to open `skael-hook.sh` or `skael-autosync.sh` with.
+
+**Why:** A CLI older than 0.22 wrote hooks that point at bash scripts. PowerShell and cmd cannot run a `.sh` file, so Windows asks for an app. Auto-sync and activation tracking do not run.
+
+**Fix:**
+1. Install 0.22 or later:
+   ```powershell
+   irm https://skael.dev/install.ps1 | iex
+   ```
+2. Run any skael command in a new terminal, for example:
+   ```powershell
+   skael hook status
+   ```
+   The command rewrites the hooks to run `skael.exe` and deletes the old scripts. Each agent shows `hook installed`.
+3. Start a new agent session. A running session keeps the hooks it loaded at start.
+
+If `skael hook status` still shows `hook out of date`, the skael on your `PATH` is a different file from the one you ran. Run `skael hook install` with the skael you want the hooks to use.
+

@@ -41,7 +41,14 @@ tar -xzf whetstone.tar.gz whetstone
 sudo mv whetstone /usr/local/bin/
 ```
 
-On Windows, download `whetstone_<version>_windows_amd64.zip` (or `_arm64`) from the [releases page](https://github.com/skael-dev/skael/releases) and put `whetstone.exe` somewhere on your `PATH`.
+On Windows, install it with Scoop:
+
+```powershell
+scoop bucket add skael https://github.com/skael-dev/scoop-skael
+scoop install whetstone
+```
+
+Or download `whetstone_<version>_windows_amd64.zip` (or `_arm64`) from the [releases page](https://github.com/skael-dev/skael/releases) and put `whetstone.exe` somewhere on your `PATH`.
 
 **From source.**
 

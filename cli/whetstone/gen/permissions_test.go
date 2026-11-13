@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/skael-dev/skael/cli/whetstone/gen"
@@ -36,7 +37,8 @@ func TestGenerate_ScriptsAreExecutableOtherResourcesAreNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scripts/extract.py not written: %v", err)
 	}
-	if scriptInfo.Mode().Perm()&0o111 == 0 {
+	// Windows has no executable bit to set.
+	if runtime.GOOS != "windows" && scriptInfo.Mode().Perm()&0o111 == 0 {
 		t.Errorf("scripts/extract.py has mode %v, want at least one executable bit set", scriptInfo.Mode().Perm())
 	}
 

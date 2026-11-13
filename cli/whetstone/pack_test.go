@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -126,7 +127,8 @@ func TestRunPack_DoesNotArchiveItsOwnOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows has no POSIX permission bits: every writable file reads 0666.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Errorf("archive mode = %#o, want 0644", info.Mode().Perm())
 	}
 }

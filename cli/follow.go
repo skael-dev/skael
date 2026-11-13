@@ -248,7 +248,7 @@ func reconcile(c *client.Client, cfg *config.Config, dir string, o reconcileOpti
 		targets := targetsFor(w.Scope)
 		paths := make([]string, len(targets))
 		for i, t := range targets {
-			paths[i] = filepath.Join(t.Base, name)
+			paths[i] = filepath.Join(t.Base, config.SkillFolder(name))
 		}
 		prev, had := local[name]
 		if had && prev.Version == w.Version && prev.Checksum == w.Checksum && samePaths(prev.Placements, paths) {

@@ -264,7 +264,7 @@ func installBundle(target string, res *client.Resolution, manifest []byte, archi
 	}
 
 	for _, e := range res.Entries {
-		dest := filepath.Join(stage, e.Name)
+		dest := filepath.Join(stage, config.SkillFolder(e.Name))
 		if err := os.Mkdir(dest, 0o755); err != nil {
 			return err
 		}
@@ -311,7 +311,7 @@ func keepForeignEntries(target, stage string) error {
 		var m client.BundleManifest
 		if json.Unmarshal(raw, &m) == nil {
 			for _, s := range m.Skills {
-				previous[s.Name] = true
+				previous[config.SkillFolder(s.Name)] = true
 			}
 		}
 	}
@@ -338,7 +338,22 @@ func copyEntry(src, dest string, entry os.DirEntry) error {
 		if err != nil {
 			return err
 		}
-		return os.Symlink(link, dest)
+		if os.Symlink(link, dest) == nil {
+			return nil
+		}
+		// Windows refuses a symlink without Developer Mode: keep a copy.
+		info, err := os.Stat(src)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.CopyFS(dest, os.DirFS(src))
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, info.Mode().Perm())
 	case entry.IsDir():
 		return os.CopyFS(dest, os.DirFS(src))
 	}
@@ -365,5 +380,5 @@ func installPullHooks(cfg *config.Config) (int, error) {
 		ui.Info("No agents detected: no hooks installed")
 		return 0, nil
 	}
-	return installActivationHooks(config.DefaultDir(), home, cfg.Endpoint, cfg.APIKey, detected), nil
+	return installActivationHooks(config.DefaultDir(), home, detected), nil
 }

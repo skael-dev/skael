@@ -22,6 +22,19 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -timeout 300s
 
+  # Agents on Windows run hook commands through PowerShell or cmd, which is
+  # where the .sh hooks opened the "open with" dialog. The hook tests run the
+  # installed commands through both.
+  windows-cli:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test CLI
+        run: go test ./cli/... -count=1 -timeout 600s
+
   sandbox:
     runs-on: ubuntu-latest
     # The sandbox half of the eval engine is not allowed to be an ungated
