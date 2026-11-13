@@ -20,7 +20,7 @@ if ! diff -q "$tmp/env.example" .env.example >/dev/null; then
 fi
 
 # Names a process reads that are not skael settings.
-allow="PATH HOME EDITOR VISUAL SKAEL_URL SKAEL_KEY WHETSTONE_BASE_TAG WHETSTONE_LLM_TIMEOUT"
+allow="PATH HOME USER USERNAME HOSTNAME EDITOR VISUAL SKAEL_URL SKAEL_KEY WHETSTONE_BASE_TAG WHETSTONE_LLM_TIMEOUT"
 read_names=$(grep -rhoE '(Getenv|LookupEnv|look|env)\("[A-Z][A-Z0-9_]+"\)' --include='*.go' --exclude='*_test.go' cmd internal cli \
   | sed -E 's/.*\("([A-Z0-9_]+)"\)/\1/' | sort -u)
 for name in $read_names; do

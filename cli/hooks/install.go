@@ -2,245 +2,241 @@ package hooks
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-// managedBy is the marker value written into hook entries so skael can find them later.
+// managedBy marks the activation hook entries skael writes.
 const managedBy = "skael"
 
-// autoSyncManagedBy is the marker for auto-sync hooks, separate from activation tracking hooks.
+// autoSyncManagedBy marks the auto-sync entries, so each kind installs and
+// uninstalls on its own.
 const autoSyncManagedBy = "skael-autosync"
 
-// ────────────────────────────────────────────────────────────────────────────
-// Claude Code  (JSON settings.json)
-// ────────────────────────────────────────────────────────────────────────────
+// edit turns an agent config file's bytes into the bytes skael wants there.
+// A missing file is nil.
+type edit func([]byte) ([]byte, error)
 
-// InstallClaudeHook reads configPath (or starts with an empty object), inserts or
-// updates the single skael-managed PreToolUse hook, and writes the file back.
-//
-// Hook structure:
-//
-//	{
-//	  "hooks": {
-//	    "PreToolUse": [
-//	      {
-//	        "matcher": "Skill",
-//	        "hooks": [
-//	          {
-//	            "type": "command",
-//	            "command": "SKAEL_AGENT=claude-code SKAEL_ENDPOINT=... SKAEL_API_KEY=... <scriptPath>",
-//	            "_managed_by": "skael"
-//	          }
-//	        ]
-//	      }
-//	    ]
-//	  }
-//	}
-func InstallClaudeHook(configPath, endpoint, apiKey, scriptPath string) error {
-	settings, err := readJSONFile(configPath)
-	if err != nil {
+// applyEdit writes path only when the edit changes it, and deletes it when
+// the edit returns nil. With create false, a missing file stays missing.
+func applyEdit(path string, e edit, create bool) error {
+	data, err := os.ReadFile(path)
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
 		return err
 	}
-	cmd := fmt.Sprintf("SKAEL_AGENT=claude-code %s", scriptPath)
-	hooksSection := getOrCreateMap(settings, "hooks")
-	settings["hooks"] = hooksSection
-	for _, ev := range claudeEvents {
-		upsertManagedHook(hooksSection, ev.name, ev.matcher, cmd)
+	if missing && !create {
+		return nil
 	}
-	return writeJSONFile(configPath, settings)
+	out, err := e(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if out == nil {
+		if missing {
+			return nil
+		}
+		return os.Remove(path)
+	}
+	if !missing && bytes.Equal(out, data) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	perm := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		perm = info.Mode().Perm()
+	}
+	return atomicWriteFile(path, out, perm)
 }
 
-// claudeEvents are the events the activation script handles: the Skill tool
-// call it reports, and the session start and model switch that tell it which
-// model a session runs when the transcript does not.
+// ────────────────────────────────────────────────────────────────────────────
+// Claude Code  (settings.json)
+// ────────────────────────────────────────────────────────────────────────────
+
+// claudeEvents are the events `hook report` handles: the Skill tool call, and
+// the session start and model switch that name a session's model.
 var claudeEvents = []struct{ name, matcher string }{
 	{"PreToolUse", "Skill"},
 	{"SessionStart", ""},
 	{"PostModelSwitch", ""},
 }
 
-// upsertManagedHook updates the skael-managed command under event, or appends
-// a new entry for it.
-func upsertManagedHook(hooksSection map[string]any, event, matcher, cmd string) {
-	list := getOrCreateSlice(hooksSection, event)
+// claudeHandler is exec form: Claude Code spawns bin with args and no shell,
+// so a path with spaces needs no quoting and Git Bash is not required.
+func claudeHandler(bin string, args []string, marker string) map[string]any {
+	list := make([]any, len(args))
+	for i, a := range args {
+		list[i] = a
+	}
+	return map[string]any{"type": "command", "command": bin, "args": list, "_managed_by": marker}
+}
+
+func claudeActivation(bin string) edit {
+	return jsonEdit(func(settings map[string]any) {
+		hooks := getOrCreateMap(settings, "hooks")
+		settings["hooks"] = hooks
+		for _, ev := range claudeEvents {
+			upsertClaudeHook(hooks, ev.name, ev.matcher, claudeHandler(bin, reportArgs("claude-code"), managedBy))
+		}
+	})
+}
+
+func claudeAutoSync(bin string) edit {
+	return jsonEdit(func(settings map[string]any) {
+		hooks := getOrCreateMap(settings, "hooks")
+		settings["hooks"] = hooks
+		dropFlatAutoSync(hooks)
+		upsertClaudeHook(hooks, "UserPromptSubmit", "", claudeHandler(bin, autoSyncArgs, autoSyncManagedBy))
+	})
+}
+
+func claudeRemove(marker string, events ...string) edit {
+	return jsonEdit(func(settings map[string]any) {
+		hooks, ok := settings["hooks"].(map[string]any)
+		if !ok {
+			return
+		}
+		if marker == autoSyncManagedBy {
+			dropFlatAutoSync(hooks)
+		}
+		for _, ev := range events {
+			removeClaudeHooks(hooks, ev, marker)
+		}
+		if len(hooks) == 0 {
+			delete(settings, "hooks")
+		}
+	})
+}
+
+func claudeEventNames() []string {
+	names := make([]string, len(claudeEvents))
+	for i, ev := range claudeEvents {
+		names[i] = ev.name
+	}
+	return names
+}
+
+// upsertClaudeHook replaces the handler carrying the handler's marker under
+// event, or appends a new matcher group for it.
+func upsertClaudeHook(hooks map[string]any, event, matcher string, handler map[string]any) {
+	list := getOrCreateSlice(hooks, event)
 	for _, raw := range list {
-		entry, ok := raw.(map[string]any)
+		group, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		innerHooks, ok := entry["hooks"].([]any)
+		inner, ok := group["hooks"].([]any)
 		if !ok {
 			continue
 		}
-		for i, h := range innerHooks {
-			if hMap, ok := h.(map[string]any); ok && hMap["_managed_by"] == managedBy {
-				hMap["command"] = cmd
-				innerHooks[i] = hMap
-				hooksSection[event] = list
+		for i, h := range inner {
+			if m, ok := h.(map[string]any); ok && m["_managed_by"] == handler["_managed_by"] {
+				inner[i] = handler
+				hooks[event] = list
 				return
 			}
 		}
 	}
-	entry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "_managed_by": managedBy}}}
+	group := map[string]any{"hooks": []any{handler}}
 	if matcher != "" {
-		entry["matcher"] = matcher
+		group["matcher"] = matcher
 	}
-	hooksSection[event] = append(list, entry)
+	hooks[event] = append(list, group)
 }
 
-// UninstallClaudeHook removes all hook entries tagged with _managed_by=skael from
-// configPath and writes the cleaned file back. Empty arrays/objects are pruned.
-func UninstallClaudeHook(configPath string) error {
-	settings, err := readJSONFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	hooksSection, ok := settings["hooks"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	for _, ev := range claudeEvents {
-		removeManagedHooks(hooksSection, ev.name)
-	}
-	if len(hooksSection) == 0 {
-		delete(settings, "hooks")
-	}
-	return writeJSONFile(configPath, settings)
-}
-
-// removeManagedHooks strips skael-managed hooks under event, dropping entries
-// left empty and the event when nothing remains.
-func removeManagedHooks(hooksSection map[string]any, event string) {
-	list, ok := hooksSection[event].([]any)
+// removeClaudeHooks strips the handlers carrying marker under event, and the
+// groups and the event left empty.
+func removeClaudeHooks(hooks map[string]any, event, marker string) {
+	list, ok := hooks[event].([]any)
 	if !ok {
 		return
 	}
 	var cleaned []any
 	for _, raw := range list {
-		entry, ok := raw.(map[string]any)
+		group, ok := raw.(map[string]any)
 		if !ok {
 			cleaned = append(cleaned, raw)
 			continue
 		}
-		innerHooks, ok := entry["hooks"].([]any)
+		inner, ok := group["hooks"].([]any)
 		if !ok {
-			cleaned = append(cleaned, entry)
+			cleaned = append(cleaned, group)
 			continue
 		}
-		var filteredInner []any
-		for _, h := range innerHooks {
-			if hMap, ok := h.(map[string]any); ok && hMap["_managed_by"] == managedBy {
+		var kept []any
+		for _, h := range inner {
+			if m, ok := h.(map[string]any); ok && m["_managed_by"] == marker {
 				continue
 			}
-			filteredInner = append(filteredInner, h)
+			kept = append(kept, h)
 		}
-		if len(filteredInner) == 0 {
+		if len(kept) == 0 {
 			continue
 		}
-		entry["hooks"] = filteredInner
-		cleaned = append(cleaned, entry)
+		group["hooks"] = kept
+		cleaned = append(cleaned, group)
 	}
 	if len(cleaned) == 0 {
-		delete(hooksSection, event)
+		delete(hooks, event)
 	} else {
-		hooksSection[event] = cleaned
+		hooks[event] = cleaned
 	}
 }
 
-// InstallClaudeAutoSync adds a UserPromptSubmit hook that runs the debounced auto-sync script.
-// This is separate from the activation tracking hook (PreToolUse) — it uses _managed_by: "skael-autosync".
-func InstallClaudeAutoSync(configPath, scriptPath string) error {
-	settings, err := readJSONFile(configPath)
-	if err != nil {
-		return err
+// dropFlatAutoSync removes the auto-sync handler older releases wrote straight
+// into UserPromptSubmit, outside a matcher group, where Claude Code never ran it.
+func dropFlatAutoSync(hooks map[string]any) {
+	list, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		return
 	}
-
-	cmd := scriptPath
-
-	newHookEntry := map[string]any{
-		"type":        "command",
-		"command":     cmd,
-		"_managed_by": autoSyncManagedBy,
-	}
-
-	hooksSection := getOrCreateMap(settings, "hooks")
-	settings["hooks"] = hooksSection
-
-	userPromptSubmit := getOrCreateSlice(hooksSection, "UserPromptSubmit")
-
-	// Look for existing skael-autosync entry.
-	found := false
-	for i, raw := range userPromptSubmit {
-		entry, ok := raw.(map[string]any)
-		if !ok {
+	var kept []any
+	for _, raw := range list {
+		if m, ok := raw.(map[string]any); ok && m["_managed_by"] == autoSyncManagedBy {
 			continue
 		}
-		if entry["_managed_by"] == autoSyncManagedBy {
-			entry["command"] = cmd
-			userPromptSubmit[i] = entry
-			found = true
-			break
-		}
+		kept = append(kept, raw)
 	}
-
-	if !found {
-		userPromptSubmit = append(userPromptSubmit, newHookEntry)
+	if len(kept) == 0 {
+		delete(hooks, "UserPromptSubmit")
+	} else {
+		hooks["UserPromptSubmit"] = kept
 	}
-	hooksSection["UserPromptSubmit"] = userPromptSubmit
-
-	return writeJSONFile(configPath, settings)
 }
 
-// UninstallClaudeAutoSync removes the auto-sync hook from configPath.
-func UninstallClaudeAutoSync(configPath string) error {
-	settings, err := readJSONFile(configPath)
+func claudeHas(data []byte, marker string) bool {
+	settings, err := parseJSON(data)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		return false
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	for _, rawList := range hooks {
+		list, _ := rawList.([]any)
+		for _, raw := range list {
+			group, _ := raw.(map[string]any)
+			if group["_managed_by"] == marker {
+				return true
+			}
+			inner, _ := group["hooks"].([]any)
+			for _, h := range inner {
+				if m, ok := h.(map[string]any); ok && m["_managed_by"] == marker {
+					return true
+				}
+			}
 		}
-		return err
 	}
-
-	hooksSection, ok := settings["hooks"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	userPromptSubmit, ok := hooksSection["UserPromptSubmit"].([]any)
-	if !ok {
-		return nil
-	}
-
-	var cleaned []any
-	for _, raw := range userPromptSubmit {
-		entry, ok := raw.(map[string]any)
-		if ok && entry["_managed_by"] == autoSyncManagedBy {
-			continue
-		}
-		cleaned = append(cleaned, raw)
-	}
-
-	if len(cleaned) == 0 {
-		delete(hooksSection, "UserPromptSubmit")
-	} else {
-		hooksSection["UserPromptSubmit"] = cleaned
-	}
-
-	if len(hooksSection) == 0 {
-		delete(settings, "hooks")
-	}
-
-	return writeJSONFile(configPath, settings)
+	return false
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Codex CLI  (TOML config.toml)
+// Codex CLI  (config.toml)
 // ────────────────────────────────────────────────────────────────────────────
 
 const (
@@ -251,71 +247,41 @@ const (
 	codexAutoSyncBlockEnd   = "# end managed_by = skael-autosync"
 )
 
-// installCodexHook appends (or replaces) a skael-managed [[hooks.PreToolUse]] TOML block.
-//
-// The event key is PascalCase (PreToolUse), matching Codex's actual hook event
-// names — confirmed against a live third-party hooks.json on this machine and
-// against OpenAI's published Codex configuration docs. An older skael wrote the
-// snake_case key `pre_tool_use`, under which the hook never fired; that stale
-// block is found and replaced (not left alongside the new one) because lookup
-// is keyed on the surrounding marker comments, not on the TOML key inside them.
-//
-// The handler command lives in a nested [[hooks.PreToolUse.hooks]] array-of-
-// tables, not as a flat `command` field on [[hooks.PreToolUse]] itself.
-// Codex's MatcherGroup type is { matcher: Option<String>, hooks: Vec<...> } —
-// a flat `command` field parses as valid TOML but lands nowhere, so Codex
-// silently registers zero handlers. Confirmed against openai/codex's own
-// config schema (codex-rs/config/src/hook_config.rs) and against the nested
-// shape already used by the working third-party hooks.json on this machine.
-//
-// No `matcher` field is set: Codex supports one, but what tool name a Codex
-// skill invocation actually presents is undocumented and unverified on this
-// machine, so a guessed pattern is omitted rather than risk silently dropping
-// every event.
-func installCodexHook(configPath, endpoint, apiKey, scriptPath string) error {
-	cmd := fmt.Sprintf("SKAEL_AGENT=codex %s", scriptPath)
-
-	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = %q\n%s\n",
-		codexBlockStart, cmd, codexBlockEnd)
-
-	existing, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	content := string(existing)
-
-	if hasManagedBlock(content, codexBlockStart) {
-		// Replace the existing managed block.
-		content = replaceBlock(content, codexBlockStart, codexBlockEnd, block)
-	} else {
-		content += block
-	}
-
-	return atomicWriteFile(configPath, []byte(content), 0o644)
+// codexBlock is one PreToolUse matcher group. The event key is PascalCase and
+// the handler sits in a nested hooks table, which is the shape Codex parses; a
+// flat command field parses as TOML and registers nothing. No matcher is set,
+// because the tool name a Codex skill call presents is undocumented, so
+// `hook report` filters instead. Codex runs `command` in the session shell and
+// `command_windows` on Windows, where that shell is PowerShell.
+func codexBlock(start, end, bin string, args []string) string {
+	return fmt.Sprintf("%s\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = %q\ncommand_windows = %q\n%s\n",
+		start, posixCommand(bin, args), windowsCommand(bin, args), end)
 }
 
-// uninstallCodexHook removes the skael-managed TOML block from configPath.
-func uninstallCodexHook(configPath string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+func codexUpsert(start, end, block string) edit {
+	return func(data []byte) ([]byte, error) {
+		content := string(data)
+		if hasManagedBlock(content, start) {
+			return []byte(replaceBlock(content, start, end, block)), nil
 		}
-		return err
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		if content != "" {
+			content += "\n"
+		}
+		return []byte(content + block), nil
 	}
-
-	content := replaceBlock(string(data), codexBlockStart, codexBlockEnd, "")
-	return atomicWriteFile(configPath, []byte(content), 0o644)
 }
 
-// hasManagedBlock reports whether content contains a line that, once trimmed,
-// is exactly equal to marker. A plain strings.Contains is not safe here:
-// codexBlockStart ("# managed_by = skael") is a literal substring of
-// codexAutoSyncBlockStart ("# managed_by = skael-autosync"), so a substring
-// check against codexBlockStart falsely matches a config that only has an
-// autosync block, silently skipping the install of the regular hook. This
-// mirrors the exact-line comparison replaceBlock already uses when scanning.
+func codexRemove(start, end string) edit {
+	return func(data []byte) ([]byte, error) {
+		return []byte(replaceBlock(string(data), start, end, "")), nil
+	}
+}
+
+// hasManagedBlock compares whole trimmed lines: codexBlockStart is a
+// substring of codexAutoSyncBlockStart.
 func hasManagedBlock(content, marker string) bool {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
@@ -350,369 +316,278 @@ func replaceBlock(content, startMarker, endMarker, replacement string) string {
 	return out.String()
 }
 
-// InstallCodexAutoSync appends (or replaces) a skael-autosync managed PreToolUse TOML block.
-// See installCodexHook for why the key is PascalCase, why the handler command
-// lives in a nested [[hooks.PreToolUse.hooks]] table rather than a flat field,
-// and why no matcher is set.
-func InstallCodexAutoSync(configPath, scriptPath string) error {
-	block := fmt.Sprintf("\n%s\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = %q\n%s\n",
-		codexAutoSyncBlockStart, scriptPath, codexAutoSyncBlockEnd)
-
-	existing, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	content := string(existing)
-	if hasManagedBlock(content, codexAutoSyncBlockStart) {
-		content = replaceBlock(content, codexAutoSyncBlockStart, codexAutoSyncBlockEnd, block)
-	} else {
-		content += block
-	}
-
-	return atomicWriteFile(configPath, []byte(content), 0o644)
-}
-
-// UninstallCodexAutoSync removes the skael-autosync TOML block.
-func UninstallCodexAutoSync(configPath string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	content := replaceBlock(string(data), codexAutoSyncBlockStart, codexAutoSyncBlockEnd, "")
-	return atomicWriteFile(configPath, []byte(content), 0o644)
-}
-
 // ────────────────────────────────────────────────────────────────────────────
-// Cursor  (JSON hooks.json)
+// Cursor  (hooks.json)
 // ────────────────────────────────────────────────────────────────────────────
 
-func installCursorHook(configPath, scriptPath string) error {
-	hooks, err := readJSONFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read cursor hooks: %w", err)
-	}
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-
-	if _, ok := hooks["version"]; !ok {
-		hooks["version"] = float64(1)
-	}
-
-	hooksObj, ok := hooks["hooks"].(map[string]any)
-	if !ok {
-		hooksObj = map[string]any{}
-		hooks["hooks"] = hooksObj
-	}
-
-	// Cursor loads a skill by reading its SKILL.md. postToolUse observes the
-	// read and cannot block it. The stop hook is the transcript scan skael
-	// used before, which saw no tool results and ran without a transcript in
-	// the CLI.
-	removeCursorHookEntries(hooksObj, "stop")
-	upsertCursorHookEntry(hooksObj, "postToolUse", map[string]any{
-		"_managed_by": managedBy,
-		"command":     scriptPath,
-		"matcher":     "Read",
+// Cursor runs a hook command through a shell: PowerShell on Windows.
+func cursorActivation(bin string) edit {
+	return cursorEdit(func(hooks map[string]any) {
+		removeCursorEntries(hooks, managedBy, "stop")
+		upsertCursorEntry(hooks, "postToolUse", map[string]any{
+			"_managed_by": managedBy,
+			"command":     shellCommand(bin, reportArgs("cursor")),
+			"matcher":     "Read",
+		})
 	})
-
-	return writeJSONFile(configPath, hooks)
 }
 
-// upsertCursorHookEntry finds the skael-managed entry in the named hook array
-// and updates it, or appends a new entry if none exists.
-func upsertCursorHookEntry(hooksObj map[string]any, hookName string, entry map[string]any) {
-	arr, ok := hooksObj[hookName].([]any)
-	if !ok {
-		arr = []any{}
-	}
+func cursorAutoSync(bin string) edit {
+	return cursorEdit(func(hooks map[string]any) {
+		removeCursorEntries(hooks, managedBy, "sessionStart")
+		upsertCursorEntry(hooks, "sessionStart", map[string]any{
+			"_managed_by": autoSyncManagedBy,
+			"command":     shellCommand(bin, autoSyncArgs),
+		})
+	})
+}
 
-	found := false
-	for i, raw := range arr {
-		m, ok := raw.(map[string]any)
+func cursorRemove(marker string, events ...string) edit {
+	return jsonEdit(func(file map[string]any) {
+		hooks, ok := file["hooks"].(map[string]any)
+		if !ok {
+			return
+		}
+		removeCursorEntries(hooks, marker, events...)
+		if len(hooks) == 0 {
+			delete(file, "hooks")
+		}
+	})
+}
+
+func cursorEdit(f func(hooks map[string]any)) edit {
+	return jsonEdit(func(file map[string]any) {
+		if _, ok := file["version"]; !ok {
+			file["version"] = float64(1)
+		}
+		hooks := getOrCreateMap(file, "hooks")
+		file["hooks"] = hooks
+		f(hooks)
+	})
+}
+
+func upsertCursorEntry(hooks map[string]any, event string, entry map[string]any) {
+	list := getOrCreateSlice(hooks, event)
+	for i, raw := range list {
+		if m, ok := raw.(map[string]any); ok && m["_managed_by"] == entry["_managed_by"] {
+			list[i] = entry
+			hooks[event] = list
+			return
+		}
+	}
+	hooks[event] = append(list, entry)
+}
+
+func removeCursorEntries(hooks map[string]any, marker string, events ...string) {
+	for _, event := range events {
+		list, ok := hooks[event].([]any)
 		if !ok {
 			continue
 		}
-		if m["_managed_by"] == managedBy {
-			arr[i] = entry
-			found = true
-			break
-		}
-	}
-	if !found {
-		arr = append(arr, entry)
-	}
-
-	hooksObj[hookName] = arr
-}
-
-// removeCursorHookEntries drops the skael-managed entry from each named hook
-// array, and the array when nothing else is left in it.
-func removeCursorHookEntries(hooksObj map[string]any, hookNames ...string) {
-	for _, hookName := range hookNames {
-		arr, ok := hooksObj[hookName].([]any)
-		if !ok {
-			continue
-		}
-		var filtered []any
-		for _, entry := range arr {
-			m, ok := entry.(map[string]any)
-			if ok && m["_managed_by"] == managedBy {
+		var kept []any
+		for _, raw := range list {
+			if m, ok := raw.(map[string]any); ok && m["_managed_by"] == marker {
 				continue
 			}
-			filtered = append(filtered, entry)
+			kept = append(kept, raw)
 		}
-		if len(filtered) == 0 {
-			delete(hooksObj, hookName)
+		if len(kept) == 0 {
+			delete(hooks, event)
 		} else {
-			hooksObj[hookName] = filtered
+			hooks[event] = kept
 		}
 	}
 }
 
-func uninstallCursorHook(configPath string) error {
-	hooks, err := readJSONFile(configPath)
+func cursorHas(data []byte, marker string) bool {
+	file, err := parseJSON(data)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read cursor hooks: %w", err)
+		return false
 	}
-
-	hooksObj, ok := hooks["hooks"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	removeCursorHookEntries(hooksObj, "stop", "postToolUse")
-
-	if len(hooksObj) == 0 {
-		delete(hooks, "hooks")
-	}
-
-	return writeJSONFile(configPath, hooks)
-}
-
-// InstallCursorAutoSync adds/updates a sessionStart hook pointing to the auto-sync script.
-// This is separate from the activation tracking hook (postToolUse) — it uses _managed_by: "skael-autosync".
-func InstallCursorAutoSync(configPath, scriptPath string) error {
-	hooks, err := readJSONFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read cursor hooks: %w", err)
-	}
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-
-	if _, ok := hooks["version"]; !ok {
-		hooks["version"] = float64(1)
-	}
-
-	hooksObj, ok := hooks["hooks"].(map[string]any)
-	if !ok {
-		hooksObj = map[string]any{}
-		hooks["hooks"] = hooksObj
-	}
-
-	// Clean up old-style sync entry (was _managed_by: "skael", now separate).
-	if arr, ok := hooksObj["sessionStart"].([]any); ok {
-		var cleaned []any
-		for _, raw := range arr {
-			m, ok := raw.(map[string]any)
-			if ok && m["_managed_by"] == managedBy {
-				continue // remove old skael entry
+	hooks, _ := file["hooks"].(map[string]any)
+	for _, rawList := range hooks {
+		list, _ := rawList.([]any)
+		for _, raw := range list {
+			if m, ok := raw.(map[string]any); ok && m["_managed_by"] == marker {
+				return true
 			}
-			cleaned = append(cleaned, raw)
-		}
-		hooksObj["sessionStart"] = cleaned
-	}
-
-	syncEntry := map[string]any{
-		"_managed_by": autoSyncManagedBy,
-		"command":     scriptPath,
-	}
-	upsertCursorAutoSyncEntry(hooksObj, "sessionStart", syncEntry)
-
-	return writeJSONFile(configPath, hooks)
-}
-
-// upsertCursorAutoSyncEntry finds the skael-autosync managed entry in the named hook array
-// and updates it, or appends a new entry if none exists.
-func upsertCursorAutoSyncEntry(hooksObj map[string]any, hookName string, entry map[string]any) {
-	arr, ok := hooksObj[hookName].([]any)
-	if !ok {
-		arr = []any{}
-	}
-
-	found := false
-	for i, raw := range arr {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if m["_managed_by"] == autoSyncManagedBy {
-			arr[i] = entry
-			found = true
-			break
 		}
 	}
-	if !found {
-		arr = append(arr, entry)
-	}
-
-	hooksObj[hookName] = arr
-}
-
-// UninstallCursorAutoSync removes the auto-sync sessionStart hook.
-func UninstallCursorAutoSync(configPath string) error {
-	hooks, err := readJSONFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read cursor hooks: %w", err)
-	}
-
-	hooksObj, ok := hooks["hooks"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	arr, ok := hooksObj["sessionStart"].([]any)
-	if !ok {
-		return nil
-	}
-
-	var filtered []any
-	for _, entry := range arr {
-		m, ok := entry.(map[string]any)
-		if ok && m["_managed_by"] == autoSyncManagedBy {
-			continue
-		}
-		filtered = append(filtered, entry)
-	}
-
-	if len(filtered) == 0 {
-		delete(hooksObj, "sessionStart")
-	} else {
-		hooksObj["sessionStart"] = filtered
-	}
-
-	if len(hooksObj) == 0 {
-		delete(hooks, "hooks")
-	}
-
-	return writeJSONFile(configPath, hooks)
+	return false
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Generic dispatch
+// Dispatch
 // ────────────────────────────────────────────────────────────────────────────
 
-// InstallForAgent calls the appropriate installer based on agentName.
-func InstallForAgent(agentName, configPath, endpoint, apiKey, scriptPath string) error {
+// target is one file skael manages for an agent, and the edits for it.
+type target struct {
+	path    string
+	install edit
+	remove  edit
+	has     func([]byte) bool
+	// normalize is what the file reads as once skael rewrites it unchanged,
+	// so a hand-formatted JSON file still counts as current.
+	normalize edit
+}
+
+func activationTarget(agentName, configPath, bin string) (target, error) {
 	switch agentName {
 	case "claude-code":
-		return InstallClaudeHook(configPath, endpoint, apiKey, scriptPath)
+		return target{configPath, claudeActivation(bin), claudeRemove(managedBy, claudeEventNames()...),
+			func(b []byte) bool { return claudeHas(b, managedBy) }, jsonEdit(func(map[string]any) {})}, nil
 	case "codex":
-		return installCodexHook(configPath, endpoint, apiKey, scriptPath)
+		return target{configPath, codexUpsert(codexBlockStart, codexBlockEnd, codexBlock(codexBlockStart, codexBlockEnd, bin, reportArgs("codex"))),
+			codexRemove(codexBlockStart, codexBlockEnd),
+			func(b []byte) bool { return hasManagedBlock(string(b), codexBlockStart) }, identity}, nil
 	case "opencode":
-		return writePlugin(configPath, opencodePlugin)
+		return pluginTarget(configPath, opencodePlugin), nil
 	case "pi":
-		return writePlugin(configPath, piExtension)
+		return pluginTarget(configPath, piExtension), nil
 	case "cursor":
-		return installCursorHook(configPath, scriptPath)
-	default:
-		return fmt.Errorf("unsupported agent: %s", agentName)
+		return target{configPath, cursorActivation(bin), cursorRemove(managedBy, "stop", "postToolUse"),
+			func(b []byte) bool { return cursorHas(b, managedBy) }, jsonEdit(func(map[string]any) {})}, nil
 	}
+	return target{}, fmt.Errorf("unsupported agent: %s", agentName)
 }
 
-// UninstallForAgent calls the appropriate uninstaller based on agentName.
+func autoSyncTarget(agentName, configPath, bin string) (target, error) {
+	switch agentName {
+	case "claude-code":
+		return target{configPath, claudeAutoSync(bin), claudeRemove(autoSyncManagedBy, "UserPromptSubmit"),
+			func(b []byte) bool { return claudeHas(b, autoSyncManagedBy) }, jsonEdit(func(map[string]any) {})}, nil
+	case "codex":
+		return target{configPath, codexUpsert(codexAutoSyncBlockStart, codexAutoSyncBlockEnd, codexBlock(codexAutoSyncBlockStart, codexAutoSyncBlockEnd, bin, autoSyncArgs)),
+			codexRemove(codexAutoSyncBlockStart, codexAutoSyncBlockEnd),
+			func(b []byte) bool { return hasManagedBlock(string(b), codexAutoSyncBlockStart) }, identity}, nil
+	case "opencode", "pi":
+		return pluginTarget(autoSyncPluginPath(configPath), autoSyncTS(agentName, bin)), nil
+	case "cursor":
+		return target{configPath, cursorAutoSync(bin), cursorRemove(autoSyncManagedBy, "sessionStart"),
+			func(b []byte) bool { return cursorHas(b, autoSyncManagedBy) }, jsonEdit(func(map[string]any) {})}, nil
+	}
+	return target{}, fmt.Errorf("unsupported agent: %s", agentName)
+}
+
+func identity(b []byte) ([]byte, error) { return b, nil }
+
+// InstallForAgent registers `skael hook report` with one agent.
+func InstallForAgent(agentName, configPath, bin string) error {
+	t, err := activationTarget(agentName, configPath, bin)
+	if err != nil {
+		return err
+	}
+	return applyEdit(t.path, t.install, true)
+}
+
+// UninstallForAgent removes the activation hook from one agent.
 func UninstallForAgent(agentName, configPath string) error {
-	switch agentName {
-	case "claude-code":
-		return UninstallClaudeHook(configPath)
-	case "codex":
-		return uninstallCodexHook(configPath)
-	case "opencode", "pi":
-		return removePlugin(configPath)
-	case "cursor":
-		return uninstallCursorHook(configPath)
-	default:
-		return fmt.Errorf("unsupported agent: %s", agentName)
+	t, err := activationTarget(agentName, configPath, "")
+	if err != nil {
+		return err
 	}
+	return applyEdit(t.path, t.remove, false)
 }
 
-// InstallAutoSyncForAgent calls the appropriate auto-sync installer based on agentName.
-func InstallAutoSyncForAgent(agentName, configPath, scriptPath string) error {
-	switch agentName {
-	case "claude-code":
-		return InstallClaudeAutoSync(configPath, scriptPath)
-	case "codex":
-		return InstallCodexAutoSync(configPath, scriptPath)
-	case "cursor":
-		return InstallCursorAutoSync(configPath, scriptPath)
-	case "opencode", "pi":
-		return writePlugin(autoSyncPluginPath(configPath), autoSyncTS(agentName, scriptPath))
-	default:
-		return fmt.Errorf("unsupported agent: %s", agentName)
+// InstallAutoSyncForAgent registers `skael hook autosync` with one agent.
+func InstallAutoSyncForAgent(agentName, configPath, bin string) error {
+	t, err := autoSyncTarget(agentName, configPath, bin)
+	if err != nil {
+		return err
 	}
+	return applyEdit(t.path, t.install, true)
 }
 
-// UninstallAutoSyncForAgent calls the appropriate auto-sync uninstaller based on agentName.
+// UninstallAutoSyncForAgent removes the auto-sync hook from one agent.
 func UninstallAutoSyncForAgent(agentName, configPath string) error {
-	switch agentName {
-	case "claude-code":
-		return UninstallClaudeAutoSync(configPath)
-	case "codex":
-		return UninstallCodexAutoSync(configPath)
-	case "cursor":
-		return UninstallCursorAutoSync(configPath)
-	case "opencode", "pi":
-		return removePlugin(autoSyncPluginPath(configPath))
-	default:
-		return fmt.Errorf("unsupported agent: %s", agentName)
+	t, err := autoSyncTarget(agentName, configPath, "")
+	if err != nil {
+		return err
 	}
+	return applyEdit(t.path, t.remove, false)
+}
+
+// HookState says which skael hooks an agent's config holds, and whether each
+// names bin with the current subcommand.
+type HookState struct {
+	Activation, ActivationCurrent bool
+	AutoSync, AutoSyncCurrent     bool
+}
+
+// State reads an agent's config and reports its skael hooks.
+func State(agentName, configPath, bin string) HookState {
+	var s HookState
+	if t, err := activationTarget(agentName, configPath, bin); err == nil {
+		s.Activation, s.ActivationCurrent = t.state()
+	}
+	if t, err := autoSyncTarget(agentName, configPath, bin); err == nil {
+		s.AutoSync, s.AutoSyncCurrent = t.state()
+	}
+	return s
+}
+
+func (t target) state() (present, current bool) {
+	data, err := os.ReadFile(t.path)
+	if err != nil || !t.has(data) {
+		return false, false
+	}
+	want, err := t.install(data)
+	if err != nil {
+		return true, false
+	}
+	have, err := t.normalize(data)
+	return true, err == nil && bytes.Equal(want, have)
+}
+
+// Repair rewrites the skael hooks an agent already has that name another
+// binary or an old script. It adds no hook the user did not install.
+func Repair(agentName, configPath, bin string) error {
+	s := State(agentName, configPath, bin)
+	var errs []error
+	if s.Activation && !s.ActivationCurrent {
+		errs = append(errs, InstallForAgent(agentName, configPath, bin))
+	}
+	if s.AutoSync && !s.AutoSyncCurrent {
+		errs = append(errs, InstallAutoSyncForAgent(agentName, configPath, bin))
+	}
+	return errors.Join(errs...)
+}
+
+// RemoveLegacyScripts deletes the bash hook scripts older releases wrote.
+func RemoveLegacyScripts(skaelDir string) {
+	for _, name := range []string{"skael-hook.sh", "skael-autosync.sh", "skael-cursor-read.sh", "skael-cursor-stop.sh"} {
+		_ = os.Remove(filepath.Join(skaelDir, "hooks", name))
+	}
+	_ = os.Remove(filepath.Join(skaelDir, "hooks"))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // JSON helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-func readJSONFile(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]any{}, nil
+func jsonEdit(f func(map[string]any)) edit {
+	return func(data []byte) ([]byte, error) {
+		m, err := parseJSON(data)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		f(m)
+		return json.MarshalIndent(m, "", "  ")
 	}
-	if len(data) == 0 {
+}
+
+func parseJSON(data []byte) (map[string]any, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return map[string]any{}, nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+	if m == nil {
+		m = map[string]any{}
 	}
 	return m, nil
-}
-
-func writeJSONFile(path string, m map[string]any) error {
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Preserve existing file permissions; default to 0644 for new files.
-	perm := os.FileMode(0o644)
-	if info, statErr := os.Stat(path); statErr == nil {
-		perm = info.Mode().Perm()
-	}
-	return atomicWriteFile(path, data, perm)
 }
 
 // atomicWriteFile writes data to path atomically via a .tmp sibling file.

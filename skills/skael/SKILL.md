@@ -154,4 +154,4 @@ These exist. Read https://skael.dev/docs/cli before you use one.
 
 `skael init` writes this file to `.agents/skills/skael/SKILL.md`, and to `.claude/skills/skael/SKILL.md` when Claude Code is detected. It never overwrites a changed copy unless you pass `--force`.
 
-To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`) or `brew upgrade --cask skael-dev/skael/skael`. Then run `skael init --force` to refresh this file to the version that ships with the new CLI.
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`. Then run `skael init --force` to refresh this file to the version that ships with the new CLI.

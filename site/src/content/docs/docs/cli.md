@@ -299,9 +299,18 @@ Diagnostic health check: config, connectivity, agent detection, hook status. It 
 
 Standalone management of activation-tracking and auto-sync hooks.
 
-- `install` — write hook scripts for all detected agents (activation tracking + auto-sync)
-- `uninstall` — remove hook scripts from all detected agents
-- `status` — show which agents have hooks installed
+- `install` — register the hooks with every detected agent (activation tracking + auto-sync)
+- `uninstall` — remove the hooks from every detected agent
+- `status` — show which agents have current hooks. A hook that names an old script or another skael binary shows as out of date.
+
+Each hook runs the skael binary itself, so the same hooks work on macOS, Linux and Windows with no bash, jq or curl:
+
+- `skael hook report --agent <name>` reads the agent's hook payload on stdin and reports a skill load. It returns at once and posts the event from a background process.
+- `skael hook autosync` starts `skael sync --quiet` in the background when the last sync is 30 minutes old.
+
+Agents call these commands. You do not run them. Both print nothing and exit 0 on every error, so a hook never blocks or breaks an agent session.
+
+The hook names the skael on your `PATH` when that is the running binary, so a Homebrew or Scoop upgrade keeps the path. Every skael command checks the hooks you installed and rewrites one that names an old script or a moved binary.
 
 | Agent | Activation tracking | Auto-sync |
 |---|---|---|
@@ -453,7 +462,7 @@ At most once a day, a command reads the server's version from `/api/capabilities
 
 The notice never changes an exit code or stdout. It stays silent with `--json` or `--quiet`, on a `dev` build, and when the server does not answer within 2 seconds. It asks your own server only, never an outside service. `skael doctor` always shows both versions.
 
-To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`) or `brew upgrade --cask skael-dev/skael/skael`, then `skael init --force` in each repo to refresh the skael skill.
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`, then `skael init --force` in each repo to refresh the skael skill.
 
 ## Skill scope
 

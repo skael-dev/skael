@@ -91,6 +91,7 @@ func prepareCommands(cmd *cobra.Command) {
 // run executes one command line and returns the process exit code.
 func run(args []string) int {
 	prepareOnce.Do(func() { prepareCommands(rootCmd) })
+	repairHooks(args)
 	rootCmd.SetArgs(args)
 	err := rootCmd.Execute()
 	defer maybeNoticeVersion(args)

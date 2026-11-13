@@ -9,7 +9,13 @@ get_os() {
   case "$(uname -s)" in
     Linux*)  echo "linux" ;;
     Darwin*) echo "darwin" ;;
-    MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+    MINGW*|MSYS*|CYGWIN*)
+      echo "On Windows, install skael from PowerShell:" >&2
+      echo "  irm https://skael.dev/install.ps1 | iex" >&2
+      echo "or with Scoop:" >&2
+      echo "  scoop bucket add skael https://github.com/skael-dev/scoop-skael" >&2
+      echo "  scoop install skael" >&2
+      exit 1 ;;
     *) echo "unsupported: $(uname -s)" >&2; exit 1 ;;
   esac
 }
@@ -40,9 +46,6 @@ if [ -z "$VERSION" ]; then
 fi
 
 EXT="tar.gz"
-if [ "$OS" = "windows" ]; then
-  EXT="zip"
-fi
 
 FILENAME="${BINARY}_${VERSION}_${OS}_${ARCH}.${EXT}"
 URL="https://github.com/${REPO}/releases/download/v${VERSION}/${FILENAME}"
@@ -68,11 +71,7 @@ else
   echo "Warning: no sha256sum or shasum found, skipping checksum verification" >&2
 fi
 
-if [ "$EXT" = "tar.gz" ]; then
-  tar xzf "$FILENAME"
-else
-  unzip -q "$FILENAME"
-fi
+tar xzf "$FILENAME"
 
 if [ -w "$INSTALL_DIR" ]; then
   mv "$BINARY" "$INSTALL_DIR/"

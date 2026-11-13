@@ -2,7 +2,6 @@ package hooks
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -108,7 +107,7 @@ export default function (pi: any) {
     if (path.startsWith("~/")) path = join(homedir(), path.slice(2))
     path = resolve(typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd(), path)
     if (basename(path) !== "SKILL.md") return
-    const root = dirname(dirname(path))
+    const root = dirname(dirname(path)).replace(/\\/g, "/")
     if (!SKILL_ROOTS.some((r) => root.endsWith(r))) return
     report("pi", skillName(path), extra(ctx))
   })
@@ -120,13 +119,14 @@ export default function (pi: any) {
 }
 `
 
-// autoSyncTS runs the debounced auto-sync script when a session starts. The
-// script returns at once and syncs in the background.
-func autoSyncTS(agent, scriptPath string) string {
-	script, _ := json.Marshal(scriptPath)
+// autoSyncTS runs `skael hook autosync` when a session starts. pi and Bun
+// spawn without a shell, so the binary is named directly.
+func autoSyncTS(agent, bin string) string {
+	argv, _ := json.Marshal(autoSyncArgs)
+	path, _ := json.Marshal(bin)
 	run := `function autoSync() {
   try {
-    spawn("bash", [` + string(script) + `], { detached: true, stdio: "ignore" }).unref()
+    spawn(` + string(path) + `, ` + string(argv) + `, { detached: true, stdio: "ignore", windowsHide: true }).unref()
   } catch {}
 }
 `
@@ -153,24 +153,21 @@ func autoSyncPluginPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "skael-autosync.ts")
 }
 
-func writePlugin(path, source string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return atomicWriteFile(path, []byte(source), 0o644)
-}
+const pluginMarker = "managed by skael CLI"
 
-// removePlugin removes a plugin file skael wrote, and nothing else.
-func removePlugin(path string) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
+// pluginTarget is a plugin file skael owns whole. Removing it deletes only a
+// file that carries the marker.
+func pluginTarget(path, source string) target {
+	return target{
+		path:    path,
+		install: func([]byte) ([]byte, error) { return []byte(source), nil },
+		remove: func(data []byte) ([]byte, error) {
+			if strings.Contains(string(data), pluginMarker) {
+				return nil, nil
+			}
+			return data, nil
+		},
+		has:       func(data []byte) bool { return strings.Contains(string(data), pluginMarker) },
+		normalize: identity,
 	}
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(string(data), "managed by skael CLI") {
-		return nil
-	}
-	return os.Remove(path)
 }

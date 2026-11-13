@@ -117,9 +117,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	// 6. Install hooks unless skipped and agents were found. A hook failure is a
 	// warning here: the skills are in place and `skael hook install` retries it.
 	if !setupSkipHooks && len(detectedAgents) > 0 {
-		installActivationHooks(dir, home, endpoint, apiKey, detectedAgents)
+		installActivationHooks(dir, home, detectedAgents)
 		if !setupNoAutoSync {
-			installAutoSyncHooks(dir, home, detectedAgents)
+			installAutoSyncHooks(home, detectedAgents)
 		}
 	}
 

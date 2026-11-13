@@ -49,6 +49,13 @@ brew install --cask skael-dev/skael/skael
 # Linux
 curl -fsSL skael.dev/install | sh
 
+# Windows (PowerShell, no admin)
+irm https://skael.dev/install.ps1 | iex
+
+# Windows (Scoop)
+scoop bucket add skael https://github.com/skael-dev/scoop-skael
+scoop install skael
+
 # From source
 git clone https://github.com/skael-dev/skael.git
 cd skael && go build -o skael ./cmd/skael

@@ -35,10 +35,19 @@ curl -fsSL skael.dev/install | sh
 # macOS (Homebrew)
 brew install --cask skael-dev/skael/skael
 
+# Windows (PowerShell, no admin)
+irm https://skael.dev/install.ps1 | iex
+
+# Windows (Scoop)
+scoop bucket add skael https://github.com/skael-dev/scoop-skael
+scoop install skael
+
 # From source
 git clone https://github.com/skael-dev/skael.git
 cd skael && go build -o skael ./cmd/skael
 ```
+
+The PowerShell installer puts `skael.exe` in `%LOCALAPPDATA%\Programs\skael\bin` and adds that folder to your user `PATH`. Open a new terminal after it finishes. Hooks on Windows need no Git Bash, WSL or jq.
 
 `go install github.com/skael-dev/skael/cmd/skael@latest` does not work — `go.mod` has a `replace` directive, and `go install <pkg>@version` refuses any module carrying one. Building from a clone is unaffected.
 

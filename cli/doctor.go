@@ -9,6 +9,7 @@ import (
 	"github.com/skael-dev/skael/cli/agents"
 	"github.com/skael-dev/skael/cli/client"
 	"github.com/skael-dev/skael/cli/config"
+	"github.com/skael-dev/skael/cli/hooks"
 	"github.com/skael-dev/skael/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -162,10 +163,8 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 		// Check whether hook is installed by reading the agent config file.
 		configPath := agent.ConfigPath(home)
-		hookInstalled := false
-		if data, err := os.ReadFile(configPath); err == nil {
-			hookInstalled = strings.Contains(string(data), "skael")
-		}
+		bin, _, _ := hooks.Binary()
+		hookInstalled := hooks.State(name, configPath, bin).ActivationCurrent
 
 		// Determine the skills directory relative to home for display.
 		relSkillsDir := skillsDir
