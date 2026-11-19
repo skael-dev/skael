@@ -80,6 +80,18 @@ type Version struct {
 	// one explicitly) can compute what remains by subtracting it, but must
 	// not treat this field alone as "what still blocks release."
 	HoldReasons []string `json:"hold_reasons,omitempty"`
+	// Outcome is "created", "unchanged" or "suite_updated". An older server
+	// sends none.
+	Outcome string `json:"outcome,omitempty"`
+	// Suite reports what the publish did with the folder's evals/.
+	Suite *PublishSuite `json:"suite,omitempty"`
+}
+
+// PublishSuite is what a publish did with a skill folder's evals/.
+type PublishSuite struct {
+	Ref     string `json:"ref,omitempty"`
+	Updated bool   `json:"updated"`
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // QualityState is the publish response's report on the evaluation, if any,

@@ -686,3 +686,11 @@ func TestEvalQueue_SkillWithNoSuiteEnqueuesADeriveJob(t *testing.T) {
 		t.Fatal("the score was not recorded as derived")
 	}
 }
+
+func (a evalSuiteAdapter) PutAuthored(ctx context.Context, name string, archive []byte, by string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}

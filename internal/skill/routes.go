@@ -113,7 +113,13 @@ type SuiteRecord struct {
 // suite is registered for the skill.
 type SuiteLookup interface {
 	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
+	// PutAuthored stores a skill folder's evals/ as the skill's suite. A suite
+	// that does not load returns an error wrapping ErrInvalidSuite.
+	PutAuthored(ctx context.Context, skillName string, archive []byte, uploadedBy string) (*SuiteRecord, error)
 }
+
+// ErrInvalidSuite is a skill folder's evals/ that the registry cannot load.
+var ErrInvalidSuite = errors.New("invalid eval suite")
 
 // OwnerResolver is the subset of the ownership store publish needs. It is
 // declared here rather than imported because internal/ownership must stay

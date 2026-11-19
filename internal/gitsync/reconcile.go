@@ -243,7 +243,11 @@ func (r *run) sync(ctx context.Context, f skillimport.DiscoveredSkill, b *Bindin
 	if err != nil {
 		return r.undo(ctx, f, created, "the folder does not pack: "+err.Error())
 	}
-	res, err := r.s.publisher.Publish(r.actor, f.Name, raw, false)
+	suite, err := skill.PackSuite(dir)
+	if err != nil {
+		return r.undo(ctx, f, created, "the evals folder does not pack: "+err.Error())
+	}
+	res, err := r.s.publisher.PublishWithSuite(r.actor, f.Name, raw, suite, false)
 	if err != nil {
 		var se huma.StatusError
 		if errors.As(err, &se) && se.GetStatus() < 500 {
@@ -275,6 +279,15 @@ func (r *run) sync(ctx context.Context, f skillimport.DiscoveredSkill, b *Bindin
 		}
 		log.Info().Str("connection", r.c.ID).Str("skill", f.Name).Int("version", res.Version.Version).
 			Str("commit", short(r.sn.sha)).Msg("gitsync: published a version from git")
+	}
+	if res.Outcome == skill.OutcomeSuiteUpdated {
+		if err := audit.Record(ctx, r.s.pool, res.PublishedBy, "git_sync.suite", "skill:"+f.Name, map[string]any{
+			"suite_ref": res.Suite.Ref, "connection": r.c.ID, "commit": r.sn.sha, "author": r.author, "job_id": res.Quality.JobID,
+		}); err != nil {
+			return err
+		}
+		log.Info().Str("connection", r.c.ID).Str("skill", f.Name).Str("suite_ref", res.Suite.Ref).
+			Str("commit", short(r.sn.sha)).Msg("gitsync: stored a new suite from git")
 	}
 	return nil
 }

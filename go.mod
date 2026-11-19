@@ -21,6 +21,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.0
 	github.com/riverqueue/river/rivertype v0.51.0
 	github.com/rs/zerolog v1.35.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0

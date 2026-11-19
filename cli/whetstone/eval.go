@@ -614,28 +614,45 @@ func gradeOutcomes(ctx context.Context, g *score.Grader, plan *runner.Plan, outs
 			defer func() { <-sem }()
 
 			ev, ok := plan.EvalByID(o.Key.TaskID)
-			if !ok || len(ev.Expectations) == 0 {
+			if !ok || len(ev.Expectations)+len(ev.Checks) == 0 {
 				return
 			}
-			began := time.Now()
-			grade, err := g.Grade(ctx, ev.Expectations, score.Run{
-				Prompt:         ev.Prompt,
-				ExpectedOutput: ev.ExpectedOutput,
-				Transcript:     loadTranscript(o.ArtifactDir),
-				Outputs:        renderOutputs(o.ArtifactDir),
-			})
-			gp := Progress{Kind: "grade", Task: o.Key.TaskID, Condition: string(o.Key.Condition), Model: o.Key.Model,
-				Attempt: o.Key.Attempt, OK: err == nil, Duration: time.Since(began)}
-			if err != nil {
-				gp.Error = err.Error()
+			if len(o.Checks) != len(ev.Checks) {
+				// A resumed run whose verdicts were lost has no measurement
+				// of its checks, which is not a failed check.
+				mu.Lock()
+				dropped = append(dropped, droppedGrade{Key: o.Key, Reason: fmt.Sprintf("%d of %d check verdicts recorded", len(o.Checks), len(ev.Checks))})
+				mu.Unlock()
+				return
 			}
-			progress(gp)
+			// An eval whose expectations are all checks makes no judge call,
+			// so its score does not depend on which model judges.
+			var grade score.Grade
+			var err error
+			if len(ev.Expectations) > 0 {
+				began := time.Now()
+				grade, err = g.Grade(ctx, ev.Expectations, score.Run{
+					Prompt:         ev.Prompt,
+					ExpectedOutput: ev.ExpectedOutput,
+					Transcript:     loadTranscript(o.ArtifactDir),
+					Outputs:        renderOutputs(o.ArtifactDir),
+				})
+				gp := Progress{Kind: "grade", Task: o.Key.TaskID, Condition: string(o.Key.Condition), Model: o.Key.Model,
+					Attempt: o.Key.Attempt, OK: err == nil, Duration: time.Since(began)}
+				if err != nil {
+					gp.Error = err.Error()
+				}
+				progress(gp)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				errs = append(errs, err)
 				dropped = append(dropped, droppedGrade{Key: o.Key, Reason: err.Error()})
 				return
+			}
+			for _, c := range o.Checks {
+				grade.AddCheck(c.Label, c.Passed, c.Evidence)
 			}
 			out[o.Key] = grade
 		}

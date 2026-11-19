@@ -155,6 +155,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 		Version    int                `json:"version"`
 		ScanStatus string             `json:"scan_status"`
 		Created    bool               `json:"created"`
+		Outcome    string             `json:"outcome"`
 		Quality    importQualityState `json:"quality"`
 		Decision   gate.Decision      `json:"decision"`
 	}
@@ -219,7 +220,7 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: msg})
 				continue
 			}
-			ver, created, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, opts.external(), opts.Queue, opts.Suites, opts.floor(), opts.Ownership)
+			ver, outcome, quality, decision, err := importSingleSkill(ctx, result.Dir, ds, src, skillStore, importStore, storage, opts.external(), opts.Queue, opts.Suites, opts.floor(), opts.Ownership)
 			if err != nil {
 				log.Warn().Err(err).Str("skill", ds.Name).Msg("import failed")
 				out.Body.Failed = append(out.Body.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
@@ -237,7 +238,8 @@ func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillSt
 				Name:       ds.Name,
 				Version:    ver.Version,
 				ScanStatus: ds.ScanStatus,
-				Created:    created,
+				Created:    outcome == skill.OutcomeCreated,
+				Outcome:    outcome,
 				Quality:    quality,
 				Decision:   decision,
 			})
@@ -303,21 +305,21 @@ func importSingleSkill(
 	suites *evalsuite.Registry,
 	qualityFloor float64,
 	ownership skill.OwnerResolver,
-) (*skill.Version, bool, importQualityState, gate.Decision, error) {
+) (*skill.Version, string, importQualityState, gate.Decision, error) {
 	skillDir := filepath.Join(rootDir, filepath.FromSlash(ds.Path))
 
 	archive, checksum, manifest, err := skill.Pack(skillDir)
 	if err != nil {
-		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("pack: %w", err)
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("pack: %w", err)
 	}
 
 	data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	if err != nil {
-		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("read SKILL.md: %w", err)
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("read SKILL.md: %w", err)
 	}
 	fm, body, err := skill.ParseFrontmatter(string(data))
 	if err != nil {
-		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("parse frontmatter: %w", err)
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("parse frontmatter: %w", err)
 	}
 
 	var fmJSON json.RawMessage
@@ -325,7 +327,7 @@ func importSingleSkill(
 		var err error
 		fmJSON, err = json.Marshal(fm)
 		if err != nil {
-			return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal frontmatter: %w", err)
+			return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal frontmatter: %w", err)
 		}
 	} else {
 		fmJSON = json.RawMessage(`{}`)
@@ -339,17 +341,27 @@ func importSingleSkill(
 		}
 	}
 
-	report, err := scan.ScanDir(skillDir)
+	// The scan reads what the version ships. evals/ is the suite, which
+	// installers never receive, and its fixtures hold what it asks about.
+	shipped, err := os.MkdirTemp("", "skael-import-scan-*")
 	if err != nil {
-		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("scan: %w", err)
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("scan: %w", err)
 	}
-	scan.MergeExternal(ctx, external, skillDir, report)
-	// skillDir lives under a throwaway checkout; findings are persisted and
-	// rendered, so they must name the file inside the bundle, not on disk.
-	scan.Relativize(report, skillDir)
+	defer os.RemoveAll(shipped)
+	if err := skill.Unpack(bytes.NewReader(archive), shipped); err != nil {
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("scan: %w", err)
+	}
+	report, err := scan.ScanDir(shipped)
+	if err != nil {
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("scan: %w", err)
+	}
+	scan.MergeExternal(ctx, external, shipped, report)
+	// shipped is a throwaway directory; findings are persisted and rendered,
+	// so they must name the file inside the bundle, not on disk.
+	scan.Relativize(report, shipped)
 	scanJSON, err := json.Marshal(report)
 	if err != nil {
-		return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal scan result: %w", err)
+		return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("import: marshal scan result: %w", err)
 	}
 
 	// Resolve ownership before deciding, mirroring publish
@@ -361,7 +373,7 @@ func importSingleSkill(
 		var err error
 		owner, err = ownership.ResolveForPublish(ctx, ds.Name, auth.UserFromContext(ctx))
 		if err != nil {
-			return nil, false, importQualityState{}, gate.Decision{}, fmt.Errorf("import: resolve ownership: %w", err)
+			return nil, "", importQualityState{}, gate.Decision{}, fmt.Errorf("import: resolve ownership: %w", err)
 		}
 	}
 
@@ -372,7 +384,7 @@ func importSingleSkill(
 	decision := skill.DecidePublish(report, owner, qualityFloor, false)
 
 	if decision.Outcome == gate.Block {
-		return nil, false, importQualityState{}, decision, fmt.Errorf(
+		return nil, "", importQualityState{}, decision, fmt.Errorf(
 			"archive rejected: it contains credential-theft or data-exfiltration findings, which are unappealable — no evaluation and no override clears them")
 	}
 
@@ -383,9 +395,14 @@ func importSingleSkill(
 			Msg("import held for review: version created but not served until an evaluation or an admin clears it")
 	}
 
+	suiteRef, suiteUpdated, err := importSuite(ctx, skillDir, ds.Name, suites, owner)
+	if err != nil {
+		return nil, "", importQualityState{}, decision, err
+	}
+
 	sk, err := skillStore.GetByName(ctx, ds.Name)
 	if err != nil {
-		return nil, false, importQualityState{}, decision, fmt.Errorf("get skill: %w", err)
+		return nil, "", importQualityState{}, decision, fmt.Errorf("get skill: %w", err)
 	}
 	newSkill := sk == nil
 	if sk == nil {
@@ -403,27 +420,30 @@ func importSingleSkill(
 		}
 		sk, err = skillStore.Create(ctx, ds.Name, "", createDesc, createBody, createFM)
 		if err != nil {
-			return nil, false, importQualityState{}, decision, fmt.Errorf("create skill: %w", err)
+			return nil, "", importQualityState{}, decision, fmt.Errorf("create skill: %w", err)
 		}
 	}
 
 	if sk.LatestVersion > 0 {
 		latest, err := skillStore.GetVersion(ctx, ds.Name, sk.LatestVersion)
 		if err == nil && latest != nil && latest.Checksum == checksum {
-			return latest, false, importQualityState{State: "none"}, decision, nil
+			if suiteUpdated {
+				return latest, skill.OutcomeSuiteUpdated, enqueueImportEval(ctx, queue, sk.ID, ds.Name, latest.Version, suiteRef), decision, nil
+			}
+			return latest, skill.OutcomeUnchanged, importQualityState{State: "none"}, decision, nil
 		}
 	}
 
 	archiveName := fmt.Sprintf("%s/%s.tar.gz", ds.Name, checksum[:16])
 	if _, err := storage.Write(ctx, archiveName, bytes.NewReader(archive)); err != nil {
-		return nil, false, importQualityState{}, decision, fmt.Errorf("store archive: %w", err)
+		return nil, "", importQualityState{}, decision, fmt.Errorf("store archive: %w", err)
 	}
 
 	ver, err := skillStore.CreateVersion(ctx, sk.ID, archiveName, checksum, changelog,
 		description, body, fmJSON, manifest, scanJSON, "import", decision)
 	if err != nil {
 		_ = storage.Delete(ctx, archiveName)
-		return nil, false, importQualityState{}, decision, fmt.Errorf("create version: %w", err)
+		return nil, "", importQualityState{}, decision, fmt.Errorf("create version: %w", err)
 	}
 
 	// Persist spec-derived metadata. UpdateSpecFields is the only writer of the
@@ -456,15 +476,7 @@ func importSingleSkill(
 			// swallowed as "this skill has no suite".
 			log.Warn().Err(err).Str("skill", ds.Name).Msg("import: suite lookup failed, skipping enqueue")
 		} else if rec != nil {
-			id, err := queue.Submit(ctx, evalqueue.Job{
-				SkillID: sk.ID, SkillName: ds.Name, Version: ver.Version,
-				SuiteRef: rec.Ref, Tier: "full", RequestedBy: "import",
-			})
-			if err != nil {
-				log.Warn().Err(err).Str("skill", ds.Name).Msg("import: could not enqueue evaluation")
-			} else {
-				quality = importQualityState{State: "pending", JobID: string(id)}
-			}
+			quality = enqueueImportEval(ctx, queue, sk.ID, ds.Name, ver.Version, rec.Ref)
 		}
 	}
 
@@ -496,7 +508,50 @@ func importSingleSkill(
 		}
 	}
 
-	return ver, true, quality, decision, nil
+	return ver, skill.OutcomeCreated, quality, decision, nil
+}
+
+// enqueueImportEval queues a full eval of one version. A queue outage must not
+// fail an import: the version is already durable by this point.
+func enqueueImportEval(ctx context.Context, queue evalqueue.Executor, skillID, name string, version int, suiteRef string) importQualityState {
+	if queue == nil {
+		return importQualityState{State: "none"}
+	}
+	id, err := queue.Submit(ctx, evalqueue.Job{
+		SkillID: skillID, SkillName: name, Version: version,
+		SuiteRef: suiteRef, Tier: "full", RequestedBy: "import",
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("skill", name).Msg("import: could not enqueue evaluation")
+		return importQualityState{State: "none"}
+	}
+	return importQualityState{State: "pending", JobID: string(id)}
+}
+
+// importSuite stores the folder's evals/ as the skill's suite, uploaded by the
+// importer, when the importer may publish the skill unheld. It reports the
+// stored ref and whether the skill's current suite changed.
+func importSuite(ctx context.Context, skillDir, name string, suites *evalsuite.Registry, owner gate.OwnerState) (string, bool, error) {
+	if suites == nil || (owner.Evaluated && !owner.IsOwner && !owner.Unowned) {
+		return "", false, nil
+	}
+	archive, err := skill.PackSuite(skillDir)
+	if err != nil || archive == nil {
+		return "", false, err
+	}
+	prev, err := suites.LatestForSkill(ctx, name)
+	if err != nil && !errors.Is(err, evalsuite.ErrNotFound) {
+		return "", false, fmt.Errorf("import: suite lookup: %w", err)
+	}
+	by := "import"
+	if u := auth.UserFromContext(ctx); u != nil {
+		by = u.Email
+	}
+	rec, err := suites.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("import: evals/ is not a valid suite: %w", err)
+	}
+	return rec.Ref, prev == nil || prev.Ref != rec.Ref, nil
 }
 
 func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage platform.Storage, opts RouteOptions) http.HandlerFunc {
@@ -533,6 +588,7 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 			Version    int                `json:"version"`
 			ScanStatus string             `json:"scan_status"`
 			Created    bool               `json:"created"`
+			Outcome    string             `json:"outcome"`
 			Quality    importQualityState `json:"quality"`
 			Decision   gate.Decision      `json:"decision"`
 		}
@@ -559,14 +615,14 @@ func makeUploadHandler(skillStore *skill.Store, importStore *Store, storage plat
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: msg})
 				continue
 			}
-			ver, created, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, opts.external(), queue, suites, opts.floor(), ownership)
+			ver, outcome, quality, decision, err := importSingleSkill(r.Context(), tmpDir, ds, src, skillStore, importStore, storage, opts.external(), queue, suites, opts.floor(), ownership)
 			if err != nil {
 				resp.Failed = append(resp.Failed, failedSkill{Name: ds.Name, Error: err.Error()})
 				continue
 			}
 			resp.Imported = append(resp.Imported, importedSkill{
-				Name: ds.Name, Version: ver.Version, ScanStatus: ds.ScanStatus, Created: created,
-				Quality: quality, Decision: decision,
+				Name: ds.Name, Version: ver.Version, ScanStatus: ds.ScanStatus, Created: outcome == skill.OutcomeCreated,
+				Outcome: outcome, Quality: quality, Decision: decision,
 			})
 		}
 

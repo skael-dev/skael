@@ -466,3 +466,43 @@ func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 		}
 	}
 }
+
+// A worker that predates checks would run the session, ignore the checks and
+// score the eval without them, so the claim must never hand it such a job.
+func TestClaim_OnlyAWorkerThatRunsChecksGetsASuiteWithChecks(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	if _, err := pool.Exec(ctx, `INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, has_checks)
+		VALUES ('checked', 'deploy-helper', 'suites/checked.tar.gz', 1, '[]', 0, 'a@b.c', TRUE)`); err != nil {
+		t.Fatal(err)
+	}
+	for id, version := range map[string]string{"old": "v0.22.0", "new": "v0.23.0"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO workers (id, version, driver, hardware_isolated, network_policy, concurrency, sandbox_image, harness, pinned, credentials, verifications)
+			VALUES ($1, $2, 'docker', FALSE, FALSE, 1, 'img', 'opencode', '', '[]', '[]')`, id, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "checked"})
+
+	for _, w := range []string{"old", "unknown"} {
+		if _, _, ok, err := q.Claim(ctx, w, time.Minute); err != nil || ok {
+			t.Fatalf("worker %s: ok=%v err=%v, want no claim", w, ok, err)
+		}
+	}
+	j, _, ok, err := q.Claim(ctx, "new", time.Minute)
+	if err != nil || !ok || j.ID != id {
+		t.Fatalf("worker new: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRunsChecks(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v0.23.0": true, "0.23.1": true, "v1.0.0": true, "v0.23.0-dev": true, "v0.23.0-4-gabc123-dirty": true,
+		"v0.22.9": false, "v0.22.0-12-gabc123": false, "dev": false, "": false,
+	} {
+		if got := evalqueue.RunsChecks(v); got != want {
+			t.Errorf("RunsChecks(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

@@ -140,6 +140,17 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 	}
 	out.Events, out.Meta = result.Events, result.Meta
 
+	if len(ev.Checks) > 0 {
+		checks, err := r.runChecks(ctx, in, ws, ev)
+		if err != nil {
+			return finish(store.StatusError, err)
+		}
+		out.Checks = checks
+		if err := writeChecks(artifactDir, checks); err != nil {
+			return finish(store.StatusError, fmt.Errorf("runner: recording checks for %+v: %w", k, err))
+		}
+	}
+
 	return finish(store.StatusOK, nil)
 }
 
@@ -314,6 +325,9 @@ func outcomeFromRecord(rec store.RunRecord) Outcome {
 	// that rather than let an unset ArtifactDir accidentally pick up a
 	// stray grading.json in whatever directory whetstone eval was run from.
 	if rec.Outcome.ArtifactDir != "" {
+		if checks, cErr := LoadChecks(rec.Outcome.ArtifactDir); cErr == nil {
+			out.Checks = checks
+		}
 		if g, gErr := LoadGrading(filepath.Join(rec.Outcome.ArtifactDir, gradingFileName)); gErr == nil {
 			out.Meta = g.Meta
 			return out

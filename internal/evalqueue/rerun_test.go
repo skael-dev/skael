@@ -579,3 +579,11 @@ func TestDerivePush_AnOrphanedPushIsStillRecordedDerived(t *testing.T) {
 		t.Fatal("a score against an orphaned derived suite was recorded as authored — it could clear a scan hold")
 	}
 }
+
+func (a rerunSuiteAdapter) PutAuthored(ctx context.Context, name string, archive []byte, by string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}

@@ -276,3 +276,40 @@ func BaselinePlanned(p Plan) bool {
 	}
 	return false
 }
+
+// TierCheck is whether a suite can fill one tier, and why not when it cannot.
+type TierCheck struct {
+	Tier   Tier
+	OK     bool
+	Reason string
+}
+
+// Tiers lists the tiers from shallowest to deepest.
+var Tiers = []Tier{TierSmoke, TierFull, TierDeep}
+
+// CheckTiers plans every tier against a suite and reports which it fills. The
+// reasons are BuildPlan's own refusals, so a suite that passes here plans.
+func CheckTiers(set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) []TierCheck {
+	out := make([]TierCheck, 0, len(Tiers))
+	for _, t := range Tiers {
+		_, err := BuildPlan(t, PanelFor(t), set, void, triggers)
+		c := TierCheck{Tier: t, OK: err == nil}
+		if err != nil {
+			c.Reason = err.Error()
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// Reached is the deepest tier a suite fills, or "" when it fills none.
+func Reached(cs []TierCheck) Tier {
+	var t Tier
+	for _, c := range cs {
+		if !c.OK {
+			break
+		}
+		t = c.Tier
+	}
+	return t
+}

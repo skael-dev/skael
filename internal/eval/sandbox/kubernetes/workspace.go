@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -73,7 +74,10 @@ type execResult struct {
 	err  error
 }
 
-// collectOut mirrors the pod's workspace back onto the caller's disk. Any
+// collectOut mirrors the pod's workspace back onto the caller's disk, and
+// removes what the run deleted, so the local copy is the pod's state and not a
+// merge of the two. A file the agent deleted must not survive here: a check
+// run stages this copy into a fresh pod. Any
 // failure is an error: a partial mirror is indistinguishable from a skill that
 // produced nothing, and would be graded as one. The exec's stdout is streamed
 // straight into untarInto through an io.Pipe, so a large workspace never
@@ -93,7 +97,8 @@ func (d *Driver) collectOut(ctx context.Context, pod, workdir, local string) err
 		resCh <- execResult{code: code, err: err}
 	}()
 
-	untarErr := untarInto(local, pr)
+	seen := map[string]bool{}
+	untarErr := untarSeen(local, pr, seen)
 	// GNU tar pads its stream to fill a blocking factor after the end-of-archive
 	// marker that untarInto stops reading at. Nothing else reads that padding,
 	// so the exec's stdout copier blocks on pw forever and resCh never fires.
@@ -119,6 +124,39 @@ func (d *Driver) collectOut(ctx context.Context, pod, workdir, local string) err
 	}
 	if res.code != 0 {
 		return fmt.Errorf("kubernetes: collecting the workspace from %s: tar exited %d\n%s", pod, res.code, stderr.String())
+	}
+	if err := prune(local, seen); err != nil {
+		return fmt.Errorf("kubernetes: removing what the run deleted from the workspace: %w", err)
+	}
+	return nil
+}
+
+// prune removes every entry under local that the pod's tar did not list.
+func prune(local string, seen map[string]bool) error {
+	var gone []string
+	err := filepath.WalkDir(local, func(path string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(local, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		if !seen[filepath.ToSlash(rel)] {
+			gone = append(gone, path)
+			if de.IsDir() {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, p := range gone {
+		if err := os.RemoveAll(p); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -168,6 +206,12 @@ func tarDir(local string, w io.Writer) error {
 }
 
 func untarInto(local string, r io.Reader) error {
+	return untarSeen(local, r, nil)
+}
+
+// untarSeen is untarInto that records each entry's slash path, and every
+// parent directory of it, in seen when seen is not nil.
+func untarSeen(local string, r io.Reader, seen map[string]bool) error {
 	tr := tar.NewReader(r)
 	var totalSize int64
 	for {
@@ -181,6 +225,13 @@ func untarInto(local string, r io.Reader) error {
 		dest, err := securePath(local, h.Name)
 		if err != nil {
 			return err
+		}
+		if seen != nil && (h.Typeflag == tar.TypeDir || h.Typeflag == tar.TypeReg) {
+			if rel, err := filepath.Rel(local, dest); err == nil && rel != "." {
+				for p := filepath.ToSlash(rel); p != "." && p != ""; p = path.Dir(p) {
+					seen[p] = true
+				}
+			}
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
