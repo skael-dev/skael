@@ -80,7 +80,7 @@ func PinSet(ctx context.Context, store *sets.Store, suites *evalsuite.Registry, 
 
 // SetsSince is the first worker release that installs a set. An older worker
 // would run the job as a plain eval and report it as one.
-var SetsSince = [3]int{0, 24, 0}
+var SetsSince = [3]int{0, 23, 0}
 
 // RunsSets reports whether a worker that checked in with version installs a
 // job's set.

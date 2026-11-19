@@ -258,7 +258,7 @@ To install the same versions again after a member publishes, pin the resolution:
 skael eval run review:all --set review-split --resolution <id>
 ```
 
-The command prints the id. A worker installs a set only from release 0.24.0. The server does not send a job with a set to an older worker.
+The command prints the id. A worker installs a set only from release 0.23.0. The server does not send a job with a set to an older worker.
 
 ## Comparing scores over time
 

@@ -521,7 +521,7 @@ func TestClaim_OnlyAWorkerThatRunsSetsGetsAJobWithASet(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO set_resolutions (id, set_id, set_name, entries, complete) VALUES ('res-1', $1, 'team', '[]', TRUE)`, setID); err != nil {
 		t.Fatal(err)
 	}
-	for id, version := range map[string]string{"old": "v0.23.0", "new": "v0.24.0"} {
+	for id, version := range map[string]string{"old": "v0.22.0", "new": "v0.23.0"} {
 		if _, err := pool.Exec(ctx, `INSERT INTO workers (id, version, driver, hardware_isolated, network_policy, concurrency, sandbox_image, harness, pinned, credentials, verifications)
 			VALUES ($1, $2, 'docker', FALSE, FALSE, 1, 'img', 'opencode', '', '[]', '[]')`, id, version); err != nil {
 			t.Fatal(err)
