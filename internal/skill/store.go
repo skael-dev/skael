@@ -32,6 +32,7 @@ type ReleaseEvent struct {
 // Declared here because internal/webhooks imports this package.
 type ChangeNotifier interface {
 	VersionReleased(ctx context.Context, tx pgx.Tx, ev ReleaseEvent) error
+	VersionWithdrawn(ctx context.Context, tx pgx.Tx, ev WithdrawEvent) error
 	SkillChanged(ctx context.Context, tx pgx.Tx, skill string) error
 }
 

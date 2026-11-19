@@ -34,12 +34,14 @@ The [CLI reference](/docs/cli#skael-webhooks) lists every command, and the [HTTP
 |---|---|
 | `skill.version.published` | A publish releases a version at once, or an approved submission does. A publish the gate holds sends nothing, because a held version has nothing to serve. |
 | `skill.version.approved` | A held version is released, by a review or by a verified score. |
+| `skill.version.withdrawn` | A rescan finds a new exfiltration or secret finding in a released version. The server stops serving the version. |
 | `set.changed` | A set's resolution id differs from the last id. Each change below recomputes the id in its own transaction, and an equal id sends nothing. |
 | `submission.decided` | A person approves or rejects a submission. |
 
 These changes can move a resolution id:
 
 - a release that moves `latest` for a skill in the set
+- a withdrawal of a version that the set resolves to
 - an approval that releases a pinned version
 - an edit of the set's entries
 - a delete of a skill in the set
@@ -74,6 +76,25 @@ The server stores the body as JSONB, so the key order and the spaces can differ 
     "skill": "lint",
     "version": 7,
     "sha256": "ab12..."
+  }
+}
+```
+
+### skill.version.withdrawn
+
+`reason` names the rule, the class, the file and the line of each finding. It holds no skill content. `latest_version` is the version the server serves after the withdrawal, or 0 when no released version is left.
+
+```json
+{
+  "id": "0d6c2b4e-2b1e-4f43-9d3a-6a7b2f6e9c10",
+  "type": "skill.version.withdrawn",
+  "time": "2026-11-19T09:00:00.000000Z",
+  "data": {
+    "skill": "lint",
+    "version": 7,
+    "sha256": "ab12...",
+    "reason": "a rescan found an unappealable finding: SECRET_EXPOSURE (secret) in SKILL.md:6",
+    "latest_version": 6
   }
 }
 ```

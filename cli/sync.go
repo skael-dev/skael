@@ -164,7 +164,9 @@ func reportSync(res *reconcileResult, quiet, dryRun bool) error {
 			Dests     map[string]string `json:"dests"`
 			Total     int               `json:"total"`
 			Conflicts []string          `json:"conflicts"`
-		}{res.Synced, res.Failed, res.Pruned, labels, string(res.Scope), dests, res.Total, append([]string{}, res.Conflicts...)}
+			Withdrawn []string          `json:"withdrawn"`
+		}{res.Synced, res.Failed, res.Pruned, labels, string(res.Scope), dests, res.Total,
+			append([]string{}, res.Conflicts...), append([]string{}, res.Withdrawn...)}
 		if failed > 0 {
 			return syncFailed(failed, map[string]any{"result": out})
 		}
