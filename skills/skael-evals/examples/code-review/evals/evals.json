@@ -1,0 +1,241 @@
+{
+  "skill_name": "code-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review orders.py before I ship it. Write the review to review.md.",
+      "expected_output": "A review in review.md that flags the f-string SQL in get_order as an injection risk and shows the parameterized fix that list_orders already uses.",
+      "files": [
+        "evals/files/orders.py"
+      ],
+      "expectations": [
+        "The review identifies the f-string query in get_order as a SQL injection risk.",
+        "The review proposes a parameterized query as the fix, for example cur.execute(\"... WHERE id = ?\", (order_id,)).",
+        "The review gives a line reference or quotes the line for the injection finding."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        },
+        {
+          "name": "review names SQL injection",
+          "type": "regex",
+          "path": "review.md",
+          "pattern": "(?i)sql[ -]?injection|injection"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Security review of auth.js please. Put your findings in review.md.",
+      "expected_output": "Findings that the raw API token is written to the log and that the token comparison is not constant-time, with fixes.",
+      "files": [
+        "evals/files/auth.js"
+      ],
+      "expectations": [
+        "The review flags that the API token is written to the log on every attempt.",
+        "The review recommends a constant-time comparison, such as crypto.timingSafeEqual, for the token check.",
+        "The review orders the findings so that the security issues come before any style comments."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "page() in pagination.rs panics in production on the last page. Review the function and write what is wrong and how to fix it to review.md.",
+      "expected_output": "The review identifies &items[start..end + 1] as an off-by-one that slices past the end, and gives &items[start..end] as the fix.",
+      "files": [
+        "evals/files/pagination.rs"
+      ],
+      "expectations": [
+        "The review identifies the end + 1 in the slice range as the cause of the out-of-range panic.",
+        "The review gives &items[start..end] (or an equivalent) as the fix."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        },
+        {
+          "name": "review quotes the bad slice",
+          "type": "regex",
+          "path": "review.md",
+          "pattern": "end\\s*\\+\\s*1"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Can you review upload.py? It serves user uploads. Write the review to review.md.",
+      "expected_output": "The review flags path traversal in both routes: the dir query parameter and the uploaded filename are joined into a path unchecked.",
+      "files": [
+        "evals/files/upload.py"
+      ],
+      "expectations": [
+        "The review identifies path traversal through the dir query parameter in download.",
+        "The review identifies path traversal through f.filename in upload, and recommends secure_filename or an equivalent check.",
+        "The review says how to confine paths to UPLOAD_DIR, for example by resolving the path and checking its prefix."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        },
+        {
+          "name": "review names path traversal",
+          "type": "regex",
+          "path": "review.md",
+          "pattern": "(?i)path[ -]traversal|directory traversal|\\.\\./"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review cache.ts for problems in a long-running server. Write the review to review.md.",
+      "expected_output": "The review points out that entries are never evicted, so the map grows without bound, and that concurrent misses for one key all call the fetcher.",
+      "files": [
+        "evals/files/cache.ts"
+      ],
+      "expectations": [
+        "The review identifies that expired entries are never removed, so the cache grows without bound.",
+        "The review identifies that concurrent lookups of the same missing key each call fetcher.",
+        "The review suggests a concrete fix for the growth, such as a maximum size with LRU eviction or deleting expired entries."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "This retry helper in retry.py hangs our worker sometimes. Review it and put the review in review.md.",
+      "expected_output": "The review flags the infinite loop with no retry limit or backoff, the bare except that also catches KeyboardInterrupt, and the missing timeout on requests.get.",
+      "files": [
+        "evals/files/retry.py"
+      ],
+      "expectations": [
+        "The review identifies that the loop retries forever, with no attempt limit.",
+        "The review identifies the bare except as catching too much, including KeyboardInterrupt or SystemExit.",
+        "The review points out that requests.get has no timeout.",
+        "The review recommends backoff between attempts."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Quick review of slugify.py before I merge? Write it to review.md.",
+      "expected_output": "A short review that finds no blocking issue, says what the function does well, and at most suggests a minor improvement.",
+      "files": [
+        "evals/files/slugify.py"
+      ],
+      "expectations": [
+        "The review does not report a correctness or security bug that is not in the code.",
+        "The review names at least one thing the code does well, such as the precompiled regex or the NFKD normalization.",
+        "The review says the change can be merged, or that it has no blocking issues."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Review the createUser handler in handler.ts and write your findings to review.md.",
+      "expected_output": "The review flags the missing return after the 500 response, which then sends a second response, the missing input validation, and the leak of the internal error message to the client.",
+      "files": [
+        "evals/files/handler.ts"
+      ],
+      "expectations": [
+        "The review identifies the missing return in the catch block, so the handler sends a second response after the 500.",
+        "The review flags that err.message sends internal error detail to the client.",
+        "The review flags that name and email are used without validation."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I'm about to commit cart.py. Review it before I do and leave the commit to me. Put the review in review.md.",
+      "expected_output": "A review of cart.py that flags float money arithmetic and the TENOFF coupon that can go negative, and leaves the repository history alone.",
+      "files": [
+        "evals/files/cart.py"
+      ],
+      "expectations": [
+        "The review flags float arithmetic for money and recommends Decimal or integer cents.",
+        "The review flags that the TENOFF coupon can produce a negative total."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        },
+        {
+          "name": "no commit",
+          "type": "command",
+          "script": "no-commit.sh"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Here is a diff in change.diff for our billing code. Review it like a PR and write the review to review.md, most important issues first.",
+      "expected_output": "Blocking findings first: the card number written to the audit log and the loop that sends the invoice three times. Then the overdue change.",
+      "files": [
+        "evals/files/change.diff"
+      ],
+      "expectations": [
+        "The review flags that the full card number is written to the audit log as a blocking issue.",
+        "The review flags that the loop sends the invoice email three times regardless of success.",
+        "The review lists the blocking issues before minor comments.",
+        "The review comments on the overdue change, either accepting the paid filter or questioning the <= boundary."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Review report.py for readability. Write the review to review.md with concrete suggestions.",
+      "expected_output": "Readability suggestions such as collections.defaultdict or a dict get, and a comprehension for the result list, with the rewritten code.",
+      "files": [
+        "evals/files/report.py"
+      ],
+      "expectations": [
+        "The review suggests a simpler accumulation, such as defaultdict(int) or totals.get(month, 0).",
+        "The review shows rewritten code for at least one suggestion.",
+        "The review does not invent a correctness bug that is not in the code."
+      ],
+      "checks": [
+        {
+          "name": "review.md exists",
+          "type": "file_exists",
+          "path": "review.md"
+        }
+      ]
+    }
+  ]
+}

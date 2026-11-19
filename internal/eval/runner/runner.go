@@ -62,6 +62,8 @@ type Outcome struct {
 	// PermissionDenials, and IsError are zero in that case.
 	MetaPartial       bool
 	MetaPartialReason string
+	// Checks are the eval's deterministic checks, graded after the session.
+	Checks []suite.CheckResult
 }
 
 // ProbeOutcome is what one trigger probe observed. No pre-computed verdict:

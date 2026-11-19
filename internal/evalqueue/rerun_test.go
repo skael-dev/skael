@@ -157,6 +157,10 @@ func (s *rerunTestServer) registerSuiteForJob(t *testing.T, name, jobID, token s
 		SkillName: name,
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing for " + name + ".", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing for " + name + "." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing for " + name + "." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing for " + name + "." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing for " + name + "." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	if err := suite.WriteEvalSet(dir, sfx); err != nil {
@@ -577,5 +581,49 @@ func TestDerivePush_AnOrphanedPushIsStillRecordedDerived(t *testing.T) {
 	}
 	if !qrec.SuiteDerived {
 		t.Fatal("a score against an orphaned derived suite was recorded as authored — it could clear a scan hold")
+	}
+}
+
+func (a rerunSuiteAdapter) PutAuthored(ctx context.Context, name string, archive []byte, by string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
+func (a rerunSuiteAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
+}
+
+// A run names no tier and gets the deepest its suite fills; a named tier the
+// suite cannot fill is refused with the reason, not queued to fail later.
+func TestRerun_RunsTheTierTheSuiteFillsAndRefusesOneItCannot(t *testing.T) {
+	srv := newRerunTestServerAsAdmin(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.registerSuite(t, "deploy-helper") // five evals, no trigger queries
+	srv.publish(t, "deploy-helper", fixtureBundle(t))
+	srv.drainQueue(t)
+
+	resp := srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{})
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body)
+	}
+	var out struct {
+		JobID string `json:"job_id"`
+		Tier  string `json:"tier"`
+	}
+	_ = json.Unmarshal(resp.Body.Bytes(), &out)
+	if out.Tier != "smoke" {
+		t.Fatalf("tier = %q, want smoke, the deepest a five-eval suite fills", out.Tier)
+	}
+
+	resp = srv.postJSON(t, "/api/skills/deploy-helper/evals", map[string]any{"tier": "full"})
+	if resp.Code != http.StatusUnprocessableEntity || !strings.Contains(resp.Body.String(), "suite below full tier: 5 scorable evals, needs 10") {
+		t.Fatalf("status = %d, want 422 naming the shortfall: %s", resp.Code, resp.Body)
 	}
 }

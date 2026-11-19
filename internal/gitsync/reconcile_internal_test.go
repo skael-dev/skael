@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -242,13 +243,15 @@ func newHarness(t *testing.T) *harness {
 	}
 	syncer := NewSyncer(store, gh.Client())
 	owners := ownership.NewResolver(ownership.NewStore(pool), users)
+	queue, suites := evalqueue.NewPool(pool), evalsuite.NewRegistry(pool, storage)
 	syncer.Bind(Deps{
-		Skills:      skills,
-		Publisher:   skill.NewPublisher(skills, storage, skill.RouteOptions{Ownership: owners}),
+		Skills: skills,
+		Publisher: skill.NewPublisher(skills, storage, skill.RouteOptions{Ownership: owners,
+			Queue: testQueue{queue}, Suites: testSuites{suites}}),
 		Submissions: submissions.NewStore(pool),
 		Contests:    contest.NewStore(pool),
-		Queue:       evalqueue.NewPool(pool),
-		Suites:      evalsuite.NewRegistry(pool, storage),
+		Queue:       queue,
+		Suites:      suites,
 		Storage:     storage,
 		Owners:      owners,
 		Users:       users,
@@ -723,4 +726,111 @@ func TestPulls_AHeadCheckedBeforeItsSkillExistedStillGetsAContest(t *testing.T) 
 	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM contests`).Scan(&contests); err != nil || contests != 1 {
 		t.Errorf("%d contests (%v), want 1", contests, err)
 	}
+}
+
+// testQueue and testSuites bridge evalqueue and evalsuite to the publisher, as
+// internal/server does in production.
+type testQueue struct{ q *evalqueue.PoolExecutor }
+
+func (a testQueue) Submit(ctx context.Context, j skill.EvalJobRequest) (string, error) {
+	id, err := a.q.Submit(ctx, evalqueue.Job{SkillID: j.SkillID, SkillName: j.SkillName, Version: j.Version,
+		SuiteRef: j.SuiteRef, Tier: j.Tier, RequestedBy: j.RequestedBy})
+	return string(id), err
+}
+
+type testSuites struct{ r *evalsuite.Registry }
+
+func (a testSuites) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.LatestForSkill(ctx, name)
+	if errors.Is(err, evalsuite.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
+func (a testSuites) PutAuthored(ctx context.Context, name string, archive []byte, by string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
+func evalsJSON(prompt string) string {
+	var evals []string
+	for i := 1; i <= 5; i++ {
+		evals = append(evals, fmt.Sprintf(`{"id":%d,"prompt":"%s %d","expectations":["it deployed"]}`, i, prompt, i))
+	}
+	return `{"skill_name":"platform:deploy","evals":[` + strings.Join(evals, ",") + `]}`
+}
+
+// A commit that changes only evals/ stores a new suite and queues one eval of
+// the version that exists. It creates no version, so installers see nothing.
+// A pull request's suite runs in its own contest and never becomes current.
+func TestReconcile_ASuiteOnlyCommitStoresTheSuiteAndCreatesNoVersion(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	h.sync(t)
+	base := map[string]string{
+		"skills/deploy/SKILL.md":  skillMD("platform:deploy", "Deploy it."),
+		"skills/release/SKILL.md": skillMD("platform:release", "Release it."),
+	}
+	counts := func() (versions, jobs int, current string) {
+		t.Helper()
+		if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM skill_versions v JOIN skills s ON s.id = v.skill_id
+			WHERE s.name = 'platform:deploy'`).Scan(&versions); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM eval_jobs WHERE skill_name = 'platform:deploy' AND contest_id IS NULL`).Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		rec, err := h.syncer.deps.Suites.LatestForSkill(ctx, "platform:deploy")
+		if err == nil {
+			current = rec.Ref
+		}
+		return
+	}
+
+	for i, prompt := range []string{"deploy the api", "deploy the web app"} {
+		files := map[string]string{"skills/deploy/evals/evals.json": evalsJSON(prompt)}
+		for k, v := range base {
+			files[k] = v
+		}
+		h.repo.push(fmt.Sprintf("s%d", i), files)
+		h.sync(t)
+		versions, jobs, current := counts()
+		if versions != 1 || jobs != i+1 || current == "" {
+			t.Fatalf("after suite commit %d: %d versions, %d jobs, suite %q; want 1 version, %d jobs and a suite", i+1, versions, jobs, current, i+1)
+		}
+	}
+	_, _, before := counts()
+
+	pr := map[string]string{"skills/deploy/evals/evals.json": evalsJSON("deploy the worker")}
+	for k, v := range base {
+		pr[k] = v
+	}
+	h.repo.openPull(9, "pr9", pr, []string{"skills/deploy/evals/evals.json"}, false, ContestLabel)
+	h.sync(t)
+	var contestSuite, headSuite string
+	if err := h.pool.QueryRow(ctx, `SELECT c.suite_ref, h.suite_ref FROM git_pr_heads h JOIN contests c ON c.id = h.contest_id
+		WHERE h.pr_number = 9`).Scan(&contestSuite, &headSuite); err != nil {
+		t.Fatalf("the PR head has no contest: %v", err)
+	}
+	if headSuite == "" || contestSuite != headSuite {
+		t.Errorf("contest suite %q, PR head suite %q; want the contest to run the PR's suite", contestSuite, headSuite)
+	}
+	if _, _, after := counts(); after != before || after == headSuite {
+		t.Errorf("the PR's suite became the skill's suite: before %s, after %s", before, after)
+	}
+}
+
+func (a testSuites) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
 }

@@ -75,6 +75,9 @@ func (s *Store) SaveSpec(sp *spec.SkillSpec) (int, error) {
 }
 
 // LoadSpec returns the latest stored spec version for a skill.
+// ErrNoSpec is a skill with no stored spec, which a suite push does not need.
+var ErrNoSpec = errors.New("no spec stored")
+
 func (s *Store) LoadSpec(skill string) (*spec.SkillSpec, int, error) {
 	var (
 		raw     string
@@ -84,7 +87,7 @@ func (s *Store) LoadSpec(skill string) (*spec.SkillSpec, int, error) {
 		`SELECT yaml, version FROM specs WHERE skill_name = ? ORDER BY version DESC LIMIT 1`,
 		skill).Scan(&raw, &version)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, fmt.Errorf("store.LoadSpec: no spec stored for %q", skill)
+		return nil, 0, fmt.Errorf("store.LoadSpec: %w for %q", ErrNoSpec, skill)
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("store.LoadSpec: %w", err)

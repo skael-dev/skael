@@ -156,7 +156,7 @@ var Defs = []Def{
 		Help: "A Go duration, for example 60s or 2m.", Default: "60s"},
 
 	{Key: "quality_floor", Env: "QUALITY_FLOOR", Kind: KindFloat, Section: "quality", Label: "Quality floor",
-		Help:    "The minimum headline a verified evaluation must reach to release a held version. 0 accepts any verified report with a complete panel and no critical contract violation.",
+		Help:    "The minimum headline a verified evaluation must reach to release a held version. 0 accepts any verified report with a complete panel.",
 		Default: "0", Min: num(0), Max: num(100), StrictEnv: true},
 
 	{Key: "event_retention_days", Env: "EVENT_RETENTION_DAYS", Kind: KindInt, Section: "analytics", Label: "Event retention (days)",

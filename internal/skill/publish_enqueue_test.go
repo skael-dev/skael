@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,6 +74,14 @@ type suiteLookupFunc func(ctx context.Context, name string) (*skill.SuiteRecord,
 
 func (f suiteLookupFunc) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
 	return f(ctx, name)
+}
+
+func (f suiteLookupFunc) Reach(context.Context, string) (string, string, error) {
+	return "smoke", "", nil
+}
+
+func (f suiteLookupFunc) PutAuthored(context.Context, string, []byte, string) (*skill.SuiteRecord, error) {
+	return nil, errors.New("suiteLookupFunc stores no suite")
 }
 
 // newEnqueueTestServer wires a real router with skill and eval-suite routes
@@ -177,6 +186,10 @@ func (s *enqueueTestServer) registerSuite(t *testing.T, name string) {
 		SkillName: name,
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing for " + name + ".", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing for " + name + "." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing for " + name + "." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing for " + name + "." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing for " + name + "." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	require.NoError(t, suite.WriteEvalSet(dir, sfx))
@@ -379,4 +392,134 @@ func TestPublish_IdempotentRepublishReportsQualityNone(t *testing.T) {
 	if out.Quality.State != "none" || out.Quality.JobID != "" {
 		t.Fatalf("quality = %+v, want none with no job on an idempotent republish", out.Quality)
 	}
+}
+
+func (a suiteLookupAdapter) PutAuthored(ctx context.Context, name string, archive []byte, by string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, by, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
+// A suite edit must not push a version to every installer: the version is the
+// folder without evals/, and a change only there stores the suite and queues
+// one eval of the version that already exists.
+func TestPublish_ASuiteOnlyChangeStoresTheSuiteAndCreatesNoVersion(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: deploy-helper\ndescription: deploys things\n---\n# deploy-helper\n"), 0o644))
+	writeEvals := func(prompt string) {
+		require.NoError(t, suite.WriteEvalSet(dir, &suite.EvalSet{SkillName: "deploy-helper",
+			Evals: []suite.Eval{{ID: 1, Prompt: prompt, Expectations: []string{"it deployed"}}, {ID: 2, Prompt: prompt + " again", Expectations: []string{"it deployed"}},
+				{ID: 3, Prompt: prompt + " twice", Expectations: []string{"it deployed"}}, {ID: 4, Prompt: prompt + " now", Expectations: []string{"it deployed"}},
+				{ID: 5, Prompt: prompt + " today", Expectations: []string{"it deployed"}}}}))
+	}
+	type result struct {
+		Version int    `json:"version"`
+		Outcome string `json:"outcome"`
+		Suite   struct {
+			Ref     string `json:"ref"`
+			Updated bool   `json:"updated"`
+		} `json:"suite"`
+		Quality struct {
+			State string `json:"state"`
+			JobID string `json:"job_id"`
+		} `json:"quality"`
+	}
+	publish := func() result {
+		archive, _, err := skill.PackUpload(dir)
+		require.NoError(t, err)
+		resp := srv.publish(t, "deploy-helper", archive)
+		require.Contains(t, []int{http.StatusCreated}, resp.Code, resp.Body.String())
+		var out result
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+		return out
+	}
+
+	writeEvals("deploy the api")
+	first := publish()
+	require.Equal(t, skill.OutcomeCreated, first.Outcome)
+	require.True(t, first.Suite.Updated)
+	require.Equal(t, "pending", first.Quality.State)
+
+	writeEvals("deploy the web app")
+	second := publish()
+	require.Equal(t, skill.OutcomeSuiteUpdated, second.Outcome)
+	require.Equal(t, first.Version, second.Version)
+	require.NotEqual(t, first.Suite.Ref, second.Suite.Ref)
+	require.Equal(t, "pending", second.Quality.State)
+
+	third := publish()
+	require.Equal(t, skill.OutcomeUnchanged, third.Outcome)
+	require.Equal(t, "none", third.Quality.State)
+
+	var versions, jobs int
+	require.NoError(t, srv.pool.QueryRow(context.Background(), `SELECT count(*) FROM skill_versions`).Scan(&versions))
+	require.NoError(t, srv.pool.QueryRow(context.Background(), `SELECT count(*) FROM eval_jobs`).Scan(&jobs))
+	require.Equal(t, 1, versions)
+	require.Equal(t, 2, jobs)
+
+	// The installed archive is the folder without its answer key.
+	ver, err := srv.skills.GetVersion(context.Background(), "deploy-helper", first.Version)
+	require.NoError(t, err)
+	for _, f := range ver.FileManifest {
+		require.False(t, strings.HasPrefix(f.Path, "evals/"), "the version ships %s", f.Path)
+	}
+}
+
+func (a suiteLookupAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
+}
+
+// A job a suite cannot plan fails on a worker after a claim and a lease, so a
+// publish queues the deepest tier the suite fills and nothing below smoke.
+func TestPublish_QueuesTheTierTheSuiteFillsAndNothingBelowSmoke(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: deploy-helper\ndescription: deploys things\n---\n# deploy-helper\n"), 0o644))
+	publishWith := func(n int) skill.PublishQuality {
+		set := &suite.EvalSet{SkillName: "deploy-helper"}
+		for i := 1; i <= n; i++ {
+			set.Evals = append(set.Evals, suite.Eval{ID: i, Prompt: fmt.Sprintf("deploy service %d", i), Expectations: []string{"it deployed"}})
+		}
+		require.NoError(t, suite.WriteEvalSet(dir, set))
+		archive, _, err := skill.PackUpload(dir)
+		require.NoError(t, err)
+		resp := srv.publish(t, "deploy-helper", archive)
+		require.Equal(t, http.StatusCreated, resp.Code, resp.Body.String())
+		var out struct {
+			Quality skill.PublishQuality `json:"quality"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+		return out.Quality
+	}
+
+	q := publishWith(3)
+	require.Equal(t, "none", q.State)
+	require.Equal(t, "suite below smoke tier: 3 scorable evals, needs 5", q.Reason)
+
+	q = publishWith(5)
+	require.Equal(t, "pending", q.State)
+	require.Equal(t, "smoke", q.Tier)
+
+	var tiers []string
+	rows, err := srv.pool.Query(context.Background(), `SELECT tier FROM eval_jobs`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var tier string
+		require.NoError(t, rows.Scan(&tier))
+		tiers = append(tiers, tier)
+	}
+	rows.Close()
+	require.Equal(t, []string{"smoke"}, tiers)
 }

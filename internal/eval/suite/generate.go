@@ -28,7 +28,15 @@ const evalsSchema = `{
       "properties": {
         "prompt":          {"type": "string"},
         "expected_output": {"type": "string"},
-        "expectations":    {"type": "array", "items": {"type": "string"}}
+        "expectations":    {"type": "array", "items": {"type": "string"}},
+        "checks":          {"type": "array", "items": {"type": "object",
+          "required": ["type", "path"],
+          "properties": {
+            "type":    {"type": "string", "enum": ["file_exists", "regex"]},
+            "path":    {"type": "string"},
+            "pattern": {"type": "string"}
+          }
+        }}
       }
     }}
   }
@@ -39,6 +47,7 @@ type evalsResult struct {
 		Prompt         string   `json:"prompt"`
 		ExpectedOutput string   `json:"expected_output"`
 		Expectations   []string `json:"expectations"`
+		Checks         []Check  `json:"checks"`
 	} `json:"evals"`
 }
 
@@ -88,11 +97,20 @@ func GenerateFrom(ctx context.Context, gw llm.Gateway, specs []*spec.SkillSpec, 
 		if strings.TrimSpace(e.Prompt) == "" {
 			continue
 		}
+		// A drafted check that cannot run is dropped rather than voiding
+		// the eval: the expectations still grade it.
+		var checks []Check
+		for _, c := range e.Checks {
+			if (c.Type == CheckFileExists || c.Type == CheckRegex) && c.Problem("") == "" {
+				checks = append(checks, Check{Type: c.Type, Path: c.Path, Pattern: c.Pattern})
+			}
+		}
 		set.Evals = append(set.Evals, Eval{
 			ID:             i + 1,
 			Prompt:         e.Prompt,
 			ExpectedOutput: e.ExpectedOutput,
 			Expectations:   e.Expectations,
+			Checks:         checks,
 		})
 	}
 	if len(set.Evals) == 0 {
@@ -157,13 +175,20 @@ one. Make them checkable from the answer itself. An expectation that any
 plausible-looking answer satisfies measures nothing, so prefer ones that fail
 when the work was not really done.
 
+When an expectation is mechanical — a file must exist at a path in the
+workspace, or a file must contain some text — write it as a check instead:
+{"type": "file_exists", "path": "report.md"} or
+{"type": "regex", "path": "report.md", "pattern": "(?i)total revenue"}.
+A check is graded without a judge, so it never drifts. Keep every judgement
+about quality in the expectations.
+
 Cover the ordinary case first, then the variations and the edges. Do not write
 a task that needs a file the user has not been given: the agent starts with an
 empty workspace.
 
 Reply with JSON only:
 
-{"evals": [{"prompt": "...", "expected_output": "...", "expectations": ["...", "..."]}]}
+{"evals": [{"prompt": "...", "expected_output": "...", "expectations": ["...", "..."], "checks": []}]}
 `)
 	return b.String()
 }

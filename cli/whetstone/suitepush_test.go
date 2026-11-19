@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	whetstone "github.com/skael-dev/skael/cli/whetstone"
@@ -165,19 +164,27 @@ func TestRunSuitePush_FallsBackWhenTheServerRejectsTheField(t *testing.T) {
 	}
 }
 
-func TestSuitePush_RefusesWhenSpecCannotBeLoaded(t *testing.T) {
+// A worker runs a suite without a spec, so a push must not need one either.
+func TestSuitePush_PushesWithoutAStoredSpec(t *testing.T) {
 	ws := newWorkspaceWithCheckedSuiteNoSpec(t)
-	err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
-		Store: ws, Skill: "deploy-helper", Endpoint: "http://unused", APIKey: "k",
-	})
-	if err == nil {
-		t.Fatal("pushed a suite whose spec could not be loaded")
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ref":"sha256:deadbeef","task_count":1}`))
+	}))
+	defer srv.Close()
+
+	if err := whetstone.RunSuitePush(context.Background(), whetstone.SuitePushRequest{
+		Store: ws, Skill: "deploy-helper", Endpoint: srv.URL, APIKey: "k",
+	}); err != nil {
+		t.Fatalf("RunSuitePush without a spec: %v", err)
 	}
-	if !strings.Contains(err.Error(), "deploy-helper") {
-		t.Fatalf("error does not name the skill: %v", err)
+	if got["archive_base64"] == "" || got["skill"] != "deploy-helper" {
+		t.Fatalf("request body was incomplete: %+v", got)
 	}
-	if !strings.Contains(err.Error(), "spec") {
-		t.Fatalf("error does not say the spec could not be loaded: %v", err)
+	if _, ok := got["spec"]; ok {
+		t.Errorf("sent a spec that was never stored: %v", got["spec"])
 	}
 }
 

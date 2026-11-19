@@ -174,7 +174,8 @@ type listJobsOutput struct {
 // rerunBody is the request to re-run an evaluation for a skill. Every field
 // is optional: omitting version re-runs the latest, omitting suite_ref uses
 // the skill's stored suite (never a freshly generated one — that would be a
-// different measurement), omitting tier defaults to "full", and omitting
+// different measurement), omitting tier runs the deepest tier the suite fills
+// (full for a job that derives its suite), and omitting
 // agents/models keeps the worker's default panel.
 type rerunBody struct {
 	Version int      `json:"version,omitempty"`
@@ -193,6 +194,8 @@ type rerunInput struct {
 
 type rerunOutputBody struct {
 	JobID string `json:"job_id"`
+	// Tier is the deepest the suite fills when the request named none.
+	Tier string `json:"tier,omitempty"`
 }
 
 type rerunOutput struct {
@@ -839,9 +842,27 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			}
 		}
 
+		// A tier the suite cannot fill would fail on a worker after a claim and
+		// a lease, so it is refused here. A derived suite is sized for full.
 		tier := input.Body.Tier
-		if tier == "" {
-			tier = "full"
+		if suiteRef == "" {
+			if tier == "" {
+				tier = string(runner.TierFull)
+			}
+		} else {
+			reach, err := suites.Reach(ctx, suiteRef)
+			if err != nil {
+				log.Error().Err(err).Str("skill", input.Name).Str("suite_ref", suiteRef).Msg("evalqueue: plan suite failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+			switch {
+			case tier == "" && reach.Highest == "":
+				return nil, huma.Error422UnprocessableEntity(reach.Why())
+			case tier == "":
+				tier = reach.Highest
+			case reach.Can(tier) != "":
+				return nil, huma.Error422UnprocessableEntity(reach.Can(tier))
+			}
 		}
 
 		requestedBy := ""
@@ -865,7 +886,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		return &rerunOutput{
 			Status: http.StatusAccepted,
-			Body:   rerunOutputBody{JobID: string(id)},
+			Body:   rerunOutputBody{JobID: string(id), Tier: tier},
 		}, nil
 	})
 }

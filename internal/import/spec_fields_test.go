@@ -70,7 +70,7 @@ Body content.
 
 	_, created, _, _, err := importSingleSkill(ctx, rootDir, ds, src, skillStore, importStore, storage, nil, nil, nil, 0, nil)
 	require.NoError(t, err)
-	require.True(t, created)
+	require.Equal(t, skill.OutcomeCreated, created)
 
 	var tags []string
 	var author, license string

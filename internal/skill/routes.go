@@ -113,7 +113,16 @@ type SuiteRecord struct {
 // suite is registered for the skill.
 type SuiteLookup interface {
 	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
+	// PutAuthored stores a skill folder's evals/ as the skill's suite. A suite
+	// that does not load returns an error wrapping ErrInvalidSuite.
+	PutAuthored(ctx context.Context, skillName string, archive []byte, uploadedBy string) (*SuiteRecord, error)
+	// Reach is the deepest tier a stored suite fills, or "" and why it fills
+	// none.
+	Reach(ctx context.Context, ref string) (tier, why string, err error)
 }
+
+// ErrInvalidSuite is a skill folder's evals/ that the registry cannot load.
+var ErrInvalidSuite = errors.New("invalid eval suite")
 
 // OwnerResolver is the subset of the ownership store publish needs. It is
 // declared here rather than imported because internal/ownership must stay
@@ -145,7 +154,7 @@ type RouteOptions struct {
 	// QualityFloor is the minimum headline quality score a verified
 	// evaluation must reach to clear a held version. It comes from
 	// the quality_floor setting at decision time; nil or zero means any
-	// verified, complete, contract-clean report clears.
+	// verified report with a complete panel clears.
 	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership for publish. A nil
 	// resolver leaves the zero gate.OwnerState, which contributes nothing —

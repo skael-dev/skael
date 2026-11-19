@@ -107,23 +107,23 @@ func RunSuitePush(ctx context.Context, req SuitePushRequest) error {
 		}
 	}
 
-	// LoadSpec's version is what a later score gets compared against. Falling
-	// back to some default here would tag the suite against the wrong (or an
-	// unknown) spec version and quietly corrupt that comparison, so a failed
-	// load fails the push instead.
-	//
-	// The full spec travels with the suite, not just its version: a
-	// published bundle never carries spec.yaml (lint.Excluded strips the
-	// whole eval sidecar before packing), so this push is the only chance a
-	// worker rebuilding a workspace from a downloaded bundle ever gets to
-	// recover the skill's real deps and purpose instead of a placeholder.
+	// The full spec travels with the suite when one exists: a published
+	// bundle never carries spec.yaml, so this push is the only way a worker
+	// learns the skill's real deps and purpose instead of a placeholder.
+	// A suite needs no spec: a worker runs one without it, from the bundle's
+	// own frontmatter. A spec that exists still travels, and one that fails to
+	// load is still an error rather than a silent omission.
+	var specJSON json.RawMessage
 	sp, specVersion, err := req.Store.LoadSpec(req.Skill)
-	if err != nil {
-		return fmt.Errorf("suite push: could not load the spec for %s, so the suite cannot be tagged with a spec version: %w", req.Skill, err)
-	}
-	specJSON, err := json.Marshal(sp)
-	if err != nil {
-		return fmt.Errorf("suite push: marshal spec for %s: %w", req.Skill, err)
+	switch {
+	case errors.Is(err, store.ErrNoSpec):
+		specVersion = 0
+	case err != nil:
+		return fmt.Errorf("suite push: could not load the spec for %s: %w", req.Skill, err)
+	default:
+		if specJSON, err = json.Marshal(sp); err != nil {
+			return fmt.Errorf("suite push: marshal spec for %s: %w", req.Skill, err)
+		}
 	}
 
 	archive, err := evalsuite.PackDir(suiteDir)

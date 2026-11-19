@@ -276,3 +276,89 @@ func BaselinePlanned(p Plan) bool {
 	}
 	return false
 }
+
+// TierCheck is whether a suite can fill one tier, and why not when it cannot.
+type TierCheck struct {
+	Tier   Tier
+	OK     bool
+	Reason string
+}
+
+// Tiers lists the tiers from shallowest to deepest.
+var Tiers = []Tier{TierSmoke, TierFull, TierDeep}
+
+// CheckTiers plans every tier against a suite and reports which it fills. The
+// reasons are BuildPlan's own refusals, so a suite that passes here plans.
+func CheckTiers(set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) []TierCheck {
+	out := make([]TierCheck, 0, len(Tiers))
+	for _, t := range Tiers {
+		_, err := BuildPlan(t, PanelFor(t), set, void, triggers)
+		c := TierCheck{Tier: t, OK: err == nil}
+		if err != nil {
+			c.Reason = err.Error()
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// Reached is the deepest tier a suite fills, or "" when it fills none.
+func Reached(cs []TierCheck) Tier {
+	var t Tier
+	for _, c := range cs {
+		if !c.OK {
+			break
+		}
+		t = c.Tier
+	}
+	return t
+}
+
+// Shortfall says, in the words a publisher reads, why a suite cannot fill
+// tier t. It is "" when the suite can.
+func Shortfall(t Tier, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) string {
+	b, ok := budgets[t]
+	if !ok {
+		return fmt.Sprintf("unknown tier %q: want one of smoke, full, deep", t)
+	}
+	scorable := 0
+	if set != nil {
+		for _, e := range set.Evals {
+			if !void[e.ID] {
+				scorable++
+			}
+		}
+	}
+	if scorable < b.Evals {
+		return fmt.Sprintf("suite below %s tier: %d scorable evals, needs %d", t, scorable, b.Evals)
+	}
+	half := b.Probes / 2
+	pos, neg := 0, 0
+	for _, q := range triggers {
+		if q.ShouldTrigger {
+			pos++
+		} else {
+			neg++
+		}
+	}
+	if pos < half || neg < half {
+		return fmt.Sprintf("suite below %s tier: %d should-trigger and %d should-not-trigger queries, needs %d of each", t, pos, neg, half)
+	}
+	return ""
+}
+
+// Highest is the deepest tier a suite fills. When it fills none, the tier is
+// "" and the reason is the smoke tier's shortfall.
+func Highest(set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) (Tier, string) {
+	var best Tier
+	for _, t := range Tiers {
+		if Shortfall(t, set, void, triggers) != "" {
+			break
+		}
+		best = t
+	}
+	if best == "" {
+		return "", Shortfall(TierSmoke, set, void, triggers)
+	}
+	return best, ""
+}

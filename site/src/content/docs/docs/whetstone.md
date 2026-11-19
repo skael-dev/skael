@@ -76,9 +76,7 @@ Three binaries, easy to confuse. The split:
 - **`skael-worker`** — server-side. The only thing that produces a **verified** score.
 - **`skael`** — the registry client. Publishes, syncs, installs.
 
-A skill is only scored if it has a registered evaluation suite. No suite means no score, permanently — not a pending state, not a zero, just nothing. That's deliberate: scoring against a suite the author never signed off on measures the wrong thing.
-
-whetstone is the only thing that produces a suite:
+The usual way to write a suite is the skael-evals skill: `skael init` writes it, a coding agent writes `evals/` in the skill folder, and `skael eval check` validates it. `skael publish` then stores the suite. See [Quality scoring](/docs/quality). whetstone is the other way, from a stored spec:
 
 ```bash
 whetstone suite gen my-skill      # draft it from the approved spec
@@ -86,11 +84,13 @@ whetstone suite check my-skill    # report which evals cannot be scored, and why
 whetstone suite push my-skill     # register it with the server
 ```
 
+`suite push` needs no stored spec. It sends the spec when one exists, and a worker runs a suite without one. It accepts a prefixed skill name such as `payments:deploy`. Only an owner of the skill or an admin can push a suite.
+
 `suite check` is a report, not a gate you have to pass first. `suite push` and `eval` run the same check themselves, so neither depends on you having run it.
 
 It also declares whether anybody has read the eval set. whetstone records the content hash of what it generated; `suite push` compares the current hash against it. An untouched set is pushed as machine-derived, and the server records it that way. The cost is real: a score against a machine-derived set is still a quality signal, but it cannot release a version the publish gate is holding. A skill must not write its own exam. Open `evals/triggers.json`, read it, change what is wrong — any edit at all clears the flag — or use the review view in the web UI, where an owner or admin can mark the set reviewed without editing a line. `whetstone tune` counts as a machine writer too, so a tuned set stays machine-derived until somebody reads it.
 
-After the push, every `skael publish` for that skill looks up its suite and enqueues an evaluation automatically. A worker claims it, runs it, posts the report back. That's the verified path.
+After the push, every `skael publish` for that skill looks up its suite and queues an evaluation. A worker claims it, runs it, posts the report back. That's the verified path.
 
 `whetstone eval` runs the exact same engine locally. It does **not** produce a verified score. Local runs are for your own iteration loop — a number you can act on in minutes instead of waiting on a queue. Only a report that came back through the queue counts as verified, and only a verified score can release a version the publish gate is holding.
 
@@ -162,7 +162,7 @@ It publishes nothing and starts nothing. Keep or discard the diff, publish, then
 
 | Command | Flag | Default | Description |
 |---|---|---|---|
-| `doctor` | `--judge` | false | Run judge calibration against the labelled set and report Cohen's κ |
+| `doctor` | `--check-egress` | false | Send a denied network request to the real Kubernetes cluster to confirm `SANDBOX_K8S_NETWORK_POLICY` |
 | `lint` | `--strict` | false | Treat warnings as errors |
 | `pack` | `-o, --output` | `<skill>.tar.gz` beside the bundle | Archive path |
 | `suite check` | `--allow-void` | false | Exit 0 even if some evals are void; they're still excluded from a later eval |

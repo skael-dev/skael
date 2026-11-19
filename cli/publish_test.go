@@ -117,7 +117,7 @@ func heldPublishBody() []byte {
 				Rule: "curl-pipe-sh", Class: "execution", Severity: "high",
 				File: "install.sh", Line: 12,
 				Message: "piping a download into a shell",
-				Clears:  "a verified evaluation scoring at least 60 with a complete panel and no critical contract violations, or an admin approval",
+				Clears:  "a verified evaluation scoring at least 60 with a complete panel, or an admin approval",
 			}},
 		},
 	}
