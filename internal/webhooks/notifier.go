@@ -51,6 +51,16 @@ type VersionData struct {
 	SHA256  string `json:"sha256"`
 }
 
+// WithdrawnData is the data of skill.version.withdrawn. LatestVersion is the
+// version served after the withdrawal, or 0 when none is left.
+type WithdrawnData struct {
+	Skill         string `json:"skill"`
+	Version       int    `json:"version"`
+	SHA256        string `json:"sha256"`
+	Reason        string `json:"reason"`
+	LatestVersion int    `json:"latest_version"`
+}
+
 // SetChangedData is the data of set.changed. It holds no skill content, so a
 // webhook cannot go around a set-limited key.
 type SetChangedData struct {
@@ -138,6 +148,16 @@ func (n *Notifier) VersionReleased(ctx context.Context, tx pgx.Tx, ev skill.Rele
 	}
 	data := VersionData{Skill: ev.Skill, Version: ev.Version, SHA256: ev.Checksum}
 	if err := n.emit(ctx, tx, eventType, data, subscribes(eventType)); err != nil {
+		return err
+	}
+	return n.SkillChanged(ctx, tx, ev.Skill)
+}
+
+// VersionWithdrawn implements skill.ChangeNotifier. Each set that served the
+// version resolves again, so set.changed follows.
+func (n *Notifier) VersionWithdrawn(ctx context.Context, tx pgx.Tx, ev skill.WithdrawEvent) error {
+	data := WithdrawnData{Skill: ev.Skill, Version: ev.Version, SHA256: ev.Checksum, Reason: ev.Reason, LatestVersion: ev.LatestVersion}
+	if err := n.emit(ctx, tx, EventVersionWithdrawn, data, subscribes(EventVersionWithdrawn)); err != nil {
 		return err
 	}
 	return n.SkillChanged(ctx, tx, ev.Skill)

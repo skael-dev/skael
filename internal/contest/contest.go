@@ -3,6 +3,8 @@ package contest
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/skael-dev/skael/internal/evalqueue"
 )
 
 // Provenance says who chose the tasks. It is recorded on every contest and
@@ -51,6 +53,9 @@ type Candidate struct {
 	// PRHeadID names the stored PR head this candidate evaluates. Version is
 	// then 0: a PR head has no version until it merges.
 	PRHeadID string `json:"pr_head_id,omitempty"`
+	// Set is the pinned set resolution this candidate installs as a whole.
+	// SkillID and SkillName are then empty and Version is 0.
+	Set *evalqueue.PinnedSet `json:"set,omitempty"`
 }
 
 // TaskLoss is one task a candidate lost, and why. A person reads this to fix
@@ -60,6 +65,10 @@ type TaskLoss struct {
 	TaskID   string   `json:"task_id"`
 	Missed   []string `json:"missed"`
 	Evidence string   `json:"evidence,omitempty"`
+	// Fired names the skills that fired on the task, on the candidate's
+	// primary runs. A set candidate's loss carries it, because which member
+	// took the task is what a person splits or merges on.
+	Fired []string `json:"fired,omitempty"`
 }
 
 // Contest is one comparison, from request to verdict.
@@ -90,7 +99,7 @@ type Contest struct {
 // The chain is read from these rather than from a stored flag: a flag can
 // disagree with the candidates, and the candidates are the fact.
 func (c *Contest) IsChainLink() bool {
-	if len(c.Candidates) != 2 {
+	if len(c.Candidates) != 2 || c.Candidates[0].Set != nil || c.Candidates[1].Set != nil {
 		return false
 	}
 	return c.Candidates[0].SkillName == c.Candidates[1].SkillName
@@ -109,4 +118,14 @@ func (c *Contest) SuiteNote() string {
 	default:
 		return "suite derived from every candidate"
 	}
+}
+
+// HasSet reports whether any candidate is a set.
+func (c *Contest) HasSet() bool {
+	for _, cand := range c.Candidates {
+		if cand.Set != nil {
+			return true
+		}
+	}
+	return false
 }

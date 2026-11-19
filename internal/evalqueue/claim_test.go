@@ -466,3 +466,82 @@ func TestClaim_ConcurrentWorkersClaimDistinctJobs(t *testing.T) {
 		}
 	}
 }
+
+// A worker that predates checks would run the session, ignore the checks and
+// score the eval without them, so the claim must never hand it such a job.
+func TestClaim_OnlyAWorkerThatRunsChecksGetsASuiteWithChecks(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "deploy-helper")
+	if _, err := pool.Exec(ctx, `INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, has_checks)
+		VALUES ('checked', 'deploy-helper', 'suites/checked.tar.gz', 1, '[]', 0, 'a@b.c', TRUE)`); err != nil {
+		t.Fatal(err)
+	}
+	for id, version := range map[string]string{"old": "v0.22.0", "new": "v0.23.0"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO workers (id, version, driver, hardware_isolated, network_policy, concurrency, sandbox_image, harness, pinned, credentials, verifications)
+			VALUES ($1, $2, 'docker', FALSE, FALSE, 1, 'img', 'opencode', '', '[]', '[]')`, id, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, _ := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "deploy-helper", Version: 1, SuiteRef: "checked"})
+
+	for _, w := range []string{"old", "unknown"} {
+		if _, _, ok, err := q.Claim(ctx, w, time.Minute); err != nil || ok {
+			t.Fatalf("worker %s: ok=%v err=%v, want no claim", w, ok, err)
+		}
+	}
+	j, _, ok, err := q.Claim(ctx, "new", time.Minute)
+	if err != nil || !ok || j.ID != id {
+		t.Fatalf("worker new: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRunsChecks(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v0.23.0": true, "0.23.1": true, "v1.0.0": true, "v0.23.0-dev": true, "v0.23.0-4-gabc123-dirty": true,
+		"v0.22.9": false, "v0.22.0-12-gabc123": false, "dev": false, "": false,
+	} {
+		if got := evalqueue.RunsChecks(v); got != want {
+			t.Errorf("RunsChecks(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// A worker that predates sets would install the skill alone and report the
+// job as a plain eval, so the claim must never hand it a job with a set, and
+// it carries the pinned set to a worker that installs it.
+func TestClaim_OnlyAWorkerThatRunsSetsGetsAJobWithASet(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	q := evalqueue.NewPool(pool)
+	skillID := insertSkill(t, pool, "review-diff")
+	var setID string
+	if err := pool.QueryRow(ctx, `INSERT INTO sets (name) VALUES ('team') RETURNING id`).Scan(&setID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO set_resolutions (id, set_id, set_name, entries, complete) VALUES ('res-1', $1, 'team', '[]', TRUE)`, setID); err != nil {
+		t.Fatal(err)
+	}
+	for id, version := range map[string]string{"old": "v0.22.0", "new": "v0.23.0"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO workers (id, version, driver, hardware_isolated, network_policy, concurrency, sandbox_image, harness, pinned, credentials, verifications)
+			VALUES ($1, $2, 'docker', FALSE, FALSE, 1, 'img', 'opencode', '', '[]', '[]')`, id, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, err := q.Submit(ctx, evalqueue.Job{SkillID: skillID, SkillName: "review-diff", Version: 1, SuiteRef: "s",
+		Set: &evalqueue.PinnedSet{SetID: setID, Name: "team", ResolutionID: "res-1",
+			Members: []evalqueue.SetMember{{Name: "commit-helper", Version: 2, Digest: "d2", SuiteRef: "s2"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, ok, err := q.Claim(ctx, "old", time.Minute); err != nil || ok {
+		t.Fatalf("worker old: ok=%v err=%v, want no claim", ok, err)
+	}
+	j, _, ok, err := q.Claim(ctx, "new", time.Minute)
+	if err != nil || !ok || j.ID != id {
+		t.Fatalf("worker new: ok=%v err=%v", ok, err)
+	}
+	if j.Set == nil || j.Set.ResolutionID != "res-1" || len(j.Set.Members) != 1 || j.Set.Members[0].SuiteRef != "s2" {
+		t.Fatalf("claimed set = %+v, want res-1 with commit-helper and its suite", j.Set)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/platform"
 	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/testutil"
@@ -59,6 +60,15 @@ type testServer struct {
 	// changes its Role in place to act as an owner, because review-eval-suite
 	// is owner or admin only.
 	user *auth.User
+	// owners answers who may replace a skill's suite. It starts unowned.
+	owners *fakeOwners
+}
+
+// fakeOwners stands in for the ownership resolver with one fixed answer.
+type fakeOwners struct{ state gate.OwnerState }
+
+func (f *fakeOwners) ResolveForPublish(context.Context, string, *auth.User) (gate.OwnerState, error) {
+	return f.state, nil
 }
 
 // fakeClaims stands in for internal/evalqueue's PoolExecutor: it answers
@@ -122,9 +132,10 @@ func newTestServerWithStorage(t *testing.T, storage platform.Storage) *testServe
 	})
 	api := humachi.New(r, huma.DefaultConfig("Test API", "1.0.0"))
 	claims := &fakeClaims{}
-	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{Claims: claims})
+	owners := &fakeOwners{state: gate.OwnerState{Evaluated: true, Unowned: true}}
+	evalsuite.RegisterRoutes(api, r, reg, skillStore, evalsuite.RouteOptions{Claims: claims, Owners: owners})
 
-	return &testServer{handler: r, skills: skillStore, reg: reg, claims: claims, user: member}
+	return &testServer{handler: r, skills: skillStore, reg: reg, claims: claims, user: member, owners: owners}
 }
 
 // newUnauthTestServer wires the eval suite routes behind the real
@@ -680,5 +691,25 @@ func TestReview_UnknownRefIs404(t *testing.T) {
 	_, err := srv.reg.Get(ctx, "does-not-exist")
 	if !errors.Is(err, evalsuite.ErrNotFound) {
 		t.Fatalf("Get(does-not-exist) err = %v, want ErrNotFound", err)
+	}
+}
+
+// A suite's score can clear a scan hold, so a member who does not own the
+// skill must not be able to replace its suite.
+func TestPostSuite_AMemberWhoDoesNotOwnTheSkillIsRefused(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	srv.owners.state = gate.OwnerState{Evaluated: true, RulePattern: "deploy-helper"}
+
+	resp := srv.postJSON(t, "/api/eval/suites", map[string]any{
+		"skill":          "deploy-helper",
+		"spec_version":   1,
+		"archive_base64": base64.StdEncoding.EncodeToString(fixtureSuiteArchive(t)),
+	})
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", resp.Code, resp.Body)
+	}
+	if _, err := srv.reg.LatestForSkill(context.Background(), "deploy-helper"); err == nil {
+		t.Fatal("a refused push stored a suite")
 	}
 }

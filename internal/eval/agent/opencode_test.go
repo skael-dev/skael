@@ -71,7 +71,7 @@ func TestParse_MapsARealSessionOntoTheNormalizedEvents(t *testing.T) {
 // The skill tool is an explicit invocation, not an inferred read.
 func TestParse_SkillToolCountsAsAnExplicitFiring(t *testing.T) {
 	res := parseFixture(t)
-	fired, inferred := score.DetectFiring("greeting-format", agent.New().Caps(), res.Events)
+	fired, inferred := score.Fired(score.DetectFiring(res.Events), "greeting-format")
 	if !fired || inferred {
 		t.Errorf("DetectFiring = fired %v inferred %v, want fired and explicit", fired, inferred)
 	}

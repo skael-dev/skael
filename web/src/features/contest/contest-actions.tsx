@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Swords } from "lucide-react";
-import { createContest, listSkills } from "@/api/sdk.gen";
+import { createContest, listSets, listSkills } from "@/api/sdk.gen";
 import type { ContestCandidateInput } from "@/api/types.gen";
 import { Button } from "@/components/ui/button";
 
@@ -70,10 +70,7 @@ export function ContestActions({
           exclude={skillName}
           onPick={(other) => {
             setPicking(false);
-            start.mutate([
-              { skill: skillName, version },
-              { skill: other, version: 0 },
-            ]);
+            start.mutate([{ skill: skillName, version }, other]);
           }}
         />
       )}
@@ -86,13 +83,14 @@ export function ContestActions({
 }
 
 // A contest between two skills is the normal company case: two teams rarely
-// converge on one name before they disagree.
+// converge on one name before they disagree. A set is a candidate too: it
+// answers whether one skill or several split ones do the job better.
 function SkillPicker({
   exclude,
   onPick,
 }: {
   exclude: string;
-  onPick: (skill: string) => void;
+  onPick: (candidate: ContestCandidateInput) => void;
 }) {
   const [query, setQuery] = useState("");
   const { data } = useQuery({
@@ -102,11 +100,20 @@ function SkillPicker({
       return res.data?.skills ?? [];
     },
   });
+  const sets = useQuery({
+    queryKey: ["sets-for-contest"],
+    queryFn: async () => {
+      const res = await listSets();
+      return res.data?.sets ?? [];
+    },
+  });
 
+  const q = query.toLowerCase();
   const matches = (data ?? [])
     .filter((s) => s.name !== exclude)
-    .filter((s) => s.name.toLowerCase().includes(query.toLowerCase()))
+    .filter((s) => s.name.toLowerCase().includes(q))
     .slice(0, 8);
+  const setMatches = (sets.data ?? []).filter((s) => s.name.toLowerCase().includes(q)).slice(0, 5);
 
   return (
     <div className="w-full mt-2 border border-border rounded-lg bg-bg-secondary p-2">
@@ -114,22 +121,35 @@ function SkillPicker({
         autoFocus
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Which skill should it run against?"
-        aria-label="Skill to compare with"
+        placeholder="Which skill or set should it run against?"
+        aria-label="Skill or set to compare with"
         className="w-full bg-transparent border-none outline-none text-[13px] text-text-primary px-1 py-1 placeholder:text-text-tertiary"
       />
       {matches.map((s) => (
         <button
           key={s.name}
-          onClick={() => onPick(s.name)}
+          onClick={() => onPick({ skill: s.name, version: 0 })}
           className="block w-full text-left px-2 py-1.5 text-[13px] font-mono text-text-secondary hover:bg-bg-tertiary hover:text-text-primary rounded cursor-pointer"
         >
           {s.name}
           <span className="text-text-tertiary"> v{s.latest_version}</span>
         </button>
       ))}
-      {matches.length === 0 && (
-        <div className="px-2 py-1.5 text-[12px] text-text-tertiary">No other skill matches.</div>
+      {setMatches.map((s) => (
+        <button
+          key={`set-${s.name}`}
+          onClick={() => onPick({ set: s.name })}
+          className="flex w-full items-baseline gap-2 text-left px-2 py-1.5 text-[13px] font-mono text-text-secondary hover:bg-bg-tertiary hover:text-text-primary rounded cursor-pointer"
+        >
+          <span className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">set</span>
+          {s.name}
+          <span className="text-text-tertiary">
+            {(s.entries ?? []).length} entr{(s.entries ?? []).length === 1 ? "y" : "ies"}
+          </span>
+        </button>
+      ))}
+      {matches.length === 0 && setMatches.length === 0 && (
+        <div className="px-2 py-1.5 text-[12px] text-text-tertiary">No other skill or set matches.</div>
       )}
     </div>
   );

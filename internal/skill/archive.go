@@ -19,7 +19,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Pack creates a tar.gz archive of the directory at dir.
+// SuiteDir is the authored eval suite at a skill folder's root. It is never
+// part of a version: a suite edit must not push a new version to every
+// installer, and an installer must never receive the answer key.
+const SuiteDir = "evals"
+
+// Pack creates a tar.gz archive of the directory at dir, without evals/.
 // It returns the archive bytes, a sha256 hex checksum, a file manifest, and
 // any error encountered. Pack returns an error if SKILL.md is not present in dir.
 func Pack(dir string) ([]byte, string, []FileEntry, error) {
@@ -27,15 +32,58 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); os.IsNotExist(err) {
 		return nil, "", nil, fmt.Errorf("skill.Pack: SKILL.md not found in %s", dir)
 	}
+	entries, err := collect(dir, func(rel string) bool { return rel != SuiteDir })
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("skill.Pack walk: %w", err)
+	}
+	return packEntries(dir, entries, "skill.Pack")
+}
 
-	// Collect files to include in the archive.
+// PackUpload packs the whole folder, evals/ included, for a client that sends
+// a skill to the server. The server lifts evals/ out before the version is
+// made, so the version digest is still Pack's.
+func PackUpload(dir string) ([]byte, []FileEntry, error) {
+	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("skill.PackUpload: SKILL.md not found in %s", dir)
+	}
+	entries, err := collect(dir, func(string) bool { return true })
+	if err != nil {
+		return nil, nil, fmt.Errorf("skill.PackUpload walk: %w", err)
+	}
+	archive, _, entries, err := packEntries(dir, entries, "skill.PackUpload")
+	return archive, entries, err
+}
+
+// PackSuite packs dir/evals/ with paths that keep the evals/ prefix, which is
+// the layout the suite registry stores. It returns nil when dir has no evals/.
+func PackSuite(dir string) ([]byte, error) {
+	info, err := os.Stat(filepath.Join(dir, SuiteDir))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("skill.PackSuite: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("skill.PackSuite: %s is not a directory", SuiteDir)
+	}
+	entries, err := collect(dir, func(rel string) bool { return rel == SuiteDir })
+	if err != nil {
+		return nil, fmt.Errorf("skill.PackSuite walk: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	archive, _, _, err := packEntries(dir, entries, "skill.PackSuite")
+	return archive, err
+}
+
+// collect lists the regular files under dir whose top-level name keep accepts.
+func collect(dir string, keep func(top string) bool) ([]FileEntry, error) {
 	var entries []FileEntry
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
@@ -43,12 +91,25 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 		}
 		// Use forward slashes in archive paths regardless of OS.
 		rel = filepath.ToSlash(rel)
+		if rel != "." {
+			top, _, _ := strings.Cut(rel, "/")
+			if !keep(top) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
 		entries = append(entries, FileEntry{Path: rel, Size: info.Size()})
 		return nil
 	})
-	if err != nil {
-		return nil, "", nil, fmt.Errorf("skill.Pack walk: %w", err)
-	}
+	return entries, err
+}
+
+func packEntries(dir string, entries []FileEntry, op string) ([]byte, string, []FileEntry, error) {
 
 	// Build the in-memory tar.gz.
 	var buf strings.Builder
@@ -70,37 +131,37 @@ func Pack(dir string) ([]byte, string, []FileEntry, error) {
 		fullPath := filepath.Join(dir, filepath.FromSlash(entry.Path))
 		info, err := os.Stat(fullPath)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("skill.Pack stat %s: %w", entry.Path, err)
+			return nil, "", nil, fmt.Errorf("%s stat %s: %w", op, entry.Path, err)
 		}
 
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("skill.Pack header %s: %w", entry.Path, err)
+			return nil, "", nil, fmt.Errorf("%s header %s: %w", op, entry.Path, err)
 		}
 		// Use the relative slash-separated path as the archive name.
 		hdr.Name = entry.Path
 		normalizeHeader(hdr, info)
 
 		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, "", nil, fmt.Errorf("skill.Pack write header %s: %w", entry.Path, err)
+			return nil, "", nil, fmt.Errorf("%s write header %s: %w", op, entry.Path, err)
 		}
 
 		f, err := os.Open(fullPath)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("skill.Pack open %s: %w", entry.Path, err)
+			return nil, "", nil, fmt.Errorf("%s open %s: %w", op, entry.Path, err)
 		}
 		if _, err := io.Copy(tw, f); err != nil {
 			f.Close()
-			return nil, "", nil, fmt.Errorf("skill.Pack copy %s: %w", entry.Path, err)
+			return nil, "", nil, fmt.Errorf("%s copy %s: %w", op, entry.Path, err)
 		}
 		f.Close()
 	}
 
 	if err := tw.Close(); err != nil {
-		return nil, "", nil, fmt.Errorf("skill.Pack close tar: %w", err)
+		return nil, "", nil, fmt.Errorf("%s close tar: %w", op, err)
 	}
 	if err := gzw.Close(); err != nil {
-		return nil, "", nil, fmt.Errorf("skill.Pack close gzip: %w", err)
+		return nil, "", nil, fmt.Errorf("%s close gzip: %w", op, err)
 	}
 
 	archiveBuf = archiveWriter.buf

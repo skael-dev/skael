@@ -16,6 +16,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/evalsuite"
 	"github.com/skael-dev/skael/internal/quality"
+	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -48,15 +49,17 @@ type jobOutput struct {
 	ContestID  string      `json:"contest_id,omitempty"`
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// Per task per candidate. Apart from Attempts, which counts job retries.
-	ContestAttempts int        `json:"contest_attempts,omitempty"`
-	Status          string     `json:"status"`
-	Attempts        int        `json:"attempts"`
-	MaxAttempts     int        `json:"max_attempts"`
-	WorkerID        string     `json:"worker_id,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
-	RequestedBy     string     `json:"requested_by,omitempty"`
-	EnqueuedAt      time.Time  `json:"enqueued_at"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
+	ContestAttempts int `json:"contest_attempts,omitempty"`
+	// Set is the pinned set resolution the worker installs beside the skill.
+	Set         *PinnedSet `json:"set,omitempty"`
+	Status      string     `json:"status"`
+	Attempts    int        `json:"attempts"`
+	MaxAttempts int        `json:"max_attempts"`
+	WorkerID    string     `json:"worker_id,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+	RequestedBy string     `json:"requested_by,omitempty"`
+	EnqueuedAt  time.Time  `json:"enqueued_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
 	// QueuePosition is how many queued jobs are ahead of this one, and 0
 	// whenever the job is not queued. It is a hint: retries and concurrency
 	// move it, so the UI shows a position and never an ETA.
@@ -73,6 +76,7 @@ func toJobOutput(j *Job) jobOutput {
 		Tier:        j.Tier,
 		ContestID:   j.ContestID,
 		Candidates:  j.Candidates,
+		Set:         j.Set,
 		Agents:      j.Panel.Agents,
 		Models:      j.Panel.Models,
 		Status:      string(j.Status),
@@ -174,7 +178,8 @@ type listJobsOutput struct {
 // rerunBody is the request to re-run an evaluation for a skill. Every field
 // is optional: omitting version re-runs the latest, omitting suite_ref uses
 // the skill's stored suite (never a freshly generated one — that would be a
-// different measurement), omitting tier defaults to "full", and omitting
+// different measurement), omitting tier runs the deepest tier the suite fills
+// (full for a job that derives its suite), and omitting
 // agents/models keeps the worker's default panel.
 type rerunBody struct {
 	Version int      `json:"version,omitempty"`
@@ -184,6 +189,12 @@ type rerunBody struct {
 	// Providers is the provider id of each model, in the same order.
 	Providers []string `json:"providers,omitempty"`
 	SuiteRef  string   `json:"suite_ref,omitempty"`
+	// Set names a set whose members are installed beside the skill. The
+	// skill itself is removed from the set if the set holds it.
+	Set string `json:"set,omitempty"`
+	// SetResolution pins a stored resolution of Set. Omitted, the server
+	// resolves the set now and pins that.
+	SetResolution string `json:"set_resolution,omitempty"`
 }
 
 type rerunInput struct {
@@ -193,6 +204,10 @@ type rerunInput struct {
 
 type rerunOutputBody struct {
 	JobID string `json:"job_id"`
+	// Tier is the deepest the suite fills when the request named none.
+	Tier string `json:"tier,omitempty"`
+	// Set is the set resolution the job pinned, when the request named one.
+	Set *PinnedSet `json:"set,omitempty"`
 }
 
 type rerunOutput struct {
@@ -222,6 +237,9 @@ type RouteOptions struct {
 	// EvalConfig returns the judge and panel for a job's requested panel, keys
 	// included, or nil when none is configured.
 	EvalConfig func(ctx context.Context, requested Panel) (*EvalConfig, error)
+	// Sets resolves a set an eval installs beside the skill. Nil refuses a
+	// request that names a set.
+	Sets *sets.Store
 }
 
 // ContestLookup returns the candidates a contest job must run, in order, with
@@ -839,9 +857,27 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			}
 		}
 
+		// A tier the suite cannot fill would fail on a worker after a claim and
+		// a lease, so it is refused here. A derived suite is sized for full.
 		tier := input.Body.Tier
-		if tier == "" {
-			tier = "full"
+		if suiteRef == "" {
+			if tier == "" {
+				tier = string(runner.TierFull)
+			}
+		} else {
+			reach, err := suites.Reach(ctx, suiteRef)
+			if err != nil {
+				log.Error().Err(err).Str("skill", input.Name).Str("suite_ref", suiteRef).Msg("evalqueue: plan suite failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+			switch {
+			case tier == "" && reach.Highest == "":
+				return nil, huma.Error422UnprocessableEntity(reach.Why())
+			case tier == "":
+				tier = reach.Highest
+			case reach.Can(tier) != "":
+				return nil, huma.Error422UnprocessableEntity(reach.Can(tier))
+			}
 		}
 
 		requestedBy := ""
@@ -849,7 +885,27 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 			requestedBy = u.Email
 		}
 
+		var pinned *PinnedSet
+		switch {
+		case input.Body.Set != "" && opts.Sets == nil:
+			return nil, huma.Error500InternalServerError("rerun eval: sets are not configured")
+		case input.Body.Set != "":
+			pinned, err = PinSet(ctx, opts.Sets, suites, input.Body.Set, input.Body.SetResolution, sk.Name)
+			switch {
+			case errors.Is(err, ErrSetNotFound), errors.Is(err, sets.ErrResolutionNotFound):
+				return nil, huma.Error404NotFound("rerun eval: " + err.Error())
+			case errors.Is(err, ErrSetEmpty):
+				return nil, huma.Error422UnprocessableEntity("rerun eval: " + err.Error())
+			case err != nil:
+				log.Error().Err(err).Str("skill", input.Name).Str("set", input.Body.Set).Msg("evalqueue: pin set failed")
+				return nil, huma.Error500InternalServerError("rerun eval: internal error")
+			}
+		case input.Body.SetResolution != "":
+			return nil, huma.Error422UnprocessableEntity("rerun eval: set_resolution needs set")
+		}
+
 		id, err := q.Submit(ctx, Job{
+			Set:         pinned,
 			SkillID:     sk.ID,
 			SkillName:   sk.Name,
 			Version:     version,
@@ -865,7 +921,7 @@ func RegisterRoutes(api huma.API, q *PoolExecutor, qual *quality.Store, skills *
 
 		return &rerunOutput{
 			Status: http.StatusAccepted,
-			Body:   rerunOutputBody{JobID: string(id)},
+			Body:   rerunOutputBody{JobID: string(id), Tier: tier, Set: pinned},
 		}, nil
 	})
 }

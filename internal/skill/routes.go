@@ -113,7 +113,16 @@ type SuiteRecord struct {
 // suite is registered for the skill.
 type SuiteLookup interface {
 	LatestForSkill(ctx context.Context, skillName string) (*SuiteRecord, error)
+	// PutAuthored stores a skill folder's evals/ as the skill's suite. A suite
+	// that does not load returns an error wrapping ErrInvalidSuite.
+	PutAuthored(ctx context.Context, skillName string, archive []byte, uploadedBy string) (*SuiteRecord, error)
+	// Reach is the deepest tier a stored suite fills, or "" and why it fills
+	// none.
+	Reach(ctx context.Context, ref string) (tier, why string, err error)
 }
+
+// ErrInvalidSuite is a skill folder's evals/ that the registry cannot load.
+var ErrInvalidSuite = errors.New("invalid eval suite")
 
 // OwnerResolver is the subset of the ownership store publish needs. It is
 // declared here rather than imported because internal/ownership must stay
@@ -145,7 +154,7 @@ type RouteOptions struct {
 	// QualityFloor is the minimum headline quality score a verified
 	// evaluation must reach to clear a held version. It comes from
 	// the quality_floor setting at decision time; nil or zero means any
-	// verified, complete, contract-clean report clears.
+	// verified report with a complete panel clears.
 	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership for publish. A nil
 	// resolver leaves the zero gate.OwnerState, which contributes nothing —
@@ -155,6 +164,12 @@ type RouteOptions struct {
 	// Git routes a change to a git-bound skill into a pull request. Nil means
 	// every skill is native.
 	Git GitBoundary
+	// Jobs queues the rescan of every released version. Nil refuses that
+	// request.
+	Jobs JobInserter
+	// MailOwners emails the owners of a skill. Nil, or no mail server, sends
+	// nothing.
+	MailOwners func(ctx context.Context, skillName, subject, text string) error
 }
 
 // OutboundChange is the pull request Skael opened for a change to a git-bound
@@ -715,9 +730,6 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		router.Get("/api/skills/{name}/versions/{version}/files/*",
 			makeFileHandler(store, storage))
 
-		// GET /api/skills/{name}/scan — scan results for the latest version
-		router.Get("/api/skills/{name}/scan", makeLatestScanHandler(store))
-
 		// GET /api/skills/{name}/versions/{version}/diff — diff a version
 		// against the currently-served one. Open to any authenticated user
 		// (auth middleware already covers /api/), not just owners/admins: a
@@ -725,6 +737,10 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 		// held version actually changed.
 		router.Get("/api/skills/{name}/versions/{version}/diff", makeDiffHandler(store))
 	}
+
+	// GET /api/skills/{name}/scan, POST .../versions/{version}/scan and
+	// POST /api/admin/rescan — stored reports and rescans.
+	registerScanRoutes(api, store, publisher, opts)
 
 	// POST /api/skills/{name}/versions/{version}/review — owner/admin (or,
 	// for the ownership reason only, a namespace owner) approval or
@@ -735,8 +751,11 @@ func RegisterRoutes(api huma.API, router chi.Router, store *Store, storage platf
 // CanReadVersion is the read rule for a version's content. Any person may read
 // any version, and the worker must reach a held version to score it. Another
 // scoped key is a machine that would run what it fetches, so it gets only a
-// released version.
+// released version. A withdrawn version is never served to anyone.
 func CanReadVersion(ctx context.Context, ver *Version) bool {
+	if ver.GateState == "withdrawn" {
+		return false
+	}
 	key := auth.KeyFromContext(ctx)
 	return !key.Restricted() || ver.GateState == "released" || auth.HasScope(ctx, auth.ScopeEvalWork)
 }
@@ -890,41 +909,6 @@ func makeDiffHandler(store *Store) http.HandlerFunc {
 		if err := json.NewEncoder(w).Encode(diff); err != nil {
 			log.Warn().Err(err).Str("skill", name).Int("version", version).Msg("diff handler: encode response failed")
 		}
-	}
-}
-
-// makeLatestScanHandler returns a handler that returns the scan result JSON for
-// the latest version of a skill.
-func makeLatestScanHandler(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := chi.URLParam(r, "name")
-
-		sk, err := store.GetByName(r.Context(), name)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if sk == nil {
-			http.NotFound(w, r)
-			return
-		}
-		if sk.LatestVersion == 0 {
-			http.Error(w, "no versions published", http.StatusNotFound)
-			return
-		}
-
-		ver, err := store.GetVersion(r.Context(), name, sk.LatestVersion)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if ver == nil {
-			http.NotFound(w, r)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(ver.ScanResult) //nolint:errcheck
 	}
 }
 

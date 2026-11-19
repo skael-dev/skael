@@ -35,7 +35,7 @@ This starts the platform plus a Postgres container with a persistent volume. The
 
 ## Evaluation worker (optional)
 
-The server queues evaluation jobs but never runs them — no Docker socket and no LLM key live on it. Running evaluations requires a separate `skael-worker` process, because it needs a sandbox to run each session in and a direct Anthropic API key to judge the result.
+The server queues evaluation jobs but never runs them. It holds the provider keys and calls no LLM, and no Docker socket lives on it. A separate `skael-worker` process runs evaluations, because each session needs a sandbox. The worker needs no LLM key: each job claim carries the keys its judge and panel use. [Quality scoring](/docs/quality) walks through the whole path, from the first provider to the first score.
 
 ### Choosing a sandbox driver
 
@@ -63,11 +63,13 @@ The worker needs nothing else. Provider keys stay on the server, and each job cl
 
 ### In a container
 
-The worker also ships as an image, published with every release:
+The worker also ships as an image, published with every release. **Evaluation → Add a worker** shows this command with the key filled in:
 
 ```bash
-docker run -d \
-  -e SKAEL_ENDPOINT=http://localhost:8080 \
+docker run -d --name skael-worker --restart unless-stopped \
+  --add-host=host.docker.internal:host-gateway \
+  -e WORKER_ID=worker-1 \
+  -e SKAEL_ENDPOINT=http://host.docker.internal:8080 \
   -e SKAEL_API_KEY=<a key from Evaluation → Add a worker> \
   -e WORKER_RUN_ROOT=/var/lib/skael/run \
   -e WORKER_WORK_ROOT=/var/lib/skael/work \
@@ -77,9 +79,11 @@ docker run -d \
   ghcr.io/skael-dev/skael-worker:latest
 ```
 
+Inside the worker container, `localhost` is the container itself. When the server runs on the same machine at `localhost`, use `host.docker.internal` in `SKAEL_ENDPOINT`. Docker Desktop resolves that name. On Linux, the `--add-host` line maps it to the host. The **Add a worker** snippet makes this change for you when the server URL is `localhost`.
+
 `docker compose --profile worker up` runs the same thing from source.
 
-One rule governs the container, and it is load-bearing. The worker starts sandbox containers as *siblings* through the mounted socket, so the host daemon resolves every bind source. `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must therefore be bound at the **same path on both sides** — never a named volume. Docker creates a missing bind source as an empty directory instead of failing, so a container-local path yields a sandbox with no task and no verifier, which scores as a skill that did nothing. The worker refuses to start containerized unless both are set.
+One rule governs the container, and it is load-bearing. The worker starts sandbox containers as *siblings* through the mounted socket, so the host daemon resolves every bind source. `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must therefore be bound at the **same path on both sides** — never a named volume. Docker creates a missing bind source as an empty directory instead of failing, so a container-local path yields a sandbox with no input files, which scores as a skill that did nothing. The worker refuses to start containerized unless both are set.
 
 ### Worker configuration
 

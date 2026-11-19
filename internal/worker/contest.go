@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -43,22 +44,16 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 		w.heartbeatLoop(ctx, runCtx, cancel, job.ID, token, leaseLost)
 	}()
 
-	bundles := make([][]byte, len(job.Candidates))
+	entrants := make([]entrant, len(job.Candidates))
 	for i, cand := range job.Candidates {
-		var b []byte
-		var err error
-		if cand.PRHeadID != "" {
-			b, err = w.api.FetchPRHead(runCtx, cand.PRHeadID)
-		} else {
-			b, err = w.api.FetchBundle(runCtx, cand.SkillName, cand.Version)
-		}
+		e, err := w.fetchEntrant(runCtx, cand)
 		if err != nil {
-			return fmt.Errorf("worker: fetch bundle for %s: %w", cand.Label, err)
+			return err
 		}
-		bundles[i] = b
+		entrants[i] = e
 	}
 
-	suiteRef, err := w.contestSuite(runCtx, job, bundles, token)
+	suiteRef, err := w.contestSuite(runCtx, job, entrants, token)
 	if err != nil {
 		return err
 	}
@@ -77,7 +72,7 @@ func (w *Worker) runContest(ctx context.Context, job *evalqueue.Job, token strin
 		tier = w.cfg.Tier
 	}
 	run := func(idx []int) (map[string]*report.Report, error) {
-		return w.runCandidates(runCtx, job, idx, bundles, suiteArchive, suiteRef, tier, meta.MachineGenerated)
+		return w.runCandidates(runCtx, job, idx, entrants, suiteArchive, suiteRef, tier, meta.MachineGenerated)
 	}
 
 	var fresh, offered []int
@@ -151,7 +146,7 @@ func reuseRefusal(cand evalqueue.Candidate, fresh *report.Report) string {
 
 // runCandidates runs the candidates at idx, at most ContestParallel at once.
 // The first failure cancels the others: a verdict needs every candidate.
-func (w *Worker) runCandidates(ctx context.Context, job *evalqueue.Job, idx []int, bundles [][]byte,
+func (w *Worker) runCandidates(ctx context.Context, job *evalqueue.Job, idx []int, entrants []entrant,
 	suiteArchive []byte, suiteRef, tier string, allowVoid bool) (map[string]*report.Report, error) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(w.cfg.ContestParallel)
@@ -160,9 +155,9 @@ func (w *Worker) runCandidates(ctx context.Context, job *evalqueue.Job, idx []in
 	out := make(map[string]*report.Report, len(idx))
 	for _, i := range idx {
 		cand := job.Candidates[i]
-		bundle := bundles[i]
+		e := entrants[i]
 		g.Go(func() error {
-			rep, err := w.runCandidate(gctx, job, cand, bundle, suiteArchive, suiteRef, tier, allowVoid)
+			rep, err := w.runCandidate(gctx, job, cand, e, suiteArchive, suiteRef, tier, allowVoid)
 			if err != nil {
 				return err
 			}
@@ -180,7 +175,7 @@ func (w *Worker) runCandidates(ctx context.Context, job *evalqueue.Job, idx []in
 
 // contestSuite returns the suite every candidate runs against, deriving one
 // from all of them when the job names none.
-func (w *Worker) contestSuite(ctx context.Context, job *evalqueue.Job, bundles [][]byte, token string) (string, error) {
+func (w *Worker) contestSuite(ctx context.Context, job *evalqueue.Job, entrants []entrant, token string) (string, error) {
 	if job.SuiteRef != "" {
 		return job.SuiteRef, nil
 	}
@@ -188,21 +183,25 @@ func (w *Worker) contestSuite(ctx context.Context, job *evalqueue.Job, bundles [
 		return "", fmt.Errorf("worker: contest job %s names no suite and this worker has no deriver configured", job.ID)
 	}
 
-	ins := make([]DeriveInput, 0, len(job.Candidates))
-	for i, cand := range job.Candidates {
-		ins = append(ins, DeriveInput{
-			Skill: cand.SkillName, Bundle: bundles[i], Tier: job.Tier, Panel: job.Panel, Eval: job.Eval,
-		})
+	// A set candidate gives one input per member: the side that splits a
+	// skill must not set its own exam by entering one member of the split.
+	var ins []DeriveInput
+	for _, e := range entrants {
+		for i, name := range e.names {
+			ins = append(ins, DeriveInput{
+				Skill: name, Bundle: e.bundles[i], Tier: job.Tier, Panel: job.Panel, Eval: job.Eval,
+			})
+		}
 	}
 	res, err := w.deriver.Contest(ctx, ins)
 	if err != nil {
 		return "", fmt.Errorf("worker: derive contest suite: %w", err)
 	}
-	// Pushed under the first candidate's name, which is only where the suite
-	// is filed. What decides whether it can release anything is its origin,
-	// and a worker's own push is always derived.
+	// Pushed under the job's skill, which is only where the suite is filed.
+	// What decides whether it can release anything is its origin, and a
+	// worker's own push is always derived.
 	ref, err := w.api.PushSuite(ctx, PushSuiteInput{
-		Skill: job.Candidates[0].SkillName, Archive: res.Archive,
+		Skill: job.SkillName, Archive: res.Archive,
 		Spec: res.Spec, JobID: job.ID, ClaimToken: token,
 	})
 	if err != nil {
@@ -217,7 +216,7 @@ func (w *Worker) contestSuite(ctx context.Context, job *evalqueue.Job, bundles [
 // runCandidate evaluates one candidate in its own workspace. Separate
 // directories, because two candidates install a skill into the same place.
 func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand evalqueue.Candidate,
-	bundle, suiteArchive []byte, suiteRef, tier string, allowVoid bool) (*report.Report, error) {
+	e entrant, suiteArchive []byte, suiteRef, tier string, allowVoid bool) (*report.Report, error) {
 
 	workDir, err := os.MkdirTemp(w.cfg.WorkRoot, "skael-contest-*")
 	if err != nil {
@@ -230,7 +229,7 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 		return nil, fmt.Errorf("worker: fetch suite meta: %w", err)
 	}
 	st, err := Materialize(workDir, MaterializeInput{
-		Skill: cand.SkillName, Bundle: bundle, SuiteArchive: suiteArchive,
+		Skill: e.names[0], Bundle: e.bundles[0], SuiteArchive: suiteArchive,
 		Spec: meta.Spec, WantSuiteRef: suiteRef,
 	})
 	if err != nil {
@@ -238,13 +237,31 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 	}
 	defer st.Close()
 
+	var set *SetInput
+	if cand.Set != nil {
+		skillDir, err := st.SkillDir(e.names[0])
+		if err != nil {
+			return nil, fmt.Errorf("worker: skill dir for %s: %w", cand.Label, err)
+		}
+		taken := map[string]bool{filepath.Base(skillDir): true}
+		members, err := w.unpackMembers(ctx, filepath.Join(workDir, "set"), cand.Set.Members[1:], e.bundles[1:], taken)
+		if err != nil {
+			return nil, err
+		}
+		set = &SetInput{
+			Name: cand.Set.Name, ResolutionID: cand.Set.ResolutionID,
+			Members: members, Pinned: cand.Set.Members, Candidate: true,
+		}
+	}
+
 	events := eventsFrom(ctx)
 	events(phase("candidate " + cand.Label))
 	rep, err := w.runner.Run(ctx, RunInput{
 		JobID: job.ID,
-		Skill: cand.SkillName, Version: cand.Version, SuiteRef: suiteRef,
+		Skill: e.names[0], Version: e.version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
 		AllowVoid: allowVoid, Contest: true, Attempts: job.ContestAttempts,
+		ContestProbes: hasSet(job.Candidates), Set: set,
 		Events: events,
 	})
 	if err != nil {
@@ -258,4 +275,53 @@ func (w *Worker) runCandidate(ctx context.Context, job *evalqueue.Job, cand eval
 			rep.SuiteRef, cand.Label, suiteRef)
 	}
 	return rep, nil
+}
+
+// entrant is one candidate's archives. A skill or a PR head is one archive;
+// a set is one per member, and the run is filed under the first member.
+type entrant struct {
+	names   []string
+	version int
+	bundles [][]byte
+}
+
+func (w *Worker) fetchEntrant(ctx context.Context, cand evalqueue.Candidate) (entrant, error) {
+	switch {
+	case cand.Set != nil:
+		if len(cand.Set.Members) == 0 {
+			return entrant{}, fmt.Errorf("worker: set candidate %s has no member", cand.Label)
+		}
+		bundles, err := w.fetchMembers(ctx, cand.Set)
+		if err != nil {
+			return entrant{}, err
+		}
+		e := entrant{version: cand.Set.Members[0].Version, bundles: bundles}
+		for _, m := range cand.Set.Members {
+			e.names = append(e.names, m.Name)
+		}
+		return e, nil
+	case cand.PRHeadID != "":
+		b, err := w.api.FetchPRHead(ctx, cand.PRHeadID)
+		if err != nil {
+			return entrant{}, fmt.Errorf("worker: fetch bundle for %s: %w", cand.Label, err)
+		}
+		return entrant{names: []string{cand.SkillName}, version: cand.Version, bundles: [][]byte{b}}, nil
+	default:
+		b, err := w.api.FetchBundle(ctx, cand.SkillName, cand.Version)
+		if err != nil {
+			return entrant{}, fmt.Errorf("worker: fetch bundle for %s: %w", cand.Label, err)
+		}
+		return entrant{names: []string{cand.SkillName}, version: cand.Version, bundles: [][]byte{b}}, nil
+	}
+}
+
+// hasSet reports whether a contest enters a set. Every candidate then plans
+// the tier's probes, so each reports which skills took which prompt.
+func hasSet(cands []evalqueue.Candidate) bool {
+	for _, c := range cands {
+		if c.Set != nil {
+			return true
+		}
+	}
+	return false
 }

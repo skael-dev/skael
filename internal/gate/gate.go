@@ -113,6 +113,18 @@ func (q *QualityState) clears(floor float64) bool {
 	return true
 }
 
+// Unappealable reports whether r alone blocks a publish, as Decide classes it.
+func Unappealable(r Reason) bool {
+	if !blocking(r.Severity) {
+		return false
+	}
+	switch Class(r.Class) {
+	case ClassExecution, ClassInjection, ClassHeuristic:
+		return false
+	}
+	return true
+}
+
 func blocking(severity string) bool {
 	return severity == "critical" || severity == "high"
 }
@@ -120,7 +132,7 @@ func blocking(severity string) bool {
 // appealableClears returns the sentence a held version shows its publisher.
 // Zero is special-cased because it is the default QUALITY_FLOOR.
 func appealableClears(floor float64) string {
-	const tail = "with a complete panel and no critical contract violations, or an admin approval"
+	const tail = "with a complete panel, or an admin approval"
 	if floor <= 0 {
 		return "a verified evaluation " + tail
 	}
@@ -160,6 +172,7 @@ func Decide(rep scan.Report, q *QualityState, o OwnerState, p Policy) Decision {
 			r.Clears = appealableClears(p.Floor)
 		default:
 			// Fail closed: an unclassified blocking finding is unappealable.
+			// Unappealable below must agree with this switch.
 			unappealable++
 			r.Clears = fmt.Sprintf("nothing: finding has no recognised class (%q), which is treated as unappealable", f.Class)
 		}

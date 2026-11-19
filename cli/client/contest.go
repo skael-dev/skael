@@ -8,11 +8,30 @@ import (
 	"net/url"
 )
 
-// ContestCandidate is one entry in a contest request or result.
-type ContestCandidate struct {
-	Skill   string `json:"skill"`
+// ContestEntry is one candidate in a contest request: a skill, with an
+// optional version, or a set.
+type ContestEntry struct {
+	Skill   string `json:"skill,omitempty"`
 	Version int    `json:"version,omitempty"`
-	Label   string `json:"label,omitempty"`
+	Set     string `json:"set,omitempty"`
+}
+
+// ContestCandidate is one candidate in a contest result.
+type ContestCandidate struct {
+	Skill   string      `json:"skill"`
+	Version int         `json:"version,omitempty"`
+	Label   string      `json:"label,omitempty"`
+	Set     *EvalJobSet `json:"set,omitempty"`
+	// TokensMedian is the candidate's median token spend per run.
+	TokensMedian int64 `json:"tokens_median,omitempty"`
+	// Fired lists, per task, the skills that fired on the primary runs.
+	Fired []ContestTaskFired `json:"fired,omitempty"`
+}
+
+// ContestTaskFired is the skills that fired on one task.
+type ContestTaskFired struct {
+	TaskID string   `json:"task_id"`
+	Skills []string `json:"skills"`
 }
 
 // ContestTask is one task's head-to-head result.
@@ -44,6 +63,7 @@ type ContestLoss struct {
 	TaskID   string   `json:"task_id"`
 	Missed   []string `json:"missed"`
 	Evidence string   `json:"evidence,omitempty"`
+	Fired    []string `json:"fired,omitempty"`
 }
 
 // Contest is a contest and, once it finishes, its verdict.
@@ -66,12 +86,12 @@ type Contest struct {
 }
 
 // CreateContest queues a contest between candidates.
-func (c *Client) CreateContest(candidates []ContestCandidate, suiteRef, tier string, attempts int) (*Contest, error) {
+func (c *Client) CreateContest(candidates []ContestEntry, suiteRef, tier string, attempts int) (*Contest, error) {
 	payload, err := json.Marshal(struct {
-		Candidates []ContestCandidate `json:"candidates"`
-		SuiteRef   string             `json:"suite_ref,omitempty"`
-		Tier       string             `json:"tier,omitempty"`
-		Attempts   int                `json:"attempts,omitempty"`
+		Candidates []ContestEntry `json:"candidates"`
+		SuiteRef   string         `json:"suite_ref,omitempty"`
+		Tier       string         `json:"tier,omitempty"`
+		Attempts   int            `json:"attempts,omitempty"`
 	}{Candidates: candidates, SuiteRef: suiteRef, Tier: tier, Attempts: attempts})
 	if err != nil {
 		return nil, fmt.Errorf("marshal contest request: %w", err)

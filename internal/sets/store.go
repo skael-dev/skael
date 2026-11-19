@@ -99,6 +99,7 @@ const (
 	ReasonVersionNotFound   = "version_not_found"
 	ReasonHeld              = "held"
 	ReasonRejected          = "rejected"
+	ReasonWithdrawn         = "withdrawn"
 )
 
 // Resolution is the immutable result of resolving a set.
@@ -479,6 +480,8 @@ func resolveEntry(ctx context.Context, q Querier, e SetEntry) (*ResolvedEntry, s
 	case "released":
 	case "rejected":
 		return nil, ReasonRejected, nil
+	case "withdrawn":
+		return nil, ReasonWithdrawn, nil
 	default:
 		return nil, ReasonHeld, nil
 	}
@@ -598,20 +601,20 @@ func (s *Store) Callers(ctx context.Context, set *Set) ([]SetCaller, error) {
 	return callers, nil
 }
 
-// ArchivePath returns where a resolved version's archive lives, or "" when its
-// skill or version has gone.
-func (s *Store) ArchivePath(ctx context.Context, name string, version int) (string, error) {
-	var path string
+// ArchivePath returns where a resolved version's archive lives and its gate
+// state, or "" when its skill or version has gone.
+func (s *Store) ArchivePath(ctx context.Context, name string, version int) (string, string, error) {
+	var path, state string
 	err := s.pool.QueryRow(ctx, `
-		SELECT v.archive_path FROM skill_versions v JOIN skills s ON s.id = v.skill_id
-		WHERE s.name = $1 AND v.version = $2`, name, version).Scan(&path)
+		SELECT v.archive_path, v.gate_state FROM skill_versions v JOIN skills s ON s.id = v.skill_id
+		WHERE s.name = $1 AND v.version = $2`, name, version).Scan(&path, &state)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("sets.ArchivePath: %w", err)
+		return "", "", fmt.Errorf("sets.ArchivePath: %w", err)
 	}
-	return path, nil
+	return path, state, nil
 }
 
 // SkillVersionExists supports validating an entry at edit time.
@@ -629,4 +632,30 @@ func (s *Store) SkillVersionExists(ctx context.Context, name string, version int
 		return false, fmt.Errorf("sets.SkillVersionExists: %w", err)
 	}
 	return ok, nil
+}
+
+// ErrResolutionNotFound means a set has no stored resolution with that id.
+var ErrResolutionNotFound = errors.New("the set has no stored resolution with that id")
+
+// Pin returns a stored resolution a job can reference: the one named by id,
+// or, with no id, the set's current resolution, which it stores first.
+func (s *Store) Pin(ctx context.Context, set *Set, id string) (*Resolution, error) {
+	if id != "" {
+		res, err := s.GetResolution(ctx, set, id)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return nil, ErrResolutionNotFound
+		}
+		return res, nil
+	}
+	res, err := Resolve(ctx, s.pool, set)
+	if err != nil {
+		return nil, err
+	}
+	if err := saveResolution(ctx, s.pool, set, res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }

@@ -14,6 +14,17 @@ type Expectation struct {
 	Text     string `json:"text"`
 	Passed   bool   `json:"passed"`
 	Evidence string `json:"evidence"`
+	// Check is true for a deterministic check, which no judge graded.
+	Check bool `json:"check,omitempty"`
+}
+
+// AddCheck counts one check's verdict as one expectation of g.
+func (g *Grade) AddCheck(text string, passed bool, evidence string) {
+	g.Expectations = append(g.Expectations, Expectation{Text: text, Passed: passed, Evidence: evidence, Check: true})
+	g.Total++
+	if passed {
+		g.Passed++
+	}
 }
 
 // Grade is one agent session's expectations, graded.

@@ -33,11 +33,14 @@ const checkName = "Skael"
 
 // PRHead is one skill folder at one pull request head.
 type PRHead struct {
-	ID          string        `json:"id"`
-	SkillName   string        `json:"skill_name"`
-	Digest      string        `json:"digest"`
-	Decision    gate.Decision `json:"decision"`
-	ContestID   string        `json:"contest_id,omitempty"`
+	ID        string        `json:"id"`
+	SkillName string        `json:"skill_name"`
+	Digest    string        `json:"digest"`
+	Decision  gate.Decision `json:"decision"`
+	ContestID string        `json:"contest_id,omitempty"`
+	// SuiteRef is the suite the PR head's evals/ carries, which its contest
+	// runs. Empty when the folder has no evals/.
+	SuiteRef    string `json:"suite_ref,omitempty"`
 	archivePath string
 	skillID     string
 }
@@ -59,7 +62,7 @@ type PullCheck struct {
 
 func (s *Store) heads(ctx context.Context, connID string, pr int, sha string) ([]PRHead, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, skill_name, digest, decision, COALESCE(contest_id::text, ''), archive_path, COALESCE(skill_id::text, '')
+		SELECT id, skill_name, digest, decision, COALESCE(contest_id::text, ''), archive_path, COALESCE(skill_id::text, ''), suite_ref
 		FROM git_pr_heads WHERE connection_id = $1 AND pr_number = $2 AND head_sha = $3 ORDER BY skill_name`,
 		connID, pr, sha)
 	if err != nil {
@@ -70,7 +73,7 @@ func (s *Store) heads(ctx context.Context, connID string, pr int, sha string) ([
 	for rows.Next() {
 		var h PRHead
 		var decision []byte
-		if err := rows.Scan(&h.ID, &h.SkillName, &h.Digest, &decision, &h.ContestID, &h.archivePath, &h.skillID); err != nil {
+		if err := rows.Scan(&h.ID, &h.SkillName, &h.Digest, &decision, &h.ContestID, &h.archivePath, &h.skillID, &h.SuiteRef); err != nil {
 			return nil, fmt.Errorf("gitsync: PR heads: %w", err)
 		}
 		_ = json.Unmarshal(decision, &h.Decision)
@@ -229,9 +232,14 @@ func (r *run) checkPull(ctx context.Context, gh *GitHub, pr *OpenPull) error {
 
 // storeHead packs, scans and stores one folder at a pull request head.
 func (r *run) storeHead(ctx context.Context, pr *OpenPull, sn *snapshot, f skillimport.DiscoveredSkill) (*PRHead, error) {
-	raw, digest, _, err := skill.Pack(filepath.Join(sn.dir, filepath.FromSlash(f.Path)))
+	dir := filepath.Join(sn.dir, filepath.FromSlash(f.Path))
+	raw, digest, _, err := skill.Pack(dir)
 	if err != nil {
 		return nil, fmt.Errorf("gitsync: pack %s at PR #%d: %w", f.Name, pr.Number, err)
+	}
+	suiteRef, err := r.storeHeadSuite(ctx, pr, dir, f.Name)
+	if err != nil {
+		return nil, err
 	}
 	report, decision, err := r.s.publisher.ScanArchive(ctx, raw)
 	if err != nil {
@@ -251,7 +259,7 @@ func (r *run) storeHead(ctx context.Context, pr *OpenPull, sn *snapshot, f skill
 	if err != nil {
 		return nil, err
 	}
-	h := &PRHead{SkillName: f.Name, Digest: digest, Decision: decision, archivePath: path}
+	h := &PRHead{SkillName: f.Name, Digest: digest, Decision: decision, SuiteRef: suiteRef, archivePath: path}
 	var skillID *string
 	if sk, err := r.s.skills.GetByName(ctx, f.Name); err != nil {
 		return nil, err
@@ -259,14 +267,37 @@ func (r *run) storeHead(ctx context.Context, pr *OpenPull, sn *snapshot, f skill
 		skillID, h.skillID = &sk.ID, sk.ID
 	}
 	err = r.s.pool.QueryRow(ctx, `
-		INSERT INTO git_pr_heads (connection_id, skill_id, skill_name, pr_number, head_sha, digest, archive_path, decision)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (connection_id, pr_number, head_sha, skill_name) DO UPDATE SET decision = EXCLUDED.decision
-		RETURNING id`, r.c.ID, skillID, f.Name, pr.Number, pr.Head.SHA, digest, path, decisionJSON).Scan(&h.ID)
+		INSERT INTO git_pr_heads (connection_id, skill_id, skill_name, pr_number, head_sha, digest, archive_path, decision, suite_ref)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (connection_id, pr_number, head_sha, skill_name) DO UPDATE SET decision = EXCLUDED.decision, suite_ref = EXCLUDED.suite_ref
+		RETURNING id`, r.c.ID, skillID, f.Name, pr.Number, pr.Head.SHA, digest, path, decisionJSON, suiteRef).Scan(&h.ID)
 	if err != nil {
 		return nil, fmt.Errorf("gitsync: record PR head: %w", err)
 	}
 	return h, nil
+}
+
+// storeHeadSuite stores the evals/ a PR head carries, so the PR's contest runs
+// the exam the PR changes. It returns "" when the folder has no evals/ or no
+// registry is wired. A suite that does not load is left out of the contest,
+// which then runs the skill's current suite.
+func (r *run) storeHeadSuite(ctx context.Context, pr *OpenPull, dir, name string) (string, error) {
+	if r.s.deps.Suites == nil {
+		return "", nil
+	}
+	archive, err := skill.PackSuite(dir)
+	if err != nil || archive == nil {
+		return "", err
+	}
+	rec, err := r.s.deps.Suites.PutFromPR(ctx, name, archive, r.saEmail)
+	if errors.Is(err, evalsuite.ErrInvalidArchive) {
+		log.Warn().Err(err).Str("skill", name).Int("pr", pr.Number).Msg("gitsync: the PR head's evals/ is not a valid suite")
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("gitsync: store the suite of %s at PR #%d: %w", name, pr.Number, err)
+	}
+	return rec.Ref, nil
 }
 
 // requesterOwnership resolves the requester of an outbound change against the
@@ -431,7 +462,12 @@ func (r *run) startContest(ctx context.Context, pr *OpenPull, h PRHead) (string,
 			{SkillID: sk.ID, SkillName: sk.Name, Label: fmt.Sprintf("%s@pr%d", sk.Name, pr.Number), PRHeadID: h.ID},
 		},
 	}
-	if r.s.deps.Suites != nil {
+	if r.s.deps.Suites != nil && h.SuiteRef != "" {
+		// The PR changes the exam with the prose, in one review, so its
+		// contest runs the PR's own suite.
+		c.SuiteRef = h.SuiteRef
+		c.SuiteProvenance = contest.ProvenanceAuthored
+	} else if r.s.deps.Suites != nil {
 		rec, err := r.s.deps.Suites.LatestForSkill(ctx, sk.Name)
 		// A skill with no suite is a contest the worker derives a suite for.
 		if errors.Is(err, evalsuite.ErrNotFound) {

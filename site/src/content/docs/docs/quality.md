@@ -3,56 +3,153 @@ title: Quality scoring
 description: Measuring whether a skill actually works, not just whether it passed a security scan.
 ---
 
-Publishing a skill and scanning it for security problems tells you it's safe to install. It doesn't tell you whether the skill actually helps. Quality scoring is skael's answer to that: a real evaluation, run against a panel of models, that measures a skill's effect on task outcomes.
+Publishing a skill and scanning it for security problems tells you it's safe to install. It doesn't tell you whether the skill actually helps. Quality scoring answers that: an evaluation, run against a panel of models, measures a skill's effect on task outcomes.
 
 ## What a score is
 
-A panel of models attempts a set of real tasks twice — once with the skill available, once without. The gap between those two runs is the skill's contribution: how much better (or worse) an agent does with it.
+A panel of models attempts a set of real tasks twice: once with the skill installed, once without. The gap between the two is the skill's contribution.
 
-A separate model, acting as judge, compares the two transcripts and scores the outcome. Alongside that, a contract checker watches whether the skill did anything it explicitly promised not to — for example, a skill whose spec says "never touch the network" gets flagged if a transcript shows it doing exactly that.
+A separate model, the judge, grades each session against the task's expectations. A check is graded without the judge. The share of expectations and checks that pass rolls up into one headline score from 0 to 100.
 
-All of that rolls up into a single headline score from 0 to 100.
+## From a skill folder to a score
 
-## What you need to run one
+This path takes `examples/code-review` from the repo to a headline on its skill page, on a new instance. Each step names what you see when it works.
 
-Two things, run separately:
+### 1. Start the server
 
-1. **The server.** It queues evaluation jobs and holds the provider keys, but calls no LLM and runs no session — no Docker socket lives there.
-2. **A `skael-worker` process, with a sandbox it can run sessions in.** The worker claims jobs from the server, runs the evaluation in a sandboxed session, and posts the score back. By default that sandbox is a Docker daemon the worker can reach; `SANDBOX_DRIVER` selects a Kubernetes cluster or a Northflank sandbox instead, for a worker with no Docker daemon — see [Self-hosting](/docs/self-hosting#choosing-a-sandbox-driver).
+From a clone, run `just db` and then `just dev`. Or run `docker compose up -d`. [Self-hosting](/docs/self-hosting) covers both. Open `http://localhost:8080`, enter the claim code from the server log, and create the owner account. Run `skael setup http://localhost:8080 <api-key>` with a key from your account page.
 
-Without a worker running, jobs just sit in the queue — nothing gets scored.
+### 2. Add a provider
 
-### Choosing the judge and the panel
+Open **Settings → Evaluation** and add a provider. Paste one key: OpenRouter, Anthropic or OpenAI each fill an empty panel with default models and a default judge. The server seals the key. It sends the key to a worker only inside a job claim.
 
-An owner sets both on the **Evaluation** page. A **provider** is one LLM endpoint and its key: Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible endpoint such as Azure AI Foundry or LiteLLM. The server seals each key and sends it to a worker only inside a job claim.
+### 3. Add a worker
+
+On the same page, click **Add a worker**. Copy the Compose or `docker run` snippet and run it on a machine with Docker. The worker needs only `SKAEL_ENDPOINT` and `SKAEL_API_KEY`.
+
+When the server URL is `localhost`, the snippet uses `host.docker.internal` instead, because `localhost` inside the worker container is the container itself. On Linux, the snippet adds `--add-host=host.docker.internal:host-gateway`.
+
+The worker shows as online on the Evaluation page within a minute.
+
+### 4. Write a suite with skael-evals
+
+Run `skael init` in the repo. It writes the skael skill and the skael-evals skill to `.agents/skills/`, and to `.claude/skills/` when Claude Code is detected. Open a coding agent in the skill folder and ask it to "write evals for this skill". skael-evals tells the agent the layout, the check types and the tier minimums, and it carries a complete suite for `examples/code-review` as an example.
+
+`examples/code-review/evals/` is that suite. Use it as it is to follow this path.
+
+### 5. Check the suite
+
+```bash
+skael eval check examples/code-review --tier full
+```
+
+The command lists each void eval with its reason, marks each tier ✓ or ✗, and ends with `tier: full`. It exits 1 when a file does not load, when an eval is void, or when the suite is below `--tier`. Fix each ✗ line and run it again.
+
+### 6. Publish
+
+```bash
+skael publish examples/code-review
+```
+
+Publish lifts `evals/` out of the folder and stores it as the skill's suite. The version is the folder without `evals/`. The publish queues an eval of the new version at the deepest tier the suite reaches, and prints the job id and the tier. A suite below the smoke tier queues no eval. The publish then says why, for example `suite below smoke tier: 3 scorable evals, needs 5`. A publish has one of three outcomes:
+
+- **created**: the skill content changed, so a new version exists.
+- **unchanged**: nothing changed.
+- **suite updated**: only `evals/` changed. The server stores the suite and queues an eval of the latest version. It creates no version.
+
+### 7. Run the eval and wait
+
+```bash
+skael eval run code-review --wait
+```
+
+The command queues an eval of the latest version at the deepest tier the suite reaches, prints each job event as the worker posts it, and ends with the headline and the lift. `skael eval run code-review@2 --tier smoke` runs one version at a named tier. The server refuses a tier the suite cannot reach and says why. The command needs an owner or admin key.
+
+A full-tier eval runs each eval twice with the skill, once without it, and six trigger probes. It takes from tens of minutes to more than an hour, by model and by worker concurrency.
+
+### 8. Read the score
+
+The skill page shows the headline, the lift and each eval's results. **Evaluation → Jobs** shows each job's phase, sessions done, failures and cost while it runs, and its events after. A failed session names the provider's error, such as an unknown model id or a rejected key.
+
+### Other routes to a suite
+
+Each of these stores a suite the same way, and each eval runs the same way:
+
+- **Git sync.** A connected repo's skill folder carries `evals/`. A commit that changes only `evals/` stores a new suite and queues one eval, and creates no version. When the suite is below the smoke tier, the connection page lists the folder under "Notes from the last sync" with the reason. A pull request head carries its own suite, and the PR's contest runs it, so a PR changes the exam with the prose in one review.
+- **Import.** `skael import` and the web import store a folder's `evals/` as the suite.
+- **whetstone.** `whetstone suite gen` drafts a suite from a stored spec, and `whetstone suite push` uploads it. See [whetstone](/docs/whetstone).
+- **No suite.** A skill with no suite still gets a score: on `skael eval run` or **Run** on the skill page, the worker derives a suite from the skill's own `SKILL.md`. A derived suite grades the skill against its own claims, so its score cannot release a held version. An instance owner or admin can review the suite's trigger queries in the web UI to mark it authored.
+
+## The suite
+
+The suite lives in the skill folder:
+
+```
+code-review/
+  SKILL.md
+  evals/
+    evals.json      tasks, expectations and checks
+    triggers.json   prompts the skill must and must not fire on
+    files/          input files a task gives the agent
+    checks/         scripts a command check runs
+```
+
+The layout is Anthropic's skill-creator layout, so a skill moves between the two with no change. Installers never receive `evals/`: a version, `skael pull` and `skael sync` leave it out. The sandbox never receives it either, so the agent under test cannot read the answer key.
+
+### evals.json
+
+| Field | Meaning |
+|---|---|
+| `id` | A unique integer. |
+| `prompt` | The request, typed the way a user types it. |
+| `expected_output` | What success looks like. The judge reads it. |
+| `files` | Input files, as `evals/files/<name>`. Each is copied to the root of an empty workspace under its base name. |
+| `expectations` | Statements the judge marks true or false from the transcript and the files the agent wrote. `assertions` is accepted as a synonym. |
+| `checks` | Statements graded without a judge. |
+
+### Checks
+
+| Type | Fields | Passes when |
+|---|---|---|
+| `file_exists` | `path` | the file exists in the workspace |
+| `regex` | `path`, `pattern` | the file's content matches the Go RE2 pattern |
+| `json_schema` | `path`, `schema` | the file is JSON that matches the JSON Schema |
+| `command` | `script` | `evals/checks/<script>` exits 0 |
+
+Each check has an optional `name`. A check runs in the sandbox after the agent finishes, with the network off, on a copy of the workspace. A command check's script enters the workspace only then, so the agent never reads it. Every file a check reads is copied before any command runs, so a command cannot change what a file check sees.
+
+A check counts as one expectation in the pass rate. The report and each contest loss label it `check: <name>`, so a reader sees which part of a score the judge produced. An eval whose expectations are all checks makes no judge call, so its score does not move when the judge model changes.
+
+A worker older than the release that runs checks never claims a job whose suite has checks: it would ignore the checks. Upgrade the worker if such a job stays queued.
+
+### Tiers
+
+| Tier | Evals that can be scored | Should trigger | Should not trigger | Sessions |
+|---|---|---|---|---|
+| smoke | 5 | 0 | 0 | each eval once, primary member only, no baseline |
+| full | 10 | 3 | 3 | each eval twice and one baseline, primary member only |
+| deep | 16 | 8 | 8 | each eval three times on every panel member, one baseline |
+
+An eval is void when it has no expectations and no checks, when a file in `files` is missing, or when a check cannot run. A void eval is never scored, so one void eval can drop a suite below a tier. `skael eval check` names each one.
+
+### Who can change a suite
+
+A suite's score can release a held version, so changing a suite is a change to the skill. Only an owner of the skill or an admin can store one, through `POST /api/eval/suites` or through publish. A publish by someone else stores the version as usual, skips the suite, and says so. An unowned skill takes a suite from anyone who can publish it.
+
+## Choosing the judge and the panel
+
+An owner sets both on the **Evaluation** page. A **provider** is one LLM endpoint and its key: Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible endpoint such as Azure AI Foundry or LiteLLM.
 
 - **The judge** grades every run. It calls the provider's Messages API for an Anthropic provider, and its Chat Completions API for every other type.
 - **The panel** runs the tasks. Every member runs in OpenCode, the one harness, inside the sandbox. The first member is the primary member, whose score is the lift. Later members are floor members, which only the `deep` tier runs. Each member chooses its own provider and model.
 
-Paste one key to start: OpenRouter, Anthropic and OpenAI each fill an empty panel with default models. The model picker lists each provider's tool-capable models from the models.dev catalog, with price and context size, and accepts any typed id, such as an Azure deployment name. A run on the skill page can pin one panel member, or any model through **Other model…**; that run charts as its own series.
+The model picker lists each provider's tool-capable models from the models.dev catalog, with price and context size, and accepts any typed id, such as an Azure deployment name. A run on the skill page can pin one panel member, or any model through **Other model…**; that run charts as its own series.
 
 `model_panel` records each member's model and provider. A change of either starts a new score trend, because two panels are not the same measurement. The report also records the sandbox image, and the Evaluation page flags a worker whose image differs from the others.
 
-Changing the judge model changes what the score means. Two scores judged by different models are not comparable and are not charted on the same trend line. The judge's agreement with human labels (κ) was measured for one judge model; swap the judge and that calibration no longer describes the judge in use.
+Changing the judge model changes what the expectation half of a score means. Two scores judged by different models are not comparable and are not charted on the same trend line. Checks do not depend on the judge.
 
 `model_panel` also records the harness and its version. A score from OpenCode never shares a trend with one from Claude Code, which ran the panel before 0.20.
-
-**Evaluation → Jobs** shows each job's phase, sessions done, failures and cost while it runs, and its events after. A failed session names the provider's error, such as an unknown model id or a rejected key.
-
-## A skill needs a suite first
-
-Before a skill can be scored, it needs a registered evaluation suite — the set of tasks the panel will attempt. Generate one with [whetstone](/docs/whetstone), then register it:
-
-```bash
-whetstone suite gen <skill>
-whetstone suite push <skill>
-```
-
-A skill with no suite gets no score, permanently — there's nothing to run. This is deliberate: scoring against a suite the skill's author never signed off on would measure the wrong thing.
-
-## How long it takes
-
-Roughly 45 to 90 minutes per evaluation, depending on the models and the worker's concurrency. It's running real tasks against real models, twice, plus a judge pass — not a quick lint.
 
 ## Reading a score
 
@@ -100,7 +197,7 @@ That last point is worth sitting with, because it is where most people's intuiti
 
 ### What a contest costs
 
-A candidate runs only the sessions a verdict reads: every task, at the contest's attempts, with the skill installed. It runs no baseline and no trigger probe, so a contest reports lift as not measured. At the full tier with the default 3 attempts, two candidates run 60 sessions. The worker runs up to `WORKER_CONTEST_PARALLEL` candidates at once.
+A candidate runs only the sessions a verdict reads: every task, at the contest's attempts, with the skill installed. It runs no baseline, so a contest reports lift as not measured. It runs no trigger probe unless a set competes. At the full tier with the default 3 attempts, two candidates run 60 sessions. The worker runs up to `WORKER_CONTEST_PARALLEL` candidates at once.
 
 A contest on a named suite reuses a candidate's run from another contest on the same UTC day, when the archive, suite, tier, attempts and requested panel all match. One candidate always runs fresh, and the worker runs a reused candidate again if its report's grader, panel, agent CLI or engine differs from the fresh one. The contest page names each reused run and the contest it came from.
 
@@ -110,11 +207,58 @@ It releases no version, holds none, and clears no hold. It records a result you 
 
 **Who chose the tasks is always shown**, because in a company the suite is the contested artifact. A suite derived for a contest is derived from *every* candidate, so no candidate's own claims set the bar. A suite authored by someone who owns a candidate still runs — it is disclosed, not refused, because the people who care enough to write a suite are the people competing.
 
+### A set as a candidate
+
+A candidate can be a set. The set candidate installs every skill of the set's resolution in each session, so a contest can compare one skill with the split skills that replace it:
+
+```bash
+skael contest review:all@3 --set review-split
+```
+
+A set's resolution can change when a member publishes. The server pins the resolution when you create the contest. The label of a set candidate is `set <name>@<first 8 characters of the resolution>`.
+
+A contest with a set candidate also runs the tier's trigger probes for every candidate. Each task then shows the skills that fired on it. A loss of a set candidate names the skills that fired on that task. A derived suite takes input from every member of every set candidate, so the split side does not write its own exam.
+
+The contest page and the CLI show the median tokens per run of each candidate. A split that wins by one task with twice the tokens is a different answer from a clean win.
+
+`whetstone propose` refuses a set candidate. To split one skill or to merge several is a decision for a person.
+
 ### Is this skill improving?
 
 The **chain** answers that: a sequence of contests between consecutive released versions, each measured on one day with both bundles present. Start one from the quality tab with "Compare with vN".
 
 This is drift-free in a way a trend line cannot be. A link compares two bundles that ran together, so changing the panel later does not invalidate the history — it just means the next link used a different panel, which is fine, because a link is a comparison and not a level.
+
+## Eval with a set
+
+A team installs a set of skills together. A skill that scores well alone can lose prompts to a neighbour, or follow a neighbour's rule instead of its own. An eval with a set measures this.
+
+```bash
+skael eval run review:all --set review-split --wait
+```
+
+The server resolves the set when it creates the job, and the job pins that resolution. The server removes the skill under test from the resolution if the set holds it. The worker installs each member in its own folder beside the skill. The sandbox image gets the packages that each member's suite declares.
+
+An eval with a set adds these sessions:
+
+- **Trigger probes with the set installed.** The probes from the skill's own suite run with every member installed. The should-trigger queries of each member's authored suite run as should-not-trigger probes for the skill, up to the tier's count per side. The trigger F1 uses only the probes from the skill's own suite.
+- **A third condition for each task.** Each task runs with the skill and the set installed, on the primary member, with the tier's attempts. This is the `with_set` condition, beside `skill` and `baseline`.
+
+The report adds a section for the set:
+
+- **Share of prompts.** For each member, the count of the skill's should-trigger probes where the member fired and the skill did not. The skill page shows "loses N% of its prompts to `<skill>`" for the latest eval with a set.
+- **Rules lost.** Each expectation and check that passes in at least half of its runs with the skill alone and in fewer than half of its runs with the set.
+- **Routing.** Each probe, and the skills that fired on it.
+
+The results with a set never change the headline, the lift or the gate. The headline and the lift come from the `skill` and `baseline` conditions only.
+
+To install the same versions again after a member publishes, pin the resolution:
+
+```bash
+skael eval run review:all --set review-split --resolution <id>
+```
+
+The command prints the id. A worker installs a set only from release 0.23.0. The server does not send a job with a set to an older worker.
 
 ## Comparing scores over time
 
@@ -130,7 +274,7 @@ In the example above, four versions were scored the same way, so they form one l
 
 ## How this feeds back into publishing
 
-A version held for review by the publish gate clears automatically once it has a **verified** score at or above `QUALITY_FLOOR` (an operator-configured minimum, default `0` — any verified score with a complete panel and no contract violations clears it). Short of that, it takes an **instance admin** — an account whose role is `owner` or `admin` — running `skael review <name> <version> --approve --reason-kind scan --reason "..."`.
+A version held for review by the publish gate clears automatically once it has a **verified** score at or above `QUALITY_FLOOR` (an operator-configured minimum, default `0` — any verified score with a complete panel clears it). Short of that, it takes an **instance admin** — an account whose role is `owner` or `admin` — running `skael review <name> <version> --approve --reason-kind scan --reason "..."`.
 
 ### A score clears one hold reason and only one
 
@@ -142,6 +286,6 @@ The reverse holds too: a skill owner approving the `ownership` reason does not c
 
 ## Turning a loss into a change
 
-A contest records what each losing candidate missed: the task, the expectations it failed, and the grader's evidence. `whetstone propose` reads that and writes one change to the skill's prose — see [whetstone](/docs/whetstone#whetstone-propose-contest-id).
+A contest records what each losing candidate missed: the task, the expectations and checks it failed, and the evidence. `whetstone propose` reads that and writes one change to the skill's prose — see [whetstone](/docs/whetstone#whetstone-propose-contest-id).
 
 See [Scanning](/docs/concepts#scanning) for the rest of what the gate does, and [`skael review`](/docs/cli#skael-review-skill-name-version) / the [review queue API](/docs/api#review-queue) for acting on held versions.

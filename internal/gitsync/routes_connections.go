@@ -69,6 +69,9 @@ type GitConnectionDetail struct {
 	Connection
 	Bindings []Binding `json:"bindings"`
 	Refusals []Refusal `json:"refusals"`
+	// Notes are folders the last sync published with something to report,
+	// such as a suite too small for any tier.
+	Notes []Refusal `json:"notes"`
 	// Webhooks is true when GitHub reached this instance for the connection.
 	// False means changes arrive through the minute-by-minute check only.
 	Webhooks bool `json:"webhooks"`
@@ -271,8 +274,12 @@ func RegisterConnectionRoutes(api huma.API, syncer *Syncer, store *Store, jobs J
 		if err != nil {
 			return nil, mapError("get connection", err)
 		}
+		notes, err := store.Notes(ctx, c.ID)
+		if err != nil {
+			return nil, mapError("get connection", err)
+		}
 		return &gitConnectionDetailOutput{Body: GitConnectionDetail{
-			Connection: *c, Bindings: bindings, Refusals: refusals, Webhooks: c.LastWebhookAt != nil,
+			Connection: *c, Bindings: bindings, Refusals: refusals, Notes: notes, Webhooks: c.LastWebhookAt != nil,
 		}}, nil
 	})
 

@@ -74,13 +74,18 @@ Resolves every followed source in `~/.skael/config.json` and installs what chang
 | `--dry-run` | false | Show what would happen without making changes |
 | `--quiet` | false | Suppress non-error output |
 
+Sync removes an installed version that a rescan withdrew, and prints the reason. It prints the reason with `--quiet` too, because the reason names a finding such as a secret. If an older released version exists, sync installs it in the same run. With `--json`, the output lists each removal under `withdrawn`.
+
 ## skael init `[name]`
 
-With no argument, `init` writes the skael skill to `.agents/skills/skael/SKILL.md` in the current directory, and to `.claude/skills/skael/SKILL.md` when Claude Code is detected. The binary carries this skill, which tells an agent how to use the CLI.
+With no argument, `init` writes two skills to `.agents/skills/` in the current directory, and to `.claude/skills/` when Claude Code is detected. The binary carries both:
+
+- `skael` tells an agent how to use the CLI.
+- `skael-evals` tells an agent how to write an eval suite that `skael eval check` reports at the full tier. It holds templates, a sheet of good and bad expectations, and a complete suite for `examples/code-review`.
 
 - A second run changes nothing and exits 0.
-- If the file differs from the skill in the binary, `init` refuses and exits 2. Pass `--force` to overwrite it.
-- With `--json`, `init` prints the `path` and a `status` of `created`, `unchanged` or `overwritten`.
+- If a file differs from the skill in the binary, `init` refuses and exits 2. Pass `--force` to overwrite it.
+- With `--json`, `init` prints the `path` and `status` of the skael `SKILL.md`, and a `files` map of every file to `created`, `unchanged` or `overwritten`.
 
 With a name, `init` scaffolds a spec-compliant skill directory. Creates `<name>/` in the current directory and writes a `SKILL.md` with `name`, an empty `description`, and a `metadata` block (`author`, `tags`, `version`) ready to fill in.
 
@@ -242,6 +247,16 @@ A directory with no `SKILL.md` exits 2. An exfiltration or secret finding stores
 
 Validates, security-scans, packs, and uploads a skill directory.
 
+`evals/` in the directory is the skill's eval suite. The server stores it as the suite and leaves it out of the version, so installers never receive it. The local scan skips it. Only an owner of the skill or an admin can change the suite: for anyone else, the publish stores the version and prints why it skipped the suite. A publish has one of three outcomes:
+
+- **created**: a new version exists.
+- **unchanged**: the skill and its suite are the same as before.
+- **suite updated**: only `evals/` changed. The server stores the suite and queues an eval of the latest version, and creates no version.
+
+An eval queued by a publish runs at the deepest tier the stored suite reaches. A suite below the smoke tier queues no eval, and the publish prints why, for example `suite below smoke tier: 3 scorable evals, needs 5`.
+
+With `--json`, the output adds `outcome`, `suite` (`ref`, `updated`, `skipped`) and `job_id`.
+
 A bundle with blocking findings meets one of two different fates, and the difference matters:
 
 - **Refused.** Credential-theft and data-exfiltration findings — the `secret` and `exfiltration` classes at `critical` or `high` severity — are unappealable. The server returns 422, **no version row is created at all**, and nothing clears them: no evaluation, no approval, no `--override`. Fix the bundle.
@@ -272,6 +287,71 @@ Runs the security scan locally without publishing.
 | `0` | No findings |
 | `1` | Findings detected (warn or critical) |
 | `2` | Scan could not run (missing SKILL.md, I/O error) |
+
+## skael rescan `<skill>[@version]`
+
+Scans a published version again on the server and prints the report. The server uses the same steps as a publish: the built-in rules, the external scanner when one is set, and relative paths in the report. Without `@version`, the command rescans the newest version, held or released. Only an owner of the skill or an instance admin can rescan.
+
+The server stores the new report. The result depends on the version:
+
+- A released version with a new exfiltration or secret finding becomes **withdrawn**. The server stops serving it, and `skael sync` removes it from each machine. Only a new version releases the skill again.
+- A released version with any other new finding stays released. The findings show as new since release.
+- A held version has its scan hold reason decided again. An ownership hold reason stays.
+
+`skael scan <dir>` stays the local scan before a publish.
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | The version has no blocking finding |
+| `1` | The version has a blocking finding, or the request failed |
+| `2` | Usage error |
+
+## skael eval check `<dir>`
+
+Validates the suite in `<dir>/evals/` locally and names the deepest tier it reaches. It needs no server.
+
+It loads `evals/evals.json` and `evals/triggers.json`, validates every eval and every check, and plans each tier. It prints each void eval with its reason, ✓ or ✗ for each tier with the reason, and `tier: <name>`.
+
+| Tier | Evals that can be scored | Should trigger | Should not trigger |
+|---|---|---|---|
+| `smoke` | 5 | 0 | 0 |
+| `full` | 10 | 3 | 3 |
+| `deep` | 16 | 8 | 8 |
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tier <tier>` | — | Exit 1 unless the suite reaches this tier: `smoke`, `full` or `deep` |
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | Every eval can be scored, and the suite reaches at least `--tier` |
+| `1` | A file does not load, an eval is void, the suite reaches no tier, or it is below `--tier` |
+| `2` | Usage error, such as an unknown tier |
+
+With `--json`, it prints `evals`, `checks`, `void`, `should_trigger`, `should_not_trigger`, `tiers` and `reached`.
+
+## skael eval run `<skill>[@version]`
+
+Queues an eval of a published skill on the server. Without `@version`, it evaluates the latest released version. A worker runs the eval against the skill's stored suite. With no stored suite, the worker derives one from the skill's `SKILL.md`. It needs an owner or admin key.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--tier <tier>` | the deepest the suite reaches | Tier to run: `smoke`, `full` or `deep`. A tier the suite cannot reach is refused with the reason. A skill with no stored suite runs `full`. |
+| `--wait` | false | Print each job event until the job ends, then the headline and the lift |
+| `--set <name>` | — | Install every skill of the set beside the skill. See [Eval with a set](/docs/quality#eval-with-a-set). |
+| `--resolution <id>` | the set's current resolution | Pin a stored resolution of `--set`, so a re-run installs the same versions |
+
+```bash
+skael eval run review:all --set review-split --wait
+```
+
+With `--set`, the command prints the resolution the job pinned. With `--wait`, it also prints the share of prompts each member took and each rule the skill keeps alone and loses with the set.
+
+Without `--wait`, it prints the job id and exits 0. With `--wait`, it exits 0 when the job finishes and 1 when the job fails or is cancelled, with the job's last error. With `--json` and `--wait`, it prints the job id and the version's quality record.
 
 ## skael search `<query>`
 
@@ -393,9 +473,9 @@ It prints, in order:
 
 `against` is the served version the diff was computed against; `0` means there is no baseline yet because this is the skill's first version. `hold_reasons` is every reason the version was ever held for; `outstanding` is the subset with no decision recorded yet. The two differ once one reason clears and the version stays held on another.
 
-## skael contest `<skill>[@version] <skill>[@version] …`
+## skael contest `[<skill>[@version] …] [--set <name> …]`
 
-Runs two or more candidate versions against one eval suite, in one job, on one panel, at the same time, and prints which won each task.
+Runs two or more candidates against one eval suite, in one job, on one panel, at the same time, and prints which won each task. A candidate is a skill version or a set.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -403,12 +483,14 @@ Runs two or more candidate versions against one eval suite, in one job, on one p
 | `--tier <tier>` | `full` | Eval tier |
 | `--attempts <n>` | 3 | Attempts per task per candidate |
 | `--wait` | true | Wait for the verdict |
+| `--set <name>` | — | Enter a set as one candidate. Repeat the flag for more sets. |
 
 ```bash
 skael contest payments:deploy@3 platform:deploy@7
+skael contest review:all@3 --set review-split
 ```
 
-A version left off means the skill's released version. The candidates need not be the same skill.
+A version left off means the skill's released version. The candidates need not be the same skill. A set candidate installs every skill of the set's current resolution. The command prints the median tokens per run of each candidate. When a set competes, it also prints the skills that fired on each task.
 
 The verdict is one of three things: a named winner, **too close to call**, or a statement that too few tasks separated the candidates for any verdict to be possible. Each comes with the split — `6-0 with 6 ties, p = 0.031` — so a reader who distrusts a single number reads the task table instead.
 
@@ -462,7 +544,7 @@ At most once a day, a command reads the server's version from `/api/capabilities
 
 The notice never changes an exit code or stdout. It stays silent with `--json` or `--quiet`, on a `dev` build, and when the server does not answer within 2 seconds. It asks your own server only, never an outside service. `skael doctor` always shows both versions.
 
-To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`, then `skael init --force` in each repo to refresh the skael skill.
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`, then `skael init --force` in each repo to refresh the skael and skael-evals skills.
 
 ## Skill scope
 

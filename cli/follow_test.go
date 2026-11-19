@@ -23,6 +23,8 @@ type registry struct {
 	archives map[string][]byte // "name@version" -> archive
 	latest   map[string]int
 	sets     map[string][][2]any // set -> [name, version]
+	// withdrawn is served at /api/sync/withdrawn when set.
+	withdrawn []client.WithdrawnEntry
 }
 
 func newRegistry(t *testing.T) *registry {
@@ -49,6 +51,9 @@ func (r *registry) serve(t *testing.T) *client.Client {
 				out = append(out, client.ManifestEntry{Name: n, Version: v, Checksum: r.sum(n, v)})
 			}
 			_ = json.NewEncoder(w).Encode(out)
+		case req.URL.Path == "/api/sync/withdrawn" && r.withdrawn != nil:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(r.withdrawn)
 		case strings.HasPrefix(req.URL.Path, "/api/sets/") && strings.HasSuffix(req.URL.Path, "/resolve"):
 			name := strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/api/sets/"), "/resolve")
 			res := client.Resolution{ID: "r", Set: name, Complete: true}
@@ -104,6 +109,32 @@ func TestReconcile_APatternInstallsEveryMatchIntoBothFolders(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Synced, "a new skill under a followed pattern arrives on the next sync")
 	require.True(t, exists(filepath.Join(repo, ".claude", "skills", config.SkillFolder("payments:payouts"), "SKILL.md")))
+}
+
+// A withdrawn version leaves the machine with its reason, and the released
+// version below it takes its place.
+func TestReconcile_AWithdrawnVersionIsRemovedAndReplaced(t *testing.T) {
+	_, repo, dir := machine(t)
+	reg := newRegistry(t)
+	reg.release(t, "alpha", 1)
+	reg.release(t, "alpha", 2)
+	c := reg.serve(t)
+	cfg := &config.Config{Skills: []config.SkillEntry{{Name: "alpha"}}}
+	_, err := reconcile(c, cfg, dir, reconcileOptions{Quiet: true})
+	require.NoError(t, err)
+
+	reg.withdrawn = []client.WithdrawnEntry{{Name: "alpha", Version: 2, Checksum: reg.sum("alpha", 2), Reason: "exfil-curl (exfiltration) in SKILL.md:4"}}
+	reg.latest["alpha"] = 1
+	res, err := reconcile(c, cfg, dir, reconcileOptions{Quiet: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha v2: exfil-curl (exfiltration) in SKILL.md:4"}, res.Withdrawn)
+	body, err := os.ReadFile(filepath.Join(repo, ".agents", "skills", "alpha", "SKILL.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(body), "body 1")
+	state, err := config.ReadState(dir)
+	require.NoError(t, err)
+	require.Len(t, state.Skills, 1)
+	require.Equal(t, 1, state.Skills[0].Version)
 }
 
 // Removing a set keeps a skill another source still wants.

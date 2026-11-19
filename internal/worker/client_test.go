@@ -77,3 +77,28 @@ func TestHTTPAPI_Claim_CarriesTheContest(t *testing.T) {
 		t.Errorf("the reused report was dropped: %+v", c)
 	}
 }
+
+// A claim that loses the set runs the eval with nothing beside the skill, and
+// the report reads as a plain eval.
+func TestHTTPAPI_Claim_CarriesTheSet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"claim_token":"tok","job":{"id":"job-1","skill_name":"alpha","version":2,
+			"set":{"set_id":"set-1","name":"team","resolution_id":"abc","members":[{"name":"beta","version":4,"digest":"d4","suite_ref":"r4"}]},
+			"contest_id":"contest-1","contest_attempts":3,"candidates":[
+			{"skill_id":"s1","skill_name":"alpha","version":2,"label":"alpha@2"},
+			{"label":"set team@abc","set":{"set_id":"set-1","name":"team","resolution_id":"abc","members":[{"name":"beta","version":4,"digest":"d4"}]}}]}}`))
+	}))
+	defer srv.Close()
+
+	job, _, ok, err := worker.NewHTTPAPI(srv.URL, "test-key").Claim(context.Background(), "w1", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("Claim: ok=%v err=%v", ok, err)
+	}
+	if job.Set == nil || job.Set.ResolutionID != "abc" || len(job.Set.Members) != 1 || job.Set.Members[0].SuiteRef != "r4" {
+		t.Fatalf("job set = %+v, want resolution abc with beta and its suite", job.Set)
+	}
+	if c := job.Candidates[1]; c.Set == nil || c.Set.Members[0].Digest != "d4" {
+		t.Errorf("the set candidate was dropped: %+v", c)
+	}
+}

@@ -8,6 +8,7 @@ export const GATE_LABELS: Record<string, string> = {
   released: "released",
   needs_review: "held for review",
   rejected: "rejected",
+  withdrawn: "withdrawn",
 };
 
 export function parseFileLink(search: string, hash: string): FileLink {

@@ -180,8 +180,17 @@ func (s *Store) BindingForSkill(ctx context.Context, name string) (*Binding, err
 
 // Refusals returns what the last sync refused.
 func (s *Store) Refusals(ctx context.Context, connectionID string) ([]Refusal, error) {
+	return s.folderReports(ctx, connectionID, "refused")
+}
+
+// Notes returns what the last sync reported about folders it did publish.
+func (s *Store) Notes(ctx context.Context, connectionID string) ([]Refusal, error) {
+	return s.folderReports(ctx, connectionID, "note")
+}
+
+func (s *Store) folderReports(ctx context.Context, connectionID, kind string) ([]Refusal, error) {
 	rows, err := s.pool.Query(ctx, `SELECT path, skill_name, reason FROM git_connection_refusals
-		WHERE connection_id = $1 ORDER BY path`, connectionID)
+		WHERE connection_id = $1 AND kind = $2 ORDER BY path`, connectionID, kind)
 	if err != nil {
 		return nil, fmt.Errorf("gitsync.Store.Refusals: %w", err)
 	}
@@ -225,7 +234,7 @@ func (s *Store) recordError(ctx context.Context, id, reason string) error {
 }
 
 // recordSync stores a finished sync and replaces the refusals.
-func (s *Store) recordSync(ctx context.Context, id, sha string, refusals []Refusal) error {
+func (s *Store) recordSync(ctx context.Context, id, sha string, refusals, notes []Refusal) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("gitsync.Store.recordSync: %w", err)
@@ -238,11 +247,13 @@ func (s *Store) recordSync(ctx context.Context, id, sha string, refusals []Refus
 	if _, err := tx.Exec(ctx, `DELETE FROM git_connection_refusals WHERE connection_id = $1`, id); err != nil {
 		return fmt.Errorf("gitsync.Store.recordSync: %w", err)
 	}
-	for _, r := range refusals {
-		if _, err := tx.Exec(ctx, `INSERT INTO git_connection_refusals (connection_id, path, skill_name, reason)
-			VALUES ($1, $2, $3, $4) ON CONFLICT (connection_id, path) DO UPDATE SET reason = EXCLUDED.reason`,
-			id, r.Path, r.SkillName, r.Reason); err != nil {
-			return fmt.Errorf("gitsync.Store.recordSync: refusal: %w", err)
+	for kind, list := range map[string][]Refusal{"refused": refusals, "note": notes} {
+		for _, r := range list {
+			if _, err := tx.Exec(ctx, `INSERT INTO git_connection_refusals (connection_id, path, skill_name, reason, kind)
+				VALUES ($1, $2, $3, $4, $5) ON CONFLICT (connection_id, path) DO UPDATE SET reason = EXCLUDED.reason, kind = EXCLUDED.kind`,
+				id, r.Path, r.SkillName, r.Reason, kind); err != nil {
+				return fmt.Errorf("gitsync.Store.recordSync: %s: %w", kind, err)
+			}
 		}
 	}
 	return tx.Commit(ctx)

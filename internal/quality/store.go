@@ -178,3 +178,22 @@ func (s *Store) History(ctx context.Context, skillID string) ([]Record, error) {
 	}
 	return out, nil
 }
+
+// LatestWithSet returns the newest report section of an eval that installed a
+// set, with the version and time it scored, or (nil, nil) when none did.
+func (s *Store) LatestWithSet(ctx context.Context, skillID string) (*SetScore, error) {
+	var out SetScore
+	err := s.db.QueryRow(ctx, `
+		SELECT version, scored_at, report_json->'set'
+		FROM skill_quality
+		WHERE skill_id = $1 AND jsonb_typeof(report_json->'set') = 'object'
+		ORDER BY scored_at DESC, id DESC
+		LIMIT 1`, skillID).Scan(&out.Version, &out.ScoredAt, &out.Set)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("quality.Store.LatestWithSet: %w", err)
+	}
+	return &out, nil
+}

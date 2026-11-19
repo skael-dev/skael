@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/skael-dev/skael/internal/auth"
+	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -140,6 +141,56 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store) {
 			return nil, huma.Error500InternalServerError("get skill quality series: internal error", err)
 		}
 		return &seriesOutput{Body: seriesBody{Series: BuildSeries(input.Name, hist)}}, nil
+	})
+
+	type qualitySetBody struct {
+		// Version and ScoredAt identify the eval. Set is null when no eval
+		// of this skill installed a set.
+		Version  int               `json:"version,omitempty"`
+		ScoredAt *time.Time        `json:"scored_at,omitempty"`
+		Set      *report.SetReport `json:"set,omitempty"`
+	}
+	type qualitySetOutput struct {
+		Body qualitySetBody
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get-skill-quality-set",
+		Method:      http.MethodGet,
+		Path:        "/api/skills/{name}/quality/set",
+		Summary:     "Get what a set did beside the skill in its latest eval with a set",
+	}, func(ctx context.Context, input *qualityInput) (*qualitySetOutput, error) {
+		sk, err := skills.GetByName(ctx, input.Name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality set: internal error", err)
+		}
+		if sk == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("skill %q not found", input.Name))
+		}
+		got, err := store.LatestWithSet(ctx, sk.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality set: internal error", err)
+		}
+		out := &qualitySetOutput{}
+		if got == nil {
+			return out, nil
+		}
+		var set report.SetReport
+		if err := json.Unmarshal(got.Set, &set); err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality set: internal error", err)
+		}
+		// Probe prompts and expectation text quote the suites. For a held
+		// version they are not public elsewhere, so only the shares remain.
+		ver, err := skills.GetVersion(ctx, input.Name, got.Version)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get skill quality set: internal error", err)
+		}
+		released := ver != nil && ver.GateState == "released"
+		if !released && !auth.UserFromContext(ctx).IsPrivileged() {
+			set.Probes, set.RulesLost = nil, nil
+		}
+		at := got.ScoredAt
+		out.Body = qualitySetBody{Version: got.Version, ScoredAt: &at, Set: &set}
+		return out, nil
 	})
 
 	type versionInput struct {

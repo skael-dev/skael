@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,12 +25,36 @@ import (
 type PublishQuality struct {
 	State string `json:"state,omitempty"`
 	JobID string `json:"job_id,omitempty"`
+	// Tier is the tier the queued eval runs: the deepest the suite fills.
+	Tier string `json:"tier,omitempty"`
+	// Reason says why no eval was queued for a suite that fills no tier.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Publish outcomes. A suite edit with unchanged skill content is the third:
+// it stores the suite and queues an eval of the latest version, and creates
+// no version.
+const (
+	OutcomeCreated      = "created"
+	OutcomeUnchanged    = "unchanged"
+	OutcomeSuiteUpdated = "suite_updated"
+)
+
+// PublishSuite reports what a publish did with the folder's evals/.
+type PublishSuite struct {
+	Ref string `json:"ref,omitempty"`
+	// Updated is true when this publish changed the skill's current suite.
+	Updated bool `json:"updated"`
+	// Skipped says why the suite was not stored.
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // PublishBody is the result of a publish.
 type PublishBody struct {
 	Version
 	Created  bool           `json:"created"`
+	Outcome  string         `json:"outcome,omitempty"`
+	Suite    *PublishSuite  `json:"suite,omitempty"`
 	Quality  PublishQuality `json:"quality"`
 	Decision gate.Decision  `json:"decision"`
 	// Change is set instead of a version for a git-bound skill: the pull
@@ -99,6 +124,11 @@ func (p *Publisher) ScanArchive(ctx context.Context, rawBody []byte) (*scan.Repo
 	if err := Unpack(bytes.NewReader(rawBody), dir); err != nil {
 		return nil, gate.Decision{}, huma.Error400BadRequest(fmt.Sprintf("invalid archive: %s", err))
 	}
+	// The suite is never shipped, so it is not what the gate decides on. A
+	// code-review suite's fixtures carry exactly the findings it asks about.
+	if err := os.RemoveAll(filepath.Join(dir, SuiteDir)); err != nil {
+		return nil, gate.Decision{}, fmt.Errorf("scan archive: %w", err)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
 		return nil, gate.Decision{}, huma.Error400BadRequest("archive must contain SKILL.md")
 	}
@@ -109,8 +139,20 @@ func (p *Publisher) ScanArchive(ctx context.Context, rawBody []byte) (*scan.Repo
 	return report, DecidePublish(report, gate.OwnerState{}, p.opts.floor(), false), nil
 }
 
-// Publish creates a version of the named skill from rawBody.
+// Publish creates a version of the named skill from rawBody. An evals/ folder
+// in the archive is lifted out as the skill's suite and is not part of the
+// version.
 func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, override bool) (*PublishBody, error) {
+	return p.publish(ctx, name, rawBody, nil, override)
+}
+
+// PublishWithSuite is Publish for a caller that packed the folder itself:
+// rawBody from Pack and suite from PackSuite, which is nil for no evals/.
+func (p *Publisher) PublishWithSuite(ctx context.Context, name string, rawBody, suite []byte, override bool) (*PublishBody, error) {
+	return p.publish(ctx, name, rawBody, suite, override)
+}
+
+func (p *Publisher) publish(ctx context.Context, name string, rawBody, suite []byte, override bool) (*PublishBody, error) {
 	// 1. Look up the skill.
 	sk, err := p.store.GetByName(ctx, name)
 	if err != nil {
@@ -131,6 +173,24 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 	if err := Unpack(bytes.NewReader(rawBody), tmpDir); err != nil {
 		return nil, huma.Error400BadRequest(
 			fmt.Sprintf("invalid archive: %s", err))
+	}
+
+	// The version digest must not move when only the suite does, so the
+	// version is the repacked folder without evals/.
+	lifted, err := PackSuite(tmpDir)
+	if err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("invalid archive: %s", err))
+	}
+	if lifted != nil {
+		if suite == nil {
+			suite = lifted
+		}
+		if err := os.RemoveAll(filepath.Join(tmpDir, SuiteDir)); err != nil {
+			return nil, fmt.Errorf("publish: lift suite: %w", err)
+		}
+		if rawBody, _, _, err = Pack(tmpDir); err != nil {
+			return nil, huma.Error400BadRequest("archive must contain SKILL.md")
+		}
 	}
 
 	// 3. Security scan.
@@ -186,6 +246,17 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 			Msg("publish held for review: version created but not served until an evaluation or an admin clears it")
 	}
 
+	// Determine publisher identity from auth context.
+	publishedBy := "system"
+	if u := auth.UserFromContext(ctx); u != nil {
+		publishedBy = u.Email
+	}
+
+	suiteOut, err := p.storeSuite(ctx, name, suite, owner, publishedBy)
+	if err != nil {
+		return nil, err
+	}
+
 	// 4. Compute checksum and compare against latest version.
 	h := sha256.Sum256(rawBody)
 	checksum := hex.EncodeToString(h[:])
@@ -212,10 +283,15 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 				}
 				persisted = stored
 			}
-			return &PublishBody{
-				Version: *latest, Created: false,
+			out := &PublishBody{
+				Version: *latest, Created: false, Outcome: OutcomeUnchanged, Suite: suiteOut,
 				Quality: PublishQuality{State: "none"}, Decision: persisted,
-			}, nil
+			}
+			if suiteOut != nil && suiteOut.Updated {
+				out.Outcome = OutcomeSuiteUpdated
+				out.Quality = p.enqueue(ctx, sk.ID, name, latest.Version, suiteOut.Ref, publishedBy)
+			}
+			return out, nil
 		}
 	}
 
@@ -287,12 +363,6 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 		return nil, fmt.Errorf("publish: marshal scan result: %w", err)
 	}
 
-	// 7. Determine publisher identity from auth context.
-	publishedBy := "system"
-	if u := auth.UserFromContext(ctx); u != nil {
-		publishedBy = u.Email
-	}
-
 	// 8. Write archive to p.storage. All validation has passed; write last so
 	// that no orphaned blobs are left behind when earlier steps fail.
 	if _, err := p.storage.Write(ctx, archiveName, bytes.NewReader(rawBody)); err != nil {
@@ -343,15 +413,7 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 			// permanently unscored with no operator signal.
 			log.Warn().Err(err).Str("skill", name).Msg("publish: suite lookup failed, skipping enqueue")
 		} else if rec != nil {
-			id, err := p.opts.Queue.Submit(ctx, EvalJobRequest{
-				SkillID: sk.ID, SkillName: name, Version: ver.Version,
-				SuiteRef: rec.Ref, Tier: "full", RequestedBy: publishedBy,
-			})
-			if err != nil {
-				log.Warn().Err(err).Str("skill", name).Msg("publish: could not enqueue evaluation")
-			} else {
-				quality = PublishQuality{State: "pending", JobID: id}
-			}
+			quality = p.enqueue(ctx, sk.ID, name, ver.Version, rec.Ref, publishedBy)
 		}
 	}
 
@@ -374,5 +436,57 @@ func (p *Publisher) Publish(ctx context.Context, name string, rawBody []byte, ov
 		}
 	}
 
-	return &PublishBody{Version: *ver, Created: true, Quality: quality, Decision: decision}, nil
+	return &PublishBody{Version: *ver, Created: true, Outcome: OutcomeCreated, Suite: suiteOut, Quality: quality, Decision: decision}, nil
+}
+
+// enqueue queues an eval of one version at the deepest tier the suite fills,
+// and queues nothing for a suite that fills none: such a job fails on a worker
+// after a claim and a lease are spent on it. A queue outage must not fail a
+// publish: the version is already durable, and an unscored version is a state
+// the product already models.
+func (p *Publisher) enqueue(ctx context.Context, skillID, name string, version int, suiteRef, by string) PublishQuality {
+	if p.opts.Queue == nil {
+		return PublishQuality{State: "none"}
+	}
+	tier, why, err := p.opts.Suites.Reach(ctx, suiteRef)
+	if err != nil {
+		log.Warn().Err(err).Str("skill", name).Msg("publish: could not plan the suite, skipping enqueue")
+		return PublishQuality{State: "none", Reason: "the suite could not be read: " + err.Error()}
+	}
+	if tier == "" {
+		return PublishQuality{State: "none", Reason: why}
+	}
+	id, err := p.opts.Queue.Submit(ctx, EvalJobRequest{
+		SkillID: skillID, SkillName: name, Version: version,
+		SuiteRef: suiteRef, Tier: tier, RequestedBy: by,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("skill", name).Msg("publish: could not enqueue evaluation")
+		return PublishQuality{State: "none"}
+	}
+	return PublishQuality{State: "pending", JobID: id, Tier: tier}
+}
+
+// storeSuite stores a folder's evals/ as the skill's suite, uploaded by the
+// publisher. Publish ownership covers the suite: a person whose publish the
+// ownership rule holds cannot replace the suite whose score clears a hold.
+func (p *Publisher) storeSuite(ctx context.Context, name string, suite []byte, owner gate.OwnerState, by string) (*PublishSuite, error) {
+	if suite == nil || p.opts.Suites == nil {
+		return nil, nil
+	}
+	if owner.Evaluated && !owner.IsOwner && !owner.Unowned {
+		return &PublishSuite{Skipped: "only an owner of this skill or an admin can change its suite"}, nil
+	}
+	prev, err := p.opts.Suites.LatestForSkill(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("publish: suite lookup: %w", err)
+	}
+	rec, err := p.opts.Suites.PutAuthored(ctx, name, suite, by)
+	if err != nil {
+		if errors.Is(err, ErrInvalidSuite) {
+			return nil, huma.Error422UnprocessableEntity("evals/ is not a valid suite: " + err.Error())
+		}
+		return nil, fmt.Errorf("publish: store suite: %w", err)
+	}
+	return &PublishSuite{Ref: rec.Ref, Updated: prev == nil || prev.Ref != rec.Ref}, nil
 }

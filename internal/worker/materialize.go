@@ -21,8 +21,8 @@ type MaterializeInput struct {
 	Skill        string
 	Bundle       []byte
 	SuiteArchive []byte
-	// Spec is nil when the suite predates this field; Materialize falls back
-	// to a placeholder from SKILL.md frontmatter.
+	// Spec is nil for a suite with no whetstone spec, such as one from a
+	// skill folder; Materialize builds a minimal one from SKILL.md frontmatter.
 	Spec         *spec.SkillSpec
 	WantSuiteRef string
 }
@@ -53,10 +53,10 @@ func Materialize(dir string, in MaterializeInput) (_ *store.Store, err error) {
 
 	sp := in.Spec
 	if sp == nil {
-		log.Warn().Str("skill", in.Skill).Msg(
-			"worker: materialize: no spec recorded for this suite; falling back to a placeholder " +
-				"reconstructed from SKILL.md frontmatter — the skill's real deps and purpose are lost, " +
-				"and the sandbox this eval runs in will not have them")
+		// A suite from a skill folder carries no spec. Only a whetstone spec
+		// declares dependencies, so the base image is the whole environment.
+		log.Info().Str("skill", in.Skill).Msg(
+			"worker: materialize: the suite has no spec; using SKILL.md frontmatter and the base image")
 		sp, err = specFromBundle(skillDir, in.Skill)
 		if err != nil {
 			return nil, err

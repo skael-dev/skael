@@ -115,11 +115,11 @@ The test runs the command on a sample skill and parses its output.
 
 ### Quality gate
 
-A version with a registered eval suite is held until a verified evaluation scores it. The floor is the lowest headline that releases it. A floor of 0 releases every verified report with a complete panel and no critical contract violation.
+A version with a registered eval suite is held until a verified evaluation scores it. The floor is the lowest headline that releases it. A floor of 0 releases every verified report with a complete panel.
 
 | Variable | Where | Default | Description |
 |---|---|---|---|
-| `QUALITY_FLOOR` | Settings page | `0` | The minimum headline a verified evaluation must reach to release a held version. 0 accepts any verified report with a complete panel and no critical contract violation. |
+| `QUALITY_FLOOR` | Settings page | `0` | The minimum headline a verified evaluation must reach to release a held version. 0 accepts any verified report with a complete panel. |
 
 ### Analytics
 

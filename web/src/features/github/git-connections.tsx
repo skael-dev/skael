@@ -489,6 +489,7 @@ export function GitConnectionPage() {
   const c = query.data;
   const bindings = c.bindings ?? [];
   const refusals = c.refusals ?? [];
+  const notes = c.notes ?? [];
 
   return (
     <div className="px-5 py-6 md:p-6 max-w-4xl mx-auto flex flex-col gap-4">
@@ -641,6 +642,23 @@ export function GitConnectionPage() {
                     Adopt
                   </Button>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {notes.length > 0 && (
+        <div>
+          <div className={cn(labelClass, "mb-1.5")}>Notes from the last sync · {notes.length}</div>
+          <div className="bg-bg-secondary border border-border rounded-lg overflow-hidden">
+            {notes.map((n) => (
+              <div key={n.path} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3.5 py-2.5 border-b border-border last:border-b-0">
+                <span className="flex-1 basis-full sm:basis-0 min-w-0">
+                  <span className="block font-mono text-[12px] text-text-primary [overflow-wrap:anywhere]">{n.skill_name}</span>
+                  <span className="block font-mono text-[11px] text-text-tertiary [overflow-wrap:anywhere]">{n.path}</span>
+                </span>
+                <span className="text-[11px] text-text-secondary basis-full sm:basis-auto">{n.reason}</span>
               </div>
             ))}
           </div>

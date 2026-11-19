@@ -98,6 +98,18 @@ Write the description in `SKILL.md` before you publish. Run `scan` first: code 0
 
 Never use `--override` or `--skip-local-scan` unless a person asks you to.
 
+## Evaluate a skill
+
+A skill's eval suite lives in its folder at `evals/`. `skael publish` stores it as the skill's suite and never ships it to installers. To write a suite, use the skael-evals skill.
+
+```sh
+skael eval check <dir> --tier full    # validate evals/ and name the tier it reaches
+skael eval run <skill> --wait          # queue an eval, print job events, then the headline
+skael eval run <skill> --set <name>    # also install a set beside the skill and report what it costs
+```
+
+`eval check` exits 1 when an eval is void or the suite is below the tier. `eval run` needs an owner or admin key, and a worker connected to the server.
+
 ## Report a run
 
 These commands need a service account key. The consumer comes from the account.
@@ -144,7 +156,7 @@ The scopes are `skills:read`, `sets:read`, `eval:work`, `events:write`, `outcome
 These exist. Read https://skael.dev/docs/cli before you use one.
 
 - `skael import <url|path>` imports skills from a GitHub repo or a local folder.
-- `skael contest <skill>@<v> <skill>@<v>` runs candidates against one suite and names a winner or "too close to call".
+- `skael contest <skill>@<v> <skill>@<v>` runs candidates against one suite and names a winner or "too close to call". `--set <name>` enters a set as one candidate.
 - `skael owners show|set|add|rm` reads and changes who reviews a skill name or namespace.
 - `skael review <skill> <version>` shows or decides a held version. Decide one only when a person asks you to.
 - `skael hook install|status|uninstall` manages activation tracking in each agent.
@@ -152,6 +164,6 @@ These exist. Read https://skael.dev/docs/cli before you use one.
 
 ## Keep this skill current
 
-`skael init` writes this file to `.agents/skills/skael/SKILL.md`, and to `.claude/skills/skael/SKILL.md` when Claude Code is detected. It never overwrites a changed copy unless you pass `--force`.
+`skael init` writes this skill and the skael-evals skill to `.agents/skills/`, and to `.claude/skills/` when Claude Code is detected. It never overwrites a changed copy unless you pass `--force`.
 
-To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`. Then run `skael init --force` to refresh this file to the version that ships with the new CLI.
+To update the CLI, run the install script again (`curl -fsSL https://skael.dev/install | sh`, or `irm https://skael.dev/install.ps1 | iex` on Windows), `brew upgrade --cask skael-dev/skael/skael`, or `scoop update skael`. Then run `skael init --force` to refresh both skills to the versions that ship with the new CLI.

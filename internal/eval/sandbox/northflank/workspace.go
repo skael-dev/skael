@@ -3,7 +3,9 @@ package northflank
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // execCommand is the substitution seam for tests.
@@ -20,10 +22,45 @@ func (d *Driver) uploadWorkspace(ctx context.Context, serviceID, local, remote s
 // downloadWorkspace copies the workspace back out for grading. A failed copy is
 // indistinguishable from a skill that produced nothing, so it must error rather
 // than leave the workspace empty.
+//
+// The copy lands in a fresh directory that then replaces the workspace's
+// contents, so a file the run deleted does not survive locally. A check run
+// stages this copy into a fresh sandbox.
 func (d *Driver) downloadWorkspace(ctx context.Context, serviceID, remote, local string) error {
-	return d.runCLI(ctx, "download", "service", "file",
+	fresh, err := os.MkdirTemp(filepath.Dir(local), ".nf-download-*")
+	if err != nil {
+		return fmt.Errorf("northflank: preparing the download: %w", err)
+	}
+	defer os.RemoveAll(fresh)
+	if err := d.runCLI(ctx, "download", "service", "file",
 		"--projectId", d.o.Project, "--service", serviceID,
-		"--localPath", local, "--remotePath", remote)
+		"--localPath", fresh, "--remotePath", remote); err != nil {
+		return err
+	}
+	return replaceContents(local, fresh)
+}
+
+// replaceContents empties dst and moves every entry of src into it.
+func replaceContents(dst, src string) error {
+	old, err := os.ReadDir(dst)
+	if err != nil {
+		return fmt.Errorf("northflank: reading the workspace: %w", err)
+	}
+	for _, e := range old {
+		if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
+			return fmt.Errorf("northflank: clearing the workspace: %w", err)
+		}
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("northflank: reading the download: %w", err)
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return fmt.Errorf("northflank: moving the download into the workspace: %w", err)
+		}
+	}
+	return nil
 }
 
 // cliLogin authenticates once, at construction. Northflank documents no token

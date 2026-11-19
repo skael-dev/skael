@@ -4,19 +4,33 @@ import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldCheck, ShieldAlert, Clock, Download } from "lucide-react";
-import { getSkill, getSkillActivations, listSkillVersions, reviewSkill, unreviewSkill } from "@/api/sdk.gen";
-import type { Skill, ActivationSummary, ListVersionsBody } from "@/api/types.gen";
+import { ArrowLeft, ShieldCheck, ShieldAlert, Clock, Download, RefreshCw } from "lucide-react";
+import {
+  getSkill,
+  getSkillActivations,
+  getSkillGit,
+  getSkillOwners,
+  getSkillScan,
+  listSkillVersions,
+  rescanSkillVersion,
+  reviewSkill,
+  unreviewSkill,
+} from "@/api/sdk.gen";
+import type { Skill, ActivationSummary, ListVersionsBody, SkillScan, Version } from "@/api/types.gen";
+import { isPrivileged, useAuth } from "@/app/auth-provider";
+import { skillGitKey } from "@/features/github/git-binding";
+import { GATE_LABELS } from "@/features/skills/file-link";
+import { throwOnApiError } from "@/lib/api-error";
 import { MarkdownRenderer } from "@/features/skills/markdown-renderer";
 import { FileBrowser } from "@/features/skills/file-browser";
 import { buildFileSearch, parseFileLink, resolveSkillLink } from "@/features/skills/file-link";
 import { VersionList } from "@/features/skills/version-list";
 import { SecurityBadge } from "@/features/security/security-badge";
 import { ReviewStatus } from "@/features/security/review-status";
-import { ScanFindings } from "@/features/security/scan-findings";
-import type { ScanReport } from "@/features/security/scan-findings";
+import { ScanFindings, findingKey } from "@/features/security/scan-findings";
 import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityReport } from "@/features/quality/quality-report";
+import { SetLossLine } from "@/features/quality/set-routing";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { UsageBreakdown } from "@/features/analytics/usage-breakdown";
 import { OwnersCard } from "@/features/skills/owners-card";
@@ -483,16 +497,80 @@ function TabUsage({ skill, activations }: { skill: Skill; activations: Activatio
 }
 
 // ── Security Tab ─────────────────────────────────────────────────
+type ScanState = { scan: SkillScan | null; missing: string | null };
+
+const GATE_TONE: Record<string, string> = {
+  released: "text-text-secondary",
+  needs_review: "text-warning",
+  rejected: "text-text-tertiary",
+  withdrawn: "text-danger",
+};
+
+const RESCAN_RESULT: Record<string, string> = {
+  stored: "Stored the new report",
+  withdrawn: "The rescan withdrew this version",
+  rejected: "The rescan rejected this held version",
+  released: "The rescan cleared the last hold reason. The version is released.",
+  held: "Stored the new report. The version stays held.",
+};
+
 function TabSecurity({
   skill,
-  scanReport,
+  scanState,
   scanLoading,
+  versions,
 }: {
   skill: Skill;
-  scanReport: ScanReport | null;
+  scanState: ScanState | null;
   scanLoading: boolean;
+  versions: Version[];
 }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const scan = scanState?.scan ?? null;
+  const scanReport = scan?.report ?? null;
+
+  const gitQuery = useQuery({
+    queryKey: skillGitKey(skill.name),
+    queryFn: async () => {
+      const res = await getSkillGit({ path: { name: skill.name } });
+      throwOnApiError("load the skill's git source", res);
+      return res.data!;
+    },
+  });
+  const gitBound = !!gitQuery.data?.bound;
+
+  const ownersQuery = useQuery({
+    queryKey: ["skill-owners", skill.name],
+    queryFn: async () => {
+      const res = await getSkillOwners({ path: { name: skill.name } });
+      if (res.error) throw res.error;
+      return res.data;
+    },
+  });
+  const canRescan =
+    isPrivileged(user) || (ownersQuery.data?.owners ?? []).some((o) => o.id === user?.id);
+  const newestVersion = versions.reduce((max, v) => Math.max(max, v.version), 0);
+  const rescanTarget = scan?.version ?? newestVersion;
+
+  const rescanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await rescanSkillVersion({ path: { name: skill.name, version: rescanTarget } });
+      throwOnApiError(`rescan v${rescanTarget}`, res);
+      return res.data!;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<ScanState>(["skill-scan", skill.name], { scan: data, missing: null });
+      queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+      queryClient.invalidateQueries({ queryKey: ["skill-versions", skill.name] });
+      const message = RESCAN_RESULT[data.outcome ?? "stored"] ?? RESCAN_RESULT.stored;
+      if (data.outcome === "withdrawn" || data.outcome === "rejected") toast.warning(message);
+      else toast.success(message);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Could not rescan");
+    },
+  });
 
   const reviewMutation = useMutation({
     mutationFn: async () => {
@@ -526,15 +604,27 @@ function TabSecurity({
 
   const isReviewed = !!skill.reviewed_at;
   const isPending = reviewMutation.isPending || unreviewMutation.isPending;
+  const newFindings = scan?.new_findings ?? [];
+  const newKeys = new Set(newFindings.map(findingKey));
+
+  const noScanText = (() => {
+    if (newestVersion === 0) {
+      return gitBound
+        ? "No version yet. A version appears when the repository syncs."
+        : "No version yet. Publish a version to run a scan.";
+    }
+    const missing = scanState?.missing ?? `v${newestVersion} has no scan report.`;
+    return canRescan ? missing : missing.replace(/; rescan it to store one$/, ".");
+  })();
 
   return (
     <div className="max-w-[800px]">
       {/* Security overview card */}
-      <div className="flex items-center justify-between p-4 bg-bg-secondary border border-border rounded-lg mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-bg-secondary border border-border rounded-lg mb-6">
         <div className="flex items-center gap-4">
           {/* Security status */}
           <div className="flex items-center gap-2.5">
-            {scanReport ? (
+            {scan && scanReport ? (
               <>
                 {scanReport.status === "clean" ? (
                   <ShieldCheck size={20} className="text-accent" />
@@ -555,14 +645,21 @@ function TabSecurity({
                     <SecurityBadge status={scanReport.status} showLabel />
                   </div>
                   <div className="text-[10px] text-text-tertiary mt-0.5">
-                    {(scanReport.findings ?? []).length} finding{(scanReport.findings ?? []).length !== 1 ? "s" : ""} detected
+                    <span className="font-mono text-text-secondary">v{scan.version}</span>
+                    {" · "}
+                    <span className={GATE_TONE[scan.gate_state] ?? "text-text-secondary"}>
+                      {GATE_LABELS[scan.gate_state] ?? scan.gate_state}
+                    </span>
+                    {" · "}
+                    {(scanReport.findings ?? []).length} finding{(scanReport.findings ?? []).length !== 1 ? "s" : ""}
+                    {scan.rescanned_at && ` · rescanned ${formatRelativeTime(scan.rescanned_at)}`}
                   </div>
                 </div>
               </>
             ) : scanLoading ? (
               <SkeletonLine className="h-4 w-40" />
             ) : (
-              <div className="text-xs text-text-tertiary">No scan data available. Publish a new version to run a scan.</div>
+              <div className="text-xs text-text-tertiary">{noScanText}</div>
             )}
           </div>
 
@@ -587,37 +684,81 @@ function TabSecurity({
           </div>
         </div>
 
-        {/* Review action button */}
-        <button
-          onClick={() => {
-            if (isReviewed) {
-              unreviewMutation.mutate();
-            } else {
-              reviewMutation.mutate();
-            }
-          }}
-          disabled={isPending}
-          className={cn(
-            "flex items-center gap-1.5 h-[30px] px-3 text-[12px] font-sans cursor-pointer rounded-md transition-colors duration-150",
-            isReviewed
-              ? "bg-transparent border border-border text-text-secondary hover:bg-bg-tertiary"
-              : "bg-accent text-bg-primary border border-accent hover:opacity-90",
-            isPending && "opacity-50 cursor-not-allowed"
+        <div className="flex items-center gap-1.5">
+          {canRescan && rescanTarget > 0 && (
+            <button
+              onClick={() => rescanMutation.mutate()}
+              disabled={rescanMutation.isPending}
+              className={cn(
+                "flex items-center gap-1.5 h-[30px] px-3 text-[12px] font-sans cursor-pointer rounded-md transition-colors duration-150",
+                "bg-transparent border border-border text-text-secondary hover:bg-bg-tertiary",
+                rescanMutation.isPending && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <RefreshCw size={12} className={cn(rescanMutation.isPending && "animate-spin")} />
+              {rescanMutation.isPending ? "Rescanning..." : `Rescan v${rescanTarget}`}
+            </button>
           )}
-        >
-          {isPending
-            ? "Updating..."
-            : isReviewed
-            ? "Unmark Reviewed"
-            : "Mark Reviewed"}
-        </button>
+
+          {/* Review action button */}
+          <button
+            onClick={() => {
+              if (isReviewed) {
+                unreviewMutation.mutate();
+              } else {
+                reviewMutation.mutate();
+              }
+            }}
+            disabled={isPending}
+            className={cn(
+              "flex items-center gap-1.5 h-[30px] px-3 text-[12px] font-sans cursor-pointer rounded-md transition-colors duration-150",
+              isReviewed
+                ? "bg-transparent border border-border text-text-secondary hover:bg-bg-tertiary"
+                : "bg-accent text-bg-primary border border-accent hover:opacity-90",
+              isPending && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {isPending
+              ? "Updating..."
+              : isReviewed
+              ? "Unmark Reviewed"
+              : "Mark Reviewed"}
+          </button>
+        </div>
       </div>
+
+      {scan?.gate_state === "withdrawn" && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-danger/40 bg-danger/10 text-[13px] text-text-primary leading-relaxed">
+          <div className="font-medium text-danger mb-1">v{scan.version} is withdrawn</div>
+          <div className="text-text-secondary">
+            {scan.gate_note ? `${scan.gate_note.charAt(0).toUpperCase()}${scan.gate_note.slice(1)}. ` : ""}
+            Skael does not serve this version, and clients remove it on their next sync.{" "}
+            {gitBound
+              ? "Remove the finding from the folder in the repository to release a new version."
+              : "Publish a new version without the finding to release the skill again."}
+          </div>
+        </div>
+      )}
+
+      {scan?.gate_state !== "withdrawn" && newFindings.length > 0 && (
+        <div role="status" className="mb-6 p-4 rounded-lg border border-warning/40 bg-warning/10 text-[13px] leading-relaxed">
+          <div className="font-medium text-warning mb-1">
+            {newFindings.length} new finding{newFindings.length !== 1 ? "s" : ""} since release
+          </div>
+          <div className="text-text-secondary">
+            A rescan found {newFindings.length !== 1 ? "findings" : "a finding"} that the released report did not have. The
+            version stays {GATE_LABELS[scan?.gate_state ?? "released"] ?? scan?.gate_state}. Read the findings marked
+            below.
+          </div>
+        </div>
+      )}
 
       {/* Scan findings */}
       {scanReport && (
         <ScanFindings
           findings={scanReport.findings ?? []}
           scanStatus={scanReport.status}
+          newKeys={newKeys}
         />
       )}
     </div>
@@ -715,19 +856,16 @@ const TABS: TabDef[] = [
   { id: "quality", label: "Quality" },
 ];
 
-// ── Fetch scan report (raw Chi route, not in generated client) ───
-async function fetchScanReport(name: string): Promise<ScanReport | null> {
-  try {
-    const res = await fetch(`/api/skills/${encodeURIComponent(name)}/scan`, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem("skael-api-key") ?? ""}`,
-      },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as ScanReport;
-  } catch {
-    return null;
+// ── Fetch scan report ───────────────────────────────────────────
+// A 404 carries the reason: no version yet, or a version with no report.
+async function fetchScanState(name: string): Promise<ScanState> {
+  const res = await getSkillScan({ path: { name } });
+  if (res.response?.status === 404) {
+    const detail = (res.error as { detail?: string } | undefined)?.detail ?? null;
+    return { scan: null, missing: detail };
   }
+  throwOnApiError("load the scan report", res);
+  return { scan: res.data!, missing: null };
 }
 
 export function SkillDetail() {
@@ -781,7 +919,7 @@ export function SkillDetail() {
 
   const scanQuery = useQuery({
     queryKey: ["skill-scan", name],
-    queryFn: () => fetchScanReport(name!),
+    queryFn: () => fetchScanState(name!),
     enabled: !!name,
   });
 
@@ -809,10 +947,12 @@ export function SkillDetail() {
   const skill = skillQuery.data;
   const activations = activationsQuery.data;
   const versions = versionsQuery.data ?? [];
-  const scanReport = scanQuery.data ?? null;
+  const scanState = scanQuery.data ?? null;
   const importSource = importSourceQuery.data;
 
   const tags = skill ? extractTags(skill) : [];
+  const newest = versions.reduce<Version | null>((a, v) => (a && a.version > v.version ? a : v), null);
+  const newestWithdrawn = newest?.gate_state === "withdrawn" ? newest : null;
 
   // Three-state status: active (used within 14d), stale (was used but not recently), idle (never triggered)
   const skillStatus: "active" | "idle" | "stale" = (() => {
@@ -932,6 +1072,7 @@ export function SkillDetail() {
           </p>
         )}
         {name && <GitBindingStrip name={name} />}
+        {name && <SetLossLine skillName={name} />}
 
         {/* Meta strip */}
         {skillQuery.isLoading ? (
@@ -943,6 +1084,14 @@ export function SkillDetail() {
         ) : (
           <div className="flex items-center gap-6 mb-7 flex-wrap">
             <MetaCell label="Version" value={skill?.latest_version ? `v${skill.latest_version}` : "—"} />
+            {newestWithdrawn && (
+              <button
+                onClick={() => changeTab("security")}
+                className="self-end text-[11px] text-danger bg-danger/10 px-2 py-1 rounded cursor-pointer border-none font-sans"
+              >
+                v{newestWithdrawn.version} withdrawn
+              </button>
+            )}
             <MetaCell label="Author" value={author} />
             <MetaCell
               label="Invocations"
@@ -1037,8 +1186,9 @@ export function SkillDetail() {
         {activeTab === "security" && skill && (
           <TabSecurity
             skill={skill}
-            scanReport={scanReport}
+            scanState={scanState}
             scanLoading={scanQuery.isLoading}
+            versions={versions}
           />
         )}
         {activeTab === "quality" && skill && (

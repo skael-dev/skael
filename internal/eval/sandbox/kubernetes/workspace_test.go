@@ -62,6 +62,42 @@ func TestStageInAndCollectOut_MirrorTheWorkspaceBothWays(t *testing.T) {
 	}
 }
 
+// A check run stages the local copy into a fresh pod, so a file the agent
+// deleted in the pod must not survive the mirror back.
+func TestCollectOut_RemovesWhatTheRunDeleted(t *testing.T) {
+	local, remote := t.TempDir(), t.TempDir()
+	for _, p := range []string{"keep/a.txt", "gone/b.txt", "c.txt"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(local, p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(local, p), []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &Driver{o: validOptions().withDefaults(), ex: &tarExecer{remote: remote}}
+	ctx := context.Background()
+	if err := d.stageIn(ctx, "pod", "/workspace", local); err != nil {
+		t.Fatalf("stageIn: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(remote, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(remote, "c.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.collectOut(ctx, "pod", "/workspace", local); err != nil {
+		t.Fatalf("collectOut: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(local, "keep", "a.txt")); err != nil {
+		t.Fatalf("a kept file is gone: %v", err)
+	}
+	for _, p := range []string{"gone", "c.txt"} {
+		if _, err := os.Stat(filepath.Join(local, p)); !os.IsNotExist(err) {
+			t.Errorf("%s survived the mirror back: %v", p, err)
+		}
+	}
+}
+
 // A partial mirror is indistinguishable from a skill that produced nothing, so
 // it must surface as an error and never as a short result.
 func TestCollectOut_ReturnsAnErrorRatherThanASilentlyEmptyWorkspace(t *testing.T) {

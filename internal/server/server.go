@@ -82,6 +82,17 @@ func (a evalSuiteAdapter) LatestForSkill(ctx context.Context, name string) (*ski
 	return &skill.SuiteRecord{Ref: rec.Ref}, nil
 }
 
+func (a evalSuiteAdapter) PutAuthored(ctx context.Context, name string, archive []byte, uploadedBy string) (*skill.SuiteRecord, error) {
+	rec, err := a.r.Put(ctx, name, archive, nil, 0, uploadedBy, nil)
+	if errors.Is(err, evalsuite.ErrInvalidArchive) {
+		return nil, fmt.Errorf("%w: %w", skill.ErrInvalidSuite, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
 // InstallEdgeMiddleware registers every middleware a request passes through
 // before it reaches session handling, authentication, or any route: security
 // headers, request ID, CORS, panic recovery, request logging, and rate
@@ -315,7 +326,8 @@ func (b *Builder) Build() (*Server, error) {
 	}
 	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()},
 		providers.NewStore(b.pool, cfg.MasterKeys, nil))
-	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, b.caps.Response().Version)
+	rescans := &skill.RescanWorker{}
+	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, rescans, b.caps.Response().Version)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}
@@ -340,6 +352,7 @@ func (b *Builder) Build() (*Server, error) {
 		JobInserter:    riverClient,
 		Jobs:           riverClient,
 		GitSync:        syncer,
+		Rescans:        rescans,
 		RiverUI:        riverUI,
 	})
 
@@ -493,4 +506,12 @@ func (g githubSealed) Discard(ctx context.Context, actor string) error {
 	}
 	_, err = g.store.Delete(ctx, actor)
 	return err
+}
+
+func (a evalSuiteAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
 }

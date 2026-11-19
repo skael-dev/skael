@@ -26,24 +26,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # The eval worker, behind a profile because it needs an LLM key and a Docker
-  # socket the other services have no business holding:
+  # The eval worker, behind a profile because it needs a Docker socket the
+  # other services have no business holding. It needs no LLM key: provider
+  # keys stay on the server, and each job claim carries the keys it uses.
   #
   #   docker compose --profile worker up
   #
   # It starts sandbox containers as SIBLINGS through the host's socket, so the
   # daemon resolves every bind source on the HOST. WORKER_RUN_ROOT (session
-  # workspaces) and WORKER_WORK_ROOT (the eval workspace, whose verifier/ is
-  # mounted at /verifier) must therefore be bound at the SAME path on both
-  # sides — never a named volume, whose container path is not a host path.
-  # Docker creates a missing bind source as an empty directory rather than
-  # failing, so a wrong root yields a sandbox with no task or no verifier. The
-  # worker refuses to start containerized unless both are set.
-  #
-  # Pick ONE auth setup below. The judge always authenticates with a key or a
-  # token whatever gateway it points at, because a published score must come
-  # from a metered backend — what changes is the endpoint and how the panel
-  # agent is billed.
+  # workspaces) and WORKER_WORK_ROOT (the eval workspace) must therefore be
+  # bound at the SAME path on both sides — never a named volume, whose
+  # container path is not a host path. Docker creates a missing bind source as
+  # an empty directory rather than failing, so a wrong root yields a sandbox
+  # with no input files. The worker refuses to start containerized unless both
+  # are set.
   worker:
     # ------------------------------------------------------------------------
     # This compose file runs the docker driver (SANDBOX_DRIVER=docker, the
@@ -90,7 +86,7 @@ services:
     volumes:
       # Sibling containers, not Docker-in-Docker: this is the host's daemon.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Identical host and container paths — see (1) above. Changing only one
+      # Identical host and container paths — see the note above the service. Changing only one
       # side of either, or swapping one for a named volume, reintroduces
       # exactly the silent-empty-mount failure.
       - ${SKAEL_RUN_ROOT:-/var/lib/skael/run}:${SKAEL_RUN_ROOT:-/var/lib/skael/run}

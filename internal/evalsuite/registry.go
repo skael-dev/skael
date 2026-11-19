@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/platform"
 	skillpkg "github.com/skael-dev/skael/internal/skill"
@@ -65,7 +66,13 @@ type Record struct {
 	// and it has a present author. Void tolerance reads this one, never
 	// Origin — see worker.RunInput.AllowVoid.
 	MachineGenerated bool
-	CreatedAt        time.Time
+	// HasChecks says an eval in the suite carries a deterministic check, which
+	// only a worker that runs checks may claim.
+	HasChecks bool
+	// FromPR marks a suite stored from an open pull request's head. It is
+	// never the skill's current suite.
+	FromPR    bool
+	CreatedAt time.Time
 }
 
 // Origin records how a suite came to exist.
@@ -104,21 +111,45 @@ func archiveKey(ref string) string {
 
 // Put stores a suite archive and records it. Idempotent on ref.
 func (r *Registry) Put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginAuthored, false, nil)
+	return r.put(ctx, putArgs{skillName: skillName, archive: archive, checks: checks, specVersion: specVersion,
+		uploadedBy: uploadedBy, specJSON: specJSON, origin: OriginAuthored})
+}
+
+// PutFromPR stores the suite a pull request's head carries. It is authored,
+// and it stays out of LatestForSkill until a merge stores the same ref again.
+func (r *Registry) PutFromPR(ctx context.Context, skillName string, archive []byte, uploadedBy string) (*Record, error) {
+	return r.put(ctx, putArgs{skillName: skillName, archive: archive, uploadedBy: uploadedBy, origin: OriginAuthored, fromPR: true})
 }
 
 // PutUnreviewed stores a suite the pusher declared unedited since generation.
 func (r *Registry) PutUnreviewed(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, false, nil)
+	return r.put(ctx, putArgs{skillName: skillName, archive: archive, checks: checks, specVersion: specVersion,
+		uploadedBy: uploadedBy, specJSON: specJSON, origin: OriginDerived})
 }
 
 // PutDerived stores a machine-generated suite, running after inside the
 // same transaction. Origin is never taken from the pusher.
 func (r *Registry) PutDerived(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
-	return r.put(ctx, skillName, archive, checks, specVersion, uploadedBy, specJSON, OriginDerived, true, after)
+	return r.put(ctx, putArgs{skillName: skillName, archive: archive, checks: checks, specVersion: specVersion,
+		uploadedBy: uploadedBy, specJSON: specJSON, origin: OriginDerived, machineGenerated: true, after: after})
 }
 
-func (r *Registry) put(ctx context.Context, skillName string, archive []byte, checks []Check, specVersion int, uploadedBy string, specJSON json.RawMessage, origin Origin, machineGenerated bool, after func(ctx context.Context, q Queryer, ref string) error) (*Record, error) {
+type putArgs struct {
+	skillName        string
+	archive          []byte
+	checks           []Check
+	specVersion      int
+	uploadedBy       string
+	specJSON         json.RawMessage
+	origin           Origin
+	machineGenerated bool
+	fromPR           bool
+	after            func(ctx context.Context, q Queryer, ref string) error
+}
+
+func (r *Registry) put(ctx context.Context, a putArgs) (*Record, error) {
+	skillName, archive, checks, specVersion, uploadedBy, specJSON := a.skillName, a.archive, a.checks, a.specVersion, a.uploadedBy, a.specJSON
+	origin, machineGenerated, after := a.origin, a.machineGenerated, a.after
 	// checks are an audit trail of what the pusher saw, not a precondition:
 	// suite.Validate is pure, so every reader runs it again. An older client
 	// still sends them; a current one may send none.
@@ -166,8 +197,8 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 	} // else left nil -> NULL
 
 	const insert = `
-		INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, spec)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO eval_suites (ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, spec, has_checks, from_pr)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (ref) DO NOTHING
 	`
 	tx, err := r.db.Begin(ctx)
@@ -176,8 +207,17 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
 
-	if _, err := tx.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam); err != nil {
+	if _, err := tx.Exec(ctx, insert, ref, skillName, archivePath, taskCount, checksJSON, specVersion, uploadedBy, specParam,
+		set.HasChecks(), a.fromPR); err != nil {
 		return nil, fmt.Errorf("evalsuite: Put insert: %w", err)
+	}
+	// A store of a ref the skill already has makes it current again, so a
+	// reverted suite is the one the next eval runs. A PR's store never does.
+	if !a.fromPR {
+		if _, err := tx.Exec(ctx, `UPDATE eval_suites SET created_at = now(), from_pr = FALSE
+			WHERE ref = $1 AND skill_name = $2`, ref, skillName); err != nil {
+			return nil, fmt.Errorf("evalsuite: Put touch: %w", err)
+		}
 	}
 	// MarkDerived rather than an origin column in the insert: it is an
 	// upgrade-only update, so re-pushing content already recorded as derived
@@ -203,7 +243,7 @@ func (r *Registry) put(ctx context.Context, skillName string, archive []byte, ch
 // Get returns the stored record for ref.
 func (r *Registry) Get(ctx context.Context, ref string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
+		SELECT ` + recordColumns + `
 		FROM eval_suites
 		WHERE ref = $1
 	`
@@ -252,13 +292,13 @@ func (r *Registry) Fetch(ctx context.Context, ref string) ([]byte, error) {
 	return b, nil
 }
 
-// LatestForSkill returns the most recently created suite recorded for
-// skillName.
+// LatestForSkill returns the skill's current suite: the one most recently
+// stored outside a pull request.
 func (r *Registry) LatestForSkill(ctx context.Context, skillName string) (*Record, error) {
 	const q = `
-		SELECT ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec, origin, reviewed_by, machine_generated
+		SELECT ` + recordColumns + `
 		FROM eval_suites
-		WHERE skill_name = $1
+		WHERE skill_name = $1 AND NOT from_pr
 		ORDER BY created_at DESC
 		LIMIT 1
 	`
@@ -320,11 +360,14 @@ func (r *Registry) MarkAuthored(ctx context.Context, q Queryer, ref, reviewedBy 
 	return nil
 }
 
+const recordColumns = `ref, skill_name, archive_path, task_count, checks, spec_version, uploaded_by, created_at, spec,
+	origin, reviewed_by, machine_generated, has_checks, from_pr`
+
 func scanRecord(row pgx.Row) (*Record, error) {
 	var rec Record
 	var checksJSON []byte
 	var specJSON []byte
-	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy, &rec.MachineGenerated); err != nil {
+	if err := row.Scan(&rec.Ref, &rec.SkillName, &rec.ArchivePath, &rec.TaskCount, &checksJSON, &rec.SpecVersion, &rec.UploadedBy, &rec.CreatedAt, &specJSON, &rec.Origin, &rec.ReviewedBy, &rec.MachineGenerated, &rec.HasChecks, &rec.FromPR); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(checksJSON, &rec.Checks); err != nil {
@@ -406,4 +449,65 @@ func PackDir(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("evalsuite: PackDir close gzip: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// Reach is what a stored suite can run: its deepest tier, and why each tier
+// it cannot fill is out of reach.
+type Reach struct {
+	Highest   string
+	Shortfall map[string]string
+}
+
+// Can reports why tier is out of reach, or "" when the suite fills it.
+func (r *Reach) Can(tier string) string {
+	return r.Shortfall[tier]
+}
+
+// Why is the reason no job may run: the smoke tier's shortfall, or "".
+func (r *Reach) Why() string {
+	if r.Highest != "" {
+		return ""
+	}
+	return r.Shortfall[string(runner.TierSmoke)]
+}
+
+// Reach plans every tier against a stored suite, so a caller queues only a
+// job that can run. A job that cannot plan fails on a worker after a claim, a
+// lease and a materialised workspace were spent on it.
+func (r *Registry) Reach(ctx context.Context, ref string) (*Reach, error) {
+	archive, err := r.ReadArchive(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "evalsuite-reach-*")
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	if err := Unpack(archive, dir); err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach unpack: %w", err)
+	}
+	set, err := suite.LoadEvalSet(dir)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	triggers, err := suite.LoadTriggerQueries(dir)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	void := map[int]bool{}
+	for _, c := range suite.Validate(dir, set) {
+		if c.Void {
+			void[c.ID] = true
+		}
+	}
+	out := &Reach{Shortfall: map[string]string{}}
+	for _, t := range runner.Tiers {
+		if why := runner.Shortfall(t, set, void, triggers); why != "" {
+			out.Shortfall[string(t)] = why
+		}
+	}
+	best, _ := runner.Highest(set, void, triggers)
+	out.Highest = string(best)
+	return out, nil
 }

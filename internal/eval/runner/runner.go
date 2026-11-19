@@ -62,10 +62,12 @@ type Outcome struct {
 	// PermissionDenials, and IsError are zero in that case.
 	MetaPartial       bool
 	MetaPartialReason string
+	// Checks are the eval's deterministic checks, graded after the session.
+	Checks []suite.CheckResult
 }
 
 // ProbeOutcome is what one trigger probe observed. No pre-computed verdict:
-// whether the skill fired is scoring's job (score.DetectFiring).
+// which skills fired is scoring's job (score.DetectFiring).
 type ProbeOutcome struct {
 	Probe  Probe
 	Events []agent.Event
@@ -100,6 +102,19 @@ type ExecuteInput struct {
 	Plan        *Plan
 	Healthy     map[Member]bool
 	Distractors []suite.Distractor
+	// Neighbours are the set members installed beside the skill, each in its
+	// own folder named by the base of its directory. A with-set run and every
+	// probe install them.
+	Neighbours []Neighbour
+	// SetCandidate is true when the skill and its neighbours together are one
+	// contest candidate: the skill-condition runs then install all of them.
+	SetCandidate bool
+}
+
+// Neighbour is one set member unpacked on disk.
+type Neighbour struct {
+	Name string
+	Dir  string
 }
 
 // ExecuteResult is everything Execute produced.
