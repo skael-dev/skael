@@ -36,10 +36,18 @@ type BundleManifestSkill struct {
 	Archive string `json:"archive"`
 }
 
-// GoneError names the skill a stored resolution can no longer serve.
-type GoneError struct{ Skill string }
+// GoneError names the skill a stored resolution can no longer serve: it was
+// deleted, or a rescan withdrew the version the resolution names.
+type GoneError struct {
+	Skill     string
+	Version   int
+	Withdrawn bool
+}
 
 func (e *GoneError) Error() string {
+	if e.Withdrawn {
+		return fmt.Sprintf("resolution names %s v%d, which was withdrawn", e.Skill, e.Version)
+	}
 	return fmt.Sprintf("resolution names skill %q, which was deleted", e.Skill)
 }
 
@@ -48,12 +56,15 @@ func (e *GoneError) Error() string {
 func (s *Store) CheckAvailable(ctx context.Context, res *Resolution) (map[string]string, error) {
 	paths := make(map[string]string, len(res.Entries))
 	for _, e := range res.Entries {
-		p, err := s.ArchivePath(ctx, e.Name, e.Version)
+		p, state, err := s.ArchivePath(ctx, e.Name, e.Version)
 		if err != nil {
 			return nil, err
 		}
 		if p == "" {
 			return nil, &GoneError{Skill: e.Name}
+		}
+		if state == "withdrawn" {
+			return nil, &GoneError{Skill: e.Name, Version: e.Version, Withdrawn: true}
 		}
 		paths[e.Name] = p
 	}

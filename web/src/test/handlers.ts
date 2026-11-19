@@ -184,8 +184,18 @@ export const handlers = [
     return HttpResponse.json({ versions: mockVersions });
   }),
 
-  http.get("/api/skills/:name/scan", () => {
-    return HttpResponse.json(mockScanReport);
+  http.get("/api/skills/:name/scan", ({ params }) => {
+    return HttpResponse.json({
+      skill: params.name,
+      version: 1,
+      gate_state: "released",
+      report: mockScanReport,
+      new_findings: [],
+    });
+  }),
+
+  http.get("/api/skills/:name/git", () => {
+    return HttpResponse.json({ bound: false });
   }),
 
   // Owners (Task 11, huma-registered and in the generated SDK) and version

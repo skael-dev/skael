@@ -183,6 +183,9 @@ type reconcileResult struct {
 	Targets                       []skillTarget
 	Scope                         Scope
 	Conflicts                     []string
+	// Withdrawn names each installed version that a rescan withdrew, with
+	// the reason. Sync removes each one.
+	Withdrawn []string
 }
 
 // reconcile makes the machine match the followed sources: it writes each
@@ -230,12 +233,42 @@ func reconcile(c *client.Client, cfg *config.Config, dir string, o reconcileOpti
 	if err != nil {
 		return nil, fmt.Errorf("read state: %w", err)
 	}
+	res := &reconcileResult{Total: len(exp.Skills), Targets: targetsFor(defaultScope), Scope: defaultScope, Conflicts: exp.Conflicts}
+
+	// A withdrawn version leaves the machine before anything else happens, and
+	// the reason is printed even with --quiet: it names a finding such as
+	// credential theft. A released version below it then installs as new.
+	withdrawn, err := c.GetWithdrawn()
+	if err != nil {
+		return nil, fmt.Errorf("list withdrawn versions: %w", err)
+	}
+	var installed []config.SyncedSkill
+	for _, s := range state.Skills {
+		w, hit := withdrawnMatch(withdrawn, s)
+		if !hit {
+			installed = append(installed, s)
+			continue
+		}
+		res.Withdrawn = append(res.Withdrawn, fmt.Sprintf("%s v%d: %s", s.Name, s.Version, w.Reason))
+		if o.DryRun {
+			ui.Warn("would remove %s v%d, which is withdrawn: %s", s.Name, s.Version, w.Reason)
+			installed = append(installed, s)
+			continue
+		}
+		for _, p := range s.Placements {
+			if err := os.RemoveAll(p.Path); err != nil {
+				ui.Errorf("remove withdrawn %s v%d from %s: %s", s.Name, s.Version, p.Path, err)
+			}
+		}
+		ui.Warn("removed %s v%d, which is withdrawn: %s", s.Name, s.Version, w.Reason)
+		res.Pruned++
+	}
+	state.Skills = installed
 	local := map[string]config.SyncedSkill{}
 	for _, s := range state.Skills {
 		local[s.Name] = s
 	}
 
-	res := &reconcileResult{Total: len(exp.Skills), Targets: targetsFor(defaultScope), Scope: defaultScope, Conflicts: exp.Conflicts}
 	var kept []config.SyncedSkill
 	names := make([]string, 0, len(exp.Skills))
 	for n := range exp.Skills {
@@ -349,6 +382,17 @@ func reconcile(c *client.Client, cfg *config.Config, dir string, o reconcileOpti
 		return nil, fmt.Errorf("write state: %w", err)
 	}
 	return res, nil
+}
+
+// withdrawnMatch finds the withdrawn entry for an installed version. A state
+// entry with no checksum matches on name and version alone.
+func withdrawnMatch(withdrawn []client.WithdrawnEntry, s config.SyncedSkill) (client.WithdrawnEntry, bool) {
+	for _, w := range withdrawn {
+		if w.Name == s.Name && w.Version == s.Version && (s.Checksum == "" || w.Checksum == s.Checksum) {
+			return w, true
+		}
+	}
+	return client.WithdrawnEntry{}, false
 }
 
 func samePaths(placements []config.Placement, paths []string) bool {

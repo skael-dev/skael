@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -50,6 +51,38 @@ func (s *Store) GetManifest(ctx context.Context) ([]ManifestEntry, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sync.Store.GetManifest rows: %w", err)
+	}
+	return entries, nil
+}
+
+// WithdrawnEntry is one withdrawn version. A client that has it installed
+// removes it and prints Reason.
+type WithdrawnEntry struct {
+	Name     string `json:"name"`
+	Version  int    `json:"version"`
+	Checksum string `json:"checksum"`
+	Reason   string `json:"reason"`
+}
+
+// Withdrawn returns every withdrawn version, ordered by name and version.
+func (s *Store) Withdrawn(ctx context.Context) ([]WithdrawnEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.name, sv.version, sv.checksum, sv.gate_note
+		FROM skill_versions sv JOIN skills s ON s.id = sv.skill_id
+		WHERE sv.gate_state = 'withdrawn'
+		ORDER BY s.name, sv.version`)
+	if err != nil {
+		return nil, fmt.Errorf("sync.Store.Withdrawn: %w", err)
+	}
+	entries, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (WithdrawnEntry, error) {
+		var e WithdrawnEntry
+		return e, r.Scan(&e.Name, &e.Version, &e.Checksum, &e.Reason)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sync.Store.Withdrawn: %w", err)
+	}
+	if entries == nil {
+		entries = []WithdrawnEntry{}
 	}
 	return entries, nil
 }

@@ -57,7 +57,7 @@ export function VersionList({ versions, latestVersion }: VersionListProps) {
 
         {sorted.map((ver) => {
           const isCurrent = ver.version === latestVersion;
-          const notServed = ver.gate_state === "needs_review" || ver.gate_state === "rejected";
+          const notServed = ver.gate_state !== "released";
           return (
             <div
               key={ver.id}
@@ -88,7 +88,11 @@ export function VersionList({ versions, latestVersion }: VersionListProps) {
                     <span
                       className={cn(
                         "text-[9px] px-1.5 py-px rounded uppercase tracking-[0.04em]",
-                        ver.gate_state === "needs_review" ? "text-warning bg-warning/10" : "text-text-tertiary bg-bg-tertiary"
+                        ver.gate_state === "needs_review"
+                          ? "text-warning bg-warning/10"
+                          : ver.gate_state === "withdrawn"
+                          ? "text-danger bg-danger/10"
+                          : "text-text-tertiary bg-bg-tertiary"
                       )}
                     >
                       {GATE_LABELS[ver.gate_state]}

@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, BookOpen, Check, FlaskConical, Lock, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, BookOpen, Check, FlaskConical, Lock, RefreshCw, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
-import { getMasterKey, getSettings, resetMasterKey, testSettings, updateSettings } from "@/api/sdk.gen";
+import { getMasterKey, getSettings, rescanAllReleased, resetMasterKey, testSettings, updateSettings } from "@/api/sdk.gen";
 import type { KeyStatus, SettingsBody, SettingsChange, SettingsField, SettingsSection } from "@/api/types.gen";
 import { isPrivileged, useAuth } from "@/app/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -445,6 +445,46 @@ function SectionCard({ section, publicURL }: { section: SettingsSection; publicU
   );
 }
 
+// RescanAllPanel queues a rescan of every released version, for use after a
+// scanner change. The jobs run in the background.
+function RescanAllPanel() {
+  const [queued, setQueued] = useState<number | null>(null);
+  const rescan = useMutation({
+    mutationFn: async () => {
+      const res = await rescanAllReleased();
+      throwOnApiError("queue the rescan", res);
+      return res.data!;
+    },
+    onSuccess: (data) => {
+      setQueued(data.queued);
+      toast.success(`Queued a rescan of ${data.queued} released version${data.queued === 1 ? "" : "s"}.`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  return (
+    <div className="mt-3 bg-bg-secondary border border-border rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-sm text-text-primary">Rescan all released versions</div>
+        <p className="text-xs text-text-tertiary m-0 mt-0.5 max-w-[520px]">
+          Use this after a scanner change. A new exfiltration or secret finding withdraws the version. Any other new finding
+          shows as a flag on the skill's Security tab.
+          {queued !== null && ` ${queued} version${queued === 1 ? "" : "s"} queued.`}
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="border-border text-text-secondary shrink-0"
+        disabled={rescan.isPending}
+        onClick={() => rescan.mutate()}
+      >
+        <RefreshCw size={14} /> {rescan.isPending ? "Queueing…" : "Rescan all"}
+      </Button>
+    </div>
+  );
+}
+
 export function MasterKeyBanner({ status }: { status: KeyStatus }) {
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState(false);
@@ -598,7 +638,10 @@ export function InstanceSettings() {
           </nav>
           <div className="flex flex-col gap-10 min-w-0">
             {editable.map((s) => (
-              <SectionCard key={s.id} section={s} publicURL={publicURL} />
+              <div key={s.id}>
+                <SectionCard section={s} publicURL={publicURL} />
+                {s.id === "scanning" && <RescanAllPanel />}
+              </div>
             ))}
             {envOnly.map((s) => (
               <div key={s.id}>

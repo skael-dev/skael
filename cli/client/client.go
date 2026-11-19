@@ -626,6 +626,63 @@ func (c *Client) GetManifest() ([]ManifestEntry, error) {
 	return entries, nil
 }
 
+// WithdrawnEntry is one version a rescan withdrew. Sync removes it.
+type WithdrawnEntry struct {
+	Name     string `json:"name"`
+	Version  int    `json:"version"`
+	Checksum string `json:"checksum"`
+	Reason   string `json:"reason"`
+}
+
+// GetWithdrawn calls GET /api/sync/withdrawn. A server that predates
+// withdrawal has no such route and answers 404 or its web app, which is read
+// as an empty list.
+func (c *Client) GetWithdrawn() ([]WithdrawnEntry, error) {
+	resp, err := c.do(http.MethodGet, "/api/sync/withdrawn", nil, "")
+	if err != nil {
+		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		return nil, nil
+	}
+	var entries []WithdrawnEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decode withdrawn response: %w", err)
+	}
+	return entries, nil
+}
+
+// SkillScan is one version's stored scan report, as GET /api/skills/{name}/scan
+// and a rescan return it.
+type SkillScan struct {
+	Skill       string         `json:"skill"`
+	Version     int            `json:"version"`
+	GateState   string         `json:"gate_state"`
+	GateNote    string         `json:"gate_note,omitempty"`
+	Report      scan.Report    `json:"report"`
+	NewFindings []scan.Finding `json:"new_findings"`
+	Outcome     string         `json:"outcome,omitempty"`
+}
+
+// Rescan calls POST /api/skills/{name}/versions/{version}/scan.
+func (c *Client) Rescan(name string, version int) (*SkillScan, error) {
+	path := "/api/skills/" + url.PathEscape(name) + "/versions/" + url.PathEscape(strconv.Itoa(version)) + "/scan"
+	resp, err := c.do(http.MethodPost, path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out SkillScan
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode rescan response: %w", err)
+	}
+	return &out, nil
+}
+
 // PublicUser is the identity-only projection of a user account returned by
 // the directory search and the resolved-owners lookup.
 type PublicUser struct {

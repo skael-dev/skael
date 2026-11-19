@@ -13,6 +13,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/server"
+	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/webhooks"
 )
 
@@ -84,7 +85,7 @@ func TestEveryRouteHasAScopeTableEntry(t *testing.T) {
 // River UI shows job arguments to admins, so an argument that grew a payload or
 // a secret would publish it there.
 func TestJobArgsHoldIDsOnly(t *testing.T) {
-	for _, args := range []any{webhooks.DeliveryArgs{}} {
+	for _, args := range []any{webhooks.DeliveryArgs{}, skill.RescanArgs{}} {
 		typ := reflect.TypeOf(args)
 		for i := range typ.NumField() {
 			field := typ.Field(i)

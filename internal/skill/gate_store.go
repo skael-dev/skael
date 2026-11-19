@@ -22,7 +22,8 @@ type Executor interface {
 // Pool returns the underlying connection pool.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
-// ReleaseVersion moves a version to released. Uses the caller's Executor so
+// ReleaseVersion moves a version to released. A rejected or withdrawn version
+// never moves: only a new version replaces it. Uses the caller's Executor so
 // ingestion can compose it with the quality upsert in one transaction.
 // Re-releasing is a no-op, not an error.
 func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, version int, by, note string) error {
@@ -39,14 +40,14 @@ func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, ver
 		SET gate_state = 'released', gated_by = $3, gated_at = now(), gate_note = $4
 		FROM skills s
 		WHERE sv.skill_id = s.id AND s.name = $1 AND sv.version = $2
-		  AND sv.gate_state <> 'rejected'
+		  AND sv.gate_state NOT IN ('rejected', 'withdrawn')
 	`
 	tag, err := e.Exec(ctx, q, name, version, by, note)
 	if err != nil {
 		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("skill.Store.ReleaseVersion: %s v%d is absent or rejected", name, version)
+		return fmt.Errorf("skill.Store.ReleaseVersion: %s v%d is absent, rejected or withdrawn", name, version)
 	}
 
 	// GREATEST, not a bare assignment: releasing a held v4 after v5 shipped
@@ -59,42 +60,7 @@ func (s *Store) ReleaseVersion(ctx context.Context, e Executor, name string, ver
 		return fmt.Errorf("skill.Store.ReleaseVersion advance latest: %w", err)
 	}
 
-	// Backfill prose from whatever version the pointer ends up at (may differ
-	// from $2 if GREATEST kept it higher). A held version wrote nothing to
-	// the skills row on publish, so without this the skill serves stale prose.
-	const backfill = `
-		UPDATE skills s
-		SET description = sv.description,
-		    content     = sv.content,
-		    frontmatter = sv.frontmatter,
-		    updated_at  = now()
-		FROM skill_versions sv
-		WHERE sv.skill_id = s.id AND sv.version = s.latest_version AND s.name = $1
-	`
-	if _, err := e.Exec(ctx, backfill, name); err != nil {
-		return fmt.Errorf("skill.Store.ReleaseVersion backfill prose: %w", err)
-	}
-
-	// Spec-derived columns (tags, author, etc.) are computed, not copied.
-	const pointedFrontmatter = `
-		SELECT sv.frontmatter
-		FROM skill_versions sv
-		JOIN skills s ON s.id = sv.skill_id AND s.latest_version = sv.version
-		WHERE s.name = $1
-	`
-	var rawFM []byte
-	if err := e.QueryRow(ctx, pointedFrontmatter, name).Scan(&rawFM); err != nil {
-		return fmt.Errorf("skill.Store.ReleaseVersion read pointed frontmatter: %w", err)
-	}
-	var fm map[string]interface{}
-	if len(rawFM) > 0 {
-		if err := json.Unmarshal(rawFM, &fm); err != nil {
-			return fmt.Errorf("skill.Store.ReleaseVersion unmarshal frontmatter: %w", err)
-		}
-	}
-	spec := ValidateSpec(fm, name)
-	if err := updateSpecFieldsExec(ctx, e, name,
-		spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags); err != nil {
+	if err := servePointedProse(ctx, e, name); err != nil {
 		return fmt.Errorf("skill.Store.ReleaseVersion: %w", err)
 	}
 	if s.notifier == nil || priorState == "released" {
@@ -134,4 +100,55 @@ func (s *Store) RejectVersion(ctx context.Context, name string, version int, by,
 		return fmt.Errorf("skill.Store.RejectVersion: %s v%d is not awaiting review", name, version)
 	}
 	return nil
+}
+
+// servePointedProse copies the prose and the spec-derived columns of the
+// version latest_version points at onto the skills row. A held version wrote
+// nothing to that row on publish, and a withdrawn one must stop being served,
+// so both a release and a withdrawal end here. With no released version left,
+// the row serves no body at all.
+func servePointedProse(ctx context.Context, e Executor, name string) error {
+	const backfill = `
+		UPDATE skills s
+		SET description = sv.description,
+		    content     = sv.content,
+		    frontmatter = sv.frontmatter,
+		    updated_at  = now()
+		FROM skill_versions sv
+		WHERE sv.skill_id = s.id AND sv.version = s.latest_version AND s.name = $1
+	`
+	tag, err := e.Exec(ctx, backfill, name)
+	if err != nil {
+		return fmt.Errorf("backfill prose: %w", err)
+	}
+	var rawFM []byte
+	if tag.RowsAffected() == 0 {
+		const clear = `
+			UPDATE skills SET content = '', frontmatter = '{}', updated_at = now()
+			WHERE name = $1 AND latest_version = 0
+		`
+		if _, err := e.Exec(ctx, clear, name); err != nil {
+			return fmt.Errorf("clear prose: %w", err)
+		}
+	} else {
+		const pointedFrontmatter = `
+			SELECT sv.frontmatter
+			FROM skill_versions sv
+			JOIN skills s ON s.id = sv.skill_id AND s.latest_version = sv.version
+			WHERE s.name = $1
+		`
+		if err := e.QueryRow(ctx, pointedFrontmatter, name).Scan(&rawFM); err != nil {
+			return fmt.Errorf("read pointed frontmatter: %w", err)
+		}
+	}
+	// Spec-derived columns (tags, author, etc.) are computed, not copied.
+	var fm map[string]interface{}
+	if len(rawFM) > 0 {
+		if err := json.Unmarshal(rawFM, &fm); err != nil {
+			return fmt.Errorf("unmarshal frontmatter: %w", err)
+		}
+	}
+	spec := ValidateSpec(fm, name)
+	return updateSpecFieldsExec(ctx, e, name,
+		spec.Author, spec.License, spec.Compat, spec.Compliance, spec.DisplayName, spec.Tags)
 }

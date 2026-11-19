@@ -21,6 +21,7 @@ import (
 	"github.com/skael-dev/skael/internal/onboarding"
 	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/settings"
+	"github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/webhooks"
 )
 
@@ -106,7 +107,7 @@ func (w *eventRetentionWorker) Work(ctx context.Context, _ *river.Job[eventReten
 
 // newRiverClient builds the client for all server background work. It touches
 // no database until Start.
-func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *analytics.Store, syncer *gitsync.Syncer, version string) (*river.Client[pgx.Tx], error) {
+func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *analytics.Store, syncer *gitsync.Syncer, rescans *skill.RescanWorker, version string) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, webhooks.NewDeliveryWorker(webhooks.NewStore(pool), func() bool { return live.Get().Bool("webhooks.allow_private") }))
 	river.AddWorker(workers, &evalLeaseReapWorker{queue: evalqueue.NewPool(pool)})
@@ -114,6 +115,7 @@ func newRiverClient(pool *pgxpool.Pool, live *settings.Live, analyticsStore *ana
 	river.AddWorker(workers, &eventRetentionWorker{store: analyticsStore, days: func() int { return live.Get().Int("event_retention_days") }})
 	river.AddWorker(workers, &gitsync.SyncWorker{Syncer: syncer})
 	river.AddWorker(workers, &gitsync.SyncAllWorker{Store: syncer.Store()})
+	river.AddWorker(workers, rescans)
 	river.AddWorker(workers, &pingWorker{pool: pool, live: live, version: version, client: &http.Client{Timeout: 10 * time.Second}})
 
 	periodic := []*river.PeriodicJob{

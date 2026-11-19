@@ -443,9 +443,10 @@ func TestGetScanResult(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
-	var report map[string]interface{}
-	require.NoError(t, json.NewDecoder(rr.Body).Decode(&report))
-	require.Contains(t, report, "status")
+	var view skill.SkillScan
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&view))
+	require.Equal(t, "clean", view.Report.Status)
+	require.Equal(t, 1, view.Version)
 }
 
 func TestGetScanResult_NoVersions(t *testing.T) {

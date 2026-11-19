@@ -315,7 +315,8 @@ func (b *Builder) Build() (*Server, error) {
 	}
 	keyService := settings.NewKeyService(b.pool, mk, live, githubSealed{store: syncer.Store()},
 		providers.NewStore(b.pool, cfg.MasterKeys, nil))
-	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, b.caps.Response().Version)
+	rescans := &skill.RescanWorker{}
+	riverClient, err := newRiverClient(b.pool, live, analyticsStore, syncer, rescans, b.caps.Response().Version)
 	if err != nil {
 		return nil, fmt.Errorf("server.Build: river: %w", err)
 	}
@@ -340,6 +341,7 @@ func (b *Builder) Build() (*Server, error) {
 		JobInserter:    riverClient,
 		Jobs:           riverClient,
 		GitSync:        syncer,
+		Rescans:        rescans,
 		RiverUI:        riverUI,
 	})
 
