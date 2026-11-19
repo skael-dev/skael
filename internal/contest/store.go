@@ -49,10 +49,20 @@ func (s *Store) Create(ctx context.Context, c *Contest) error {
 	for i := range c.Candidates {
 		cand := &c.Candidates[i]
 		cand.Position = i
+		var setID, resolution *string
+		setName, members := "", []byte("[]")
+		if cand.Set != nil {
+			setID, resolution, setName = &cand.Set.SetID, &cand.Set.ResolutionID, cand.Set.Name
+			if members, err = json.Marshal(cand.Set.Members); err != nil {
+				return fmt.Errorf("contest.Store.Create: candidate %s: %w", cand.Label, err)
+			}
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO contest_candidates (contest_id, position, skill_id, skill_name, version, label, pr_head_id)
-			VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6, NULLIF($7, '')::uuid)`,
+			INSERT INTO contest_candidates (contest_id, position, skill_id, skill_name, version, label, pr_head_id,
+				set_id, set_name, resolution_id, set_members)
+			VALUES ($1, $2, NULLIF($3, '')::uuid, $4, NULLIF($5, 0), $6, NULLIF($7, '')::uuid, $8, $9, $10, $11)`,
 			c.ID, cand.Position, cand.SkillID, cand.SkillName, cand.Version, cand.Label, cand.PRHeadID,
+			setID, setName, resolution, members,
 		); err != nil {
 			return fmt.Errorf("contest.Store.Create: candidate %s: %w", cand.Label, err)
 		}
@@ -111,10 +121,14 @@ func (s *Store) Finish(ctx context.Context, id string, v Verdict, reports map[st
 		if err != nil {
 			return fmt.Errorf("contest.Store.Finish: marshal missed: %w", err)
 		}
+		fired, err := json.Marshal(nonNil(l.Fired))
+		if err != nil {
+			return fmt.Errorf("contest.Store.Finish: marshal fired: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO contest_task_losses (contest_id, label, task_id, missed, evidence)
-			VALUES ($1, $2, $3, $4, $5)`,
-			id, l.Label, l.TaskID, missed, l.Evidence,
+			INSERT INTO contest_task_losses (contest_id, label, task_id, missed, evidence, fired)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			id, l.Label, l.TaskID, missed, l.Evidence, fired,
 		); err != nil {
 			return fmt.Errorf("contest.Store.Finish: loss for %s: %w", l.Label, err)
 		}
@@ -164,8 +178,9 @@ func (s *Store) CandidatesForClaim(ctx context.Context, jobID string) ([]evalque
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT cc.skill_id, cc.skill_name, COALESCE(cc.version, 0), cc.label, COALESCE(cc.pr_head_id::text, ''),
-			COALESCE(sv.checksum, ph.digest, '')
+		SELECT COALESCE(cc.skill_id::text, ''), cc.skill_name, COALESCE(cc.version, 0), cc.label, COALESCE(cc.pr_head_id::text, ''),
+			COALESCE(sv.checksum, ph.digest, ''),
+			COALESCE(cc.set_id::text, ''), cc.set_name, COALESCE(cc.resolution_id, ''), cc.set_members
 		FROM contest_candidates cc
 		LEFT JOIN skill_versions sv ON sv.skill_id = cc.skill_id AND sv.version = cc.version
 		LEFT JOIN git_pr_heads ph ON ph.id = cc.pr_head_id
@@ -179,9 +194,20 @@ func (s *Store) CandidatesForClaim(ctx context.Context, jobID string) ([]evalque
 	for rows.Next() {
 		var c evalqueue.Candidate
 		var digest string
-		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &c.PRHeadID, &digest); err != nil {
+		var set evalqueue.PinnedSet
+		var members []byte
+		if err := rows.Scan(&c.SkillID, &c.SkillName, &c.Version, &c.Label, &c.PRHeadID, &digest,
+			&set.SetID, &set.Name, &set.ResolutionID, &members); err != nil {
 			rows.Close()
 			return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: scan: %w", err)
+		}
+		if set.ResolutionID != "" {
+			if err := json.Unmarshal(members, &set.Members); err != nil {
+				rows.Close()
+				return nil, 0, fmt.Errorf("contest.Store.CandidatesForClaim: set members: %w", err)
+			}
+			// A set candidate is never reused: no digest names it.
+			c.Set, digest = &set, ""
 		}
 		out = append(out, c)
 		digests = append(digests, digest)
@@ -276,7 +302,10 @@ func (s *Store) ByJob(ctx context.Context, jobID string) (*Contest, error) {
 func (s *Store) ListForSkill(ctx context.Context, skillID string) ([]Contest, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT `+contestColumns+` FROM contests
-		WHERE id IN (SELECT contest_id FROM contest_candidates WHERE skill_id = $1)
+		WHERE id IN (SELECT cc.contest_id FROM contest_candidates cc
+		             WHERE cc.skill_id = $1
+		                OR cc.set_members @> (SELECT jsonb_build_array(jsonb_build_object('name', s.name))
+		                                      FROM skills s WHERE s.id = $1))
 		ORDER BY created_at DESC`, skillID)
 	if err != nil {
 		return nil, fmt.Errorf("contest.Store.ListForSkill: %w", err)
@@ -304,8 +333,9 @@ func (s *Store) ListForSkill(ctx context.Context, skillID string) ([]Contest, er
 
 func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	rows, err := s.db.Query(ctx, `
-		SELECT position, skill_id, skill_name, COALESCE(version, 0), label, report_json, COALESCE(reused_from::text, ''),
-			COALESCE(pr_head_id::text, '')
+		SELECT position, COALESCE(skill_id::text, ''), skill_name, COALESCE(version, 0), label, report_json, COALESCE(reused_from::text, ''),
+			COALESCE(pr_head_id::text, ''),
+			COALESCE(set_id::text, ''), set_name, COALESCE(resolution_id, ''), set_members
 		FROM contest_candidates WHERE contest_id = $1 ORDER BY position`, c.ID)
 	if err != nil {
 		return fmt.Errorf("contest.Store: candidates: %w", err)
@@ -314,8 +344,17 @@ func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	c.Candidates = nil
 	for rows.Next() {
 		var cand Candidate
-		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report, &cand.ReusedFrom, &cand.PRHeadID); err != nil {
+		var set evalqueue.PinnedSet
+		var members []byte
+		if err := rows.Scan(&cand.Position, &cand.SkillID, &cand.SkillName, &cand.Version, &cand.Label, &cand.Report, &cand.ReusedFrom, &cand.PRHeadID,
+			&set.SetID, &set.Name, &set.ResolutionID, &members); err != nil {
 			return fmt.Errorf("contest.Store: scan candidate: %w", err)
+		}
+		if set.ResolutionID != "" {
+			if err := json.Unmarshal(members, &set.Members); err != nil {
+				return fmt.Errorf("contest.Store: set members: %w", err)
+			}
+			cand.Set = &set
 		}
 		c.Candidates = append(c.Candidates, cand)
 	}
@@ -324,7 +363,7 @@ func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	}
 
 	lrows, err := s.db.Query(ctx, `
-		SELECT label, task_id, missed, evidence
+		SELECT label, task_id, missed, evidence, fired
 		FROM contest_task_losses WHERE contest_id = $1 ORDER BY label, task_id`, c.ID)
 	if err != nil {
 		return fmt.Errorf("contest.Store: losses: %w", err)
@@ -333,12 +372,15 @@ func (s *Store) loadParts(ctx context.Context, c *Contest) error {
 	c.Losses = nil
 	for lrows.Next() {
 		var l TaskLoss
-		var missed []byte
-		if err := lrows.Scan(&l.Label, &l.TaskID, &missed, &l.Evidence); err != nil {
+		var missed, fired []byte
+		if err := lrows.Scan(&l.Label, &l.TaskID, &missed, &l.Evidence, &fired); err != nil {
 			return fmt.Errorf("contest.Store: scan loss: %w", err)
 		}
 		if err := json.Unmarshal(missed, &l.Missed); err != nil {
 			return fmt.Errorf("contest.Store: decode missed: %w", err)
+		}
+		if err := json.Unmarshal(fired, &l.Fired); err != nil {
+			return fmt.Errorf("contest.Store: decode fired: %w", err)
 		}
 		c.Losses = append(c.Losses, l)
 	}
@@ -361,4 +403,11 @@ func scanContest(r scanner) (*Contest, error) {
 		}
 	}
 	return &c, nil
+}
+
+func nonNil(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
 }

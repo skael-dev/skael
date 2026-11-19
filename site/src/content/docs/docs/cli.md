@@ -320,6 +320,14 @@ Queues an eval of a published skill on the server. Without `@version`, it evalua
 |---|---|---|
 | `--tier <tier>` | the deepest the suite reaches | Tier to run: `smoke`, `full` or `deep`. A tier the suite cannot reach is refused with the reason. A skill with no stored suite runs `full`. |
 | `--wait` | false | Print each job event until the job ends, then the headline and the lift |
+| `--set <name>` | — | Install every skill of the set beside the skill. See [Eval with a set](/docs/quality#eval-with-a-set). |
+| `--resolution <id>` | the set's current resolution | Pin a stored resolution of `--set`, so a re-run installs the same versions |
+
+```bash
+skael eval run review:all --set review-split --wait
+```
+
+With `--set`, the command prints the resolution the job pinned. With `--wait`, it also prints the share of prompts each member took and each rule the skill keeps alone and loses with the set.
 
 Without `--wait`, it prints the job id and exits 0. With `--wait`, it exits 0 when the job finishes and 1 when the job fails or is cancelled, with the job's last error. With `--json` and `--wait`, it prints the job id and the version's quality record.
 
@@ -443,9 +451,9 @@ It prints, in order:
 
 `against` is the served version the diff was computed against; `0` means there is no baseline yet because this is the skill's first version. `hold_reasons` is every reason the version was ever held for; `outstanding` is the subset with no decision recorded yet. The two differ once one reason clears and the version stays held on another.
 
-## skael contest `<skill>[@version] <skill>[@version] …`
+## skael contest `[<skill>[@version] …] [--set <name> …]`
 
-Runs two or more candidate versions against one eval suite, in one job, on one panel, at the same time, and prints which won each task.
+Runs two or more candidates against one eval suite, in one job, on one panel, at the same time, and prints which won each task. A candidate is a skill version or a set.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -453,12 +461,14 @@ Runs two or more candidate versions against one eval suite, in one job, on one p
 | `--tier <tier>` | `full` | Eval tier |
 | `--attempts <n>` | 3 | Attempts per task per candidate |
 | `--wait` | true | Wait for the verdict |
+| `--set <name>` | — | Enter a set as one candidate. Repeat the flag for more sets. |
 
 ```bash
 skael contest payments:deploy@3 platform:deploy@7
+skael contest review:all@3 --set review-split
 ```
 
-A version left off means the skill's released version. The candidates need not be the same skill.
+A version left off means the skill's released version. The candidates need not be the same skill. A set candidate installs every skill of the set's current resolution. The command prints the median tokens per run of each candidate. When a set competes, it also prints the skills that fired on each task.
 
 The verdict is one of three things: a named winner, **too close to call**, or a statement that too few tasks separated the candidates for any verdict to be possible. Each comes with the split — `6-0 with 6 ties, p = 0.031` — so a reader who distrusts a single number reads the task table instead.
 

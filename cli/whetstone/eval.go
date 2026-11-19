@@ -28,8 +28,10 @@ import (
 	"github.com/skael-dev/skael/internal/eval/sandbox/imagespec"
 	"github.com/skael-dev/skael/internal/eval/sandbox/resolve"
 	"github.com/skael-dev/skael/internal/eval/score"
+	"github.com/skael-dev/skael/internal/eval/spec"
 	"github.com/skael-dev/skael/internal/eval/store"
 	"github.com/skael-dev/skael/internal/eval/suite"
+	skillpkg "github.com/skael-dev/skael/internal/skill"
 	"github.com/skael-dev/skael/internal/ui"
 )
 
@@ -94,6 +96,37 @@ type EvalRequest struct {
 	// and no baseline or probe, because a verdict reads neither.
 	Contest  bool
 	Attempts int
+	// ContestProbes plans the tier's probes in a contest. A contest that
+	// enters a set sets it for every candidate, so each runs the same probes.
+	ContestProbes bool
+	// Set installs a set's members beside the skill. Nil installs none.
+	Set *SetRun
+}
+
+// SetRun is a pinned set resolution, unpacked on disk.
+type SetRun struct {
+	Name         string
+	ResolutionID string
+	// Members are installed beside the skill.
+	Members []SetMemberRun
+	// Pinned is every skill of the pinned resolution, as the report lists it.
+	Pinned []report.SetReportMember
+	// Candidate is true when the skill and the members are one contest
+	// candidate together. The skill-condition runs then install every member,
+	// and no member is a neighbour of the others.
+	Candidate bool
+}
+
+// SetMemberRun is one member of a set, unpacked at Dir. Queries are the
+// should-trigger queries of the member's authored suite, and Deps the
+// packages its suite's spec declares.
+type SetMemberRun struct {
+	Name    string
+	Version int
+	Digest  string
+	Dir     string
+	Queries []string
+	Deps    spec.DepsDecl
 }
 
 // Progress is one step of a running evaluation.
@@ -229,7 +262,13 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	if err := resolve.EnsureBase(ctx, d.Driver, baseTag == imagespec.SlimBaseTag); err != nil {
 		return nil, fmt.Errorf("whetstone eval: preparing base image: %w", err)
 	}
-	image, err := d.Driver.Prepare(ctx, sandbox.EnvSpec{Skill: sp.Name, Deps: sp.Deps, BaseTag: baseTag})
+	deps := sp.Deps
+	if req.Set != nil {
+		for _, m := range req.Set.Members {
+			deps = unionDeps(deps, m.Deps)
+		}
+	}
+	image, err := d.Driver.Prepare(ctx, sandbox.EnvSpec{Skill: sp.Name, Deps: deps, BaseTag: baseTag})
 	if err != nil {
 		return nil, fmt.Errorf("whetstone eval: preparing image: %w", err)
 	}
@@ -307,12 +346,25 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	// 8. Plan and execute.
 	var plan *runner.Plan
 	if req.Contest {
-		plan, err = runner.BuildContestPlan(req.Tier, req.Attempts, panel, set, voidSet)
+		plan, err = runner.BuildContestPlan(req.Tier, req.Attempts, panel, set, voidSet, triggers, req.ContestProbes)
 	} else {
 		plan, err = runner.BuildPlan(req.Tier, panel, set, voidSet, triggers)
 	}
 	if err != nil {
 		return nil, err
+	}
+	var neighbours []runner.Neighbour
+	if req.Set != nil {
+		var queries []runner.SetQueries
+		for _, m := range req.Set.Members {
+			neighbours = append(neighbours, runner.Neighbour{Name: m.Name, Dir: m.Dir})
+			queries = append(queries, runner.SetQueries{Skill: m.Name, Queries: m.Queries})
+		}
+		if !req.Set.Candidate && !req.Contest {
+			if err := runner.AddSet(plan, queries); err != nil {
+				return nil, err
+			}
+		}
 	}
 	bundleDir, err := d.Store.SkillDir(req.Skill)
 	if err != nil {
@@ -372,6 +424,7 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	execRes, err := rn.Execute(ctx, evalID, runner.ExecuteInput{
 		Skill: req.Skill, BundleDir: bundleDir, SuiteDir: suiteDir, Image: image,
 		Plan: plan, Healthy: healthy, Distractors: distractors,
+		Neighbours: neighbours, SetCandidate: req.Set != nil && req.Set.Candidate,
 	})
 	close(finished)
 	progress(Progress{Kind: "phase", Phase: PhaseGrading})
@@ -416,7 +469,21 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		}
 	}
 
+	names, err := firingNames(req.Skill, bundleDir, req.Set)
+	if err != nil {
+		return nil, err
+	}
 	tasks := newTaskAgg()
+	for _, o := range execRes.Outcomes {
+		if o.Status != store.StatusOK {
+			continue
+		}
+		if fired := names.canonical(score.DetectFiring(o.Events)); len(fired) > 0 {
+			tasks.addFired(o.Key.TaskID, report.FiredNote{
+				Model: o.Key.Model, Condition: o.Key.Condition, Attempt: o.Key.Attempt, Skills: fired,
+			})
+		}
+	}
 	var members []report.MemberInput
 	for _, m := range panel {
 		if !scheduled[m] {
@@ -458,9 +525,37 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 	tokensSkill := medianTokens(execRes.Outcomes, runner.CondSkill)
 	tokensBaseline := medianTokens(execRes.Outcomes, runner.CondBaseline)
 
-	triggerF1, triggerInferred, triggerUnknown, triggerSource, err := scoreTriggers(req.Skill, execRes.Probes)
+	// A set candidate fires when any of its skills does: the candidate is the
+	// whole set.
+	underTest := []string{req.Skill}
+	if req.Set != nil && req.Set.Candidate {
+		underTest = names.all()
+	}
+	triggerF1, triggerInferred, triggerUnknown, triggerSource, err := scoreTriggers(underTest, names, execRes.Probes)
 	if err != nil {
 		return nil, err
+	}
+
+	var setReport *report.SetReport
+	if req.Set != nil {
+		setReport = &report.SetReport{
+			Name: req.Set.Name, ResolutionID: req.Set.ResolutionID,
+			Probes: routedProbes(names, execRes.Probes),
+		}
+		setReport.Members = req.Set.Pinned
+		var memberNames []string
+		for _, m := range req.Set.Members {
+			memberNames = append(memberNames, m.Name)
+		}
+		if !req.Set.Candidate && !req.Contest {
+			// The with-set runs fill the task table only. Their score is
+			// never a member score: the headline and the lift ignore it.
+			if _, _, _, err := memberScore(plan, execRes.Outcomes, graded, panel[0], runner.CondWithSet, tasks); err != nil {
+				ui.Warn("whetstone eval: no with-set score — %v", err)
+			}
+			setReport.Shares = report.Shares(req.Skill, memberNames, setReport.Probes)
+			setReport.TokensMedian = medianTokens(execRes.Outcomes, runner.CondWithSet)
+		}
 	}
 
 	rep, err := report.Compose(report.ComposeInput{
@@ -472,11 +567,15 @@ func RunEvalWith(ctx context.Context, d EvalDeps, req EvalRequest) (*report.Repo
 		TriggerF1: triggerF1, TriggerInferred: triggerInferred,
 		TriggerUnknown: triggerUnknown, TriggerSource: triggerSource,
 		GraderModel: graderModel(d.Gateway, graded), Dropped: droppedReport(dropped),
+		Set:             setReport,
 		ReusedBaselines: reused,
 		StartedAt:       startedAt, FinishedAt: now(),
 	})
 	if err != nil {
 		return nil, err
+	}
+	if rep.Set != nil && !req.Set.Candidate && !req.Contest && len(panel) > 0 {
+		rep.Set.RulesLost = report.RulesLost(rep.Tasks, panel[0].Model, runner.CondSkill, runner.CondWithSet)
 	}
 
 	// 11. Persist.
@@ -790,25 +889,34 @@ func memberScore(plan *runner.Plan, outs []runner.Outcome, graded map[store.RunK
 	return s, metaPartial, metaReason, nil
 }
 
-// scoreTriggers turns the trigger smoke check's probes into an F1.
+// scoreTriggers turns the trigger smoke check's probes into an F1. underTest
+// names what counts as the skill firing. Only the suite's own probes count: a
+// set member's query is routing evidence, and adding it would change which
+// queries the F1 is over.
 //
 // A tier that plans no probes measures nothing here and reports 1.0: an
 // unmeasured check must not read as a failed one. The release precondition
 // that reads this figure is applied where a version is released, not here.
-func scoreTriggers(skill string, probes []runner.ProbeOutcome) (f1 float64, inferred bool, unknown int, source report.PanelMember, err error) {
-	if len(probes) == 0 {
+func scoreTriggers(underTest []string, names firingNameSet, probes []runner.ProbeOutcome) (f1 float64, inferred bool, unknown int, source report.PanelMember, err error) {
+	var own []runner.ProbeOutcome
+	for _, p := range probes {
+		if p.Probe.Source == "" {
+			own = append(own, p)
+		}
+	}
+	if len(own) == 0 {
 		return 1, false, 0, report.PanelMember{}, nil
 	}
-	pm := probes[0].Probe.Member
+	pm := own[0].Probe.Member
 	source = report.PanelMember{Agent: pm.Agent, Model: pm.Model, Class: string(pm.Class)}
 
-	ps := make([]score.Probe, 0, len(probes))
-	for _, p := range probes {
+	ps := make([]score.Probe, 0, len(own))
+	for _, p := range own {
 		if p.Unknown {
 			ps = append(ps, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Unknown: true, Reason: p.Reason})
 			continue
 		}
-		fired, inf := score.DetectFiring(skill, p.Caps, p.Events)
+		fired, inf := score.Fired(names.resolve(score.DetectFiring(p.Events)), underTest...)
 		ps = append(ps, score.Probe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Fired: fired, Inferred: inf})
 	}
 	res, err := score.TriggerF1(ps)
@@ -816,6 +924,111 @@ func scoreTriggers(skill string, probes []runner.ProbeOutcome) (f1 float64, infe
 		return 0, false, 0, source, err
 	}
 	return res.F1, res.AnyInferred, res.Unknown, source, nil
+}
+
+// routedProbes lists every probe with the skills that fired on it, in plan
+// order.
+func routedProbes(names firingNameSet, probes []runner.ProbeOutcome) []report.RoutedProbe {
+	sorted := append([]runner.ProbeOutcome(nil), probes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Probe.Index < sorted[j].Probe.Index })
+	out := make([]report.RoutedProbe, 0, len(sorted))
+	for _, p := range sorted {
+		rp := report.RoutedProbe{Prompt: p.Probe.Prompt, Positive: p.Probe.Positive, Source: p.Probe.Source, Unknown: p.Unknown}
+		if !p.Unknown {
+			rp.Fired = names.canonical(score.DetectFiring(p.Events))
+		}
+		out = append(out, rp)
+	}
+	return out
+}
+
+// firingNameSet maps every name a skill can fire under to its canonical name.
+// OpenCode reports a skill by its frontmatter name, and a read names its
+// folder; neither need be the registry's name, which can hold a prefix.
+type firingNameSet struct {
+	byAlias map[string]string
+	order   []string
+}
+
+// firingNames builds the map for the skill under test and every set member.
+func firingNames(skill, bundleDir string, set *SetRun) (firingNameSet, error) {
+	n := firingNameSet{byAlias: map[string]string{}}
+	if err := n.add(skill, bundleDir); err != nil {
+		return n, err
+	}
+	if set != nil {
+		for _, m := range set.Members {
+			if err := n.add(m.Name, m.Dir); err != nil {
+				return n, err
+			}
+		}
+	}
+	return n, nil
+}
+
+func (n *firingNameSet) add(canonical, dir string) error {
+	n.order = append(n.order, canonical)
+	n.byAlias[canonical] = canonical
+	n.byAlias[filepath.Base(dir)] = canonical
+	raw, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		return fmt.Errorf("whetstone eval: reading %s SKILL.md: %w", canonical, err)
+	}
+	fm, _, err := skillpkg.ParseFrontmatter(string(raw))
+	if err != nil {
+		return fmt.Errorf("whetstone eval: parsing %s SKILL.md: %w", canonical, err)
+	}
+	if name, ok := fm["name"].(string); ok && name != "" {
+		n.byAlias[name] = canonical
+	}
+	return nil
+}
+
+// resolve rewrites each firing's name to the canonical one. A name nothing
+// installed claims, such as a distractor's, is kept as it is.
+func (n firingNameSet) resolve(fs []score.Firing) []score.Firing {
+	out := make([]score.Firing, 0, len(fs))
+	for _, f := range fs {
+		if c, ok := n.byAlias[f.Skill]; ok {
+			f.Skill = c
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// canonical lists the canonical names that fired, once each, in order.
+func (n firingNameSet) canonical(fs []score.Firing) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range n.resolve(fs) {
+		if !seen[f.Skill] {
+			seen[f.Skill] = true
+			out = append(out, f.Skill)
+		}
+	}
+	return out
+}
+
+// all is every installed skill's canonical name.
+func (n firingNameSet) all() []string { return append([]string(nil), n.order...) }
+
+// unionDeps merges two dependency declarations, each list sorted and without
+// duplicates, so a neighbour that needs a tool has it in the shared image.
+func unionDeps(a, b spec.DepsDecl) spec.DepsDecl {
+	merge := func(x, y []string) []string {
+		seen := map[string]bool{}
+		var out []string
+		for _, v := range append(append([]string{}, x...), y...) {
+			if !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	return spec.DepsDecl{Apt: merge(a.Apt, b.Apt), Pip: merge(a.Pip, b.Pip), Npm: merge(a.Npm, b.Npm)}
 }
 
 // medianTokens is the median total token spend across the sessions run under
@@ -856,6 +1069,11 @@ func (t *taskAgg) addCondition(id string, c report.ConditionReport) {
 	ti.Conditions = append(ti.Conditions, c)
 }
 
+func (t *taskAgg) addFired(id string, f report.FiredNote) {
+	ti := t.get(id)
+	ti.Fired = append(ti.Fired, f)
+}
+
 func (t *taskAgg) addGrade(id string, g report.GradeNote) {
 	ti := t.get(id)
 	ti.Grades = append(ti.Grades, g)
@@ -885,6 +1103,16 @@ func (t *taskAgg) slice() []report.TaskInput {
 				return ti.Grades[i].Model < ti.Grades[j].Model
 			}
 			return ti.Grades[i].Attempt < ti.Grades[j].Attempt
+		})
+		sort.Slice(ti.Fired, func(i, j int) bool {
+			a, b := ti.Fired[i], ti.Fired[j]
+			if a.Condition != b.Condition {
+				return a.Condition < b.Condition
+			}
+			if a.Model != b.Model {
+				return a.Model < b.Model
+			}
+			return a.Attempt < b.Attempt
 		})
 		out = append(out, *ti)
 	}

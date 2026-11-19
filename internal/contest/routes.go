@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/report"
 	"github.com/skael-dev/skael/internal/evalqueue"
 	"github.com/skael-dev/skael/internal/evalsuite"
+	"github.com/skael-dev/skael/internal/sets"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -37,8 +39,15 @@ type ClaimVerifier interface {
 // panics the server at startup.
 
 type contestCandidateInput struct {
-	Skill   string `json:"skill" minLength:"1"`
+	// Skill names a skill. Exactly one of Skill and Set is set.
+	Skill   string `json:"skill,omitempty"`
 	Version int    `json:"version,omitempty"`
+	// Set names a set: every skill its resolution holds runs as one
+	// candidate.
+	Set string `json:"set,omitempty"`
+	// SetResolution pins a stored resolution of Set. Omitted, the server
+	// resolves the set now and pins that.
+	SetResolution string `json:"set_resolution,omitempty"`
 }
 
 type contestCreateBody struct {
@@ -61,6 +70,18 @@ type contestCandidateOutput struct {
 	// ReusedFrom names the contest whose same-day run this candidate's
 	// report came from. Empty means this contest measured it.
 	ReusedFrom string `json:"reused_from,omitempty"`
+	// Set is the pinned set this candidate installs, when it is a set.
+	Set *evalqueue.PinnedSet `json:"set,omitempty"`
+	// TokensMedian is the median token spend of the candidate's runs: a split
+	// that wins by one task at twice the context is a different answer.
+	TokensMedian int64 `json:"tokens_median,omitempty"`
+	// Fired lists, per task, the skills that fired on the primary runs.
+	Fired []contestTaskFired `json:"fired,omitempty"`
+}
+
+type contestTaskFired struct {
+	TaskID string   `json:"task_id"`
+	Skills []string `json:"skills"`
 }
 
 type contestLossOutput struct {
@@ -68,6 +89,7 @@ type contestLossOutput struct {
 	TaskID   string   `json:"task_id"`
 	Missed   []string `json:"missed"`
 	Evidence string   `json:"evidence,omitempty"`
+	Fired    []string `json:"fired,omitempty"`
 }
 
 // ContestOutput is the wire shape for a contest. Exported because Huma drops
@@ -137,9 +159,22 @@ func toOutput(c *Contest) ContestOutput {
 		CreatedAt: c.CreatedAt, FinishedAt: c.FinishedAt,
 	}
 	for _, cand := range c.Candidates {
-		out.Candidates = append(out.Candidates, contestCandidateOutput{
-			Skill: cand.SkillName, Version: cand.Version, Label: cand.Label, ReusedFrom: cand.ReusedFrom,
-		})
+		co := contestCandidateOutput{
+			Skill: cand.SkillName, Version: cand.Version, Label: cand.Label, ReusedFrom: cand.ReusedFrom, Set: cand.Set,
+		}
+		if len(cand.Report) > 0 {
+			if rep, err := report.Load(bytes.NewReader(cand.Report)); err == nil {
+				co.TokensMedian = rep.TokensMedian
+				if len(rep.ModelPanel) > 0 {
+					for _, t := range rep.Tasks {
+						if fired := FiredOn(t, rep.ModelPanel[0].Model); len(fired) > 0 {
+							co.Fired = append(co.Fired, contestTaskFired{TaskID: t.TaskID, Skills: fired})
+						}
+					}
+				}
+			}
+		}
+		out.Candidates = append(out.Candidates, co)
 	}
 	for _, l := range c.Losses {
 		out.Losses = append(out.Losses, contestLossOutput(l))
@@ -151,6 +186,17 @@ func toOutput(c *Contest) ContestOutput {
 // across skills and stable in a stored result.
 func Label(skillName string, version int) string {
 	return fmt.Sprintf("%s@%d", skillName, version)
+}
+
+// SetLabel names a set candidate in a verdict: the set and the first eight
+// characters of its resolution. A space never appears in a skill name, so a
+// set's label cannot collide with a skill's.
+func SetLabel(name, resolutionID string) string {
+	short := resolutionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return fmt.Sprintf("set %s@%s", name, short)
 }
 
 // ParseCandidate splits "skill@version". A missing version means the skill's
@@ -172,7 +218,7 @@ func ParseCandidate(s string) (string, int, error) {
 
 // RegisterRoutes wires the contest endpoints. A contest advises: nothing here
 // releases a version, holds one, or clears a hold.
-func RegisterRoutes(api huma.API, store *Store, skills *skill.Store, suites *evalsuite.Registry, queue Submitter, claims ClaimVerifier) {
+func RegisterRoutes(api huma.API, store *Store, skills *skill.Store, suites *evalsuite.Registry, setStore *sets.Store, queue Submitter, claims ClaimVerifier) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "create-contest",
 		Method:        http.MethodPost,
@@ -196,7 +242,18 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store, suites *eva
 
 		seen := map[string]bool{}
 		for _, in := range input.Body.Candidates {
-			cand, err := resolveCandidate(ctx, skills, in.Skill, in.Version)
+			var cand *Candidate
+			var err error
+			switch {
+			case in.Skill != "" && in.Set != "":
+				return nil, huma.Error422UnprocessableEntity("create contest: a candidate names a skill or a set, not both")
+			case in.Set != "":
+				cand, err = resolveSetCandidate(ctx, setStore, suites, in.Set, in.SetResolution)
+			case in.Skill != "":
+				cand, err = resolveCandidate(ctx, skills, in.Skill, in.Version)
+			default:
+				return nil, huma.Error422UnprocessableEntity("create contest: a candidate names no skill and no set")
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -217,7 +274,10 @@ func RegisterRoutes(api huma.API, store *Store, skills *skill.Store, suites *eva
 			return nil, huma.Error500InternalServerError("create contest: internal error")
 		}
 
-		first := c.Candidates[0]
+		first, err := jobSkill(ctx, skills, c.Candidates)
+		if err != nil {
+			return nil, err
+		}
 		jobID, err := queue.Submit(ctx, evalqueue.Job{
 			SkillID: first.SkillID, SkillName: first.SkillName, Version: first.Version,
 			SuiteRef: c.SuiteRef, Tier: c.Tier, RequestedBy: user.Email, ContestID: c.ID,
@@ -309,6 +369,44 @@ func resolveCandidate(ctx context.Context, skills *skill.Store, name string, ver
 	return &Candidate{
 		SkillID: sk.ID, SkillName: name, Version: version, Label: Label(name, version),
 	}, nil
+}
+
+// resolveSetCandidate pins a set as one candidate. Nothing is removed from
+// it: the set as a whole is what competes.
+func resolveSetCandidate(ctx context.Context, setStore *sets.Store, suites *evalsuite.Registry, name, resolutionID string) (*Candidate, error) {
+	if setStore == nil {
+		return nil, huma.Error500InternalServerError("create contest: sets are not configured")
+	}
+	pin, err := evalqueue.PinSet(ctx, setStore, suites, name, resolutionID, "")
+	switch {
+	case errors.Is(err, evalqueue.ErrSetNotFound), errors.Is(err, sets.ErrResolutionNotFound):
+		return nil, huma.Error404NotFound("create contest: " + err.Error())
+	case errors.Is(err, evalqueue.ErrSetEmpty):
+		return nil, huma.Error422UnprocessableEntity("create contest: " + err.Error())
+	case err != nil:
+		return nil, huma.Error500InternalServerError("create contest: internal error", err)
+	}
+	return &Candidate{Set: pin, Label: SetLabel(pin.Name, pin.ResolutionID)}, nil
+}
+
+// jobSkill is the skill the contest's job row names. eval_jobs keeps one
+// skill per job so every existing query on it stays correct: the first skill
+// candidate, or, when every candidate is a set, the first set's first member.
+func jobSkill(ctx context.Context, skills *skill.Store, cands []Candidate) (Candidate, error) {
+	for _, c := range cands {
+		if c.Set == nil {
+			return c, nil
+		}
+	}
+	m := cands[0].Set.Members[0]
+	sk, err := skills.GetByName(ctx, m.Name)
+	if err != nil {
+		return Candidate{}, huma.Error500InternalServerError("create contest: internal error", err)
+	}
+	if sk == nil {
+		return Candidate{}, huma.Error404NotFound(fmt.Sprintf("skill %q not found", m.Name))
+	}
+	return Candidate{SkillID: sk.ID, SkillName: m.Name, Version: m.Version}, nil
 }
 
 // resolveSuite records who chose the tasks. An empty ref leaves the suite to

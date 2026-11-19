@@ -38,7 +38,13 @@ var evalRunCmd = &cobra.Command{
 	Long: `Queue an eval of the latest version, or of the version after @. With --wait,
 print the job events until the job ends, then print the headline. The eval runs
 on a worker against the skill's stored suite, at the deepest tier the suite
-fills unless --tier names one. A tier the suite cannot fill is refused.`,
+fills unless --tier names one. A tier the suite cannot fill is refused.
+
+With --set, the worker also installs every skill of the set beside the skill,
+and the report names the share of prompts each one took and the rules the
+skill keeps alone but loses with the set. The server pins the set's current
+resolution; --resolution pins an earlier one, so a re-run installs the same
+versions. The set never changes the headline, the lift or the gate.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runEvalRun,
 }
@@ -47,6 +53,8 @@ var (
 	evalCheckTier string
 	evalRunTier   string
 	evalRunWait   bool
+	evalRunSet    string
+	evalRunRes    string
 	evalPoll      = 5 * time.Second
 )
 
@@ -54,6 +62,8 @@ func init() {
 	evalCheckCmd.Flags().StringVar(&evalCheckTier, "tier", "", "Exit 1 unless the suite reaches this tier (smoke, full or deep)")
 	evalRunCmd.Flags().StringVar(&evalRunTier, "tier", "", "Tier to run: smoke, full or deep (default: the deepest the suite fills)")
 	evalRunCmd.Flags().BoolVar(&evalRunWait, "wait", false, "Print job events until the job ends, then the headline")
+	evalRunCmd.Flags().StringVar(&evalRunSet, "set", "", "Install every skill of this set beside the skill")
+	evalRunCmd.Flags().StringVar(&evalRunRes, "resolution", "", "Pin this stored resolution of --set instead of the current one")
 	evalCmd.AddCommand(evalCheckCmd, evalRunCmd)
 	rootCmd.AddCommand(evalCmd)
 }
@@ -175,25 +185,33 @@ func runEvalRun(cmd *cobra.Command, args []string) error {
 	if evalRunTier != "" && !validTier(evalRunTier) {
 		return usageError("invalid_tier", fmt.Sprintf("unknown tier %q", evalRunTier), "use smoke, full or deep")
 	}
+	if evalRunRes != "" && evalRunSet == "" {
+		return usageError("resolution_without_set", "--resolution needs --set", "skael eval run <skill> --set <name> --resolution <id>")
+	}
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return notConfigured(err)
 	}
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
-	jobID, tier, err := c.RunEval(name, version, evalRunTier)
+	queued, err := c.RunEval(name, client.RunEvalRequest{
+		Version: version, Tier: evalRunTier, Set: evalRunSet, SetResolution: evalRunRes,
+	})
 	if err != nil {
 		return apiFailure(err)
 	}
+	jobID, tier := queued.JobID, queued.Tier
 	if !evalRunWait {
 		if ui.JSONMode {
-			return ui.PrintJSON(map[string]any{"skill": name, "job_id": jobID, "tier": tier})
+			return ui.PrintJSON(map[string]any{"skill": name, "job_id": jobID, "tier": tier, "set": queued.Set})
 		}
 		ui.Success("Queued job %s (%s tier)", jobID, tier)
+		printPinnedSet(queued.Set)
 		return nil
 	}
 	if !ui.JSONMode {
 		fmt.Fprintf(os.Stdout, "  Queued job %s (%s tier)\n", jobID, tier)
+		printPinnedSet(queued.Set)
 	}
 
 	var after int64
@@ -248,8 +266,65 @@ func runEvalRun(cmd *cobra.Command, args []string) error {
 	if q.SuiteDerived {
 		fmt.Fprintln(os.Stdout, "  The suite is machine-derived, so this score cannot release a held version.")
 	}
+	if q.Report != nil && q.Report.Set != nil {
+		printSetResult(job.SkillName, q.Report.Set)
+	} else if queued.Set != nil {
+		fmt.Fprintln(os.Stdout, "  The with-set results are in the report, which only an owner or an admin can read while the version is held.")
+	}
 	fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, job.SkillName)
 	return nil
+}
+
+// printPinnedSet names the resolution a job pinned and the skills it installs.
+func printPinnedSet(s *client.EvalJobSet) {
+	if s == nil || ui.JSONMode {
+		return
+	}
+	var names []string
+	for _, m := range s.Members {
+		names = append(names, fmt.Sprintf("%s@%d", m.Name, m.Version))
+	}
+	fmt.Fprintf(os.Stdout, "  Set %s, resolution %s: %s\n", s.Name, s.ResolutionID, strings.Join(names, ", "))
+}
+
+// printSetResult prints what the set's members did beside the skill.
+func printSetResult(skill string, s *client.EvalSetResult) {
+	fmt.Fprintf(os.Stdout, "\n  With set %s\n", s.Name)
+	took := false
+	for _, sh := range s.Shares {
+		if sh.Took == 0 && sh.Shared == 0 {
+			continue
+		}
+		took = true
+		fmt.Fprintf(os.Stdout, "  loses %.0f%% of its prompts to %s (%d of %d)", sh.Share*100, sh.Name, sh.Took, sh.Of)
+		if sh.Shared > 0 {
+			fmt.Fprintf(os.Stdout, ", and fires beside it on %d more", sh.Shared)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+	measured := false
+	for _, sh := range s.Shares {
+		measured = measured || sh.Of > 0
+	}
+	switch {
+	case !measured:
+		fmt.Fprintln(os.Stdout, "  share of prompts not measured: this tier runs no trigger probe")
+	case !took:
+		fmt.Fprintf(os.Stdout, "  no member of the set took a prompt from %s\n", skill)
+	}
+	for _, r := range s.RulesLost {
+		// A check's text already starts with "check:".
+		text := r.Text
+		if !r.Check {
+			text = "expectation: " + text
+		}
+		fmt.Fprintf(os.Stdout, "  rule lost on eval %s, %s (passes %d of %d alone, %d of %d with the set)\n",
+			r.TaskID, text, r.AlonePasses, r.AloneRuns, r.SetPasses, r.SetRuns)
+	}
+	if len(s.RulesLost) == 0 {
+		fmt.Fprintln(os.Stdout, "  no expectation or check passes alone and fails with the set")
+	}
+	fmt.Fprintf(os.Stdout, "  Re-run with the same versions: skael eval run %s --set %s --resolution %s\n", skill, s.Name, s.ResolutionID)
 }
 
 func firstLine(s string) string {

@@ -49,6 +49,13 @@ type Record struct {
 	ReportJSON               json.RawMessage
 }
 
+// SetScore is the with-set section of one scored report.
+type SetScore struct {
+	Version  int
+	ScoredAt time.Time
+	Set      json.RawMessage
+}
+
 // FromReport maps a report onto a record. Pure: no database or I/O.
 func FromReport(r *report.Report) (Record, error) {
 	if r == nil {

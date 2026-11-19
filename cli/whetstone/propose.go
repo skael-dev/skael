@@ -102,6 +102,9 @@ func RunProposeWith(ctx context.Context, st *store.Store, g llm.Gateway, req Pro
 func pickCandidate(st *store.Store, c *client.Contest, want string) (label, skillName string, err error) {
 	if want != "" {
 		for _, cand := range c.Candidates {
+			if cand.Label == want && cand.Set != nil {
+				return "", "", errSetCandidate(cand.Label)
+			}
 			if cand.Label == want {
 				return cand.Label, cand.Skill, nil
 			}
@@ -111,7 +114,7 @@ func pickCandidate(st *store.Store, c *client.Contest, want string) (label, skil
 
 	var matches []client.ContestCandidate
 	for _, cand := range c.Candidates {
-		if inWorkspace(st, cand.Skill) {
+		if cand.Set == nil && inWorkspace(st, cand.Skill) {
 			matches = append(matches, cand)
 		}
 	}
@@ -127,6 +130,13 @@ func pickCandidate(st *store.Store, c *client.Contest, want string) (label, skil
 		}
 		return "", "", fmt.Errorf("whetstone propose: this workspace holds %s; name one with --candidate", strings.Join(labels, " and "))
 	}
+}
+
+// errSetCandidate refuses a proposal for a set candidate. Whether to split a
+// skill into several or merge several into one is a structural decision, and
+// a diff to one skill's prose cannot make it.
+func errSetCandidate(label string) error {
+	return fmt.Errorf("whetstone propose: %s is a set; split versus merge is a decision for a person, so propose works only on a single skill's losses", label)
 }
 
 // inWorkspace reports whether this workspace holds the skill's bundle.

@@ -71,6 +71,7 @@ var routeRules = []RouteRule{
 	read("/api/skills/{name}/quality", ScopeSkillsRead),
 	read("/api/skills/{name}/quality/history", ScopeSkillsRead),
 	read("/api/skills/{name}/quality/series", ScopeSkillsRead),
+	read("/api/skills/{name}/quality/set", ScopeSkillsRead),
 	read("/api/skills/{name}/quality/{version}", ScopeSkillsRead),
 	read("/api/skills/tags", ScopeSkillsRead),
 	read("/api/search", ScopeSkillsRead),

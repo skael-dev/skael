@@ -16,6 +16,7 @@ import (
 	"github.com/skael-dev/skael/internal/eval/agent"
 	"github.com/skael-dev/skael/internal/eval/sandbox"
 	"github.com/skael-dev/skael/internal/eval/store"
+	"github.com/skael-dev/skael/internal/eval/suite"
 )
 
 func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, byKey map[store.RunKey]store.RunRecord, k store.RunKey) Outcome {
@@ -109,9 +110,14 @@ func (r *Runner) executeRun(ctx context.Context, evalID int64, in ExecuteInput, 
 		}
 	}()
 
-	if k.Condition == CondSkill {
+	if k.Condition == CondSkill || k.Condition == CondWithSet {
 		if err := a.InstallSkill(ws, in.BundleDir); err != nil {
 			return finish(store.StatusError, fmt.Errorf("runner: installing skill: %w", err))
+		}
+		if k.Condition == CondWithSet || in.SetCandidate {
+			if err := installNeighbours(a, ws, in.Neighbours); err != nil {
+				return finish(store.StatusError, err)
+			}
 		}
 		skipDirs = []string{a.Caps().SkillDir}
 	}
@@ -249,7 +255,10 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	if err := a.InstallSkill(ws, in.BundleDir); err != nil {
 		return finish(fmt.Errorf("runner: installing skill: %w", err))
 	}
-	if err := installDistractors(ws, a.Caps().SkillDir, in.Distractors); err != nil {
+	if err := installNeighbours(a, ws, in.Neighbours); err != nil {
+		return finish(err)
+	}
+	if err := installDistractors(ws, a.Caps().SkillDir, distractorsBeside(in)); err != nil {
 		return finish(fmt.Errorf("runner: installing distractors: %w", err))
 	}
 
@@ -281,6 +290,32 @@ func (r *Runner) executeProbe(ctx context.Context, evalID int64, in ExecuteInput
 	// the two must not disagree about what a recorded path means.
 	po.Events, po.Meta, po.Caps = result.Events, result.Meta, a.Caps()
 	return finish(nil)
+}
+
+// installNeighbours installs each set member in its own folder.
+func installNeighbours(a agent.Adapter, ws string, ns []Neighbour) error {
+	for _, n := range ns {
+		if err := a.InstallSkill(ws, n.Dir); err != nil {
+			return fmt.Errorf("runner: installing set member %s: %w", n.Name, err)
+		}
+	}
+	return nil
+}
+
+// distractorsBeside drops a distractor whose folder a real skill already
+// holds. Writing it would replace that skill's SKILL.md.
+func distractorsBeside(in ExecuteInput) []suite.Distractor {
+	taken := map[string]bool{filepath.Base(in.BundleDir): true}
+	for _, n := range in.Neighbours {
+		taken[filepath.Base(n.Dir)] = true
+	}
+	out := make([]suite.Distractor, 0, len(in.Distractors))
+	for _, d := range in.Distractors {
+		if !taken[d.Name] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // probeKey gives a trigger probe a store.RunKey so it can be claimed and

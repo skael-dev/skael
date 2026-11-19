@@ -35,6 +35,7 @@ func Reduce(label string, r *report.Report) ([]TaskOutcome, []TaskLoss) {
 		})
 		if miss := missed(task, primary); len(miss.Missed) > 0 {
 			miss.Label, miss.TaskID = label, task.TaskID
+			miss.Fired = FiredOn(task, primary)
 			losses = append(losses, miss)
 		}
 	}
@@ -64,4 +65,23 @@ func missed(task report.TaskReport, primary string) TaskLoss {
 	}
 	sort.Strings(loss.Missed)
 	return loss
+}
+
+// FiredOn lists the skills that fired on one task in the primary member's
+// skill-condition runs, once each, in the order they first fired.
+func FiredOn(task report.TaskReport, primary string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range task.Fired {
+		if f.Model != primary || f.Condition != runner.CondSkill {
+			continue
+		}
+		for _, s := range f.Skills {
+			if !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }

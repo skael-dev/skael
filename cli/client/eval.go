@@ -10,30 +10,39 @@ import (
 	"time"
 )
 
-// RunEval calls POST /api/skills/{name}/evals and returns the queued job's id
-// and tier. A zero version evaluates the latest, and an empty tier is the
-// deepest tier the skill's suite fills.
-func (c *Client) RunEval(name string, version int, tier string) (string, string, error) {
-	payload, err := json.Marshal(struct {
-		Version int    `json:"version,omitempty"`
-		Tier    string `json:"tier,omitempty"`
-	}{version, tier})
+// RunEvalRequest is one queued eval. A zero version evaluates the latest, and
+// an empty tier is the deepest tier the skill's suite fills. Set installs a
+// set beside the skill; SetResolution pins one stored resolution of it.
+type RunEvalRequest struct {
+	Version       int    `json:"version,omitempty"`
+	Tier          string `json:"tier,omitempty"`
+	Set           string `json:"set,omitempty"`
+	SetResolution string `json:"set_resolution,omitempty"`
+}
+
+// QueuedEval is the queued job, its tier and the set resolution it pinned.
+type QueuedEval struct {
+	JobID string      `json:"job_id"`
+	Tier  string      `json:"tier"`
+	Set   *EvalJobSet `json:"set,omitempty"`
+}
+
+// RunEval calls POST /api/skills/{name}/evals.
+func (c *Client) RunEval(name string, req RunEvalRequest) (*QueuedEval, error) {
+	payload, err := json.Marshal(req)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	resp, err := c.do(http.MethodPost, "/api/skills/"+url.PathEscape(name)+"/evals", bytes.NewReader(payload), "application/json")
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	var out struct {
-		JobID string `json:"job_id"`
-		Tier  string `json:"tier"`
-	}
+	var out QueuedEval
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", "", fmt.Errorf("decode eval response: %w", err)
+		return nil, fmt.Errorf("decode eval response: %w", err)
 	}
-	return out.JobID, out.Tier, nil
+	return &out, nil
 }
 
 // GetEvalJob calls GET /api/eval/jobs/{id}.
@@ -111,6 +120,34 @@ type QualityScore struct {
 	SuiteRef      string   `json:"suite_ref"`
 	Tier          string   `json:"tier"`
 	JobID         string   `json:"job_id,omitempty"`
+	// Report is the full report: null when the version is held and the
+	// caller is not an owner or an admin.
+	Report *struct {
+		Set *EvalSetResult `json:"set,omitempty"`
+	} `json:"report,omitempty"`
+}
+
+// EvalSetResult is what a set's members did beside the skill.
+type EvalSetResult struct {
+	Name         string `json:"name"`
+	ResolutionID string `json:"resolution_id"`
+	Shares       []struct {
+		Name   string  `json:"name"`
+		Took   int     `json:"took"`
+		Shared int     `json:"shared"`
+		Of     int     `json:"of"`
+		Share  float64 `json:"share"`
+	} `json:"shares"`
+	RulesLost []struct {
+		TaskID      string `json:"task_id"`
+		Text        string `json:"text"`
+		Check       bool   `json:"check"`
+		AlonePasses int    `json:"alone_passes"`
+		AloneRuns   int    `json:"alone_runs"`
+		SetPasses   int    `json:"set_passes"`
+		SetRuns     int    `json:"set_runs"`
+	} `json:"rules_lost"`
+	TokensMedian int64 `json:"tokens_median"`
 }
 
 // QualityForVersion calls GET /api/skills/{name}/quality/{version}.

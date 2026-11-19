@@ -355,11 +355,12 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		QualityFloor: floor,
 		Contests:     contestStore,
 		EvalConfig:   providerStore.EvalConfigFor,
+		Sets:         setStore,
 	})
 
 	// Contests advise and never gate: nothing registered here releases a
 	// version, holds one, or clears a hold.
-	contest.RegisterRoutes(api, contestStore, skillStore, suiteRegistry, evalPool, evalPool)
+	contest.RegisterRoutes(api, contestStore, skillStore, suiteRegistry, setStore, evalPool, evalPool)
 
 	// Read-only quality endpoints: latest score and history.
 	quality.RegisterRoutes(api, qualityStore, skillStore)

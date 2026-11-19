@@ -39,6 +39,7 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 		candidates = append(candidates, evalqueue.Candidate{
 			SkillID: c.SkillID, SkillName: c.SkillName, Version: c.Version, Label: c.Label,
 			ReusedReport: c.ReusedReport, ReusedFrom: c.ReusedFrom, PRHeadID: c.PRHeadID,
+			Set: pinnedSet(c.Set),
 		})
 	}
 	var eval *evalqueue.EvalConfig
@@ -67,7 +68,22 @@ func (h *HTTPAPI) Claim(_ context.Context, workerID string, lease time.Duration)
 		ContestID:       j.ContestID,
 		Candidates:      candidates,
 		ContestAttempts: j.ContestAttempts,
+		Set:             pinnedSet(j.Set),
 	}, token, true, nil
+}
+
+// pinnedSet maps a claim's set onto the queue's type, or nil for none.
+func pinnedSet(s *client.EvalJobSet) *evalqueue.PinnedSet {
+	if s == nil {
+		return nil
+	}
+	out := &evalqueue.PinnedSet{SetID: s.SetID, Name: s.Name, ResolutionID: s.ResolutionID}
+	for _, m := range s.Members {
+		out.Members = append(out.Members, evalqueue.SetMember{
+			Name: m.Name, Version: m.Version, Digest: m.Digest, SuiteRef: m.SuiteRef,
+		})
+	}
+	return out
 }
 
 // Heartbeat calls POST /api/eval/jobs/{id}/heartbeat. Both 409 (job no longer

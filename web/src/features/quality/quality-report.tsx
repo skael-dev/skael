@@ -5,6 +5,7 @@ import { EvalStatus } from "./eval-status";
 import { QualityTrend } from "./quality-trend";
 import { ContestActions } from "@/features/contest/contest-actions";
 import { ContestChain } from "@/features/contest/contest-chain";
+import { SetSection } from "./set-routing";
 
 // The engine keeps a measurement that was never defined for a run distinct
 // from a measured zero, using a nullable field, in several places
@@ -483,6 +484,8 @@ export function QualityReport({
           <ContestChain skillName={skillName} />
         </div>
       </div>
+
+      <SetSection skillName={skillName} />
 
       <PillarBreakdownTable data={summary.pillar_breakdown} />
       <PanelMatrixTable data={summary.panel_matrix} />

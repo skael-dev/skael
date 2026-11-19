@@ -35,6 +35,7 @@ type TaskInput struct {
 	TaskID     string
 	Conditions []ConditionReport
 	Grades     []GradeNote
+	Fired      []FiredNote
 }
 
 // ComposeInput is everything Compose needs to assemble a Report.
@@ -71,6 +72,9 @@ type ComposeInput struct {
 	TriggerUnknown  int
 
 	GraderModel string
+
+	// Set is the with-set measurement, or nil.
+	Set *SetReport
 
 	// Dropped lists sessions the judge could not grade.
 	Dropped []DroppedGrade
@@ -167,6 +171,7 @@ func Compose(in ComposeInput) (*Report, error) {
 		TriggerSource:        in.TriggerSource,
 		TriggerUnknown:       in.TriggerUnknown,
 		GraderModel:          in.GraderModel,
+		Set:                  in.Set,
 		StartedAt:            in.StartedAt,
 		FinishedAt:           in.FinishedAt,
 	}
