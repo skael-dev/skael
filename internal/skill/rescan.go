@@ -113,7 +113,29 @@ func (s *Store) ScanView(ctx context.Context, name string, version int, released
 // findingKey identifies a finding across two scans of one archive. The archive
 // does not change, so a rule, a file and a line name the same text.
 func findingKey(f scan.Finding) string {
-	return fmt.Sprintf("%s\x00%s\x00%d", f.Rule, f.File, f.Line)
+	return fmt.Sprintf("%s\x00%s\x00%d", ruleKey(f.Rule), f.File, f.Line)
+}
+
+// ruleKey drops a directory from an external scanner's rule prefix. Reports
+// stored before v0.23 prefixed external rules with the full command path, and
+// later scans use the base name, so "/opt/tools/gitleaks:aws-key" and
+// "gitleaks:aws-key" are one rule.
+func ruleKey(rule string) string {
+	// A Windows command path starts with a drive letter and a colon, which
+	// is not the scanner separator.
+	start := 0
+	if len(rule) > 2 && rule[1] == ':' && (rule[2] == '\\' || rule[2] == '/') {
+		start = 2
+	}
+	sep := strings.Index(rule[start:], ":")
+	if sep < 0 {
+		return rule
+	}
+	scanner, id := rule[:start+sep], rule[start+sep+1:]
+	if i := strings.LastIndexAny(scanner, `/\`); i >= 0 {
+		scanner = strings.TrimSuffix(scanner[i+1:], ".exe")
+	}
+	return scanner + ":" + id
 }
 
 // newFindings returns the findings of now that before did not have.
