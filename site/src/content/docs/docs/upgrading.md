@@ -20,6 +20,16 @@ Within 0.x minor releases, skael keeps these promises:
 - **API paths keep working.** A path that changes gets a deprecation note first. A new request field is optional, so an older CLI or worker keeps working against a newer server.
 - **Archives stay where they are.** An install that started with archives on the filesystem keeps them there, even though a new install now stores them in Postgres.
 
+### Upgrading to 0.23
+
+- Three migrations run at start. Upgrade the server first, then the workers.
+- A worker older than 0.23.0 keeps running plain evals. It never claims a job whose suite has checks or that installs a set.
+- A skill whose folder has `evals/` at its root gets one new version on its next publish or git sync, because the bundle no longer includes that folder. The folder becomes the skill's authored suite.
+- Only an owner of a skill or an admin can upload its suite with `POST /api/eval/suites`. A script that pushes suites with another member's key gets 403.
+- A publish queues an eval at the deepest tier the suite reaches, not always `full`. A suite that reaches no tier queues nothing.
+- Run `skael init` in a project to add the skael-evals skill.
+- External scanner rule names now use the command's base name. Stored reports keep the old full path until the version is rescanned. **Instance settings → Security scanning → Rescan all released versions** rewrites them. That rescan withdraws a released version that a newer rule catches as exfiltration or a secret.
+
 ### Upgrading to 0.22
 
 - Hooks run the skael binary instead of the bash scripts in `~/.skael/hooks`. The first skael command after the upgrade rewrites the hooks you installed and deletes the scripts. Nothing to run by hand.
