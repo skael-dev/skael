@@ -116,6 +116,9 @@ type SuiteLookup interface {
 	// PutAuthored stores a skill folder's evals/ as the skill's suite. A suite
 	// that does not load returns an error wrapping ErrInvalidSuite.
 	PutAuthored(ctx context.Context, skillName string, archive []byte, uploadedBy string) (*SuiteRecord, error)
+	// Reach is the deepest tier a stored suite fills, or "" and why it fills
+	// none.
+	Reach(ctx context.Context, ref string) (tier, why string, err error)
 }
 
 // ErrInvalidSuite is a skill folder's evals/ that the registry cannot load.

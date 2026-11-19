@@ -251,6 +251,8 @@ Validates, security-scans, packs, and uploads a skill directory.
 - **unchanged**: the skill and its suite are the same as before.
 - **suite updated**: only `evals/` changed. The server stores the suite and queues an eval of the latest version, and creates no version.
 
+An eval queued by a publish runs at the deepest tier the stored suite reaches. A suite below the smoke tier queues no eval, and the publish prints why, for example `suite below smoke tier: 3 scorable evals, needs 5`.
+
 With `--json`, the output adds `outcome`, `suite` (`ref`, `updated`, `skipped`) and `job_id`.
 
 A bundle with blocking findings meets one of two different fates, and the difference matters:
@@ -316,7 +318,7 @@ Queues an eval of a published skill on the server. Without `@version`, it evalua
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tier <tier>` | `full` | Tier to run: `smoke`, `full` or `deep` |
+| `--tier <tier>` | the deepest the suite reaches | Tier to run: `smoke`, `full` or `deep`. A tier the suite cannot reach is refused with the reason. A skill with no stored suite runs `full`. |
 | `--wait` | false | Print each job event until the job ends, then the headline and the lift |
 
 Without `--wait`, it prints the job id and exits 0. With `--wait`, it exits 0 when the job finishes and 1 when the job fails or is cancelled, with the job's last error. With `--json` and `--wait`, it prints the job id and the version's quality record.

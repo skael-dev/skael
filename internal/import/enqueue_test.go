@@ -48,6 +48,10 @@ func writeFixtureSuite(t *testing.T, dir, skillName string) {
 		SkillName: skillName,
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing for " + skillName + ".", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing for " + skillName + "." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing for " + skillName + "." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing for " + skillName + "." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing for " + skillName + "." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	require.NoError(t, suite.WriteEvalSet(dir, s))

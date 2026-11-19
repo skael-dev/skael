@@ -97,8 +97,10 @@ type PublishSuite struct {
 // QualityState is the publish response's report on the evaluation, if any,
 // that was queued for the new version.
 type QualityState struct {
-	State string `json:"state,omitempty"`
-	JobID string `json:"job_id,omitempty"`
+	State  string `json:"state,omitempty"`
+	JobID  string `json:"job_id,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // ManifestEntry holds the sync metadata for a single skill.

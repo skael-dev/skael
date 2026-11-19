@@ -37,7 +37,8 @@ var evalRunCmd = &cobra.Command{
 	Short: "Queue an eval of a published skill on the server",
 	Long: `Queue an eval of the latest version, or of the version after @. With --wait,
 print the job events until the job ends, then print the headline. The eval runs
-on a worker against the skill's stored suite.`,
+on a worker against the skill's stored suite, at the deepest tier the suite
+fills unless --tier names one. A tier the suite cannot fill is refused.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runEvalRun,
 }
@@ -51,7 +52,7 @@ var (
 
 func init() {
 	evalCheckCmd.Flags().StringVar(&evalCheckTier, "tier", "", "Exit 1 unless the suite reaches this tier (smoke, full or deep)")
-	evalRunCmd.Flags().StringVar(&evalRunTier, "tier", "full", "Tier to run: smoke, full or deep")
+	evalRunCmd.Flags().StringVar(&evalRunTier, "tier", "", "Tier to run: smoke, full or deep (default: the deepest the suite fills)")
 	evalRunCmd.Flags().BoolVar(&evalRunWait, "wait", false, "Print job events until the job ends, then the headline")
 	evalCmd.AddCommand(evalCheckCmd, evalRunCmd)
 	rootCmd.AddCommand(evalCmd)
@@ -171,7 +172,7 @@ func runEvalRun(cmd *cobra.Command, args []string) error {
 		}
 		name, version = name[:i], v
 	}
-	if !validTier(evalRunTier) {
+	if evalRunTier != "" && !validTier(evalRunTier) {
 		return usageError("invalid_tier", fmt.Sprintf("unknown tier %q", evalRunTier), "use smoke, full or deep")
 	}
 	cfg, err := config.LoadConfig()
@@ -180,19 +181,19 @@ func runEvalRun(cmd *cobra.Command, args []string) error {
 	}
 	c := client.New(cfg.Endpoint, cfg.APIKey)
 
-	jobID, err := c.RunEval(name, version, evalRunTier)
+	jobID, tier, err := c.RunEval(name, version, evalRunTier)
 	if err != nil {
 		return apiFailure(err)
 	}
 	if !evalRunWait {
 		if ui.JSONMode {
-			return ui.PrintJSON(map[string]any{"skill": name, "job_id": jobID})
+			return ui.PrintJSON(map[string]any{"skill": name, "job_id": jobID, "tier": tier})
 		}
-		ui.Success("Queued job %s", jobID)
+		ui.Success("Queued job %s (%s tier)", jobID, tier)
 		return nil
 	}
 	if !ui.JSONMode {
-		fmt.Fprintf(os.Stdout, "  Queued job %s\n", jobID)
+		fmt.Fprintf(os.Stdout, "  Queued job %s (%s tier)\n", jobID, tier)
 	}
 
 	var after int64

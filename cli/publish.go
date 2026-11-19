@@ -212,6 +212,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			Outcome   string               `json:"outcome,omitempty"`
 			Suite     *client.PublishSuite `json:"suite,omitempty"`
 			JobID     string               `json:"job_id,omitempty"`
+			Quality   client.QualityState  `json:"quality"`
 			Decision  gate.Decision        `json:"decision"`
 			GateState string               `json:"gate_state"`
 		}{
@@ -221,6 +222,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			Outcome:   ver.Outcome,
 			Suite:     ver.Suite,
 			JobID:     ver.Quality.JobID,
+			Quality:   ver.Quality,
 			Decision:  ver.Decision,
 			GateState: ver.GateState,
 		}
@@ -235,7 +237,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if ver.Outcome == "suite_updated" {
 		ui.Success("Suite updated — v%d is unchanged", ver.Version)
 		if ver.Quality.State == "pending" {
-			fmt.Fprintf(os.Stdout, "  An evaluation of v%d against the new suite is queued (job %s)\n", ver.Version, ver.Quality.JobID)
+			fmt.Fprintf(os.Stdout, "  A %s-tier evaluation of v%d against the new suite is queued (job %s)\n", ver.Quality.Tier, ver.Version, ver.Quality.JobID)
+		}
+		if ver.Quality.Reason != "" {
+			ui.Warn("No evaluation queued: %s", ver.Quality.Reason)
 		}
 		return nil
 	}
@@ -290,6 +295,8 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 		if ver.Quality.State == "pending" {
 			fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand instead:")
+		} else if ver.Quality.Reason != "" {
+			fmt.Fprintf(os.Stdout, "  No evaluation was queued: %s. Until the suite is fixed, an owner or admin can approve it:\n", ver.Quality.Reason)
 		} else {
 			fmt.Fprintln(os.Stdout, "  No evaluation suite is registered for this skill, so nothing will")
 			fmt.Fprintln(os.Stdout, "  clear it automatically. An owner or admin can approve it:")
@@ -309,7 +316,10 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stdout, "  ✓ Suite stored from evals/\n")
 	}
 	if ver.Quality.State == "pending" && ver.Decision.Outcome != gate.NeedsReview {
-		fmt.Fprintf(os.Stdout, "  An evaluation is queued (job %s)\n", ver.Quality.JobID)
+		fmt.Fprintf(os.Stdout, "  A %s-tier evaluation is queued (job %s)\n", ver.Quality.Tier, ver.Quality.JobID)
+	}
+	if ver.Quality.Reason != "" && ver.Decision.Outcome != gate.NeedsReview {
+		ui.Warn("No evaluation queued: %s", ver.Quality.Reason)
 	}
 	return nil
 }

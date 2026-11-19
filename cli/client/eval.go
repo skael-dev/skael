@@ -10,28 +10,30 @@ import (
 	"time"
 )
 
-// RunEval calls POST /api/skills/{name}/evals and returns the queued job's id.
-// A zero version evaluates the latest, and an empty tier is full.
-func (c *Client) RunEval(name string, version int, tier string) (string, error) {
+// RunEval calls POST /api/skills/{name}/evals and returns the queued job's id
+// and tier. A zero version evaluates the latest, and an empty tier is the
+// deepest tier the skill's suite fills.
+func (c *Client) RunEval(name string, version int, tier string) (string, string, error) {
 	payload, err := json.Marshal(struct {
 		Version int    `json:"version,omitempty"`
 		Tier    string `json:"tier,omitempty"`
 	}{version, tier})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	resp, err := c.do(http.MethodPost, "/api/skills/"+url.PathEscape(name)+"/evals", bytes.NewReader(payload), "application/json")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	var out struct {
 		JobID string `json:"job_id"`
+		Tier  string `json:"tier"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode eval response: %w", err)
+		return "", "", fmt.Errorf("decode eval response: %w", err)
 	}
-	return out.JobID, nil
+	return out.JobID, out.Tier, nil
 }
 
 // GetEvalJob calls GET /api/eval/jobs/{id}.

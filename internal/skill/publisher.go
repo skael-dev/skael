@@ -25,6 +25,10 @@ import (
 type PublishQuality struct {
 	State string `json:"state,omitempty"`
 	JobID string `json:"job_id,omitempty"`
+	// Tier is the tier the queued eval runs: the deepest the suite fills.
+	Tier string `json:"tier,omitempty"`
+	// Reason says why no eval was queued for a suite that fills no tier.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Publish outcomes. A suite edit with unchanged skill content is the third:
@@ -435,22 +439,32 @@ func (p *Publisher) publish(ctx context.Context, name string, rawBody, suite []b
 	return &PublishBody{Version: *ver, Created: true, Outcome: OutcomeCreated, Suite: suiteOut, Quality: quality, Decision: decision}, nil
 }
 
-// enqueue queues a full eval of one version. A queue outage must not fail a
+// enqueue queues an eval of one version at the deepest tier the suite fills,
+// and queues nothing for a suite that fills none: such a job fails on a worker
+// after a claim and a lease are spent on it. A queue outage must not fail a
 // publish: the version is already durable, and an unscored version is a state
 // the product already models.
 func (p *Publisher) enqueue(ctx context.Context, skillID, name string, version int, suiteRef, by string) PublishQuality {
 	if p.opts.Queue == nil {
 		return PublishQuality{State: "none"}
 	}
+	tier, why, err := p.opts.Suites.Reach(ctx, suiteRef)
+	if err != nil {
+		log.Warn().Err(err).Str("skill", name).Msg("publish: could not plan the suite, skipping enqueue")
+		return PublishQuality{State: "none", Reason: "the suite could not be read: " + err.Error()}
+	}
+	if tier == "" {
+		return PublishQuality{State: "none", Reason: why}
+	}
 	id, err := p.opts.Queue.Submit(ctx, EvalJobRequest{
 		SkillID: skillID, SkillName: name, Version: version,
-		SuiteRef: suiteRef, Tier: "full", RequestedBy: by,
+		SuiteRef: suiteRef, Tier: tier, RequestedBy: by,
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("skill", name).Msg("publish: could not enqueue evaluation")
 		return PublishQuality{State: "none"}
 	}
-	return PublishQuality{State: "pending", JobID: id}
+	return PublishQuality{State: "pending", JobID: id, Tier: tier}
 }
 
 // storeSuite stores a folder's evals/ as the skill's suite, uploaded by the

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,6 +74,10 @@ type suiteLookupFunc func(ctx context.Context, name string) (*skill.SuiteRecord,
 
 func (f suiteLookupFunc) LatestForSkill(ctx context.Context, name string) (*skill.SuiteRecord, error) {
 	return f(ctx, name)
+}
+
+func (f suiteLookupFunc) Reach(context.Context, string) (string, string, error) {
+	return "smoke", "", nil
 }
 
 func (f suiteLookupFunc) PutAuthored(context.Context, string, []byte, string) (*skill.SuiteRecord, error) {
@@ -181,6 +186,10 @@ func (s *enqueueTestServer) registerSuite(t *testing.T, name string) {
 		SkillName: name,
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing for " + name + ".", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing for " + name + "." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing for " + name + "." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing for " + name + "." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing for " + name + "." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	require.NoError(t, suite.WriteEvalSet(dir, sfx))
@@ -405,7 +414,9 @@ func TestPublish_ASuiteOnlyChangeStoresTheSuiteAndCreatesNoVersion(t *testing.T)
 		[]byte("---\nname: deploy-helper\ndescription: deploys things\n---\n# deploy-helper\n"), 0o644))
 	writeEvals := func(prompt string) {
 		require.NoError(t, suite.WriteEvalSet(dir, &suite.EvalSet{SkillName: "deploy-helper",
-			Evals: []suite.Eval{{ID: 1, Prompt: prompt, Expectations: []string{"it deployed"}}}}))
+			Evals: []suite.Eval{{ID: 1, Prompt: prompt, Expectations: []string{"it deployed"}}, {ID: 2, Prompt: prompt + " again", Expectations: []string{"it deployed"}},
+				{ID: 3, Prompt: prompt + " twice", Expectations: []string{"it deployed"}}, {ID: 4, Prompt: prompt + " now", Expectations: []string{"it deployed"}},
+				{ID: 5, Prompt: prompt + " today", Expectations: []string{"it deployed"}}}}))
 	}
 	type result struct {
 		Version int    `json:"version"`
@@ -458,4 +469,57 @@ func TestPublish_ASuiteOnlyChangeStoresTheSuiteAndCreatesNoVersion(t *testing.T)
 	for _, f := range ver.FileManifest {
 		require.False(t, strings.HasPrefix(f.Path, "evals/"), "the version ships %s", f.Path)
 	}
+}
+
+func (a suiteLookupAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
+}
+
+// A job a suite cannot plan fails on a worker after a claim and a lease, so a
+// publish queues the deepest tier the suite fills and nothing below smoke.
+func TestPublish_QueuesTheTierTheSuiteFillsAndNothingBelowSmoke(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createSkill(t, "deploy-helper")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: deploy-helper\ndescription: deploys things\n---\n# deploy-helper\n"), 0o644))
+	publishWith := func(n int) skill.PublishQuality {
+		set := &suite.EvalSet{SkillName: "deploy-helper"}
+		for i := 1; i <= n; i++ {
+			set.Evals = append(set.Evals, suite.Eval{ID: i, Prompt: fmt.Sprintf("deploy service %d", i), Expectations: []string{"it deployed"}})
+		}
+		require.NoError(t, suite.WriteEvalSet(dir, set))
+		archive, _, err := skill.PackUpload(dir)
+		require.NoError(t, err)
+		resp := srv.publish(t, "deploy-helper", archive)
+		require.Equal(t, http.StatusCreated, resp.Code, resp.Body.String())
+		var out struct {
+			Quality skill.PublishQuality `json:"quality"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+		return out.Quality
+	}
+
+	q := publishWith(3)
+	require.Equal(t, "none", q.State)
+	require.Equal(t, "suite below smoke tier: 3 scorable evals, needs 5", q.Reason)
+
+	q = publishWith(5)
+	require.Equal(t, "pending", q.State)
+	require.Equal(t, "smoke", q.Tier)
+
+	var tiers []string
+	rows, err := srv.pool.Query(context.Background(), `SELECT tier FROM eval_jobs`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var tier string
+		require.NoError(t, rows.Scan(&tier))
+		tiers = append(tiers, tier)
+	}
+	rows.Close()
+	require.Equal(t, []string{"smoke"}, tiers)
 }

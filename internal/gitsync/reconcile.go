@@ -87,7 +87,7 @@ func (s *Syncer) Reconcile(ctx context.Context, id string, force bool) error {
 	if err := r.linkMerged(ctx, gh); err != nil {
 		return err
 	}
-	return s.store.recordSync(ctx, id, head, r.refusals)
+	return s.store.recordSync(ctx, id, head, r.refusals, r.notes)
 }
 
 // run is one sync of one connection.
@@ -98,7 +98,9 @@ type run struct {
 	author   string
 	saEmail  string
 	refusals []Refusal
-	actor    context.Context
+	// notes are folders that published with something to report.
+	notes []Refusal
+	actor context.Context
 }
 
 func (r *run) refuse(f skillimport.DiscoveredSkill, reason string) {
@@ -279,6 +281,9 @@ func (r *run) sync(ctx context.Context, f skillimport.DiscoveredSkill, b *Bindin
 		}
 		log.Info().Str("connection", r.c.ID).Str("skill", f.Name).Int("version", res.Version.Version).
 			Str("commit", short(r.sn.sha)).Msg("gitsync: published a version from git")
+	}
+	if res.Quality.Reason != "" {
+		r.notes = append(r.notes, Refusal{Path: f.Path, SkillName: f.Name, Reason: "no eval queued: " + res.Quality.Reason})
 	}
 	if res.Outcome == skill.OutcomeSuiteUpdated {
 		if err := audit.Record(ctx, r.s.pool, res.PublishedBy, "git_sync.suite", "skill:"+f.Name, map[string]any{

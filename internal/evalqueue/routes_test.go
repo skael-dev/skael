@@ -108,6 +108,10 @@ func (s *testServer) pushSuite(t *testing.T, skillName string) string {
 		SkillName: skillName,
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing for " + skillName + ".", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing for " + skillName + "." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing for " + skillName + "." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing for " + skillName + "." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing for " + skillName + "." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	if err := suite.WriteEvalSet(dir, sp); err != nil {

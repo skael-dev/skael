@@ -71,8 +71,10 @@ func gitBound(ctx context.Context, git skill.GitBoundary, name string) (string, 
 // responses read identically to a client, but declared separately since that
 // one is a route-local type unreachable from this package.
 type importQualityState struct {
-	State string `json:"state,omitempty"`
-	JobID string `json:"job_id,omitempty"`
+	State  string `json:"state,omitempty"`
+	JobID  string `json:"job_id,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func RegisterRoutes(api huma.API, router chi.Router, importStore *Store, skillStore *skill.Store, storage platform.Storage, fetcher *Fetcher, opts RouteOptions) {
@@ -428,7 +430,7 @@ func importSingleSkill(
 		latest, err := skillStore.GetVersion(ctx, ds.Name, sk.LatestVersion)
 		if err == nil && latest != nil && latest.Checksum == checksum {
 			if suiteUpdated {
-				return latest, skill.OutcomeSuiteUpdated, enqueueImportEval(ctx, queue, sk.ID, ds.Name, latest.Version, suiteRef), decision, nil
+				return latest, skill.OutcomeSuiteUpdated, enqueueImportEval(ctx, queue, suites, sk.ID, ds.Name, latest.Version, suiteRef), decision, nil
 			}
 			return latest, skill.OutcomeUnchanged, importQualityState{State: "none"}, decision, nil
 		}
@@ -476,7 +478,7 @@ func importSingleSkill(
 			// swallowed as "this skill has no suite".
 			log.Warn().Err(err).Str("skill", ds.Name).Msg("import: suite lookup failed, skipping enqueue")
 		} else if rec != nil {
-			quality = enqueueImportEval(ctx, queue, sk.ID, ds.Name, ver.Version, rec.Ref)
+			quality = enqueueImportEval(ctx, queue, suites, sk.ID, ds.Name, ver.Version, rec.Ref)
 		}
 	}
 
@@ -511,21 +513,30 @@ func importSingleSkill(
 	return ver, skill.OutcomeCreated, quality, decision, nil
 }
 
-// enqueueImportEval queues a full eval of one version. A queue outage must not
-// fail an import: the version is already durable by this point.
-func enqueueImportEval(ctx context.Context, queue evalqueue.Executor, skillID, name string, version int, suiteRef string) importQualityState {
-	if queue == nil {
+// enqueueImportEval queues an eval of one version at the deepest tier the
+// suite fills, and nothing for a suite that fills none. A queue outage must
+// not fail an import: the version is already durable by this point.
+func enqueueImportEval(ctx context.Context, queue evalqueue.Executor, suites *evalsuite.Registry, skillID, name string, version int, suiteRef string) importQualityState {
+	if queue == nil || suites == nil {
 		return importQualityState{State: "none"}
+	}
+	reach, err := suites.Reach(ctx, suiteRef)
+	if err != nil {
+		log.Warn().Err(err).Str("skill", name).Msg("import: could not plan the suite, skipping enqueue")
+		return importQualityState{State: "none", Reason: "the suite could not be read: " + err.Error()}
+	}
+	if reach.Highest == "" {
+		return importQualityState{State: "none", Reason: reach.Why()}
 	}
 	id, err := queue.Submit(ctx, evalqueue.Job{
 		SkillID: skillID, SkillName: name, Version: version,
-		SuiteRef: suiteRef, Tier: "full", RequestedBy: "import",
+		SuiteRef: suiteRef, Tier: reach.Highest, RequestedBy: "import",
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("skill", name).Msg("import: could not enqueue evaluation")
 		return importQualityState{State: "none"}
 	}
-	return importQualityState{State: "pending", JobID: string(id)}
+	return importQualityState{State: "pending", JobID: string(id), Tier: reach.Highest}
 }
 
 // importSuite stores the folder's evals/ as the skill's suite, uploaded by the

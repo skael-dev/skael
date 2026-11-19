@@ -760,7 +760,11 @@ func (a testSuites) PutAuthored(ctx context.Context, name string, archive []byte
 }
 
 func evalsJSON(prompt string) string {
-	return `{"skill_name":"platform:deploy","evals":[{"id":1,"prompt":"` + prompt + `","expectations":["it deployed"]}]}`
+	var evals []string
+	for i := 1; i <= 5; i++ {
+		evals = append(evals, fmt.Sprintf(`{"id":%d,"prompt":"%s %d","expectations":["it deployed"]}`, i, prompt, i))
+	}
+	return `{"skill_name":"platform:deploy","evals":[` + strings.Join(evals, ",") + `]}`
 }
 
 // A commit that changes only evals/ stores a new suite and queues one eval of
@@ -821,4 +825,12 @@ func TestReconcile_ASuiteOnlyCommitStoresTheSuiteAndCreatesNoVersion(t *testing.
 	if _, _, after := counts(); after != before || after == headSuite {
 		t.Errorf("the PR's suite became the skill's suite: before %s, after %s", before, after)
 	}
+}
+
+func (a testSuites) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
 }

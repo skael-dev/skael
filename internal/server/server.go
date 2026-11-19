@@ -505,3 +505,11 @@ func (g githubSealed) Discard(ctx context.Context, actor string) error {
 	_, err = g.store.Delete(ctx, actor)
 	return err
 }
+
+func (a evalSuiteAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
+}

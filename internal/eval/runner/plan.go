@@ -313,3 +313,52 @@ func Reached(cs []TierCheck) Tier {
 	}
 	return t
 }
+
+// Shortfall says, in the words a publisher reads, why a suite cannot fill
+// tier t. It is "" when the suite can.
+func Shortfall(t Tier, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) string {
+	b, ok := budgets[t]
+	if !ok {
+		return fmt.Sprintf("unknown tier %q: want one of smoke, full, deep", t)
+	}
+	scorable := 0
+	if set != nil {
+		for _, e := range set.Evals {
+			if !void[e.ID] {
+				scorable++
+			}
+		}
+	}
+	if scorable < b.Evals {
+		return fmt.Sprintf("suite below %s tier: %d scorable evals, needs %d", t, scorable, b.Evals)
+	}
+	half := b.Probes / 2
+	pos, neg := 0, 0
+	for _, q := range triggers {
+		if q.ShouldTrigger {
+			pos++
+		} else {
+			neg++
+		}
+	}
+	if pos < half || neg < half {
+		return fmt.Sprintf("suite below %s tier: %d should-trigger and %d should-not-trigger queries, needs %d of each", t, pos, neg, half)
+	}
+	return ""
+}
+
+// Highest is the deepest tier a suite fills. When it fills none, the tier is
+// "" and the reason is the smoke tier's shortfall.
+func Highest(set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) (Tier, string) {
+	var best Tier
+	for _, t := range Tiers {
+		if Shortfall(t, set, void, triggers) != "" {
+			break
+		}
+		best = t
+	}
+	if best == "" {
+		return "", Shortfall(TierSmoke, set, void, triggers)
+	}
+	return best, ""
+}

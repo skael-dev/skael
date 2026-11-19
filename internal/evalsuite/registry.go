@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skael-dev/skael/internal/eval/runner"
 	"github.com/skael-dev/skael/internal/eval/suite"
 	"github.com/skael-dev/skael/internal/platform"
 	skillpkg "github.com/skael-dev/skael/internal/skill"
@@ -448,4 +449,65 @@ func PackDir(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("evalsuite: PackDir close gzip: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// Reach is what a stored suite can run: its deepest tier, and why each tier
+// it cannot fill is out of reach.
+type Reach struct {
+	Highest   string
+	Shortfall map[string]string
+}
+
+// Can reports why tier is out of reach, or "" when the suite fills it.
+func (r *Reach) Can(tier string) string {
+	return r.Shortfall[tier]
+}
+
+// Why is the reason no job may run: the smoke tier's shortfall, or "".
+func (r *Reach) Why() string {
+	if r.Highest != "" {
+		return ""
+	}
+	return r.Shortfall[string(runner.TierSmoke)]
+}
+
+// Reach plans every tier against a stored suite, so a caller queues only a
+// job that can run. A job that cannot plan fails on a worker after a claim, a
+// lease and a materialised workspace were spent on it.
+func (r *Registry) Reach(ctx context.Context, ref string) (*Reach, error) {
+	archive, err := r.ReadArchive(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "evalsuite-reach-*")
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	if err := Unpack(archive, dir); err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach unpack: %w", err)
+	}
+	set, err := suite.LoadEvalSet(dir)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	triggers, err := suite.LoadTriggerQueries(dir)
+	if err != nil {
+		return nil, fmt.Errorf("evalsuite: Reach: %w", err)
+	}
+	void := map[int]bool{}
+	for _, c := range suite.Validate(dir, set) {
+		if c.Void {
+			void[c.ID] = true
+		}
+	}
+	out := &Reach{Shortfall: map[string]string{}}
+	for _, t := range runner.Tiers {
+		if why := runner.Shortfall(t, set, void, triggers); why != "" {
+			out.Shortfall[string(t)] = why
+		}
+	}
+	best, _ := runner.Highest(set, void, triggers)
+	out.Highest = string(best)
+	return out, nil
 }

@@ -522,6 +522,10 @@ func writeFixtureSuite(t *testing.T, dir string) {
 		SkillName: "demo",
 		Evals: []suite.Eval{
 			{ID: 1, Prompt: "Do the thing.", Expectations: []string{"it did the thing"}},
+			{ID: 2, Prompt: "Do the thing." + " 2", Expectations: []string{"it did the thing"}},
+			{ID: 3, Prompt: "Do the thing." + " 3", Expectations: []string{"it did the thing"}},
+			{ID: 4, Prompt: "Do the thing." + " 4", Expectations: []string{"it did the thing"}},
+			{ID: 5, Prompt: "Do the thing." + " 5", Expectations: []string{"it did the thing"}},
 		},
 	}
 	require.NoError(t, suite.WriteEvalSet(dir, set))
@@ -693,4 +697,12 @@ func (a evalSuiteAdapter) PutAuthored(ctx context.Context, name string, archive 
 		return nil, err
 	}
 	return &skill.SuiteRecord{Ref: rec.Ref}, nil
+}
+
+func (a evalSuiteAdapter) Reach(ctx context.Context, ref string) (string, string, error) {
+	r, err := a.r.Reach(ctx, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return r.Highest, r.Why(), nil
 }

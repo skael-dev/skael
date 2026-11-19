@@ -51,7 +51,7 @@ The command lists each void eval with its reason, marks each tier ✓ or ✗, an
 skael publish examples/code-review
 ```
 
-Publish lifts `evals/` out of the folder and stores it as the skill's suite. The version is the folder without `evals/`. The publish queues a full-tier eval of the new version and prints the job id. A publish has one of three outcomes:
+Publish lifts `evals/` out of the folder and stores it as the skill's suite. The version is the folder without `evals/`. The publish queues an eval of the new version at the deepest tier the suite reaches, and prints the job id and the tier. A suite below the smoke tier queues no eval. The publish then says why, for example `suite below smoke tier: 3 scorable evals, needs 5`. A publish has one of three outcomes:
 
 - **created**: the skill content changed, so a new version exists.
 - **unchanged**: nothing changed.
@@ -63,7 +63,7 @@ Publish lifts `evals/` out of the folder and stores it as the skill's suite. The
 skael eval run code-review --wait
 ```
 
-The command queues an eval of the latest version, prints each job event as the worker posts it, and ends with the headline and the lift. `skael eval run code-review@2 --tier smoke` runs one version at another tier. It needs an owner or admin key.
+The command queues an eval of the latest version at the deepest tier the suite reaches, prints each job event as the worker posts it, and ends with the headline and the lift. `skael eval run code-review@2 --tier smoke` runs one version at a named tier. The server refuses a tier the suite cannot reach and says why. The command needs an owner or admin key.
 
 A full-tier eval runs each eval twice with the skill, once without it, and six trigger probes. It takes from tens of minutes to more than an hour, by model and by worker concurrency.
 
@@ -75,7 +75,7 @@ The skill page shows the headline, the lift and each eval's results. **Evaluatio
 
 Each of these stores a suite the same way, and each eval runs the same way:
 
-- **Git sync.** A connected repo's skill folder carries `evals/`. A commit that changes only `evals/` stores a new suite and queues one eval, and creates no version. A pull request head carries its own suite, and the PR's contest runs it, so a PR changes the exam with the prose in one review.
+- **Git sync.** A connected repo's skill folder carries `evals/`. A commit that changes only `evals/` stores a new suite and queues one eval, and creates no version. When the suite is below the smoke tier, the connection page lists the folder under "Notes from the last sync" with the reason. A pull request head carries its own suite, and the PR's contest runs it, so a PR changes the exam with the prose in one review.
 - **Import.** `skael import` and the web import store a folder's `evals/` as the suite.
 - **whetstone.** `whetstone suite gen` drafts a suite from a stored spec, and `whetstone suite push` uploads it. See [whetstone](/docs/whetstone).
 - **No suite.** A skill with no suite still gets a score: on `skael eval run` or **Run** on the skill page, the worker derives a suite from the skill's own `SKILL.md`. A derived suite grades the skill against its own claims, so its score cannot release a held version. An instance owner or admin can review the suite's trigger queries in the web UI to mark it authored.

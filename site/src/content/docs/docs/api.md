@@ -123,7 +123,7 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `DELETE` | `/api/skills/{name}` | Delete a skill and its archives |
 | `POST` | `/api/skills/register` | Register a skill stub (accepts display-style names; used by agent hooks) |
 | `GET` | `/api/skills/{name}/versions` | List versions |
-| `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed). `?override=true` publishes despite appealable scan findings — instance admin only, recorded server-side. An `evals/` folder in the archive is stored as the skill's suite and left out of the version. The response's `outcome` is `created`, `unchanged` or `suite_updated`, and `suite` holds the stored `ref`, whether it `updated` the skill's suite, and why it was `skipped` |
+| `POST` | `/api/skills/{name}/versions` | Publish a new version (multipart binary, content-addressed). `?override=true` publishes despite appealable scan findings — instance admin only, recorded server-side. An `evals/` folder in the archive is stored as the skill's suite and left out of the version. The response's `outcome` is `created`, `unchanged` or `suite_updated`, and `suite` holds the stored `ref`, whether it `updated` the skill's suite, and why it was `skipped`. `quality.tier` is the tier of the queued eval, the deepest the suite reaches. `quality.reason` says why no eval was queued, such as a suite below the smoke tier |
 | `GET` | `/api/skills/{name}/versions/{version}/download` | Download version archive |
 | `GET` | `/api/skills/{name}/versions/{version}/files/{path}` | Download one file from the version archive, as `application/octet-stream` with its size in `X-Skael-File-Size`. The read rule is the same as the archive download: a scoped key that is not a worker gets 404 on a held version. A path that climbs out of the archive gets 400 |
 | `GET` | `/api/skills/{name}/versions/{version}/diff` | What this version changes against the version currently served — SKILL.md as a unified diff, plus per-file added/modified/removed |
@@ -162,7 +162,7 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/skills/{name}/quality/history` | Every score for a skill, newest first, ungrouped |
 | `GET` | `/api/skills/{name}/quality/series` | Quality history grouped into comparable runs |
 | `GET` | `/api/skills/{name}/evals` | Evaluation jobs for a skill, newest first |
-| `POST` | `/api/skills/{name}/evals` | Enqueue an evaluation against a different model panel — instance admin only |
+| `POST` | `/api/skills/{name}/evals` | Enqueue an evaluation against a different model panel — instance admin only. With no `tier`, the job runs the deepest tier the suite reaches, and the response names it in `tier`. A `tier` the suite cannot reach returns 422 with the reason |
 | `POST` | `/api/eval/suites` | Upload an evaluation suite (base64 archive; the pusher's own check results are optional). Stored content-addressably; returns its `ref`. The caller must own the skill or be an admin; anyone may push to an unowned skill. A worker's push for a claimed job is checked against its claim instead |
 | `GET` | `/api/eval/suites/{ref}/meta` | The spec and origin recorded for a suite |
 | `GET` | `/api/eval/suites/{ref}` | Download the suite archive (`application/gzip`) |
