@@ -68,6 +68,17 @@ type TaskReport struct {
 	TaskID     string            `json:"task_id"`
 	Conditions []ConditionReport `json:"conditions,omitempty"`
 	Grades     []GradeNote       `json:"grades,omitempty"`
+	// Fired lists, per session, the skills that fired. Empty when no session
+	// fired any skill, or when the sessions were resumed without their events.
+	Fired []FiredNote `json:"fired,omitempty"`
+}
+
+// FiredNote is the skills that fired in one session of a task.
+type FiredNote struct {
+	Model     string          `json:"model"`
+	Condition store.Condition `json:"condition"`
+	Attempt   int             `json:"attempt"`
+	Skills    []string        `json:"skills"`
 }
 
 // VoidTask is an eval excluded from scoring, listed so the reader can see it.
@@ -145,6 +156,10 @@ type Report struct {
 
 	// GraderModel identifies which model graded this run.
 	GraderModel string `json:"grader_model,omitempty"`
+
+	// Set is the measurement with a set installed beside the skill, or nil
+	// when no set was. It never changes the headline, the lift or the gate.
+	Set *SetReport `json:"set,omitempty"`
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
@@ -263,4 +278,156 @@ func sortedVersions(ms []PanelMember) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// SetReport is what a set's members did beside the skill: which skill each
+// probe went to, the share of the skill's prompts each member took, and the
+// expectations and checks that pass alone and fail with the set.
+type SetReport struct {
+	Name         string            `json:"name"`
+	ResolutionID string            `json:"resolution_id"`
+	Members      []SetReportMember `json:"members"`
+	// Probes lists every probe and the skills that fired on it.
+	Probes []RoutedProbe `json:"probes,omitempty"`
+	// Shares lists, per member, how many of the skill's own should-trigger
+	// probes it took. Empty for a contest candidate, which has no single
+	// skill under test.
+	Shares []NeighbourShare `json:"shares,omitempty"`
+	// RulesLost lists the expectations and checks that pass with the skill
+	// alone and fail with the set, on the primary member.
+	RulesLost []RuleLost `json:"rules_lost,omitempty"`
+	// TokensMedian is the median token spend of the with-set runs.
+	TokensMedian int64 `json:"tokens_median,omitempty"`
+}
+
+// SetReportMember is one pinned member of the resolution the eval installed.
+type SetReportMember struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Digest  string `json:"digest"`
+}
+
+// RoutedProbe is one probe and the skills that fired on it. Source is empty
+// for a query from the suite under test, and names the member whose own
+// should-trigger query it is otherwise.
+type RoutedProbe struct {
+	Prompt   string   `json:"prompt"`
+	Positive bool     `json:"positive"`
+	Source   string   `json:"source,omitempty"`
+	Fired    []string `json:"fired,omitempty"`
+	Unknown  bool     `json:"unknown,omitempty"`
+}
+
+// NeighbourShare is one member's take of the skill's prompts. Took counts the
+// should-trigger probes where the member fired and the skill did not; Shared
+// counts those where both fired. Share is Took over Of, the measured
+// should-trigger probes.
+type NeighbourShare struct {
+	Name   string  `json:"name"`
+	Took   int     `json:"took"`
+	Shared int     `json:"shared"`
+	Of     int     `json:"of"`
+	Share  float64 `json:"share"`
+}
+
+// RuleLost is one expectation or check that passes with the skill alone and
+// fails with the set. Passes and runs are counted on the primary member.
+type RuleLost struct {
+	TaskID      string `json:"task_id"`
+	Text        string `json:"text"`
+	Check       bool   `json:"check,omitempty"`
+	AlonePasses int    `json:"alone_passes"`
+	AloneRuns   int    `json:"alone_runs"`
+	SetPasses   int    `json:"set_passes"`
+	SetRuns     int    `json:"set_runs"`
+}
+
+// Shares counts, per member, the skill's should-trigger probes it took. A
+// probe counts only when it is the suite's own and was measured.
+func Shares(skill string, members []string, probes []RoutedProbe) []NeighbourShare {
+	out := make([]NeighbourShare, 0, len(members))
+	of := 0
+	for _, p := range probes {
+		if p.Positive && p.Source == "" && !p.Unknown {
+			of++
+		}
+	}
+	for _, m := range members {
+		ns := NeighbourShare{Name: m, Of: of}
+		for _, p := range probes {
+			if !p.Positive || p.Source != "" || p.Unknown || !contains(p.Fired, m) {
+				continue
+			}
+			if contains(p.Fired, skill) {
+				ns.Shared++
+			} else {
+				ns.Took++
+			}
+		}
+		if of > 0 {
+			ns.Share = float64(ns.Took) / float64(of)
+		}
+		out = append(out, ns)
+	}
+	return out
+}
+
+// RulesLost compares each expectation's pass count with the skill alone and
+// with the set, on the primary member. An expectation is lost when it passes
+// in at least half its runs alone and in fewer than half with the set.
+func RulesLost(tasks []TaskReport, primary string, alone, withSet store.Condition) []RuleLost {
+	var out []RuleLost
+	for _, t := range tasks {
+		type tally struct{ ap, ar, sp, sr int }
+		by := map[string]*tally{}
+		var order []string
+		checks := map[string]bool{}
+		for _, g := range t.Grades {
+			if g.Model != primary || (g.Condition != alone && g.Condition != withSet) {
+				continue
+			}
+			for _, e := range g.Expectations {
+				tl, ok := by[e.Text]
+				if !ok {
+					tl = &tally{}
+					by[e.Text] = tl
+					order = append(order, e.Text)
+				}
+				checks[e.Text] = e.Check
+				pass := 0
+				if e.Passed {
+					pass = 1
+				}
+				if g.Condition == alone {
+					tl.ap += pass
+					tl.ar++
+				} else {
+					tl.sp += pass
+					tl.sr++
+				}
+			}
+		}
+		for _, text := range order {
+			tl := by[text]
+			if tl.ar == 0 || tl.sr == 0 {
+				continue
+			}
+			if 2*tl.ap >= tl.ar && 2*tl.sp < tl.sr {
+				out = append(out, RuleLost{
+					TaskID: t.TaskID, Text: text, Check: checks[text],
+					AlonePasses: tl.ap, AloneRuns: tl.ar, SetPasses: tl.sp, SetRuns: tl.sr,
+				})
+			}
+		}
+	}
+	return out
+}
+
+func contains(xs []string, x string) bool {
+	for _, s := range xs {
+		if s == x {
+			return true
+		}
+	}
+	return false
 }

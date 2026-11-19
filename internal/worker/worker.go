@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -81,6 +82,10 @@ type RunInput struct {
 	// baseline and no probe.
 	Contest  bool
 	Attempts int
+	// ContestProbes plans the tier's probes in a contest that enters a set.
+	ContestProbes bool
+	// Set is installed beside the skill, or nil.
+	Set *SetInput
 
 	// Events records one job event. Never nil when the worker calls Run.
 	Events func(evalqueue.EvalJobEvent)
@@ -274,6 +279,25 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 	}
 	defer st.Close()
 
+	var set *SetInput
+	if job.Set != nil {
+		events.Add(phase("fetching set " + job.Set.Name))
+		bundles, err := w.fetchMembers(runCtx, job.Set)
+		if err != nil {
+			return err
+		}
+		skillDir, err := st.SkillDir(job.SkillName)
+		if err != nil {
+			return fmt.Errorf("worker: skill dir: %w", err)
+		}
+		taken := map[string]bool{filepath.Base(skillDir): true}
+		members, err := w.unpackMembers(runCtx, filepath.Join(workDir, "set"), job.Set.Members, bundles, taken)
+		if err != nil {
+			return err
+		}
+		set = &SetInput{Name: job.Set.Name, ResolutionID: job.Set.ResolutionID, Members: members, Pinned: job.Set.Members}
+	}
+
 	tier := job.Tier
 	if tier == "" {
 		tier = w.cfg.Tier
@@ -283,7 +307,7 @@ func (w *Worker) runJob(ctx context.Context, job *evalqueue.Job, token string) e
 		JobID: job.ID,
 		Skill: job.SkillName, Version: job.Version, SuiteRef: suiteRef,
 		Tier: tier, Panel: job.Panel, Eval: job.Eval, WorkspaceDir: workDir,
-		AllowVoid: meta.MachineGenerated, Events: events.Add,
+		AllowVoid: meta.MachineGenerated, Events: events.Add, Set: set,
 	})
 
 	cancel()

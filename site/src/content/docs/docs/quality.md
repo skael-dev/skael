@@ -197,7 +197,7 @@ That last point is worth sitting with, because it is where most people's intuiti
 
 ### What a contest costs
 
-A candidate runs only the sessions a verdict reads: every task, at the contest's attempts, with the skill installed. It runs no baseline and no trigger probe, so a contest reports lift as not measured. At the full tier with the default 3 attempts, two candidates run 60 sessions. The worker runs up to `WORKER_CONTEST_PARALLEL` candidates at once.
+A candidate runs only the sessions a verdict reads: every task, at the contest's attempts, with the skill installed. It runs no baseline, so a contest reports lift as not measured. It runs no trigger probe unless a set competes. At the full tier with the default 3 attempts, two candidates run 60 sessions. The worker runs up to `WORKER_CONTEST_PARALLEL` candidates at once.
 
 A contest on a named suite reuses a candidate's run from another contest on the same UTC day, when the archive, suite, tier, attempts and requested panel all match. One candidate always runs fresh, and the worker runs a reused candidate again if its report's grader, panel, agent CLI or engine differs from the fresh one. The contest page names each reused run and the contest it came from.
 
@@ -207,11 +207,58 @@ It releases no version, holds none, and clears no hold. It records a result you 
 
 **Who chose the tasks is always shown**, because in a company the suite is the contested artifact. A suite derived for a contest is derived from *every* candidate, so no candidate's own claims set the bar. A suite authored by someone who owns a candidate still runs — it is disclosed, not refused, because the people who care enough to write a suite are the people competing.
 
+### A set as a candidate
+
+A candidate can be a set. The set candidate installs every skill of the set's resolution in each session, so a contest can compare one skill with the split skills that replace it:
+
+```bash
+skael contest review:all@3 --set review-split
+```
+
+A set's resolution can change when a member publishes. The server pins the resolution when you create the contest. The label of a set candidate is `set <name>@<first 8 characters of the resolution>`.
+
+A contest with a set candidate also runs the tier's trigger probes for every candidate. Each task then shows the skills that fired on it. A loss of a set candidate names the skills that fired on that task. A derived suite takes input from every member of every set candidate, so the split side does not write its own exam.
+
+The contest page and the CLI show the median tokens per run of each candidate. A split that wins by one task with twice the tokens is a different answer from a clean win.
+
+`whetstone propose` refuses a set candidate. To split one skill or to merge several is a decision for a person.
+
 ### Is this skill improving?
 
 The **chain** answers that: a sequence of contests between consecutive released versions, each measured on one day with both bundles present. Start one from the quality tab with "Compare with vN".
 
 This is drift-free in a way a trend line cannot be. A link compares two bundles that ran together, so changing the panel later does not invalidate the history — it just means the next link used a different panel, which is fine, because a link is a comparison and not a level.
+
+## Eval with a set
+
+A team installs a set of skills together. A skill that scores well alone can lose prompts to a neighbour, or follow a neighbour's rule instead of its own. An eval with a set measures this.
+
+```bash
+skael eval run review:all --set review-split --wait
+```
+
+The server resolves the set when it creates the job, and the job pins that resolution. The server removes the skill under test from the resolution if the set holds it. The worker installs each member in its own folder beside the skill. The sandbox image gets the packages that each member's suite declares.
+
+An eval with a set adds these sessions:
+
+- **Trigger probes with the set installed.** The probes from the skill's own suite run with every member installed. The should-trigger queries of each member's authored suite run as should-not-trigger probes for the skill, up to the tier's count per side. The trigger F1 uses only the probes from the skill's own suite.
+- **A third condition for each task.** Each task runs with the skill and the set installed, on the primary member, with the tier's attempts. This is the `with_set` condition, beside `skill` and `baseline`.
+
+The report adds a section for the set:
+
+- **Share of prompts.** For each member, the count of the skill's should-trigger probes where the member fired and the skill did not. The skill page shows "loses N% of its prompts to `<skill>`" for the latest eval with a set.
+- **Rules lost.** Each expectation and check that passes in at least half of its runs with the skill alone and in fewer than half of its runs with the set.
+- **Routing.** Each probe, and the skills that fired on it.
+
+The results with a set never change the headline, the lift or the gate. The headline and the lift come from the `skill` and `baseline` conditions only.
+
+To install the same versions again after a member publishes, pin the resolution:
+
+```bash
+skael eval run review:all --set review-split --resolution <id>
+```
+
+The command prints the id. A worker installs a set only from release 0.23.0. The server does not send a job with a set to an older worker.
 
 ## Comparing scores over time
 

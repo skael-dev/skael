@@ -49,7 +49,7 @@ export function ContestChain({ skillName }: { skillName: string }) {
       {against.length > 0 && (
         <div>
           <h4 className="text-[11px] text-text-tertiary uppercase tracking-[0.08em] mb-1.5">
-            Against other skills
+            Against other skills and sets
           </h4>
           {against.map((c) => (
             <Row key={c.id} contest={c} rowProps={listRow(c.id)} />

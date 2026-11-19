@@ -59,7 +59,10 @@ type Job struct {
 	// ContestAttempts is the attempts per task per candidate the contest
 	// asked for. Attempts above counts job retries.
 	ContestAttempts int
-	CreatedAt       time.Time
+	// Set is the set resolution installed beside the skill, or nil. It never
+	// changes the headline, the lift or the gate.
+	Set       *PinnedSet
+	CreatedAt time.Time
 	// Eval is the server's judge and panel at claim time. It is not stored:
 	// a retried job takes the configuration current at its new claim.
 	Eval *EvalConfig
@@ -82,6 +85,9 @@ type Candidate struct {
 	// PRHeadID names a stored PR head the worker fetches instead of a
 	// version. Version is then 0.
 	PRHeadID string `json:"pr_head_id,omitempty"`
+	// Set is a pinned set resolution the worker installs as one candidate.
+	// SkillID, SkillName and Version are then empty.
+	Set *PinnedSet `json:"set,omitempty"`
 }
 
 // Executor submits and cancels eval jobs.

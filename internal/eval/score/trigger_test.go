@@ -110,22 +110,20 @@ func TestTriggerF1_FlagsAnInferredMeasurement(t *testing.T) {
 }
 
 func TestDetectFiring_PrefersAnExplicitInvocation(t *testing.T) {
-	caps := agent.Caps{SupportsSkillInvocation: true}
 	events := []agent.Event{
 		{Seq: 1, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
-	fired, inferred := score.DetectFiring("demo", caps, events)
+	fired, inferred := score.Fired(score.DetectFiring(events), "demo")
 	if !fired || inferred {
 		t.Errorf("fired=%v inferred=%v, want an explicit detection", fired, inferred)
 	}
 }
 
 func TestDetectFiring_FallsBackToASkillRead(t *testing.T) {
-	caps := agent.Caps{SupportsSkillInvocation: false}
 	events := []agent.Event{
 		{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
-	fired, inferred := score.DetectFiring("demo", caps, events)
+	fired, inferred := score.Fired(score.DetectFiring(events), "demo")
 	if !fired || !inferred {
 		t.Errorf("fired=%v inferred=%v, want an inferred detection", fired, inferred)
 	}
@@ -137,30 +135,27 @@ func TestDetectFiring_ASkillReadIsAlwaysInferredEvenWhenTheAdapterSupportsInvoca
 	// still cannot distinguish "consulted" from "used". If this adapter
 	// truly saw only a read here (no TypeToolCall), that's exactly the case
 	// Inferred exists to flag.
-	caps := agent.Caps{SupportsSkillInvocation: true}
 	events := []agent.Event{
 		{Seq: 1, Type: agent.TypeSkillRead, Name: "demo", Paths: []string{".claude/skills/demo/SKILL.md"}},
 	}
-	fired, inferred := score.DetectFiring("demo", caps, events)
+	fired, inferred := score.Fired(score.DetectFiring(events), "demo")
 	if !fired || !inferred {
 		t.Errorf("fired=%v inferred=%v, want fired and inferred", fired, inferred)
 	}
 }
 
 func TestDetectFiring_IgnoresADistractorsSkillRead(t *testing.T) {
-	caps := agent.Caps{SupportsSkillInvocation: false}
 	events := []agent.Event{
 		{Seq: 1, Type: agent.TypeSkillRead, Name: "other", Paths: []string{".claude/skills/other/SKILL.md"}},
 	}
 	// Reading a distractor is the correct behaviour on a hard negative. Counting
 	// it as the skill under test firing would make precision measure nothing.
-	if fired, _ := score.DetectFiring("demo", caps, events); fired {
+	if fired, _ := score.Fired(score.DetectFiring(events), "demo"); fired {
 		t.Error("a distractor's skill read counted as the skill firing")
 	}
 }
 
 func TestDetectFiring_IgnoresTheSkillNameAsANonTerminalPathSegment(t *testing.T) {
-	caps := agent.Caps{SupportsSkillInvocation: false}
 	events := []agent.Event{
 		{Seq: 1, Type: agent.TypeSkillRead, Name: "other-skill", Paths: []string{".claude/skills/other-skill/demo/subdir/notes.md"}},
 	}
@@ -169,7 +164,21 @@ func TestDetectFiring_IgnoresTheSkillNameAsANonTerminalPathSegment(t *testing.T)
 	// a firing of that skill. Only the immediate parent directory of the path
 	// counts, so "demo" appearing as a non-terminal segment here must not
 	// match.
-	if fired, _ := score.DetectFiring("demo", caps, events); fired {
+	if fired, _ := score.Fired(score.DetectFiring(events), "demo"); fired {
 		t.Error("the skill name as a non-terminal path segment counted as the skill firing")
+	}
+}
+
+// With a set installed, one session can fire the skill under test and a
+// neighbour. The routing report names both, so neither may hide the other.
+func TestDetectFiring_NamesEverySkillThatFired(t *testing.T) {
+	events := []agent.Event{
+		{Seq: 1, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{"review-diff/SKILL.md"}},
+		{Seq: 2, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{"commit-helper/SKILL.md"}},
+		{Seq: 3, Type: agent.TypeToolCall, Name: "Skill", Paths: []string{"review-diff/SKILL.md"}},
+	}
+	got := score.DetectFiring(events)
+	if len(got) != 2 || got[0].Skill != "review-diff" || got[1].Skill != "commit-helper" {
+		t.Fatalf("DetectFiring = %+v, want review-diff then commit-helper", got)
 	}
 }

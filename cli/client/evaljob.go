@@ -35,6 +35,9 @@ type EvalJob struct {
 	ContestID       string             `json:"contest_id,omitempty"`
 	Candidates      []EvalJobCandidate `json:"candidates,omitempty"`
 	ContestAttempts int                `json:"contest_attempts,omitempty"`
+	// Set is the pinned set resolution the worker installs beside the skill.
+	// A client that drops it runs the job as a plain eval.
+	Set *EvalJobSet `json:"set,omitempty"`
 	// Eval is the claim's judge and panel, raw, for the worker to decode.
 	Eval json.RawMessage `json:"-"`
 }
@@ -48,6 +51,23 @@ type EvalJobCandidate struct {
 	ReusedReport json.RawMessage `json:"reused_report,omitempty"`
 	ReusedFrom   string          `json:"reused_from,omitempty"`
 	PRHeadID     string          `json:"pr_head_id,omitempty"`
+	Set          *EvalJobSet     `json:"set,omitempty"`
+}
+
+// EvalJobSet is a pinned set resolution as the claim returns it.
+type EvalJobSet struct {
+	SetID        string             `json:"set_id"`
+	Name         string             `json:"name"`
+	ResolutionID string             `json:"resolution_id"`
+	Members      []EvalJobSetMember `json:"members"`
+}
+
+// EvalJobSetMember is one skill of a pinned set.
+type EvalJobSetMember struct {
+	Name     string `json:"name"`
+	Version  int    `json:"version"`
+	Digest   string `json:"digest"`
+	SuiteRef string `json:"suite_ref,omitempty"`
 }
 
 // ClaimEvalJob calls POST /api/eval/jobs/claim. It returns (nil, "", false,

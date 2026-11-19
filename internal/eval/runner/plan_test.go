@@ -85,7 +85,7 @@ func TestBuildPlan_BaselineRunsOnThePrimaryMemberOnly(t *testing.T) {
 // A contest pays only for sessions its verdict reads: the contest's attempts
 // with the skill, no baseline and no probes, whatever triggers the suite has.
 func TestBuildContestPlan_RunsTheContestAttemptsAndNothingElse(t *testing.T) {
-	p, err := runner.BuildContestPlan(runner.TierFull, 3, runner.DefaultPanel(), evals(10), nil)
+	p, err := runner.BuildContestPlan(runner.TierFull, 3, runner.DefaultPanel(), evals(10), nil, nil, false)
 	if err != nil {
 		t.Fatalf("BuildContestPlan: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestBuildContestPlan_RunsTheContestAttemptsAndNothingElse(t *testing.T) {
 	if runner.BaselinePlanned(*p) {
 		t.Error("a contest plan reports a baseline")
 	}
-	if _, err := runner.BuildContestPlan(runner.TierFull, 0, runner.DefaultPanel(), evals(10), nil); err == nil {
+	if _, err := runner.BuildContestPlan(runner.TierFull, 0, runner.DefaultPanel(), evals(10), nil, nil, false); err == nil {
 		t.Error("zero attempts planned without an error")
 	}
 }

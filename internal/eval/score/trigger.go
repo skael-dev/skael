@@ -73,42 +73,85 @@ func TriggerF1(ps []Probe) (F1Result, error) {
 	return r, nil
 }
 
-// DetectFiring reports whether skill fired in events, and whether the
-// detection was inferred (a SKILL.md read) rather than explicit (a Skill
-// tool call).
-func DetectFiring(skill string, caps agent.Caps, events []agent.Event) (fired, inferred bool) {
-	explicit := false
-	read := false
+// Firing is one skill that fired in a session. Skill is the name the event
+// carried: the name the agent invoked, or the folder of the SKILL.md it read.
+// Inferred is true when the only evidence is a read of SKILL.md.
+type Firing struct {
+	Skill    string
+	Inferred bool
+}
+
+// DetectFiring returns every skill that fired in events, in the order each
+// first fired. An explicit invocation (a Skill tool call) wins over a read of
+// the same skill. With several skills installed, a session can fire more than
+// one, and the routing report needs every name.
+func DetectFiring(events []agent.Event) []Firing {
+	var out []Firing
+	at := map[string]int{}
+	add := func(name string, inferred bool) {
+		if name == "" {
+			return
+		}
+		if i, ok := at[name]; ok {
+			if !inferred {
+				out[i].Inferred = false
+			}
+			return
+		}
+		at[name] = len(out)
+		out = append(out, Firing{Skill: name, Inferred: inferred})
+	}
 	for _, e := range events {
 		switch e.Type {
 		case agent.TypeToolCall:
-			if e.Name == "Skill" && eventNamesSkill(e, skill) {
-				explicit = true
+			if e.Name == "Skill" {
+				for _, n := range eventSkills(e) {
+					add(n, false)
+				}
 			}
 		case agent.TypeSkillRead:
-			if eventNamesSkill(e, skill) {
+			for _, n := range eventSkills(e) {
+				add(n, true)
+			}
+		}
+	}
+	return out
+}
+
+// Fired reports whether any of names fired, and whether the evidence was only
+// inferred. names holds every name the skill can appear under.
+func Fired(firings []Firing, names ...string) (fired, inferred bool) {
+	explicit, read := false, false
+	for _, f := range firings {
+		for _, n := range names {
+			if f.Skill != n {
+				continue
+			}
+			if f.Inferred {
 				read = true
+			} else {
+				explicit = true
 			}
 		}
 	}
 	if explicit {
 		return true, false
 	}
-	if read {
-		return true, true
-	}
-	return false, false
+	return read, read
 }
 
-// eventNamesSkill reports whether e refers to skill by name or path.
-func eventNamesSkill(e agent.Event, skill string) bool {
-	if e.Name == skill {
-		return true
-	}
+// eventSkills names the skills one event refers to. Only the immediate parent
+// directory of a path counts, so a folder named after a skill deeper in some
+// other skill's tree is not that skill.
+func eventSkills(e agent.Event) []string {
+	var out []string
 	for _, p := range e.Paths {
-		if path.Base(path.Dir(p)) == skill {
-			return true
+		if path.Base(p) == "SKILL.md" {
+			out = append(out, path.Base(path.Dir(p)))
 		}
 	}
-	return false
+	if len(out) == 0 && e.Name != "" && e.Name != "Skill" {
+		out = append(out, e.Name)
+	}
+	return out
 }

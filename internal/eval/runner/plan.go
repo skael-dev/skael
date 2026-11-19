@@ -37,6 +37,10 @@ const (
 	CondSkill    store.Condition = "skill"
 	CondBaseline store.Condition = "baseline"
 	CondTrigger  store.Condition = "trigger"
+	// CondWithSet runs a task with the skill and every member of a set
+	// installed. It never feeds the headline or the lift: it only shows what
+	// the neighbours cost the skill.
+	CondWithSet store.Condition = "with_set"
 )
 
 // Member is one entry in the model panel.
@@ -144,6 +148,10 @@ type Probe struct {
 	Prompt   string
 	Positive bool
 	Member   Member
+	// Source is empty for a query from the suite under test, and names the set
+	// member whose own should-trigger query this is otherwise. A member's
+	// query is a should-not-trigger probe for the skill under test.
+	Source string
 }
 
 // Plan is the complete list of work an evaluation performs.
@@ -170,10 +178,10 @@ func BuildPlan(t Tier, p Panel, set *suite.EvalSet, void map[int]bool, triggers 
 }
 
 // BuildContestPlan enumerates a contest candidate's sessions: the tier's evals
-// and members at the contest's attempts per task, and nothing else. A verdict
-// reads only skill-condition runs, so a baseline or a probe here is a session
-// spent on a number no contest reports.
-func BuildContestPlan(t Tier, attempts int, p Panel, set *suite.EvalSet, void map[int]bool) (*Plan, error) {
+// and members at the contest's attempts per task. A verdict reads only
+// skill-condition runs, so no baseline runs. Probes run only when the contest
+// enters a set: then which skill takes which prompt is part of the answer.
+func BuildContestPlan(t Tier, attempts int, p Panel, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery, probes bool) (*Plan, error) {
 	b, ok := budgets[t]
 	if !ok {
 		return nil, fmt.Errorf("runner: unknown tier %q", t)
@@ -181,8 +189,65 @@ func BuildContestPlan(t Tier, attempts int, p Panel, set *suite.EvalSet, void ma
 	if attempts < 1 {
 		return nil, fmt.Errorf("runner: a contest needs at least one attempt per task, got %d", attempts)
 	}
-	b.Runs, b.BaselineRuns, b.Probes = attempts, 0, 0
-	return buildPlan(t, b, p, set, void, nil)
+	b.Runs, b.BaselineRuns = attempts, 0
+	if !probes {
+		b.Probes, triggers = 0, nil
+	}
+	return buildPlan(t, b, p, set, void, triggers)
+}
+
+// SetQueries is one set member's own should-trigger queries.
+type SetQueries struct {
+	Skill   string
+	Queries []string
+}
+
+// AddSet extends a plan for an eval with a set installed beside the skill.
+// Each planned task gets a with-set run on the primary member, at the tier's
+// attempts, so a rule the neighbours break shows against the skill-alone runs.
+// Each member's should-trigger queries join the probes as should-not-trigger
+// probes, up to the tier's count per side: a real neighbour's prompts measure
+// an overlap the synthetic distractors cannot. A tier with no probes adds none.
+func AddSet(p *Plan, members []SetQueries) error {
+	b, ok := budgets[p.Tier]
+	if !ok {
+		return fmt.Errorf("runner: unknown tier %q", p.Tier)
+	}
+	if len(p.Panel) == 0 {
+		return fmt.Errorf("runner: tier %s needs at least one panel member", p.Tier)
+	}
+	primary := p.Panel[0]
+	for _, e := range p.Evals {
+		for attempt := 1; attempt <= b.Runs; attempt++ {
+			p.Runs = append(p.Runs, store.RunKey{
+				TaskID: EvalID(e.ID), Agent: primary.Agent, Model: primary.Model, Condition: CondWithSet, Attempt: attempt,
+			})
+		}
+	}
+	if b.Probes == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, pr := range p.Probes {
+		seen[pr.Prompt] = true
+	}
+	next := len(p.Probes)
+	for _, m := range members {
+		added := 0
+		for _, q := range m.Queries {
+			if added == b.Probes/2 {
+				break
+			}
+			if q == "" || seen[q] {
+				continue
+			}
+			seen[q] = true
+			p.Probes = append(p.Probes, Probe{Index: next, Prompt: q, Positive: false, Member: primary, Source: m.Skill})
+			next++
+			added++
+		}
+	}
+	return nil
 }
 
 func buildPlan(t Tier, b tierBudget, p Panel, set *suite.EvalSet, void map[int]bool, triggers []suite.TriggerQuery) (*Plan, error) {

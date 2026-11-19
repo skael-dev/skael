@@ -30,6 +30,7 @@ import { ReviewStatus } from "@/features/security/review-status";
 import { ScanFindings, findingKey } from "@/features/security/scan-findings";
 import { SpecBadge } from "@/features/skills/spec-badge";
 import { QualityReport } from "@/features/quality/quality-report";
+import { SetLossLine } from "@/features/quality/set-routing";
 import { SkillActivationsChart } from "@/features/skills/skill-activations-chart";
 import { UsageBreakdown } from "@/features/analytics/usage-breakdown";
 import { OwnersCard } from "@/features/skills/owners-card";
@@ -1071,6 +1072,7 @@ export function SkillDetail() {
           </p>
         )}
         {name && <GitBindingStrip name={name} />}
+        {name && <SetLossLine skillName={name} />}
 
         {/* Meta strip */}
         {skillQuery.isLoading ? (

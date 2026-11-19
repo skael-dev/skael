@@ -65,14 +65,21 @@ func TestEvalRequestFrom_CarriesTierAndPanel(t *testing.T) {
 			Agents: []string{"claude-code", "codex"},
 			Models: []string{"claude-opus-5", "gpt-5"},
 		},
-		Contest:  true,
-		Attempts: 3,
+		Contest:       true,
+		Attempts:      3,
+		ContestProbes: true,
+		Set: &worker.SetInput{Name: "team", ResolutionID: "abc", Candidate: true,
+			Members: []worker.SetMemberInput{{Name: "beta", Version: 4, Dir: "/w/set/beta", Queries: []string{"q"}}},
+			Pinned:  []evalqueue.SetMember{{Name: "alpha", Version: 1}, {Name: "beta", Version: 4}}},
 	}
 
 	req := evalRequestFrom(in, 4, 8)
 
-	if !req.Contest || req.Attempts != 3 {
-		t.Fatalf("Contest = %v, Attempts = %d, want true and 3", req.Contest, req.Attempts)
+	if !req.Contest || req.Attempts != 3 || !req.ContestProbes {
+		t.Fatalf("Contest = %v, Attempts = %d, ContestProbes = %v, want true, 3 and true", req.Contest, req.Attempts, req.ContestProbes)
+	}
+	if req.Set == nil || !req.Set.Candidate || len(req.Set.Members) != 1 || req.Set.Members[0].Dir != "/w/set/beta" || len(req.Set.Pinned) != 2 {
+		t.Fatalf("Set = %+v, want the set candidate with its member and both pinned skills", req.Set)
 	}
 
 	if got, want := string(req.Tier), in.Tier; got != want {

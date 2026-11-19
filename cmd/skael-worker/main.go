@@ -525,7 +525,27 @@ func evalRequestFrom(in worker.RunInput, concurrency, gradeConcurrency int) whet
 		AllowVoid:        in.AllowVoid,
 		Contest:          in.Contest,
 		Attempts:         in.Attempts,
+		ContestProbes:    in.ContestProbes,
+		Set:              setRunFrom(in.Set),
 		Concurrency:      concurrency,
 		GradeConcurrency: gradeConcurrency,
 	}
+}
+
+// setRunFrom maps the worker's unpacked set onto the engine's. A set dropped
+// here runs the eval with nothing beside the skill, and nothing fails.
+func setRunFrom(in *worker.SetInput) *whetstone.SetRun {
+	if in == nil {
+		return nil
+	}
+	out := &whetstone.SetRun{Name: in.Name, ResolutionID: in.ResolutionID, Candidate: in.Candidate}
+	for _, m := range in.Members {
+		out.Members = append(out.Members, whetstone.SetMemberRun{
+			Name: m.Name, Version: m.Version, Digest: m.Digest, Dir: m.Dir, Queries: m.Queries, Deps: m.Deps,
+		})
+	}
+	for _, m := range in.Pinned {
+		out.Pinned = append(out.Pinned, report.SetReportMember{Name: m.Name, Version: m.Version, Digest: m.Digest})
+	}
+	return out
 }

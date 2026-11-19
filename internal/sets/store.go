@@ -633,3 +633,29 @@ func (s *Store) SkillVersionExists(ctx context.Context, name string, version int
 	}
 	return ok, nil
 }
+
+// ErrResolutionNotFound means a set has no stored resolution with that id.
+var ErrResolutionNotFound = errors.New("the set has no stored resolution with that id")
+
+// Pin returns a stored resolution a job can reference: the one named by id,
+// or, with no id, the set's current resolution, which it stores first.
+func (s *Store) Pin(ctx context.Context, set *Set, id string) (*Resolution, error) {
+	if id != "" {
+		res, err := s.GetResolution(ctx, set, id)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return nil, ErrResolutionNotFound
+		}
+		return res, nil
+	}
+	res, err := Resolve(ctx, s.pool, set)
+	if err != nil {
+		return nil, err
+	}
+	if err := saveResolution(ctx, s.pool, set, res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}

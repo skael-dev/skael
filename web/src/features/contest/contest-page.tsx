@@ -3,14 +3,29 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { getContest } from "@/api/sdk.gen";
-import type { ContestOutput, Pairing } from "@/api/types.gen";
+import type { ContestCandidateOutput, ContestOutput, Pairing } from "@/api/types.gen";
 import { Split, SuiteNote, VerdictLine } from "./contest-verdict";
 
 function rate(v: number) {
   return `${Math.round(v * 100)}%`;
 }
 
-function PairingTable({ pairing }: { pairing: Pairing }) {
+// The skills that fired on one task for one candidate, joined, or "none".
+function firedOn(candidates: ContestCandidateOutput[], label: string, taskId: string): string {
+  const cand = candidates.find((c) => c.label === label);
+  const hit = (cand?.fired ?? []).find((f) => f.task_id === taskId);
+  return hit && (hit.skills ?? []).length > 0 ? (hit.skills ?? []).join(" + ") : "none";
+}
+
+function PairingTable({
+  pairing,
+  candidates,
+  showFired,
+}: {
+  pairing: Pairing;
+  candidates: ContestCandidateOutput[];
+  showFired: boolean;
+}) {
   const tasks = pairing.tasks ?? [];
   return (
     <div className="mb-8">
@@ -30,6 +45,7 @@ function PairingTable({ pairing }: { pairing: Pairing }) {
               <th className="text-right font-normal px-3 py-2 font-mono">{pairing.a}</th>
               <th className="text-right font-normal px-3 py-2 font-mono">{pairing.b}</th>
               <th className="text-right font-normal px-3 py-2">Won by</th>
+              {showFired && <th className="text-left font-normal px-3 py-2">Fired</th>}
             </tr>
           </thead>
           <tbody>
@@ -45,6 +61,18 @@ function PairingTable({ pairing }: { pairing: Pairing }) {
                     <span className="text-text-tertiary">tie</span>
                   )}
                 </td>
+                {showFired && (
+                  <td className="px-3 py-2 text-[11px] font-mono text-text-secondary">
+                    <div>
+                      <span className="text-text-tertiary">A </span>
+                      {firedOn(candidates, pairing.a, t.task_id)}
+                    </div>
+                    <div>
+                      <span className="text-text-tertiary">B </span>
+                      {firedOn(candidates, pairing.b, t.task_id)}
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -61,6 +89,7 @@ function Losses({ contest }: { contest: ContestOutput }) {
   const losses = contest.losses ?? [];
   if (losses.length === 0) return null;
 
+  const setLabels = new Set((contest.candidates ?? []).filter((c) => c.set).map((c) => c.label));
   const byLabel = new Map<string, typeof losses>();
   for (const l of losses) {
     byLabel.set(l.label, [...(byLabel.get(l.label) ?? []), l]);
@@ -83,6 +112,14 @@ function Losses({ contest }: { contest: ContestOutput }) {
                   <li key={m}>— {m}</li>
                 ))}
               </ul>
+              {((l.fired ?? []).length > 0 || setLabels.has(label)) && (
+                <div className="text-[11px] text-text-tertiary mt-0.5">
+                  fired:{" "}
+                  <span className="font-mono">
+                    {(l.fired ?? []).length > 0 ? (l.fired ?? []).join(", ") : "no skill of the set"}
+                  </span>
+                </div>
+              )}
               {l.evidence && (
                 <div className="text-[11px] text-text-tertiary mt-0.5 italic">{l.evidence}</div>
               )}
@@ -90,6 +127,41 @@ function Losses({ contest }: { contest: ContestOutput }) {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// Each candidate's cost beside its result: a split that wins by one task at
+// twice the context is a different answer from a clean win.
+function Candidates({ candidates }: { candidates: ContestCandidateOutput[] }) {
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-medium text-text-primary mb-2">Candidates</h3>
+      <div className="border border-border rounded-lg divide-y divide-border">
+        {candidates.map((c) => (
+          <div key={c.label} className="px-3 py-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <div className="min-w-0">
+              <div className="font-mono text-[12px] text-text-primary break-all">{c.label}</div>
+              {c.set && (
+                <div className="text-[11px] text-text-tertiary break-words">
+                  installs{" "}
+                  {(c.set.members ?? []).map((m) => `${m.name}@${m.version}`).join(", ")}
+                </div>
+              )}
+            </div>
+            <div className="text-[11px] text-text-secondary whitespace-nowrap">
+              {c.tokens_median ? (
+                <>
+                  <span className="font-mono text-text-primary">{c.tokens_median.toLocaleString()}</span>{" "}
+                  tokens per run, median
+                </>
+              ) : (
+                "token use not measured"
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -123,15 +195,18 @@ export function ContestPage() {
 
   const contest = query.data;
   const candidates = contest.candidates ?? [];
+  // A set candidate names no single skill, so the link goes to the first
+  // candidate that does.
+  const backTo = candidates.find((c) => c.skill)?.skill;
 
   return (
     <div className="px-5 py-8 md:px-8 max-w-[1000px]">
       <Link
-        to={candidates[0] ? `/skills/${candidates[0].skill}` : "/"}
+        to={backTo ? `/skills/${backTo}` : "/"}
         className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary hover:text-text-primary mb-6"
       >
         <ArrowLeft className="size-3.5" />
-        {candidates[0]?.skill ?? "Skills"}
+        {backTo ?? "Skills"}
       </Link>
 
       <div className="text-[10px] text-text-tertiary uppercase tracking-[0.08em] mb-2">
@@ -163,8 +238,15 @@ export function ContestPage() {
         </ul>
       )}
 
+      <Candidates candidates={candidates} />
+
       {(contest.pairings ?? []).map((p) => (
-        <PairingTable key={`${p.a}-${p.b}`} pairing={p} />
+        <PairingTable
+          key={`${p.a}-${p.b}`}
+          pairing={p}
+          candidates={candidates}
+          showFired={candidates.some((c) => c.set)}
+        />
       ))}
 
       <Losses contest={contest} />

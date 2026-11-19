@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,7 +60,8 @@ func (p *PoolExecutor) WithExecutor(e DBExecutor) *PoolExecutor {
 // order. Claim's UPDATE ... RETURNING (a later task) returns the same list.
 const jobColumns = `id, skill_id, skill_name, version, suite_ref, tier, panel,
 	status, attempts, max_attempts, worker_id, lease_expires_at, lease_seconds,
-	last_error, requested_by, created_at, started_at, COALESCE(contest_id::text, '')`
+	last_error, requested_by, created_at, started_at, COALESCE(contest_id::text, ''),
+	COALESCE(set_id::text, ''), set_name, COALESCE(set_resolution_id, ''), set_members`
 
 // row is the subset of pgx.Row/pgx.Rows that Scan needs.
 type row interface {
@@ -73,14 +72,22 @@ type row interface {
 func scanJob(r row) (*Job, error) {
 	var j Job
 	var id, skillID string
-	var panelJSON []byte
+	var panelJSON, membersJSON []byte
+	var set PinnedSet
 	err := r.Scan(
 		&id, &skillID, &j.SkillName, &j.Version, &j.SuiteRef, &j.Tier, &panelJSON,
 		&j.Status, &j.Attempts, &j.MaxAttempts, &j.WorkerID, &j.LeaseExpiresAt, &j.LeaseSeconds,
 		&j.LastError, &j.RequestedBy, &j.CreatedAt, &j.StartedAt, &j.ContestID,
+		&set.SetID, &set.Name, &set.ResolutionID, &membersJSON,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if set.ResolutionID != "" {
+		if err := json.Unmarshal(membersJSON, &set.Members); err != nil {
+			return nil, fmt.Errorf("evalqueue: unmarshal set members: %w", err)
+		}
+		j.Set = &set
 	}
 	j.ID = JobID(id)
 	j.SkillID = skillID
@@ -111,11 +118,21 @@ func (p *PoolExecutor) Submit(ctx context.Context, j Job) (JobID, error) {
 	if j.ContestID != "" {
 		contestID = &j.ContestID
 	}
+	var setID, setResolution *string
+	setName, setMembers := "", []byte("[]")
+	if j.Set != nil {
+		setID, setResolution, setName = &j.Set.SetID, &j.Set.ResolutionID, j.Set.Name
+		if setMembers, err = json.Marshal(j.Set.Members); err != nil {
+			return "", fmt.Errorf("evalqueue: marshal set members: %w", err)
+		}
+	}
 	var id string
 	err = p.db.QueryRow(ctx, `
-		INSERT INTO eval_jobs (skill_id, skill_name, version, suite_ref, tier, panel, requested_by, contest_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		j.SkillID, j.SkillName, j.Version, j.SuiteRef, tier, panelJSON, requestedBy, contestID).Scan(&id)
+		INSERT INTO eval_jobs (skill_id, skill_name, version, suite_ref, tier, panel, requested_by, contest_id,
+			set_id, set_name, set_resolution_id, set_members)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+		j.SkillID, j.SkillName, j.Version, j.SuiteRef, tier, panelJSON, requestedBy, contestID,
+		setID, setName, setResolution, setMembers).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("evalqueue: submit: %w", err)
 	}
@@ -194,7 +211,8 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		return nil, "", false, fmt.Errorf("evalqueue: claim: worker version: %w", err)
 	}
 	// A worker that predates checks would run the session and ignore them,
-	// and a check it never ran would not count against the skill.
+	// and a check it never ran would not count against the skill. A worker
+	// that predates sets would run a job with a set as a plain eval.
 	row := p.db.QueryRow(ctx, `
 		WITH claimable AS (
 			SELECT id AS claim_id FROM eval_jobs
@@ -203,6 +221,9 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 			  AND attempts < max_attempts
 			  AND ($4 OR NOT EXISTS (SELECT 1 FROM eval_suites s
 			                         WHERE s.ref = eval_jobs.suite_ref AND s.has_checks))
+			  AND ($5 OR (eval_jobs.set_resolution_id IS NULL
+			              AND NOT EXISTS (SELECT 1 FROM contest_candidates cc
+			                              WHERE cc.contest_id = eval_jobs.contest_id AND cc.resolution_id IS NOT NULL)))
 			ORDER BY created_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
@@ -218,7 +239,7 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		    updated_at = now()
 		FROM claimable c
 		WHERE j.id = c.claim_id
-		RETURNING `+jobColumns, workerID, int(lease.Seconds()), hex.EncodeToString(hash[:]), RunsChecks(version))
+		RETURNING `+jobColumns, workerID, int(lease.Seconds()), hex.EncodeToString(hash[:]), RunsChecks(version), RunsSets(version))
 
 	j, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -233,24 +254,9 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 // ChecksSince is the first worker release that runs checks.
 var ChecksSince = [3]int{0, 23, 0}
 
-var releaseVersion = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
-
 // RunsChecks reports whether a worker that checked in with version runs an
-// eval's checks. A pre-release or a git describe suffix belongs to the release
-// it names; "dev" and an unknown worker do not run them.
-func RunsChecks(version string) bool {
-	m := releaseVersion.FindStringSubmatch(version)
-	if m == nil {
-		return false
-	}
-	for i := 0; i < 3; i++ {
-		n, _ := strconv.Atoi(m[i+1])
-		if n != ChecksSince[i] {
-			return n > ChecksSince[i]
-		}
-	}
-	return true
-}
+// eval's checks.
+func RunsChecks(version string) bool { return atLeast(version, ChecksSince) }
 
 // QueuePosition reports how many queued jobs sit ahead of id, so the UI can
 // say "position 3" instead of showing a spinner for the 45-90 minutes an eval

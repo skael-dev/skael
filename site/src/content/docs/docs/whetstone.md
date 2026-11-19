@@ -156,6 +156,8 @@ It never adds a file, deletes one, or writes anything executable. A generator th
 
 **The proposer never sees the tasks.** It is given the expectations that failed and the grader's evidence, and nothing else — so it cannot write a change tailored to a case it has not read. The second safeguard is that the output is a diff you read before anything is published.
 
+It refuses a set candidate. To split one skill or to merge several is a decision for a person.
+
 It publishes nothing and starts nothing. Keep or discard the diff, publish, then run `skael contest` against the previous version to find out whether it helped. A candidate that recorded no loss gets no proposal, and is told so: inventing an improvement with no evidence is the thing this replaces.
 
 ### Flags
