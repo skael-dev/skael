@@ -184,3 +184,16 @@ func TestFinalize_MergesExternalFindings(t *testing.T) {
 		t.Errorf("expected Summary.High==1, got %d", report.Summary.High)
 	}
 }
+
+func TestNewExternalScanner_NameHidesCommandPath(t *testing.T) {
+	cases := map[string]string{
+		"/opt/tools/gitleaks detect --source {dir}": "gitleaks",
+		`C:\tools\gitleaks.exe detect`:              "gitleaks",
+		"gitleaks detect":                           "gitleaks",
+	}
+	for cmdline, want := range cases {
+		if got := NewExternalScanner(cmdline, 0).Name; got != want {
+			t.Errorf("NewExternalScanner(%q).Name = %q, want %q", cmdline, got, want)
+		}
+	}
+}
