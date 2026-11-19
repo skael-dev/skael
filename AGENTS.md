@@ -72,3 +72,6 @@ One Go module builds every binary under `cmd/`, and `cmd/server` embeds the Reac
 - followed source: a skill name, a pattern or a set that skael add recorded, which sync keeps current. Avoid: subscription, watch.
 - pattern entry: a set entry or followed source written as prefix:* or *, matching released skills by canonical name. Avoid: glob, wildcard, namespace entry.
 - exclusion: a set entry written as !name or !prefix:*, applied after every include. Avoid: deny entry, blocklist.
+- check: a deterministic pass or fail test in evals.json that runs in the sandbox after the agent finishes, with no judge. Avoid: assertion, verifier.
+- withdrawn: the gate state of a released version in which a rescan found an exfiltration or secret finding, which is never served. Avoid: yanked, revoked, pulled.
+- suite: the evals folder of a skill, with evals.json, triggers.json, files and checks, stored apart from the version under its own ref. Avoid: test set, eval pack.
