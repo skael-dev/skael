@@ -17,6 +17,7 @@ import (
 
 	"github.com/skael-dev/skael/internal/auth"
 	"github.com/skael-dev/skael/internal/eval/suite"
+	"github.com/skael-dev/skael/internal/gate"
 	"github.com/skael-dev/skael/internal/skill"
 )
 
@@ -70,10 +71,18 @@ type DeriveClaims interface {
 	RecordDerivedSuite(ctx context.Context, q Queryer, jobID, ref string) error
 }
 
+// OwnerResolver answers whether a person may change a skill. It folds instance
+// privilege into IsOwner, the same answer publish acts on.
+type OwnerResolver interface {
+	ResolveForPublish(ctx context.Context, skillName string, user *auth.User) (gate.OwnerState, error)
+}
+
 // RouteOptions carries optional collaborators. A nil Claims disables push-time
 // provenance entirely: every upload is recorded authored, as it was before.
+// A nil Owners lets any member push, which only a test harness wants.
 type RouteOptions struct {
 	Claims DeriveClaims
+	Owners OwnerResolver
 }
 
 type suiteInput struct {
@@ -171,6 +180,18 @@ func RegisterRoutes(api huma.API, router chi.Router, reg *Registry, skills *skil
 		// store an authored suite, and a score against that suite clears a hold.
 		if auth.KeyFromContext(ctx).Restricted() {
 			return nil, huma.Error403Forbidden("upload eval suite: a scoped key must present a job claim")
+		}
+		// A suite's score can clear a scan hold, so replacing it is a change to
+		// the skill, and only someone who may publish it unheld may make it.
+		if opts.Owners != nil {
+			st, err := opts.Owners.ResolveForPublish(ctx, input.Body.Skill, auth.UserFromContext(ctx))
+			if err != nil {
+				log.Error().Err(err).Str("skill", input.Body.Skill).Msg("evalsuite: resolve ownership failed")
+				return nil, huma.Error500InternalServerError("upload eval suite: internal error")
+			}
+			if !st.IsOwner && !st.Unowned {
+				return nil, huma.Error403Forbidden(fmt.Sprintf("upload eval suite: only an owner of %s or an admin can replace its suite", input.Body.Skill))
+			}
 		}
 
 		if input.Body.Unreviewed {

@@ -164,7 +164,7 @@ func runLocalImport(c *client.Client, path string) error {
 	var allFailed []client.FailedSkill
 
 	for _, dir := range dirs {
-		archive, _, _, err := skill.Pack(dir)
+		archive, _, err := skill.PackUpload(dir)
 		if err != nil {
 			allFailed = append(allFailed, client.FailedSkill{Name: filepath.Base(dir), Error: err.Error()})
 			if !ui.JSONMode {

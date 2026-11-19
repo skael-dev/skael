@@ -28,6 +28,8 @@ type Eval struct {
 	ExpectedOutput string   `json:"expected_output,omitempty"`
 	Files          []string `json:"files,omitempty"`
 	Expectations   []string `json:"expectations,omitempty"`
+	// Checks are graded without a judge. Each counts as one expectation.
+	Checks []Check `json:"checks,omitempty"`
 }
 
 // UnmarshalJSON reads `assertions` as an alias for `expectations`.
@@ -176,12 +178,21 @@ func Validate(dir string, set *EvalSet) []EvalCheck {
 	for _, e := range set.Evals {
 		check := EvalCheck{ID: e.ID, OK: true}
 		switch {
-		case len(e.Expectations) == 0:
-			check = EvalCheck{ID: e.ID, Void: true, Reason: "no expectations to grade"}
+		case len(e.Expectations) == 0 && len(e.Checks) == 0:
+			check = EvalCheck{ID: e.ID, Void: true, Reason: "no expectations or checks to grade"}
 		default:
 			for _, f := range e.Files {
 				if missing := missingFile(dir, f); missing != "" {
 					check = EvalCheck{ID: e.ID, Void: true, Reason: "missing input file " + missing}
+					break
+				}
+			}
+			if check.Void {
+				break
+			}
+			for i, c := range e.Checks {
+				if p := c.Problem(dir); p != "" {
+					check = EvalCheck{ID: e.ID, Void: true, Reason: fmt.Sprintf("check %d (%s): %s", i+1, c.Label(), p)}
 					break
 				}
 			}

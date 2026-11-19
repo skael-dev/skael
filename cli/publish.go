@@ -77,7 +77,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	// Run local security scan and print findings
 	sp := StartSpinner("Scanning...")
-	report, err := scan.ScanDir(dir)
+	report, err := scan.ScanDirExcept(dir, skill.SuiteDir)
 	if err != nil {
 		sp.Stop()
 		return failure("scan_error", err.Error(), "")
@@ -124,7 +124,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	// Pack the skill directory into a tar.gz archive
 	sp = StartSpinner("Packing archive...")
-	archive, _, entries, err := skill.Pack(dir)
+	archive, entries, err := skill.PackUpload(dir)
 	if err != nil {
 		sp.Stop()
 		return failure("pack_error", err.Error(), "")
@@ -206,15 +206,23 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	if ui.JSONMode {
 		out := struct {
-			Name      string        `json:"name"`
-			Version   int           `json:"version"`
-			Created   bool          `json:"created"`
-			Decision  gate.Decision `json:"decision"`
-			GateState string        `json:"gate_state"`
+			Name      string               `json:"name"`
+			Version   int                  `json:"version"`
+			Created   bool                 `json:"created"`
+			Outcome   string               `json:"outcome,omitempty"`
+			Suite     *client.PublishSuite `json:"suite,omitempty"`
+			JobID     string               `json:"job_id,omitempty"`
+			Quality   client.QualityState  `json:"quality"`
+			Decision  gate.Decision        `json:"decision"`
+			GateState string               `json:"gate_state"`
 		}{
 			Name:      name,
 			Version:   ver.Version,
 			Created:   ver.Created,
+			Outcome:   ver.Outcome,
+			Suite:     ver.Suite,
+			JobID:     ver.Quality.JobID,
+			Quality:   ver.Quality,
 			Decision:  ver.Decision,
 			GateState: ver.GateState,
 		}
@@ -223,6 +231,19 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return enc.Encode(out)
 	}
 
+	if ver.Suite != nil && ver.Suite.Skipped != "" {
+		ui.Warn("evals/ was not stored: %s", ver.Suite.Skipped)
+	}
+	if ver.Outcome == "suite_updated" {
+		ui.Success("Suite updated — v%d is unchanged", ver.Version)
+		if ver.Quality.State == "pending" {
+			fmt.Fprintf(os.Stdout, "  A %s-tier evaluation of v%d against the new suite is queued (job %s)\n", ver.Quality.Tier, ver.Version, ver.Quality.JobID)
+		}
+		if ver.Quality.Reason != "" {
+			ui.Warn("No evaluation queued: %s", ver.Quality.Reason)
+		}
+		return nil
+	}
 	if !ver.Created {
 		// An unchanged-checksum republish returns the version's *persisted*
 		// gate state, not a fresh recompute — GateState is read back from
@@ -274,6 +295,8 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 		if ver.Quality.State == "pending" {
 			fmt.Fprintln(os.Stdout, "  An evaluation has been queued. To approve it by hand instead:")
+		} else if ver.Quality.Reason != "" {
+			fmt.Fprintf(os.Stdout, "  No evaluation was queued: %s. Until the suite is fixed, an owner or admin can approve it:\n", ver.Quality.Reason)
 		} else {
 			fmt.Fprintln(os.Stdout, "  No evaluation suite is registered for this skill, so nothing will")
 			fmt.Fprintln(os.Stdout, "  clear it automatically. An owner or admin can approve it:")
@@ -288,6 +311,15 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	default:
 		fmt.Fprintf(os.Stdout, "  ✓ Published v%d\n", ver.Version)
 		fmt.Fprintf(os.Stdout, "  %s/skills/%s\n", cfg.Endpoint, name)
+	}
+	if ver.Suite != nil && ver.Suite.Updated {
+		fmt.Fprintf(os.Stdout, "  ✓ Suite stored from evals/\n")
+	}
+	if ver.Quality.State == "pending" && ver.Decision.Outcome != gate.NeedsReview {
+		fmt.Fprintf(os.Stdout, "  A %s-tier evaluation is queued (job %s)\n", ver.Quality.Tier, ver.Quality.JobID)
+	}
+	if ver.Quality.Reason != "" && ver.Decision.Outcome != gate.NeedsReview {
+		ui.Warn("No evaluation queued: %s", ver.Quality.Reason)
 	}
 	return nil
 }

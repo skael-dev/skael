@@ -482,17 +482,39 @@ function ProvidersTable({ providers }: { providers: Provider[] }) {
   );
 }
 
+const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// containerEndpoint rewrites a loopback endpoint for a worker in a container,
+// where localhost is the container itself. Docker Desktop resolves
+// host.docker.internal by itself; Linux needs the --add-host mapping.
+function containerEndpoint(endpoint: string): { value: string; loopback: boolean } {
+  try {
+    const u = new URL(endpoint);
+    if (!loopbackHosts.has(u.hostname)) return { value: endpoint, loopback: false };
+    u.hostname = "host.docker.internal";
+    return { value: u.toString().replace(/\/$/, ""), loopback: true };
+  } catch {
+    return { value: endpoint, loopback: false };
+  }
+}
+
 function snippets(reply: WorkersKeyReply, workerID: string) {
-  const env = (reply.env ?? []).map((e) => ({
-    ...e,
-    value: e.name === "SKAEL_ENDPOINT" && !e.value ? window.location.origin : e.value,
-  }));
+  let loopback = false;
+  let endpoint = "";
+  const env = (reply.env ?? []).map((e) => {
+    if (e.name !== "SKAEL_ENDPOINT") return e;
+    endpoint = e.value || window.location.origin;
+    const ep = containerEndpoint(endpoint);
+    loopback = ep.loopback;
+    return { ...e, value: ep.value };
+  });
   const val = (e: { name: string; value: string }) => e.value || `<your ${e.name}>`;
   const compose = [
     "services:",
     "  skael-worker:",
     "    image: ghcr.io/skael-dev/skael-worker:latest",
     "    restart: unless-stopped",
+    ...(loopback ? ["    extra_hosts:", '      - "host.docker.internal:host-gateway"'] : []),
     "    environment:",
     `      WORKER_ID: ${workerID}`,
     ...env.map((e) => `      ${e.name}: ${val(e)}`),
@@ -505,6 +527,7 @@ function snippets(reply: WorkersKeyReply, workerID: string) {
   ].join("\n");
   const run = [
     "docker run -d --name skael-worker --restart unless-stopped \\",
+    ...(loopback ? ["  --add-host=host.docker.internal:host-gateway \\"] : []),
     `  -e WORKER_ID=${workerID} \\`,
     ...env.map((e) => `  -e ${e.name}=${val(e)} \\`),
     "  -e WORKER_RUN_ROOT=/var/lib/skael/run -e WORKER_WORK_ROOT=/var/lib/skael/work \\",
@@ -512,15 +535,26 @@ function snippets(reply: WorkersKeyReply, workerID: string) {
     "  -v /var/lib/skael/run:/var/lib/skael/run -v /var/lib/skael/work:/var/lib/skael/work \\",
     "  ghcr.io/skael-dev/skael-worker:latest",
   ].join("\n");
+  // A pod cannot reach a loopback URL either. With no endpoint, the chart
+  // reaches the server through its in-cluster service, which is right when the
+  // server runs in the same release.
+  const helmEndpoint = loopback
+    ? [
+        `  # No endpoint: ${endpoint} is this machine, which a pod cannot reach.`,
+        "  # The chart then reaches the server through its in-cluster service.",
+        "  # A server outside this cluster: set endpoint to a URL the cluster reaches,",
+        "  # or set Public URL in Instance settings and add the worker again.",
+      ]
+    : [`  endpoint: ${endpoint}`];
   const helm = [
     "# helm upgrade --install skael deploy/helm/skael -f values.yaml",
     "worker:",
     "  enabled: true",
-    `  endpoint: ${val(env.find((e) => e.name === "SKAEL_ENDPOINT")!)}`,
+    ...helmEndpoint,
     `  # kubectl create secret generic skael-worker --from-literal=SKAEL_API_KEY=${val(env.find((e) => e.name === "SKAEL_API_KEY")!)}`,
     "  existingSecret: skael-worker",
   ].join("\n");
-  return { compose, run, helm };
+  return { compose, run, helm, loopback } as const;
 }
 
 function AddWorkerDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -558,6 +592,18 @@ function AddWorkerDialog({ open, onClose }: { open: boolean; onClose: () => void
         ) : (
           <div className="flex flex-col gap-3 min-w-0">
             <p className="text-xs text-warning m-0">The key is shown once. Copy the snippet now.</p>
+            {s!.loopback && tab === "helm" && (
+              <p className="text-xs text-text-secondary m-0">
+                This server is on localhost, which a pod cannot reach. The values leave the endpoint out, so the chart uses the server's in-cluster
+                service.
+              </p>
+            )}
+            {s!.loopback && tab !== "helm" && (
+              <p className="text-xs text-text-secondary m-0">
+                This server is on localhost, and inside the worker container localhost is the container. The snippet uses host.docker.internal, which
+                the --add-host line maps to this machine on Linux.
+              </p>
+            )}
             <div className="flex text-xs border border-border rounded overflow-hidden self-start" role="tablist">
               {(["compose", "run", "helm"] as const).map((t) => (
                 <button

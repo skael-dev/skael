@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -186,12 +188,21 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		return nil, "", false, err
 	}
 	hash := sha256.Sum256([]byte(token))
+	var version string
+	err = p.db.QueryRow(ctx, `SELECT version FROM workers WHERE id = $1`, workerID).Scan(&version)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", false, fmt.Errorf("evalqueue: claim: worker version: %w", err)
+	}
+	// A worker that predates checks would run the session and ignore them,
+	// and a check it never ran would not count against the skill.
 	row := p.db.QueryRow(ctx, `
 		WITH claimable AS (
 			SELECT id AS claim_id FROM eval_jobs
 			WHERE (status = 'queued'
 			       OR (status = 'running' AND lease_expires_at < now()))
 			  AND attempts < max_attempts
+			  AND ($4 OR NOT EXISTS (SELECT 1 FROM eval_suites s
+			                         WHERE s.ref = eval_jobs.suite_ref AND s.has_checks))
 			ORDER BY created_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
@@ -207,7 +218,7 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		    updated_at = now()
 		FROM claimable c
 		WHERE j.id = c.claim_id
-		RETURNING `+jobColumns, workerID, int(lease.Seconds()), hex.EncodeToString(hash[:]))
+		RETURNING `+jobColumns, workerID, int(lease.Seconds()), hex.EncodeToString(hash[:]), RunsChecks(version))
 
 	j, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -217,6 +228,28 @@ func (p *PoolExecutor) Claim(ctx context.Context, workerID string, lease time.Du
 		return nil, "", false, fmt.Errorf("evalqueue: claim: %w", err)
 	}
 	return j, token, true, nil
+}
+
+// ChecksSince is the first worker release that runs checks.
+var ChecksSince = [3]int{0, 23, 0}
+
+var releaseVersion = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
+// RunsChecks reports whether a worker that checked in with version runs an
+// eval's checks. A pre-release or a git describe suffix belongs to the release
+// it names; "dev" and an unknown worker do not run them.
+func RunsChecks(version string) bool {
+	m := releaseVersion.FindStringSubmatch(version)
+	if m == nil {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		n, _ := strconv.Atoi(m[i+1])
+		if n != ChecksSince[i] {
+			return n > ChecksSince[i]
+		}
+	}
+	return true
 }
 
 // QueuePosition reports how many queued jobs sit ahead of id, so the UI can

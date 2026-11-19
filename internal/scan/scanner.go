@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -28,6 +29,13 @@ func init() {
 // Binary files and files larger than maxScanBytes are not fully scanned but are
 // surfaced as informational findings rather than skipped silently.
 func ScanDir(dir string) (*Report, error) {
+	return ScanDirExcept(dir)
+}
+
+// ScanDirExcept is ScanDir without the named top-level directories. A skill's
+// evals/ is never shipped, so a local pre-scan that read it would refuse a
+// publish over fixtures the server never decides on.
+func ScanDirExcept(dir string, skipTop ...string) (*Report, error) {
 	report := &Report{
 		Findings: []Finding{},
 	}
@@ -37,6 +45,9 @@ func ScanDir(dir string) (*Report, error) {
 			return err
 		}
 		if d.IsDir() {
+			if path != dir && filepath.Dir(path) == filepath.Clean(dir) && slices.Contains(skipTop, d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 

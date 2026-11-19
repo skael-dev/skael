@@ -10,6 +10,10 @@ import (
 // SidecarDir is the eval sidecar directory at the bundle root.
 const SidecarDir = "eval"
 
+// SuiteDir is the authored suite at the skill root, in skill-creator's
+// layout. It holds the answer key, so the agent under test must never see it.
+const SuiteDir = "evals"
+
 // SpecFile is the authored spec, beside the bundle rather than inside the
 // sidecar.
 const SpecFile = "spec.yaml"
@@ -22,6 +26,8 @@ const archiveSuffix = ".tar.gz"
 func Excluded(rel string) bool {
 	switch {
 	case rel == SidecarDir || strings.HasPrefix(rel, SidecarDir+"/"):
+		return true
+	case rel == SuiteDir || strings.HasPrefix(rel, SuiteDir+"/"):
 		return true
 	case rel == SpecFile:
 		return true

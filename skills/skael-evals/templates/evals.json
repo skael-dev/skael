@@ -1,0 +1,30 @@
+{
+  "skill_name": "SKILL-NAME",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The request a user types, with concrete detail. Name the input file: data.csv.",
+      "expected_output": "One or two sentences on what a good result looks like.",
+      "files": ["evals/files/data.csv"],
+      "expectations": [
+        "A statement that is true of a good result and false of a bad one.",
+        "A second statement about a different part of the result."
+      ],
+      "checks": [
+        {"name": "output written", "type": "file_exists", "path": "summary.md"},
+        {"name": "output names the total", "type": "regex", "path": "summary.md", "pattern": "(?i)total"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A request whose result a script can verify.",
+      "expected_output": "What a good result looks like.",
+      "expectations": [
+        "A statement the judge can verify from the transcript or the files."
+      ],
+      "checks": [
+        {"name": "tests pass", "type": "command", "script": "run-tests.sh"}
+      ]
+    }
+  ]
+}

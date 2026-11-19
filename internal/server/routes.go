@@ -318,7 +318,7 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 	// Claims lets a worker's derive-path push be attributed to the job it is
 	// deriving for, so the suite is recorded derived at push time rather than
 	// only if and when a report lands.
-	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore, evalsuite.RouteOptions{Claims: evalPool})
+	evalsuite.RegisterRoutes(api, router, suiteRegistry, skillStore, evalsuite.RouteOptions{Claims: evalPool, Owners: ownerResolver})
 
 	// Eval job queue. The server enqueues and ingests; it never holds a
 	// Docker socket or an LLM key — those live on the worker.
