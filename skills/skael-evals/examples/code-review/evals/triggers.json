@@ -1,0 +1,10 @@
+[
+  {"query": "Can you review this PR before I merge it? The diff is in change.diff.", "should_trigger": true},
+  {"query": "Look over utils.py and tell me what is wrong with it.", "should_trigger": true},
+  {"query": "Do a security review of the login handler in auth.js.", "should_trigger": true},
+  {"query": "Give me feedback on the code in billing/ before I open a pull request.", "should_trigger": true},
+  {"query": "Write a Python function that parses ISO 8601 dates.", "should_trigger": false},
+  {"query": "Explain what a mutex is and when I need one.", "should_trigger": false},
+  {"query": "Rename the variable foo to bar across the project.", "should_trigger": false},
+  {"query": "Set up a GitHub Actions workflow that runs the tests.", "should_trigger": false}
+]

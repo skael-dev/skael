@@ -120,7 +120,7 @@ func blocking(severity string) bool {
 // appealableClears returns the sentence a held version shows its publisher.
 // Zero is special-cased because it is the default QUALITY_FLOOR.
 func appealableClears(floor float64) string {
-	const tail = "with a complete panel and no critical contract violations, or an admin approval"
+	const tail = "with a complete panel, or an admin approval"
 	if floor <= 0 {
 		return "a verified evaluation " + tail
 	}

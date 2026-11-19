@@ -1,0 +1,16 @@
+diff --git a/billing/invoice.py b/billing/invoice.py
+--- a/billing/invoice.py
++++ b/billing/invoice.py
+@@ -10,12 +10,15 @@ def send_invoice(customer, invoice):
+-    pdf = render_pdf(invoice)
+-    mailer.send(customer.email, "Your invoice", attachments=[pdf])
+-    invoice.mark_sent()
++    pdf = render_pdf(invoice)
++    for attempt in range(3):
++        mailer.send(customer.email, "Your invoice", attachments=[pdf])
++    invoice.mark_sent()
++    audit.log("invoice sent to " + customer.email + " card " + customer.card_number)
+ 
+ def overdue(invoices):
+-    return [i for i in invoices if i.due_date < today()]
++    return [i for i in invoices if i.due_date <= today() and not i.paid]

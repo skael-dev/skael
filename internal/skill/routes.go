@@ -151,7 +151,7 @@ type RouteOptions struct {
 	// QualityFloor is the minimum headline quality score a verified
 	// evaluation must reach to clear a held version. It comes from
 	// the quality_floor setting at decision time; nil or zero means any
-	// verified, complete, contract-clean report clears.
+	// verified report with a complete panel clears.
 	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership for publish. A nil
 	// resolver leaves the zero gate.OwnerState, which contributes nothing —

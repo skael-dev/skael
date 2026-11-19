@@ -42,7 +42,7 @@ type RouteOptions struct {
 	// QualityFloor is the minimum headline quality score a verified
 	// evaluation must reach to clear a held version. Mirrors
 	// skill.RouteOptions.QualityFloor; the zero value means any verified,
-	// complete, contract-clean report clears.
+	// report with a complete panel clears.
 	QualityFloor func() float64
 	// Ownership resolves and claims skill ownership, mirroring
 	// skill.RouteOptions.Ownership. A nil resolver leaves the zero

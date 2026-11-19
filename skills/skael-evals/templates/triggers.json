@@ -1,0 +1,10 @@
+[
+  {"query": "A request this skill must handle, typed as a user types it.", "should_trigger": true},
+  {"query": "A second request this skill must handle, worded differently.", "should_trigger": true},
+  {"query": "A third request this skill must handle.", "should_trigger": true},
+  {"query": "A fourth request this skill must handle.", "should_trigger": true},
+  {"query": "A near miss: a request in the same area that this skill must not take.", "should_trigger": false},
+  {"query": "A second near miss.", "should_trigger": false},
+  {"query": "A third near miss.", "should_trigger": false},
+  {"query": "An unrelated request.", "should_trigger": false}
+]
