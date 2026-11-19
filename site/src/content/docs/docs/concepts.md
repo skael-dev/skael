@@ -27,7 +27,7 @@ Every publish (and every import) runs a security scan for hardcoded secrets, pro
 - Everything else that blocks (dangerous shell execution, prompt injection, other heuristic matches) doesn't reject the publish. It **holds** the version instead: the version is created with a real version number and a stored archive, but it isn't served — it's left out of the sync manifest, can't be installed or downloaded, and the skill's "latest version" pointer doesn't move to it.
 A held version carries a **set** of hold reasons, and every one of them has to clear before it is served. There are two:
 
-- **`scan`** — an appealable security finding. Cleared by a [quality score](/docs/quality) that comes back verified, with a complete panel and no critical contract violations, at or above `QUALITY_FLOOR`; or by an instance admin running `skael review <name> <version> --approve --reason "..." --reason-kind scan`.
+- **`scan`** — an appealable security finding. Cleared by a [quality score](/docs/quality) that comes back verified, with a complete panel, at or above `QUALITY_FLOOR`; or by an instance admin running `skael review <name> <version> --approve --reason "..." --reason-kind scan`.
 - **`ownership`** — the publisher is not an owner of the name. Cleared by a [skill owner](/docs/ownership) or an instance admin.
 
 Neither can be used to launder the other. A quality score never clears `ownership`; a skill owner never clears `scan`. Rejecting any single reason rejects the whole version.

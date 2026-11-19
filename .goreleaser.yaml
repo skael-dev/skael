@@ -182,7 +182,7 @@ release:
 
     Migrations run automatically on startup. Or use `docker compose up -d` to bundle Postgres.
 
-    The optional evaluation worker is published beside it, as `ghcr.io/skael-dev/skael-worker:{{.Version}}`. It needs a Docker socket and an LLM key, so it runs separately from the server. On a new instance, sign up at `http://localhost:8080` to create the owner account and a personal API key. An upgraded instance keeps its accounts. Read "Before you upgrade" below before you start it.
+    The optional evaluation worker is published beside it, as `ghcr.io/skael-dev/skael-worker:{{.Version}}`. It needs a Docker socket, so it runs separately from the server. Provider keys stay on the server and reach the worker with each job. On a new instance, sign up at `http://localhost:8080` to create the owner account and a personal API key. An upgraded instance keeps its accounts. Read "Before you upgrade" below before you start it.
 
     ## What's in this release
   footer: |

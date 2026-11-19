@@ -121,7 +121,7 @@ Every `skael publish` runs a security scan that checks for hardcoded secrets, pr
 
 **Held for review.** Everything else that blocks — dangerous execution, prompt injection, heuristic matches — creates the version but does not release it. The archive exists and has a version number, but `skills.latest_version` doesn't advance, so the skill never appears in the sync manifest, `skael add` reports it as not found, `skael sync` won't install it, and no client can download it.
 
-A hold is a **set** of reasons, not a single state, and every one of them has to clear before the version is served. There are two. `scan` is an appealable security finding; it clears on a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel and no critical contract violations, or on an instance admin's decision. `ownership` means the publisher doesn't own the name; it clears on a decision by a skill owner or an instance admin.
+A hold is a **set** of reasons, not a single state, and every one of them has to clear before the version is served. There are two. `scan` is an appealable security finding; it clears on a verified evaluation that scores at or above `QUALITY_FLOOR` with a complete panel, or on an instance admin's decision. `ownership` means the publisher doesn't own the name; it clears on a decision by a skill owner or an instance admin.
 
 Neither can launder the other. A quality score clears `scan` and never `ownership` — if it could, the review path would be decorative. A skill owner clears `ownership` and never `scan` — if they could, the security gate would only be as strong as the least careful self-managed namespace. Rejecting any single reason rejects the whole version.
 
@@ -208,16 +208,17 @@ Full reference: [skael.dev/docs/whetstone](https://skael.dev/docs/whetstone).
 
 ## Running the eval worker
 
-A skill only gets scored if it has a registered evaluation suite — by design, not as a failure mode. Publishing a skill with no suite leaves it unscored indefinitely; there's no default suite and nothing generates one automatically.
-
-Register a suite once you've generated and approved one locally with `whetstone`:
+A skill's suite lives in its folder at `evals/`. `skael init` writes the skael-evals skill, which tells a coding agent how to write one; `skael eval check <dir> --tier full` validates it. `skael publish` stores `evals/` as the skill's suite and never ships it to installers:
 
 ```bash
-whetstone suite gen my-skill      # draft a suite from the skill's approved spec
-whetstone suite push my-skill     # register it with the server as the skill's current suite
+skael eval check my-skill --tier full   # validate evals/ and name the tier it reaches
+skael publish my-skill                  # store the version and, from evals/, the suite
+skael eval run my-skill --wait          # queue an eval, print its events, then the headline
 ```
 
-From then on, every `skael publish` for that skill looks up its registered suite and enqueues an evaluation job automatically — publishing never fails because the queue is down or a suite lookup errors; the version is already durable, and an unscored version is a state the product already models.
+A skill with no suite still gets a score: the worker derives a suite from its `SKILL.md`, and that score cannot release a held version. `whetstone suite push` is the other way to store a suite.
+
+Every `skael publish` for a skill with a suite enqueues an evaluation job automatically — publishing never fails because the queue is down or a suite lookup errors; the version is already durable, and an unscored version is a state the product already models.
 
 Jobs sit on the server; nothing evaluates them until a worker is running to claim, execute, and report them back. First, on **Evaluation**, choose a provider and paste its key: OpenRouter, Anthropic, OpenAI, Azure AI Foundry, or any OpenAI-compatible endpoint. Then **Add a worker** creates the worker's key:
 
@@ -236,7 +237,7 @@ export SKAEL_API_KEY=<the key from Evaluation → Add a worker>
 docker compose --profile worker up
 ```
 
-It starts sandbox containers as *siblings* through the host's Docker socket rather than running a daemon of its own. So `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume, and `docker-compose.yml` already does it. Session workspaces and the suite's verifier are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
+It starts sandbox containers as *siblings* through the host's Docker socket rather than running a daemon of its own. So `WORKER_RUN_ROOT` and `WORKER_WORK_ROOT` must each be bind-mounted at the **same path on both sides** — never a named volume, and `docker-compose.yml` already does it. Session workspaces are bind-mounted into sandboxes, and the host daemon resolves those paths; a container-local path silently mounts as an empty directory, which would score every skill as though it did nothing. The worker refuses to start containerized unless both are set.
 
 See [Running the worker in a container](site/src/content/docs/docs/configuration.md#running-the-worker-in-a-container).
 
@@ -254,14 +255,7 @@ Once a job completes, `GET /api/skills/{name}/quality` returns the most recent s
 
 What has to be running: the server, Postgres, and a `skael-worker` with a Docker daemon. Nothing gets scored without a worker — jobs just queue.
 
-A skill needs a registered suite before it can be scored:
-
-```bash
-whetstone suite gen my-skill
-whetstone suite push my-skill
-```
-
-No suite means no score, ever — that's by design (see "Running the eval worker" above).
+A skill's suite comes from `evals/` in its folder (see "Running the eval worker" above). Without one, a worker derives a suite, and that score cannot clear a hold.
 
 On publish, the server looks up the skill's registered suite and enqueues an evaluation job automatically. A version the gate holds still gets a version number and an archive, but isn't served until it clears.
 
