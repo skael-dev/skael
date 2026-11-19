@@ -51,8 +51,9 @@ type Version struct {
 	PublishedBy string          `json:"published_by"`
 	CreatedAt   time.Time       `json:"created_at"`
 
-	// GateState is one of "released", "needs_review", "rejected". Only a
-	// released version is pointed at by skills.latest_version.
+	// GateState is one of "released", "needs_review", "rejected",
+	// "withdrawn". Only a released version is pointed at by
+	// skills.latest_version, and a withdrawn version is never served.
 	GateState    string          `json:"gate_state"`
 	GateDecision json.RawMessage `json:"gate_decision,omitempty"`
 	GatedBy      string          `json:"gated_by,omitempty"`

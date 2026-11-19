@@ -76,6 +76,7 @@ var routeRules = []RouteRule{
 	read("/api/skills/tags", ScopeSkillsRead),
 	read("/api/search", ScopeSkillsRead),
 	read("/api/sync/manifest", ScopeSkillsRead),
+	read("/api/sync/withdrawn", ScopeSkillsRead),
 
 	// Sets.
 	setRead("/api/sets"),
@@ -138,6 +139,7 @@ var routeRules = []RouteRule{
 	del("/api/service-accounts/{id}/keys/{keyId}"),
 	post("/api/skills"), post("/api/skills/register"), del("/api/skills/{name}"),
 	post("/api/skills/{name}/versions"), post("/api/skills/{name}/versions/{version}/review"),
+	post("/api/skills/{name}/versions/{version}/scan"), post("/api/admin/rescan"),
 	put("/api/skills/review"), put("/api/skills/{name}/review"),
 	del("/api/skills/{name}/review"),
 	post("/api/skills/{name}/aliases"), del("/api/skills/{name}/aliases/{alias}"), post("/api/skills/merge"),

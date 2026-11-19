@@ -35,6 +35,7 @@ import { relativeTime } from "@/lib/relative-time";
 const EVENT_TYPES = [
   { id: "skill.version.published", label: "A skill version is released" },
   { id: "skill.version.approved", label: "A review releases a held version" },
+  { id: "skill.version.withdrawn", label: "A rescan withdraws a released version" },
   { id: "set.changed", label: "A set's resolution changes" },
   { id: "submission.decided", label: "A reviewer decides a submission" },
 ];

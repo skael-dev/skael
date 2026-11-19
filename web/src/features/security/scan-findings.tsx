@@ -44,9 +44,14 @@ function getSeverityConfig(severity: string): SeverityStyle {
   return SEVERITY_STYLES[severity] ?? DEFAULT_SEVERITY;
 }
 
+/** Identifies a finding across two scans of one archive, as the server does. */
+export function findingKey(f: Pick<ScanFinding, "rule" | "file" | "line">): string {
+  return `${f.rule}\u0000${f.file}\u0000${f.line}`;
+}
+
 // ── FindingRow ───────────────────────────────────────────────────
 
-function FindingRow({ finding }: { finding: ScanFinding }) {
+function FindingRow({ finding, isNew }: { finding: ScanFinding; isNew: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const sev = getSeverityConfig(finding.severity);
 
@@ -79,6 +84,12 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
         >
           {sev.label}
         </span>
+
+        {isNew && (
+          <span className="text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0 bg-warning/15 text-warning">
+            New since release
+          </span>
+        )}
 
         {/* Rule name */}
         <span className="text-xs font-mono text-text-primary shrink-0">
@@ -126,9 +137,11 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
 type ScanFindingsProps = {
   findings: ScanFinding[];
   scanStatus: string;
+  /** Keys (findingKey) of the findings the released report did not have. */
+  newKeys?: Set<string>;
 };
 
-export function ScanFindings({ findings, scanStatus }: ScanFindingsProps) {
+export function ScanFindings({ findings, scanStatus, newKeys }: ScanFindingsProps) {
   if (findings.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-3">
@@ -136,7 +149,7 @@ export function ScanFindings({ findings, scanStatus }: ScanFindingsProps) {
         <div className="text-sm text-text-secondary">
           {scanStatus === "clean"
             ? "No security findings detected. No action needed."
-            : "No findings to display. Publish a new version to run a scan."}
+            : "No findings to display."}
         </div>
       </div>
     );
@@ -175,7 +188,11 @@ export function ScanFindings({ findings, scanStatus }: ScanFindingsProps) {
       {/* Findings list */}
       <div className="border border-border rounded-lg overflow-hidden">
         {findings.map((finding, i) => (
-          <FindingRow key={`${finding.rule}-${finding.file}-${finding.line}-${i}`} finding={finding} />
+          <FindingRow
+            key={`${finding.rule}-${finding.file}-${finding.line}-${i}`}
+            finding={finding}
+            isNew={newKeys?.has(findingKey(finding)) ?? false}
+          />
         ))}
       </div>
     </div>

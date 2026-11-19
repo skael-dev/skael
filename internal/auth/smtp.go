@@ -30,6 +30,11 @@ func SendTestSMTP(ctx context.Context, host string, port int, username, password
 		"This message confirms that Skael can send email with these settings.")
 }
 
+// SendSMTPText sends one plain-text message to to.
+func SendSMTPText(ctx context.Context, host string, port int, username, password, from, to, subject, text string) error {
+	return sendSMTP(ctx, host, port, username, password, from, to, subject, text)
+}
+
 func sendSMTP(ctx context.Context, host string, port int, username, password, from, to, subject, text string) error {
 	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(from, "\r\n") {
 		return fmt.Errorf("auth.smtp: invalid address")

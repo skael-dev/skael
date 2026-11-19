@@ -74,6 +74,8 @@ Resolves every followed source in `~/.skael/config.json` and installs what chang
 | `--dry-run` | false | Show what would happen without making changes |
 | `--quiet` | false | Suppress non-error output |
 
+Sync removes an installed version that a rescan withdrew, and prints the reason. It prints the reason with `--quiet` too, because the reason names a finding such as a secret. If an older released version exists, sync installs it in the same run. With `--json`, the output lists each removal under `withdrawn`.
+
 ## skael init `[name]`
 
 With no argument, `init` writes two skills to `.agents/skills/` in the current directory, and to `.claude/skills/` when Claude Code is detected. The binary carries both:
@@ -285,6 +287,26 @@ Runs the security scan locally without publishing.
 | `0` | No findings |
 | `1` | Findings detected (warn or critical) |
 | `2` | Scan could not run (missing SKILL.md, I/O error) |
+
+## skael rescan `<skill>[@version]`
+
+Scans a published version again on the server and prints the report. The server uses the same steps as a publish: the built-in rules, the external scanner when one is set, and relative paths in the report. Without `@version`, the command rescans the newest version, held or released. Only an owner of the skill or an instance admin can rescan.
+
+The server stores the new report. The result depends on the version:
+
+- A released version with a new exfiltration or secret finding becomes **withdrawn**. The server stops serving it, and `skael sync` removes it from each machine. Only a new version releases the skill again.
+- A released version with any other new finding stays released. The findings show as new since release.
+- A held version has its scan hold reason decided again. An ownership hold reason stays.
+
+`skael scan <dir>` stays the local scan before a publish.
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | The version has no blocking finding |
+| `1` | The version has a blocking finding, or the request failed |
+| `2` | Usage error |
 
 ## skael eval check `<dir>`
 

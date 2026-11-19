@@ -127,7 +127,9 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `GET` | `/api/skills/{name}/versions/{version}/download` | Download version archive |
 | `GET` | `/api/skills/{name}/versions/{version}/files/{path}` | Download one file from the version archive, as `application/octet-stream` with its size in `X-Skael-File-Size`. The read rule is the same as the archive download: a scoped key that is not a worker gets 404 on a held version. A path that climbs out of the archive gets 400 |
 | `GET` | `/api/skills/{name}/versions/{version}/diff` | What this version changes against the version currently served — SKILL.md as a unified diff, plus per-file added/modified/removed |
-| `GET` | `/api/skills/{name}/scan` | Scan results for the latest version |
+| `GET` | `/api/skills/{name}/scan` | The stored scan report of the newest version, held or released. The body names the `version`, its `gate_state`, the `report`, and `new_findings`: the findings that the report at release did not have. A scoped key that is not a worker gets the newest released version. A skill with no version, or a version with no report, gets 404 with the reason |
+| `POST` | `/api/skills/{name}/versions/{version}/scan` | Scan a stored version again with the same steps as a publish, and store the new report. Owner of the skill or instance admin only. `outcome` is `stored`, `withdrawn`, `rejected`, `released` or `held`. A new exfiltration or secret finding withdraws a released version: it is never served again, and `latest_version` falls back to the newest released version below it, or 0 |
+| `POST` | `/api/admin/rescan` | Queue a rescan of every released version, one background job each. Owner or admin only. Returns `queued` |
 | `PUT` | `/api/skills/{name}/review` | Mark skill as reviewed |
 | `DELETE` | `/api/skills/{name}/review` | Unmark skill as reviewed |
 | `PUT` | `/api/skills/review` | Bulk mark skills as reviewed |
@@ -152,6 +154,7 @@ A request over budget gets `429 Too Many Requests` with a `Retry-After` header, 
 | `POST` | `/api/analytics/dismiss` | Dismiss an unregistered skill |
 | `GET` | `/api/search` | Full-text + fuzzy skill search (`?q=...&limit=N`) |
 | `GET` | `/api/sync/manifest` | Manifest used by `skael sync` (skill names + checksums) |
+| `GET` | `/api/sync/withdrawn` | Each withdrawn version with its name, version, checksum and reason. `skael sync` removes an installed version that is on this list |
 | `POST` | `/api/import/resolve` | Preview skills available for import from a URL |
 | `POST` | `/api/import` | Import selected skills from a resolved source |
 | `POST` | `/api/import/upload` | Import skills from a local archive upload |
@@ -374,7 +377,7 @@ An instance admin registers an endpoint, and the server sends it signed events. 
 {"name": "ci-cache", "url": "https://ci.example.com/skael", "event_types": ["set.changed"], "set_ids": ["c7a1..."]}
 ```
 
-- `event_types` needs at least one of `skill.version.published`, `skill.version.approved`, `set.changed` and `submission.decided`.
+- `event_types` needs at least one of `skill.version.published`, `skill.version.approved`, `skill.version.withdrawn`, `set.changed` and `submission.decided`.
 - `set_ids` limits `set.changed` to those sets. Empty means all sets.
 - A refused address, an unknown event type or an unknown set id returns 422.
 

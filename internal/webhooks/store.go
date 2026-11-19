@@ -15,13 +15,14 @@ import (
 const (
 	EventVersionPublished = "skill.version.published"
 	EventVersionApproved  = "skill.version.approved"
+	EventVersionWithdrawn = "skill.version.withdrawn"
 	EventSetChanged       = "set.changed"
 	EventSubmissionDone   = "submission.decided"
 	eventTest             = "webhook.test"
 )
 
 // EventTypes lists what an endpoint can subscribe to.
-var EventTypes = []string{EventVersionPublished, EventVersionApproved, EventSetChanged, EventSubmissionDone}
+var EventTypes = []string{EventVersionPublished, EventVersionApproved, EventVersionWithdrawn, EventSetChanged, EventSubmissionDone}
 
 // Endpoint is a registered receiver. Its secrets never leave through this type.
 type Endpoint struct {

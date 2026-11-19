@@ -88,6 +88,8 @@ type RegisterAPIDeps struct {
 	// GitSync is the syncer the River worker runs. Nil builds one that only
 	// serves routes.
 	GitSync *gitsync.Syncer
+	// Rescans is the River worker that rescans one version. Nil binds nothing.
+	Rescans *skill.RescanWorker
 }
 
 // mountPeople serves auth-all's routes and merges them into the OpenAPI document,
@@ -227,8 +229,13 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 
 		QualityFloor: floor,
 		Ownership:    ownerResolver,
+		MailOwners:   ownerMailer(snap, ownerResolver, d.UserStore),
+		Jobs:         d.Jobs,
 	}
 	skill.RegisterRoutes(api, router, skillStore, d.Storage, skillOptions)
+	if d.Rescans != nil {
+		d.Rescans.Bind(skill.NewPublisher(skillStore, d.Storage, skillOptions))
+	}
 
 	// Webhooks. Each store below tells the notifier of a change inside the
 	// transaction that makes it.
@@ -288,6 +295,22 @@ func RegisterAPIRoutes(api huma.API, router chi.Router, d RegisterAPIDeps) *eval
 		}
 		return &struct {
 			Body []gosync.ManifestEntry
+		}{Body: entries}, nil
+	})
+	huma.Register(api, huma.Operation{
+		OperationID: "get-withdrawn",
+		Method:      http.MethodGet,
+		Path:        "/api/sync/withdrawn",
+		Summary:     "Every withdrawn version, which a client removes on sync",
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body []gosync.WithdrawnEntry
+	}, error) {
+		entries, err := syncStore.Withdrawn(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("", err)
+		}
+		return &struct {
+			Body []gosync.WithdrawnEntry
 		}{Body: entries}, nil
 	})
 
