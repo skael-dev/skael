@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -34,14 +35,22 @@ type ExternalScanner struct {
 }
 
 // NewExternalScanner builds a scanner from a whitespace-separated command line,
-// or returns nil when cmdline is empty (feature disabled). The first token is
-// used as the scanner Name when it has no explicit name.
+// or returns nil when cmdline is empty (feature disabled). The base name of the
+// first token is the scanner Name.
 func NewExternalScanner(cmdline string, timeout time.Duration) *ExternalScanner {
 	fields := strings.Fields(cmdline)
 	if len(fields) == 0 {
 		return nil
 	}
-	return &ExternalScanner{Name: fields[0], Command: fields, Timeout: timeout}
+	return &ExternalScanner{Name: scannerName(fields[0]), Command: fields, Timeout: timeout}
+}
+
+// scannerName drops the directory and a .exe suffix from a command. The name
+// prefixes every rule ID that reports, the UI and webhooks show, so a full
+// path would disclose the server's filesystem layout.
+func scannerName(command string) string {
+	base := path.Base(strings.ReplaceAll(command, "\\", "/"))
+	return strings.TrimSuffix(base, ".exe")
 }
 
 // Run executes the external scanner over dir and returns the parsed findings.
