@@ -178,7 +178,7 @@ func installAutoSyncHooks(home string, detected []agents.Agent) int {
 // skael on PATH repairs, so a dev build or a copy in a temp dir never
 // redirects a user's hooks to itself.
 func repairHooks(args []string) {
-	if len(args) > 0 && (args[0] == "hook" || args[0] == "version" || args[0] == "help") {
+	if len(args) > 0 && (args[0] == "hook" || args[0] == "uninstall" || args[0] == "version" || args[0] == "help") {
 		return
 	}
 	dir := config.DefaultDir()
