@@ -402,6 +402,28 @@ The hook names the skael on your `PATH` when that is the running binary, so a Ho
 
 Auto-sync runs `skael sync --quiet` in the background, at most once in 30 minutes. `uninstall` removes only the files and entries that Skael wrote.
 
+## skael uninstall
+
+Removes everything the skael CLI wrote on this machine. It lists what it removes and asks first.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--keep-skills` | false | Keep the skills that sync installed |
+| `--yes`, `-y` | false | Do not ask. Without a terminal, or with `--json`, uninstall needs this flag |
+
+It removes:
+
+- The activation and auto-sync hooks from every agent in the table above. An entry or plugin file that Skael did not write stays.
+- Each skill folder that `~/.skael/state.json` records as synced, in the user and the project skill folders.
+- `~/.skael`, with the config, the API key and the sync state.
+- The binary, for an `install.sh` or `install.ps1` install. On Windows it also removes the user `PATH` entry that `install.ps1` added. When `install.sh` installed into a folder you cannot write, uninstall prints the `sudo rm` command.
+
+It does not remove:
+
+- A binary from Scoop or Homebrew. Uninstall prints `scoop uninstall skael` or `brew uninstall --cask skael`.
+- A skill that `skael init` wrote into a project.
+- Your API key on the server. Delete it in the web app under **Settings → API & Keys**.
+
 ## skael import `<url|path>`
 
 Imports skills into the registry from a GitHub repository, a subpath within one (e.g. `.../tree/main/skills/docx`), or a local directory. Each imported skill goes through the same scan and the same [publish gate](/docs/concepts#publish-gate) as `skael publish` — an imported skill can be rejected or held for review exactly like a published one.
