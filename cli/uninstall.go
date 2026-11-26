@@ -82,8 +82,9 @@ func detectInstall(exe, goos, localAppData, installDir string) installKind {
 	if strings.Contains(exe, "/Caskroom/skael/") || strings.Contains(exe, "/Cellar/skael/") {
 		return installHomebrew
 	}
-	dir := filepath.Dir(exe)
-	if installDir != "" && dir == filepath.Clean(installDir) {
+	// Unix paths always use "/", whatever OS runs this.
+	dir := path.Dir(exe)
+	if installDir != "" && dir == path.Clean(installDir) {
 		return installSh
 	}
 	if dir == "/usr/local/bin" {
